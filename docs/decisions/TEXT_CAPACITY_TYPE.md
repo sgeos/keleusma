@@ -2,7 +2,7 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: authorized. The value representation and the literal cast are implemented as of 2026-10-30. Five bundled operations are implemented as compiler intrinsics behind the `text` cargo feature as of 2026-10-31. See [the literal-cast increment](#the-literal-cast-increment-landed-2026-10-30) and [the bundled operations](#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31). The `ScalarKind::Text` collapse was investigated on 2026-10-31 and not performed. See [the collapse investigation](#the-scalarkindtext-collapse-investigated-2026-10-31-and-stopped).
+**Status**: authorized. The value representation and the literal cast are implemented as of 2026-10-30. Five bundled operations are implemented as compiler intrinsics behind the `text` cargo feature as of 2026-10-31, called as methods on the value and giving a defined result for every operand body. See [the literal-cast increment](#the-literal-cast-increment-landed-2026-10-30) and [the bundled operations](#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31). The `ScalarKind::Text` collapse was investigated on 2026-10-31 and not performed. See [the collapse investigation](#the-scalarkindtext-collapse-investigated-2026-10-31-and-stopped).
 
 ## The authorization, recorded with provenance
 
@@ -268,8 +268,9 @@ Two questions remain genuinely open.
 
 **Both are ruled as of 2026-10-31.** The operator chose compiler intrinsics, option (b), over
 generic natives and per-capacity natives. That restores the bundled operations without answering
-the generic native signature question, which stays open for natives alone. The surface is the
-literal cast and free functions under `text::`, and the comparison operators stay refused. See
+the generic native signature question, which stays open for natives alone. The surface was first
+the literal cast and free functions under `text::`, and the comparison operators stay refused. A
+later ruling the same day replaced the free functions with methods on the value. See
 [the bundled operations](#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31).
 
 ## The literal-cast increment, landed 2026-10-30
@@ -347,7 +348,7 @@ the boundary. The self-hosted stages need the type before the shipping refusal c
 **Updated 2026-10-31.** The operations, the length surface and equality landed as intrinsics and
 are recorded in the next section. The `"ab" + "cd"` defect had already been closed by a type
 checker refusal pinned in `tests/text_composition_hole.rs`, whose diagnostic now names
-`text::concat`. The truncation arm, the `shared` field and the self-hosted stages remain.
+the `a.concat(b)` method. The truncation arm, the `shared` field and the self-hosted stages remain.
 
 ## The bundled operations as compiler intrinsics, landed 2026-10-31
 
@@ -357,8 +358,16 @@ The operator ruled first-hand in session on 2026-10-31, as relayed to this line 
 built this increment. The operations are compiler intrinsics over `Text<N>`, option (b), chosen
 over generic natives and over one native per capacity. They are conditionally includable behind a
 cargo feature named `text`, and a build without the feature refuses their use at compile time. The
-surface is the literal cast and free functions, so `==` and `<` on `Text<N>` stay refused and
-`text::eq` is the comparison.
+surface was the literal cast and free functions, so `==` and `<` on `Text<N>` stay refused and
+`text::eq` was the comparison.
+
+**The surface was changed the same day, and this section now records the method form.** The
+operator ruled that the operations are method calls on the value, replacing the free functions so
+that each operation has one spelling, and that they are resolved by receiver type rather than by
+trait impl. The ruling is recorded under
+[the operator rulings](#operator-rulings-2026-10-31-on-the-collapse-and-the-surface). The operator
+also ruled that every operation must give a fully defined result for every input, including a
+malformed body a host supplies, which replaced the trust assumption this section first carried.
 
 ### What existed before V0.2.0 removed it
 
@@ -369,37 +378,70 @@ arena string with no static bound. That last property is why they were removed.
 
 ### The operations
 
-`A`, `B` and `N` are operand capacities, read from the operand types after monomorphization.
-`wb` is the target word width in bytes. The instruction counts and costs exclude evaluating the
-operands, and were measured on 2026-10-31 on the 64-bit host target with
-`verify::wcet_whole_chunk` and `verify::wcmu_whole_chunk`, at capacities 1, 2, 4, 8, 16 and 32. Each
-formula reproduces all six measurements exactly.
+`A`, `B` and `N` are operand capacities, read from the operand types after monomorphization, with
+`a: Text<A>`, `b: Text<B>` and `t: Text<N>`. `wb` is the target word width in bytes. The
+instruction counts and costs exclude evaluating the operands and the enclosing `Return`. They were
+measured on 2026-10-31 on the 64-bit host target with `verify::wcet_whole_chunk` and
+`verify::wcmu_whole_chunk`, at capacities 1, 2, 4, 8, 16 and 32, with concatenation also measured
+at `B = 1` and equality also at `B = 2A` to separate the coefficients. Each formula reproduces
+every measurement exactly, and `the_static_cost_matches_the_recorded_formulas` in
+`tests/text_ops.rs` pins them, so a change to the lowering or to the cost model fails that test
+rather than leaving this table stale.
 
 | operation | result | instructions | WCET | arena WCMU |
 |---|---|---|---|---|
-| `text::len(t: Text<N>)` | `Word` | 1 | 2 | 0 |
-| `text::capacity(t: Text<N>)` | `Word`, the literal `N` | 2 | 2 | 0 |
-| `text::concat(a: Text<A>, b: Text<B>)` | `Text<A + B>` | `7(A + B) + 3A + 15` | `15(A + B) + 5A + 27` | `2(A + B) + wb` |
-| `text::eq(a: Text<A>, b: Text<B>)` | `bool` | `7 min(A, B) + 9` | `12 min(A, B) + 13` | 0 |
-| `text::slice(t: Text<N>, start: Word, end: Word)` | `Text<N>` | `16N + 47` | `29N + 62` | `2N + wb` |
+| `t.len()` | `Word`, the effective length | 17 | 20 | 0 |
+| `t.capacity()` | `Word`, the literal `N` | 2 | 2 | 0 |
+| `a.concat(b)` | `Text<A + B>` | `27A + 16B + 47` | `46A + 29B + 63` | `2(A + B) + wb` |
+| `a.eq(b)` | `bool` | `14 min(A, B) + 41` | `22 min(A, B) + 49` | 0 |
+| `t.slice(start, end)` | `Text<N>` | `16N + 61` | `29N + 78` | `2N + wb` |
 
 The arena figure for a constructed result counts the byte array and the enclosing tuple, which
 the verifier charges separately. Concatenation and slicing also push one operand-stack value per
 result byte before the two `NewComposite` instructions, so their operand stack peak grows by
 `A + B` and `N` value slots respectively, which the verifier counts in the stack term.
 
+### What the defined-result rule costs
+
+The free-function form of the same day assumed well-formed operands. Its cost as recorded in this
+table when pull request 682 landed is the following, and it was not re-measured for this record.
+The difference is the price of a defined
+result for every operand body. It is static, and the arena figure does not change.
+
+| operation | before, instructions | before, WCET | added instructions | added WCET |
+|---|---|---|---|---|
+| `len` | 1 | 2 | 16 | 18 |
+| `capacity` | 2 | 2 | 0 | 0 |
+| `concat` | `10A + 7B + 15` | `20A + 15B + 27` | `17A + 9B + 32` | `26A + 14B + 36` |
+| `eq` | `7 min(A, B) + 9` | `12 min(A, B) + 13` | `7 min(A, B) + 32` | `10 min(A, B) + 36` |
+| `slice` | `16N + 47` | `29N + 62` | 14 | 16 |
+
+The constant terms are the effective-length computation, seventeen instructions per text operand
+including the read of the length word. The per-byte terms are the masks, six instructions and a
+`BitAnd` each. Concatenation applies two to each of the first `A` result positions and one to
+each of the remaining `B`, and equality applies one to each compared pair. Slicing needs no mask beyond the one it already had, because
+every byte it keeps lies below the clamped end. The lowering also declares one more frame local
+for `len` and two more each for `concat` and `eq`.
+
 ### Semantics
 
+- **Every operation reads its operands through the effective length.** For a `Text<N>` whose
+  length word is `len`, the effective length is `min(max(len, 0), N)`, and the content is the
+  bytes below it. Every byte at or past the effective length reads as zero, whatever the body
+  holds there. Each operation below is specified over the content, so its result is defined for
+  every operand body, and every result it constructs has a length in `[0, N]` and zero padding.
+  `t.len()` answers the effective length. `t.capacity()` reads no body.
 - **Lengths and positions count bytes**, as `N` does. This differs from the removed `length` and
   `slice`, which counted Unicode scalar values. A slice that splits a multi-byte UTF-8 sequence
   yields the bytes it names.
 - **Concatenation cannot overflow.** The result capacity is the sum of the operand capacities, so
   no truncation arises and no outcome arm is needed.
-- **Slicing is total.** The range `[start, end)` is clamped, `start` into `[0, len]` and then `end`
-  into `[start, len]`. An empty, reversed or out-of-range request yields a shorter or empty text
+- **Slicing is total.** The range `[start, end)` is clamped, `start` into `[0, l]` and then `end`
+  into `[start, l]`, where `l` is the effective length. An empty, reversed or out-of-range request yields a shorter or empty text
   rather than a fault. The result capacity is the operand capacity, so no truncation arises.
-- **Equality compares live content** and admits operands of different capacities, so
-  `"ab" as Text<2>` equals `"ab" as Text<8>`.
+- **Equality compares content** and admits operands of different capacities, so
+  `"ab" as Text<2>` equals `"ab" as Text<8>`. Two bodies that differ only at or past their
+  common effective length are equal.
 
 ### Lowering
 
@@ -412,39 +454,77 @@ byte of a flat body, so each constructed result is pushed one byte at a time and
 `NewComposite` for the array and one for the tuple. The code size and the execution time are
 therefore linear in the capacity, as the table shows.
 
-- **`concat`** computes result byte `i` as `a[i] + b[i - len(a)]` in wrapping byte arithmetic.
-  Exactly one term can be nonzero, because each operand is zero outside its live range and a read
-  at a negative index is zero. The selection therefore needs no branch.
-- **`eq`** folds `len(a) xor len(b)` and the wrapping byte difference of each position below
-  `min(A, B)` into one accumulator with `BitOr`, and compares it with zero. Positions past the
-  smaller capacity are zero in both operands whenever the lengths agree.
-- **`slice`** clamps with four one-sided conditional moves and masks each result byte with the
-  sign of `i - rlen`, taken by an arithmetic shift, so bytes past the result length are zero.
+Two building blocks give the defined result. The **effective length** is the length word clamped
+by two one-sided conditional moves against the constants `0` and `N`. The **mask below a bound**
+is the sign of `i - bound` spread across the word by an arithmetic shift by `word_bits - 1`, all
+ones exactly when `i` is below the bound. Both operands of that difference lie in `[0, A + B]`, so
+it cannot overflow.
 
-### The invariant, and the trust assumption it carries
+- **`concat`** computes result byte `i` as `(a[i] & below(i, la)) | b[i - la]`, then masks it by
+  `below(i, la + lb)`, where `la` and `lb` are the effective lengths. The `a` term is zero at and
+  past `la`. The `b` term is a total read, zero at a negative index and past the array, and the
+  outer mask zeroes it at and past `lb`. At most one term is nonzero, so `BitOr` selects without
+  a branch. A word `Add` is not used, because the virtual machine's `Add` does not take two words.
+- **`eq`** folds `la xor lb` and, for each position below `min(A, B)`, the wrapping byte
+  difference masked by `below(i, la)`, into one accumulator with `BitOr`, and compares it with
+  zero. When the effective lengths agree at `l`, the masked positions are exactly those below `l`,
+  and every position at or past `l` is outside the content of both operands, so nothing past the
+  smaller capacity needs a comparison.
+- **`slice`** clamps with four one-sided conditional moves against the effective length and masks
+  each result byte with `below(i, rlen)`, so bytes past the result length are zero. Every byte it
+  keeps lies below the clamped end, so no byte at or past the effective length reaches the result.
 
-**Every `Text<N>` has a live length of at most `N`, and every byte at or past the length is zero.**
-The literal cast and the zero value establish it, and every operation above establishes it for
-its result. `concat` and `eq` rely on it. Nothing in script code can produce a value that breaks
-it. A host can, by passing a malformed `Text<N>` as an argument to an entry or a function, and
-then the result of an operation is defined but unspecified. Every read remains bounds-checked by
-the virtual machine, so such a value cannot reach memory outside its body. Checking the invariant
-at the host boundary belongs with the `shared` field work, which needs the same check.
+### The invariant, and why no operation relies on it
 
-### Feature gating and the reserved namespace
+**Every `Text<N>` that script code produces has a length in `[0, N]`, and every byte at or past
+the length is zero.** The literal cast and the zero value establish it, and every operation above
+establishes it for its result whatever its operands held. **No operation relies on it for its
+operands.** A host can pass a malformed `Text<N>`, as an argument to an entry or a function, with a
+negative length, a length above `N`, or nonzero bytes past the length. The operations then give the
+result the semantics above specify for the effective content, which is the operator's requirement
+that results be fully defined for every input. Every read remains bounds-checked by the virtual
+machine, so such a value cannot reach memory outside its body.
+
+The malformed cases are pinned in `tests/text_ops.rs`, by replacing the pooled body of a literal
+cast in a compiled module with a hand-built one and by a host entry argument built in the arena.
+The lengths cover the most negative word, `-1`, `0`, `1`, `N - 1`, `N`, `N + 1` and the most
+positive word, over bodies whose every byte is nonzero. Removing the clamps fails all five of those
+tests, and removing the masks fails the concatenation, equality and slicing tests, which was
+checked once by hand on 2026-10-31 and is not automated.
+
+**What this does not settle.** A host that reads the length word of a malformed value directly,
+rather than through `t.len()`, still sees the raw word. Checking the invariant at the host boundary
+belongs with the `shared` field work, which needs the same check.
+
+### Feature gating and the method resolution
 
 The `text` feature is off by default, as `shell` is, and it is `no_std`. `keleusma-cli` enables it,
 so the shipping command line compiles the operations. The `math` and `audio` libraries named in
 the ruling are not cargo features in this tree. `math` is a library bundle and `audio` is gated
 on `floats`, so `shell` is the only precedent of the requested kind.
 
-The `text` path is reserved in every build. With the feature, a call under it is an intrinsic.
-Without the feature, the same call is refused at compile time with a message naming the feature,
-rather than being accepted as a permissive native call, which is what any other `a::b(..)` call
-without a `use` declaration becomes. A `use text::..` declaration is refused in both builds, so
-one spelling never means a host native in one build and an intrinsic in the other. **That is a
-host-observable change**, since a host could previously import a native under `text::`. None in
-this tree did.
+**A method call is an operation exactly when its receiver has the type `Text<N>` and the method is
+one of `len`, `capacity`, `concat`, `eq` and `slice`.** The type checker decides this from the
+receiver type before it consults any trait, and the compiler and the monomorphization pass's
+instantiation inference decide it the same way. Without the feature, such a call is refused at
+compile time with a message naming the feature. A method of any other name on a `Text<N>` falls to
+the ordinary trait resolution.
+
+**No user method is shadowed.** A method of the same name on any other receiver, a struct for
+example, still resolves to its trait impl, in both builds. A trait impl for a `Text<N>` that
+declares one of the five names is admitted, but a method call on a `Text<N>` reaches the operation
+rather than the impl. No program lost a working call by this, because before the change ordinary
+resolution never found a trait method for a `Text<N>` receiver. The type checker keys the impl
+under `Text<4>` and looks the receiver up under `Text`, and that call was refused as having no
+method, which was measured on 2026-10-31 before the change. Whether that keying mismatch is itself
+a defect is outside this increment.
+
+**The `text` path is no longer reserved.** The free functions were removed, so `text::len(..)` is
+an ordinary path again. Without a `use` declaration it is an undefined function, as any other
+undeclared path is, and a `use text::..` declaration imports a host native under it in either
+build. That reverses the reservation pull request 682 introduced, and it restores the
+`use text::upper` example in `book/src/COOKBOOK.md`, which that reservation had made a compile
+error.
 
 The continuous-integration feature sets cover both builds. The workspace run unifies the feature
 on through `keleusma-cli` and runs `tests/text_ops.rs`. The single-package runs leave it off and
@@ -452,20 +532,21 @@ run `tests/text_ops_without_feature.rs`. The isolated `self-host` run has the fe
 
 ### What stays refused, and why
 
-- **`==`, `<` and the other comparison operators** on `Text<N>`, by the ruling. `text::eq` is the
+- **`==`, `<` and the other comparison operators** on `Text<N>`, by the ruling. `a.eq(b)` is the
   comparison.
-- **A pipeline target or a guarded operation under `text::`.** A pipeline would route the call
-  through the permissive native path, and the operations are total and have no outcome arms.
-- **A turbofish** on an operation, and an operand whose `Text<N>` capacity the compiler cannot read
-  after monomorphization.
+- **A guarded form over an operation.** The guarded construct admits arithmetic and native calls
+  only, so it refuses a method call with no rule specific to the operations. The operations are
+  total and have no outcome arms.
+- **An operand whose `Text<N>` capacity the compiler cannot read** after monomorphization.
 - **A result past the flat body limit.** A flat body is at most `u16::MAX` bytes including the
   length word, and on a narrow-word target a capacity must also be a non-negative word.
 - **The self-hosted compiler** does not mirror the operations. A program using one necessarily
   names a `Text<N>`, because the literal cast is the only way to make an operand, so the existing
-  shipping refusal reports it as unsupported. It is pinned by
-  `a_bundled_text_operation_is_outside_the_self_hosted_subset` in
-  `tests/selfhost_full_language.rs`. Mirroring them in the stages was not attempted, so whether it
-  fits the stage caps is not measured.
+  shipping refusal reports it as unsupported and never produces bytes for it. It is pinned by
+  `a_bundled_text_operation_is_outside_the_self_hosted_subset` in `tests/text_ops.rs`, and in the
+  build without the feature by `the_self_hosted_entry_reports_the_reference_refusal` in
+  `tests/text_ops_without_feature.rs`. Mirroring them in the stages was not attempted, so whether
+  it fits the stage caps is not measured.
 
 ### What is not built
 
@@ -584,3 +665,17 @@ pull request 682 to method calls on the value, `a.concat(b)`, `t.len()`, `t.capa
 `a.eq(b)` and `t.slice(start, end)`. The free functions are replaced, not kept beside the
 methods, so that each operation has one spelling. The lowering, the costs and the `text` feature
 gating are unchanged. This supersedes the free-function surface recorded for question 8.
+
+**The methods are resolved by receiver type.** The operator ruled, as relayed to this line in the
+task that built the method form, that the methods are resolved in the type checker by the
+receiver type `Text<N>` and not by trait impl, that the `text` feature gating stays, and that the
+free-function surface and the reserved `text::` path are removed unless something depends on
+them. Nothing in the tree depended on either. Implemented on 2026-10-31 and recorded under
+[the bundled operations](#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31).
+
+**Results must be fully defined for every input.** The operator ruled, relayed by the same task,
+that the defined but unspecified result for a malformed host-supplied `Text<N>` is not acceptable,
+and that every operation must read the effective length `min(max(len, 0), N)` and treat every
+byte at or past it as zero, with a static cost. That ruling changes the costs the paragraph above
+calls unchanged. The new costs, and what the rule added to each operation, are in
+[the operations](#the-operations).

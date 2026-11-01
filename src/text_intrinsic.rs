@@ -1,29 +1,35 @@
-//! The bundled text operations over `Text<N>`, recognised by name.
+//! The bundled text operations over `Text<N>`, recognised as methods on the
+//! value.
 //!
 //! The operations are compiler intrinsics, ruled by the operator on 2026-10-31
-//! as option (b) over generic natives and per-capacity natives. A call such as
-//! `text::concat(a, b)` is typed by the type checker and lowered by the
+//! as option (b) over generic natives and per-capacity natives. The operator
+//! ruled the same day that they are called as methods, `t.len()`,
+//! `t.capacity()`, `a.concat(b)`, `a.eq(b)` and `t.slice(start, end)`, and that
+//! the method form replaces the earlier free functions so that each operation
+//! has one spelling. A call is typed by the type checker and lowered by the
 //! compiler to existing opcodes. No native is registered, no opcode is added,
 //! and no host sees the call.
 //!
-//! The `text` path is reserved. In a build with the `text` cargo feature a call
-//! under it is an intrinsic, and in a build without the feature the same call
-//! is refused at compile time rather than resolved as a host native. A `use`
-//! declaration under the path is refused in both builds, because importing a
-//! host native under the intrinsic namespace would make one spelling mean two
-//! things depending on how the runtime was built.
+//! # Resolution rule
+//!
+//! A method call is an operation exactly when its receiver has the type
+//! `Text<N>` and the method is one of the five names. The receiver type
+//! decides, not a trait impl, and the check comes before trait resolution.
+//! A method of the same name on any other receiver resolves through its trait
+//! impl as before, so no user type loses a method. A trait impl for a
+//! `Text<N>` cannot supply one of the five names to a method call, which no
+//! program could do before either, because trait resolution never found such
+//! an impl for a `Text<N>` receiver. In a build without the `text` cargo
+//! feature the same call is refused at compile time naming the feature.
 //!
 //! See `docs/decisions/TEXT_CAPACITY_TYPE.md`, the section on the bundled
-//! operations, for the operation list, the result capacities, the lowering and
-//! the cost of each.
+//! operations, for the operation list, the result capacities, the defined
+//! result for a malformed operand, the lowering and the cost of each.
 
 extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
-
-/// The path segment that names the intrinsic namespace.
-pub(crate) const NAMESPACE: &str = "text";
 
 /// Whether the intrinsics are compiled into this build.
 pub(crate) const ENABLED: bool = cfg!(feature = "text");
@@ -35,16 +41,16 @@ pub(crate) const ENABLED: bool = cfg!(feature = "text");
 #[cfg_attr(not(feature = "text"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextOp {
-    /// `text::len(t: Text<N>) -> Word`, the live byte length.
+    /// `t.len() -> Word`, the effective byte length.
     Len,
-    /// `text::capacity(t: Text<N>) -> Word`, the static capacity `N`.
+    /// `t.capacity() -> Word`, the static capacity `N`.
     Capacity,
-    /// `text::concat(a: Text<A>, b: Text<B>) -> Text<A + B>`.
+    /// `a.concat(b: Text<B>) -> Text<A + B>`.
     Concat,
-    /// `text::eq(a: Text<A>, b: Text<B>) -> Bool`, equality of live content.
+    /// `a.eq(b: Text<B>) -> Bool`, equality of effective content.
     Eq,
-    /// `text::slice(t: Text<N>, start: Word, end: Word) -> Text<N>`, the
-    /// half-open byte range clamped to the live length.
+    /// `t.slice(start: Word, end: Word) -> Text<N>`, the half-open byte range
+    /// clamped to the effective length.
     Slice,
 }
 
@@ -60,7 +66,7 @@ impl TextOp {
         TextOp::Slice,
     ];
 
-    /// The unqualified name of the operation.
+    /// The method name of the operation.
     pub(crate) fn name(self) -> &'static str {
         match self {
             TextOp::Len => "len",
@@ -71,12 +77,12 @@ impl TextOp {
         }
     }
 
-    /// The number of arguments the operation takes.
+    /// The number of arguments the method takes, excluding the receiver.
     pub(crate) fn arity(self) -> usize {
         match self {
-            TextOp::Len | TextOp::Capacity => 1,
-            TextOp::Concat | TextOp::Eq => 2,
-            TextOp::Slice => 3,
+            TextOp::Len | TextOp::Capacity => 0,
+            TextOp::Concat | TextOp::Eq => 1,
+            TextOp::Slice => 2,
         }
     }
 
@@ -92,76 +98,28 @@ impl TextOp {
     }
 }
 
-/// The unqualified remainder of a call name under the intrinsic namespace, or
-/// `None` when the name is not under it.
+/// Resolve a method called on a `Text<N>` receiver to its operation.
 ///
-/// Only a two-segment name qualifies. `text::concat` is under the namespace,
-/// while `text` alone, `texts::concat` and `a::text::concat` are not.
-pub(crate) fn namespace_member(call_name: &str) -> Option<&str> {
-    let rest = call_name.strip_prefix(NAMESPACE)?.strip_prefix("::")?;
-    if rest.is_empty() || rest.contains("::") {
-        return None;
-    }
-    Some(rest)
-}
-
-/// Whether a `use` path names the intrinsic namespace as its first segment.
-pub(crate) fn use_path_is_reserved(path: &[String]) -> bool {
-    path.first().map(String::as_str) == Some(NAMESPACE)
-}
-
-/// Resolve a call name under the namespace to its operation.
-///
-/// `Ok(None)` when the name is not under the namespace, so the caller resolves
-/// it as before. `Err` carries the refusal message when the name is under the
-/// namespace but this build does not have the feature, or when the member is
-/// not an operation.
-pub(crate) fn resolve(call_name: &str) -> Result<Option<TextOp>, String> {
-    let Some(member) = namespace_member(call_name) else {
+/// The caller has already established that the receiver type is `Text<N>`.
+/// `Ok(None)` when the method is not an operation, so the caller resolves it
+/// through trait impls as before. `Err` carries the refusal message when the
+/// method is an operation and this build does not have the feature.
+pub(crate) fn resolve_method(method: &str) -> Result<Option<TextOp>, String> {
+    let Some(op) = TextOp::from_name(method) else {
         return Ok(None);
     };
     if !ENABLED {
         return Err(format!(
-            "`{call_name}` is a bundled text operation, and this build was compiled without the \
-             `text` cargo feature that provides it"
+            "`.{method}()` on a `Text<N>` is a bundled text operation, and this build was \
+             compiled without the `text` cargo feature that provides it"
         ));
     }
-    match TextOp::from_name(member) {
-        Some(op) => Ok(Some(op)),
-        None => Err(format!(
-            "`{call_name}` is not a bundled text operation. The operations are text::len, \
-             text::capacity, text::concat, text::eq and text::slice"
-        )),
-    }
-}
-
-/// The refusal message for a `use` declaration under the namespace.
-pub(crate) fn reserved_use_message(path: &[String]) -> String {
-    format!(
-        "`use {}::...` is refused: the `{NAMESPACE}` path names the bundled text operations, \
-         which are called directly and are never imported as host natives",
-        path.join("::")
-    )
+    Ok(Some(op))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_a_two_segment_name_is_under_the_namespace() {
-        assert_eq!(namespace_member("text::concat"), Some("concat"));
-        assert_eq!(namespace_member("text::anything"), Some("anything"));
-        for outside in [
-            "text",
-            "text::",
-            "texts::concat",
-            "a::text::concat",
-            "text::a::b",
-        ] {
-            assert_eq!(namespace_member(outside), None, "{outside}");
-        }
-    }
 
     #[test]
     fn every_operation_round_trips_through_its_name() {
@@ -172,24 +130,25 @@ mod tests {
     }
 
     #[test]
-    fn a_name_outside_the_namespace_resolves_to_nothing() {
-        assert_eq!(resolve("math::sqrt"), Ok(None));
-        assert_eq!(resolve("concat"), Ok(None));
+    fn a_name_that_is_not_an_operation_resolves_to_nothing() {
+        for name in ["length", "push", "", "text::len", "Len"] {
+            assert_eq!(resolve_method(name), Ok(None), "{name}");
+        }
     }
 
     #[cfg(feature = "text")]
     #[test]
-    fn a_name_inside_the_namespace_resolves_or_is_refused_by_name() {
-        assert_eq!(resolve("text::concat"), Ok(Some(TextOp::Concat)));
-        let err = resolve("text::length").unwrap_err();
-        assert!(err.contains("not a bundled text operation"), "{err}");
+    fn every_operation_name_resolves_with_the_feature() {
+        for op in TextOp::ALL {
+            assert_eq!(resolve_method(op.name()), Ok(Some(op)));
+        }
     }
 
     #[cfg(not(feature = "text"))]
     #[test]
-    fn without_the_feature_every_name_inside_the_namespace_is_refused() {
-        for name in ["text::concat", "text::len", "text::length"] {
-            let err = resolve(name).unwrap_err();
+    fn without_the_feature_every_operation_name_is_refused() {
+        for op in TextOp::ALL {
+            let err = resolve_method(op.name()).unwrap_err();
             assert!(err.contains("`text` cargo feature"), "{err}");
         }
     }
