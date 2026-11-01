@@ -5739,7 +5739,37 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let input = self.intern_opaque_arcs(input);
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
-        if let Some(base_frame) = self.frames.first().copied() {
+        //
+        // The slot written is that of the INNERMOST stream frame, the `loop`
+        // whose body is running. Until 2026-10-31 it was always the base
+        // frame. A `loop` may call a `loop`, and the callee never returns, so
+        // its `Reset` restarts the callee in place with the caller's frame
+        // beneath it. `Reset` clears every local of the resetting frame, its
+        // parameter included, so writing the base frame left the callee's
+        // parameter `Unit` on every iteration after the first. The
+        // definite-initialization verifier in `src/verify_init.rs` assumes
+        // the opposite, that each resume writes slot 0 of the stream chunk
+        // that reset, so the callee read a slot the verifier had proven
+        // written. A tuple built from it then faulted with `flat scalar codec:
+        // OutOfBounds` or stored zeros. Without delegation the innermost
+        // stream frame is the base frame, so nothing changes for such a
+        // program. See `tests/delegated_loop_reset.rs`.
+        //
+        // The parameter type check below is therefore made against the
+        // callee's own parameter type. The type checker refuses a delegated
+        // `loop` whose parameter type differs from the entry loop's, so this
+        // check is a second line of defence for a module that reaches the
+        // virtual machine without that check, and a mismatch surfaces here as
+        // a `TypeError` at the resume boundary.
+        let stream_frame = {
+            let aux = self.aux();
+            self.frames
+                .iter()
+                .rev()
+                .copied()
+                .find(|f| aux.module().chunk_block_type(f.chunk_idx) == Some(BlockType::Stream))
+        };
+        if let Some(base_frame) = stream_frame.or_else(|| self.frames.first().copied()) {
             let aux = self.aux();
             let block_type = aux
                 .module()
