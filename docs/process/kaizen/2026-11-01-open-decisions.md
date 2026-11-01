@@ -24,6 +24,52 @@ Otherwise it is marked **judgment**. Each list gives the recommendation first.
 | Interline checkpoint | Exported with the bodies of sequences 193 and 194 redacted, merged as pull request 698. Sequences 190 to 192 stay as they are, on the operator's decision |
 | V0.2.X decision 2 | Dropped by V0.2.X against V0.3.X's record of question 28 as (a) |
 
+## Operator ruling, 2026-11-01
+
+The operator ruled first-hand in this line's session on 2026-11-01, in these words.
+
+> Re: Decisions.
+>
+> D1. A.
+> D2. A.
+> D3. A. I started a proofs session.
+> D4. A.
+>
+> Re: K-series. We will circle back.
+>
+> Re: Obvious choices. Accept all obvious choices and take appropriate action.
+
+| Item | Disposition |
+|---|---|
+| D1 | (a). The pinned lists stay, and nothing changes |
+| D2 | (a). **Fact.** The Claude Code settings reference lists `idleCompaction` as a Boolean, default `true`, honoured in any settings file, from version 2.1.290, and this machine runs 2.1.316. The sandbox denies this line writes to settings files, so the operator adds `"idleCompaction": false` to the global `settings.json`. The two weeks start on the day it is applied, after which this line reruns `context_quality.py` |
+| D3 | (a). The proofs session merged its branch into `v0.2.3` as pull request 708, `b24d05c1`, and the remote `proofs` branch is gone. Its last commit, `dc1b784b`, and `origin/v0.2.3` at `b24d05c1` match no disclosure term on this line's scan. K13 is closed |
+| D4 | (a) was tried and abandoned. `minimatch` 11.0.3 removes the `Minimatch.prototype.makeRe` method, which `vscode-languageclient` 11.0.0 calls in `globPattern.js` and `fileOperations.js`, so the override would throw at run time when the language server registers a file watcher or a file operation filter. The extension's CI job parses the manifest, checks the client's syntax and runs `npm ci`, and all three passed with the override, so that job cannot detect this break. Nothing was pushed. The alert stays open, which is option (b), until the operator chooses otherwise |
+| K-series | Open. The operator will return to them |
+| O1 to O5 | Adopted. O3 is carried out in the pull request that records this ruling. D5 below follows from it |
+
+**Correction to D4.** The list said the lockfile holds `minimatch` 10.2.6. That is true
+of `v0.2.3`, which uses `vscode-languageclient` 11.0.0. `main`, where the alert opened,
+holds `minimatch` 5.1.9 under `vscode-languageclient` 8.1.0. The advisory names no
+patched version below 11.0.1, so neither line has an in-range fix.
+
+**D5. A worktree hook for Claude Code's agent trees.** *Judgment, new.* O3 adds to
+`scripts/worktree.sh list` a report of every package `target` in a live tree that is a
+directory and not a link, deleting and moving nothing. On 2026-11-01 it named the main
+checkout's `target`, 182 MB, and one agent tree's, 2.4 GB. The four agent trees of
+2026-10-31 are no longer listed. **Fact**, from the Claude Code hooks reference: a
+`WorktreeCreate` hook replaces Claude Code's own creation of a worktree, receives a
+name and no path, must create the tree itself and print its absolute path, and is not
+run for `git worktree add` in a shell. A `WorktreeRemove` hook receives the tree's path.
+Neither runs when a subagent's tree is cleaned up at the end of the subagent.
+(a) Write a tracked hook script that creates the tree where Claude Code would and links
+its targets through `scratch.sh`, with a removal hook that deletes its scratch folder,
+both tested on throwaway repositories as `worktree.sh` is. The operator then adds the
+hooks to the project settings, which this line cannot write. Because the hook replaces
+the default creation, `.worktreeinclude` would no longer be read, and the subagent
+cleanup path would leave scratch folders for `worktree.sh list` to report.
+(b) Keep the report only, and let the operator move or delete large agent output.
+
 ## Decisions
 
 **D1. N6, keep the pinned shard lists.** *Judgment.* Pull request 689 pins 43 self-host
