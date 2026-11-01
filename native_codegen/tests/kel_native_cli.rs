@@ -234,11 +234,14 @@ fn every_documented_failure_reaches_its_exit_status() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A pipe into a generic template. The reference compiler accepts it, and the
-/// self-hosted parser refuses it as outside the subset, which is the witness
-/// `tests/self_hosted_backend.rs` uses for `SelfHostError::Unsupported`.
-const OUTSIDE_SUBSET: &str = "fn id<T>(x: T) -> T { x } \
-    loop main(t: Word) -> Word { let v: Word = t |> id(); let r = yield v; yield r }";
+/// A nested destructuring `let`. The reference compiler accepts it, and the
+/// self-hosted destructuring filter refuses it as outside the subset, which is
+/// the witness `tests/self_hosted_backend.rs` uses for
+/// `SelfHostError::Unsupported`. It replaced a pipe into a generic template at
+/// absorption 129, when upstream pull request 694 brought pipes into the
+/// self-hosted subset.
+const OUTSIDE_SUBSET: &str = "loop main(t: Word) -> Word { \
+    let (a, (b, c)) = (t, (2, 3)); let r = yield a + b + c; yield r }";
 
 /// **QUESTION 19, THE SELECTOR.** Each of the three compilers produces the
 /// module the native route lowers, and the libraries they yield are the same
