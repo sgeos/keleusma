@@ -6,25 +6,37 @@ The proof line's mailbox and its self-contained resume prompt in one file, follo
 per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 `git show origin/proofs:docs/process/handoffs/proofs.md`.
 
-> **REFRESHED 2026-10-31, third stamp, describing the release of this line into V0.2.X.**
-> The operator released the branch, a ruling relayed by the V0.2.X line on 2026-10-30 and
-> confirmed first-hand in this line's session on 2026-10-31. This line merged `origin/v0.2.3`
-> at `364e33fa` into `proofs` at `5921a7c5`, which replaced the five lines in four files that
-> matched the kept private term list, scanned to zero at the merged tip. The queued Appendix E
-> correction is folded in. A pull request from `proofs` into `v0.2.3` carries this file and
-> the correction, the only work of this line not already on `v0.2.3`. The interline mailbox is
-> this line's message channel, `interline inbox --line proofs`, and its five notices up to
-> 2026-11-01 were read and acknowledged on 2026-10-31.
+> **THE PROJECT MAY BE VERY DIFFERENT FROM WHAT THIS FILE DESCRIBES.** This file records the
+> state on 2026-11-01. This line works in long idle stretches, and the other lines keep moving.
+> Before this line's previous resume, `v0.2.3` had moved 1112 commits past this file's prior
+> stamp. Treat every commit, line reference, branch, worktree, file path, peer request, and
+> open item below as a claim to re-measure, not as current fact. Measure how far `v0.2.3`,
+> `v0.3.0`, and `main` have moved since `208df9e9`, read the peer handoffs and the mailbox, and
+> report what changed before acting on anything here.
+
+> **REFRESHED 2026-11-01, fourth stamp, describing the line in a holding state after its
+> release.** The operator released the branch, a ruling relayed by the V0.2.X line on
+> 2026-10-30 and confirmed first-hand in this line's session on 2026-10-31. This line merged
+> `origin/v0.2.3` at `364e33fa` into `proofs` at `5921a7c5`, which replaced the five lines in
+> four files that matched the kept private term list, scanned to zero at the merged tip, and
+> landed the Appendix E correction at `dc1b784b`. The V0.2.X line merged pull request 708 into
+> `v0.2.3` as `b24d05c1` on 2026-11-01, on the operator's direction, so every commit of this
+> line up to `dc1b784b` is on `v0.2.3`. This stamp's own commit, which refreshes this file and
+> exports the interline checkpoint, is held on `proofs` with no pull request, for the reason
+> under the hold below. The interline mailbox is this line's message channel, read with
+> `interline inbox --line proofs`, and it was empty when this stamp was written.
 
 ## Validity
 
 Validate by ancestry and by content, never by a hash match.
 
 ```sh
-# Ancestry. All three must succeed.
+# Ancestry. All four must succeed. They detect a reset, not staleness, so also measure
+# how far v0.2.3 has moved past 208df9e9, as the warning at the top of this file asks.
 git merge-base --is-ancestor 8414a1a1 origin/v0.2.3     # the proof's landing merge
 git merge-base --is-ancestor f779be7d origin/v0.2.3     # the CLEAN-verdict tip, its own branch pruned 2026-10-31
 git merge-base --is-ancestor 613a2b98 origin/proofs     # the no-ff merge into this line
+git merge-base --is-ancestor dc1b784b origin/v0.2.3     # the release commit, landed by pull request 708
 
 # Content, measured at 391f0b51. If any differs, say so rather than acting on the state below.
 P=docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md
@@ -41,8 +53,8 @@ ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | `v0.2.3` merged in at `5921a7c5`, then the release commit |
-| `proof/composite-region-reuse` | the first proof's feature branch | complete, tip `f779be7d`, merged, remote branch pruned by the V0.2.X line on 2026-10-31 |
+| `proofs` | top-level integration branch | level with `v0.2.3` at `208df9e9` except this stamp's held commit |
+| `proof/composite-region-reuse` | the first proof's feature branch | complete and merged at tip `f779be7d`, its remote branch pruned by the V0.2.X line and its local branch and worktree removed by this line on 2026-10-31 |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
 proofs are cut from `proofs` as feature branches and merged back with no-fast-forward merges.
@@ -109,15 +121,28 @@ ruling it is and how it arrived.**
   would only strengthen with dispatch scopes included. Measured, it existed only because of
   them.
 
+## THE HOLD ON MERGES INTO V0.2.3
+
+On 2026-11-01 the V0.2.X line asked this line to hold further merges into `v0.2.3` until that
+line reports its merge of `v0.2.3` into `main`, because each move of `v0.2.3` restarts that
+merge's gates. The request arrived as peer message `v02-20261101-708-merged`, which states
+that the V0.2.X operator directed the `main` merge. It is a peer request, not a ruling of this
+line's operator, and this line honors it as coordination. Check the mailbox and `origin/main`
+for that report before opening any pull request into `v0.2.3`.
+
 ## QUEUED FOR THE NEXT LANDING
 
-Nothing. The Appendix E correction to the attributed three-ruling form landed with the
-release commit on 2026-10-31.
+One commit, this stamp's, held on `proofs`. It refreshes this file and exports
+`docs/process/interline/checkpoint.json`. Every line exports that shared checkpoint, so it
+will likely conflict when this line next merges `v0.2.3`. Resolve such a conflict by exporting
+the checkpoint again from the live store after the merge, not by combining the two JSON files
+by hand.
 
 ## OPEN, ALL WITH THE OPERATOR
 
-1. **`src/verify.rs:1337`**, the loop accounting the proof's Appendix E cites, adopting confined-site accounting, explicitly unruled, lowering a
-   published worst-case-memory-usage figure. The V0.2.X line's landed `src/confine.rs`
+1. **`src/verify.rs:1337`**, the loop accounting the proof's Appendix E cites, adopting
+   confined-site accounting, explicitly unruled, lowering a published worst-case-memory-usage
+   figure. The line number was taken from Appendix E as `v0.2.3` updated it and will drift. The V0.2.X line's landed `src/confine.rs`
    analysis is assembling the measured consequence, and the proof's Theorem C remark is the
    piece to read first, footprint can exceed the branch-max bound on branch-dominated shapes,
    so adoption should be per-site by comparing both bounds.
@@ -125,14 +150,20 @@ release commit on 2026-10-31.
    the proof's Appendix C.
 3. **Mechanization**, the recorded follow-on that upgrades the proof from audited prose to
    checked proof, its cost much reduced by the axiomatization the audits forced.
-4. **The floating-point application binary interface question** in
-   `docs/process/REVERSE_PROMPT.md`, predating this line entirely, still awaiting one word.
+4. **The floating-point application binary interface question**, which predates this line.
+   This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
+   2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
+   was answered or dropped is unverified, so ask the operator before treating it as open.
 
 ## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
 
-- **Work in a worktree.** This session operates in `../keleusma-worktrees/proofs` and
-  `../keleusma-worktrees/composite-region-reuse`. The main checkout belongs to the V0.2.X
+- **Work in a worktree.** This line operates in `../keleusma-worktrees/proofs`, with each new
+  proof in a sibling worktree on a `proof/*` branch. The main checkout belongs to the V0.2.X
   session. A shared checkout silently changes what a long-running command measures.
+- **Build output lives on the scratch volume.** The worktree's `target` is a link to
+  `/Volumes/Scratch/keleusma/proofs/target`. A `cargo clean` deletes the link, so run
+  `scratch.sh link target` again before building. Inside the agent sandbox the global
+  `sccache` wrapper is refused, so build with `RUSTC_WRAPPER=` set to empty.
 - **A pull request based on anything but `main` or `v*` triggers no continuous integration,
   silently.** Merge on a green run at the commit it ran, reading the conclusion field.
 - **Nothing is promoted from read to executed without an execution**, and rows carry their
@@ -150,7 +181,7 @@ release commit on 2026-10-31.
 
 ## Owed by this line
 
-Nothing to either peer line.
+Nothing to any peer line. This line honors the V0.2.X hold above.
 
 ## Owed to this line
 
@@ -158,10 +189,14 @@ Nothing.
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-Run the validity block. Read the three audit records and the proof's Appendix E, which carry
-the full provenance. Check both peer mailboxes,
+Assume the project has changed, as the warning at the top of this file says. Fetch, run the
+validity block, and measure how far `v0.2.3`, `v0.3.0`, and `main` have moved since
+`208df9e9`. Read and acknowledge `interline inbox --line proofs`, and check whether the V0.2.X
+line has reported its `main` merge, which ends the hold. Read the peer handoffs,
 `git show origin/v0.2.3:docs/process/handoffs/v0.2.3.md` and
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`, for anything addressed to this
-line. Then wait for the operator. Nothing is blocked, no work is in flight, and the line's
-next action is whichever the operator commissions, a second proof cut as a feature branch from
-`proofs`, the queued Appendix E correction folded into it, or the mechanization effort.
+line. Read the three audit records and the proof's Appendix E when the next task touches the
+proof. Report the differences you found, then wait for the operator. Nothing was in flight when
+this stamp was written. The line's next action is whichever the operator commissions, landing
+the held commit once the hold ends, a second proof cut as a feature branch from `proofs`, or the
+mechanization effort.
