@@ -249,7 +249,7 @@ pub fn encrypt_to_recipient(
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| EncryptionError::EncryptFailed(format!("{:?}", e)))?;
     let ciphertext = cipher
-        .encrypt(aes_gcm::Nonce::from_slice(&nonce), plaintext)
+        .encrypt(&aes_gcm::Nonce::from(nonce), plaintext)
         .map_err(|e| EncryptionError::EncryptFailed(format!("{:?}", e)))?;
 
     let metadata = EncryptionMetadata {
@@ -284,12 +284,39 @@ pub fn decrypt_from_metadata(
     if local_fingerprint != metadata.recipient_key_id {
         return Err(EncryptionError::WrongRecipient);
     }
+    open_sealed(
+        &metadata.ephemeral_public_key,
+        &metadata.aes_gcm_nonce,
+        ciphertext,
+        local_private_key,
+    )
+}
+
+/// The cryptographic half of [`decrypt_from_metadata`], after the recipient
+/// fingerprint has been compared. Runs the X25519 agreement, refuses a
+/// non-contributory one, derives the key and nonce through HKDF-SHA-256, checks
+/// the supplied nonce against the derived one, and opens the AES-256-GCM body.
+///
+/// The self-hosted framing (Order 5) compares the fingerprint itself and calls
+/// this as a host primitive, so the comparison and its ordering are decided in
+/// Keleusma while every cryptographic computation stays here.
+///
+/// # Errors
+///
+/// As [`decrypt_from_metadata`], except that it never returns `WrongRecipient`.
+pub(crate) fn open_sealed(
+    ephemeral_public_key: &[u8; X25519_PUBLIC_KEY_LEN],
+    aes_gcm_nonce: &[u8; AES_GCM_NONCE_LEN],
+    ciphertext: &[u8],
+    local_private_key: &[u8; X25519_PRIVATE_KEY_LEN],
+) -> Result<Vec<u8>, EncryptionError> {
+    let local_secret = StaticSecret::from(*local_private_key);
 
     // Reconstruct the shared secret from the ephemeral public key
     // in the metadata and the local private key. By X25519's
     // Diffie-Hellman property this produces the same shared secret
     // the compiler derived.
-    let ephemeral_pk = PublicKey::from(metadata.ephemeral_public_key);
+    let ephemeral_pk = PublicKey::from(*ephemeral_public_key);
     let shared_secret = local_secret.diffie_hellman(&ephemeral_pk);
 
     // Reject a low-order ephemeral key. `was_contributory()` is false
@@ -317,7 +344,7 @@ pub fn decrypt_from_metadata(
     let mut expected_nonce = [0u8; AES_GCM_NONCE_LEN];
     hkdf.expand(HKDF_INFO_NONCE, &mut expected_nonce)
         .map_err(|e| EncryptionError::KeyDerivationFailed(format!("{:?}", e)))?;
-    if expected_nonce != metadata.aes_gcm_nonce {
+    if expected_nonce != *aes_gcm_nonce {
         return Err(EncryptionError::DecryptFailed(String::from(
             "nonce in metadata does not match HKDF derivation",
         )));
@@ -329,10 +356,7 @@ pub fn decrypt_from_metadata(
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| EncryptionError::DecryptFailed(format!("{:?}", e)))?;
     let plaintext = cipher
-        .decrypt(
-            aes_gcm::Nonce::from_slice(&metadata.aes_gcm_nonce),
-            ciphertext,
-        )
+        .decrypt(&aes_gcm::Nonce::from(*aes_gcm_nonce), ciphertext)
         .map_err(|e| EncryptionError::DecryptFailed(format!("{:?}", e)))?;
 
     Ok(plaintext)

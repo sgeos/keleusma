@@ -1,0 +1,87 @@
+# Proposes dependency updates as pull requests that CI checks and a line or the
+# operator reviews. Adopted from sgeos/project-template on the operator's decision of
+# 2026-10-28.
+#
+# Dependabot reads this file from the default branch, `main`, and by default opens its
+# pull requests against `main` too. Keleusma integrates on a version branch, so every
+# entry names it with `target-branch`. When a new version branch is cut, change every
+# `target-branch` below in the same commit, on `main` and on the new branch, or the
+# updates go to a branch nobody merges.
+#
+# The cooldown keeps a release out until it has had a week to be noticed if it is bad.
+# Grouping puts each ecosystem's updates of one week into one pull request, which keeps
+# review and CI load to one run per ecosystem per week.
+#
+# Security updates, the separate feature that opens a pull request per advisory, are on
+# by the operator's choice of 2026-10-30, which replaced the choice of 2026-10-25 to keep
+# them off. They are enabled in the repository settings, not in this file. GitHub's
+# options reference says they "always use the default branch for the repository", so
+# they check the manifests on `main`, open their pull requests against `main`, and
+# ignore `target-branch`. Because every entry below sets `target-branch`, none of its
+# options, the cooldown and the groups included, applies to them. Each one is therefore
+# a merge into `main`, then carried forward into the version branch. On 2026-10-30 the
+# operator pre-authorized merging a green security-only pull request into `main`. Any
+# other merge into `main` still needs the operator's confirmation.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    # `dtolnay/rust-toolchain` is pinned to a different commit per toolchain, its 1.85,
+    # 1.88, nightly and stable branches, and the commit selects the toolchain. Dependabot
+    # treats every use as one action and moved all of them to one commit in pull requests
+    # 592 and 641, which dropped the 1.85, 1.88 and nightly toolchains and failed Miri.
+    # Update these pins by hand. Ignored on the operator's instruction of 2026-10-30.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The root workspace. Its Cargo.lock is tracked so the binaries build reproducibly.
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  # The detached packages with their own tracked lockfiles. They are outside the
+  # workspace. Root CI builds, lints and tests the first two in its `detached` job, and
+  # checks the fuzz package's lockfile there. The scheduled Fuzz workflow builds and runs
+  # the fuzz package on nightly.
+  #
+  # They depend on workspace members by path, and Dependabot also edits those members'
+  # manifests, as `c90fe3e8` did for `syn` on 2026-10-28, without updating the root
+  # Cargo.lock. Root CI checks with `--locked` and fails such a pull request. Before
+  # merging it, run `cargo metadata --format-version 1 > /dev/null` at the root and
+  # commit the refreshed Cargo.lock to the same pull request.
+  - package-ecosystem: cargo
+    directories: ["/keleusma-lsp", "/keleusma-wasm", "/fuzz"]
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      detached-cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /editors/vscode
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      vscode:
+        patterns: ["*"]

@@ -38,6 +38,14 @@ const CITED_TESTS: &[&str] = &[
     "reset_is_once_per_stream_cycle_not_once_per_loop_iteration",
     "a_composite_written_to_private_data_is_copied_not_aliased",
     "nesting_a_composite_into_a_flat_one_copies_its_bytes_inline",
+    "no_compiled_stream_chunk_emits_return",
+    "a_stream_calling_a_stream_compiles_verifies_and_runs",
+    "a_loop_body_may_not_consume_from_below_its_entry_height",
+    "compiled_loops_really_do_carry_a_non_empty_entry_stack",
+    "the_instruction_set_has_no_write_accessor_into_a_composite",
+    "a_dispatch_break_may_carry_a_value_past_the_loop_entry_height",
+    "composite_equality_is_content_derived_not_address_derived",
+    "a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased",
 ];
 
 /// The `src/verify.rs` citations, as (line, the text that line must contain).
@@ -46,9 +54,9 @@ const CITED_TESTS: &[&str] = &[
 /// to the line; if the code moved, they must be sent to a failing test rather
 /// than to whatever now occupies it.
 const CITED_LINES: &[(usize, &str)] = &[
-    (992, "then_branch.heap_total.max(else_branch.heap_total)"),
-    (1079, "body_heap_one.saturating_mul(iter_count)"),
-    (1087, "body_heap.max(break_heap)"),
+    (1278, "then_branch.heap_total.max(else_branch.heap_total)"),
+    (1367, "body_heap_one.saturating_mul(iter_count)"),
+    (1375, "body_heap.max(break_heap)"),
 ];
 
 #[test]

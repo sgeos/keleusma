@@ -37,6 +37,28 @@ fn analyze_yield_coverage(
     always: &BTreeSet<usize>,
     break_states: &mut Vec<bool>,
 ) -> Option<bool> {
+    analyze_yield_coverage_at(ops, start, end, initial, always, break_states, 0)
+}
+
+/// [`analyze_yield_coverage`] with the recursion depth carried explicitly.
+///
+/// Beyond [`MAX_REGION_DEPTH`] it answers `Some(false)`, which is the
+/// conservative direction: the caller uses `Some(true)` to admit a chunk to
+/// the always-yielding set, so refusing to classify keeps a Stream chunk from
+/// delegating its productivity obligation to one this pass could not walk.
+#[allow(clippy::too_many_arguments)]
+fn analyze_yield_coverage_at(
+    ops: &[Op],
+    start: usize,
+    end: usize,
+    initial: bool,
+    always: &BTreeSet<usize>,
+    break_states: &mut Vec<bool>,
+    depth: u32,
+) -> Option<bool> {
+    if depth > MAX_REGION_DEPTH {
+        return Some(false);
+    }
     let mut has_yielded = initial;
     let mut ip = start;
 
@@ -69,21 +91,23 @@ fn analyze_yield_coverage(
                     } else {
                         unreachable!()
                     };
-                    let then_result = analyze_yield_coverage(
+                    let then_result = analyze_yield_coverage_at(
                         ops,
                         ip + 1,
                         target - 1,
                         has_yielded,
                         always,
                         break_states,
+                        depth + 1,
                     );
-                    let else_result = analyze_yield_coverage(
+                    let else_result = analyze_yield_coverage_at(
                         ops,
                         target,
                         endif_pos,
                         has_yielded,
                         always,
                         break_states,
+                        depth + 1,
                     );
                     match (then_result, else_result) {
                         (Some(a), Some(b)) => has_yielded = a && b,
@@ -94,13 +118,14 @@ fn analyze_yield_coverage(
                     ip = endif_pos + 1;
                 } else {
                     // If-EndIf without Else (pattern matching).
-                    let then_result = analyze_yield_coverage(
+                    let then_result = analyze_yield_coverage_at(
                         ops,
                         ip + 1,
                         target,
                         has_yielded,
                         always,
                         break_states,
+                        depth + 1,
                     );
                     match then_result {
                         Some(a) => has_yielded = a && has_yielded,
@@ -118,13 +143,14 @@ fn analyze_yield_coverage(
                 // valid input always has exit >= 1, so this is unchanged there.
                 let endloop_ip = loop_exit_target.saturating_sub(1);
                 let mut loop_breaks: Vec<bool> = Vec::new();
-                let _body_result = analyze_yield_coverage(
+                let _body_result = analyze_yield_coverage_at(
                     ops,
                     ip + 1,
                     endloop_ip,
                     has_yielded,
                     always,
                     &mut loop_breaks,
+                    depth + 1,
                 );
                 if loop_breaks.is_empty() {
                     return None;
@@ -154,6 +180,150 @@ fn analyze_yield_coverage(
     }
 
     Some(has_yielded)
+}
+
+/// Recursion guard for the four region walkers (audit H1 residual).
+///
+/// # Why a cap at all, when every target is now forward
+///
+/// [`check_forward_control_flow_targets`] makes the walks terminate; it does
+/// not bound how deeply they nest, and the walkers recurse once per nested
+/// `If`/`Else` or `Loop` region. A stack overflow **aborts** rather than
+/// unwinding, so a host cannot catch it and no watchdog can name it. That
+/// makes this the one failure mode a mutation harness cannot report on its
+/// own, and a guard the only available instrument.
+///
+/// # The value, from measurement
+///
+/// Measured on a two-mebibyte stack, the size Rust gives a spawned thread:
+///
+/// - The deepest nesting the COMPILER can emit is **20**. At 22 the
+///   recursive-descent parser itself overflows, so no source program can
+///   produce a chunk nested deeper than the parser survives. That is a
+///   separate limit, recorded here because it bounds what a valid chunk can
+///   look like.
+/// - Uncapped, the walks survive a hand-built chunk nested **4600** deep and
+///   abort at **4800**.
+/// - The `u16` target width caps a chunk at 65536 instructions, and this shape
+///   costs four per level, so the reachable range runs to about **16384**.
+///   4800 is inside it, which is what makes the residual real rather than
+///   theoretical.
+///
+/// 256 is therefore about thirteen times the deepest nesting a program can
+/// have, and about nineteen times below the depth at which the walk aborts.
+/// Both endpoints scale with the host's stack, so the ratios are the durable
+/// part rather than the absolute numbers, and an embedded host with a far
+/// smaller stack is the case this protects most.
+///
+/// It is not chosen by analogy to [`crate::zero_value`]'s guard, which is 64
+/// for its own reasons. The shape of the two guards is shared; the value is
+/// not.
+///
+/// # A measurement error worth keeping
+///
+/// The first boundary taken here was **5500**, and it was wrong, because the
+/// test builder that produced the nested chunk was itself **recursive** and
+/// recursed as deeply as the structure it built. The probe and the subject
+/// were overflowing together, so the number described neither. The builder is
+/// iterative now and derives its layout in closed form. An instrument that
+/// shares a failure mode with its subject reports the sum of the two.
+const MAX_REGION_DEPTH: u32 = 256;
+
+/// Refuse a float opcode on a build without the `floats` feature.
+///
+/// A module compiled on a floats build may carry `IntToFloat` or
+/// `FloatToInt`, and a build without the feature cannot execute either. Before
+/// this check such a module verified and loaded, then failed at the call with
+/// `InvalidBytecode`, which is the class `verify` exists to exclude. The
+/// operator ruled on 2026-10-30 that the refusal belongs here, at load.
+///
+/// These two are the only float-specific opcodes. Every other float operation
+/// acts on a `Float` value, and without the feature no `Float` constant, field
+/// kind or value exists to reach one, because the wire decoder refuses the
+/// float tags. Pinned by `tests/float_opcode_without_floats.rs`.
+#[cfg(not(feature = "floats"))]
+fn check_no_float_opcodes(chunk: &Chunk) -> Result<(), VerifyError> {
+    for (ip, op) in chunk.ops.iter().enumerate() {
+        let name = match op {
+            Op::IntToFloat => "IntToFloat",
+            Op::FloatToInt => "FloatToInt",
+            _ => continue,
+        };
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "Op::{name} at {ip} requires the `floats` feature, which this build lacks"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Reject a chunk whose structured-control-flow operands do not point
+/// **forward**, before any region walk reads them (audit H1).
+///
+/// # The defect this closes
+///
+/// Every region walker in this module — [`analyze_yield_coverage`],
+/// [`wcet_region`], [`wcmu_region`] and [`verify_depth_region`] — advances its
+/// cursor to a position taken from an `If`, `Else` or `Loop` operand. A
+/// backward operand moves the cursor to a position it has already passed, and
+/// the walker then re-reads the same instruction forever; where the operand
+/// instead selects the recursive If-Else arm, the region it recurses into
+/// still contains the same `If`, and the recursion does not bottom out.
+///
+/// Both were reachable on hostile input, and neither is a hypothetical:
+///
+/// - `verify` computed [`compute_always_yielding`] **before** `verify_chunk`,
+///   so pass 1's target validation had not run on any chunk yet. A single
+///   backward `If` operand in an otherwise valid module hung `verify`, or
+///   aborted the process with a stack overflow, which no caller can catch.
+/// - [`wcet_stream_iteration`] and [`wcmu_stream_iteration`] are public and
+///   documented as standalone; they never ran pass 1 at all.
+///
+/// # Why a separate check rather than a guard in each walker
+///
+/// The walkers are four, the operands are three, and a guard per cursor
+/// assignment is twelve places to keep right. The property is a property of
+/// the chunk, so it is checked once, on the chunk, before anything walks it.
+///
+/// # What it does NOT establish
+///
+/// Forward and in range is what termination needs; it is weaker than pass 1's
+/// structured-position check (audit D2), which additionally requires each
+/// target to be the matching `Else` or `EndIf`. Pass 1 still runs and still
+/// enforces that. This check exists to make the walkers terminate, not to
+/// replace the structural validation.
+///
+/// It also does not bound recursion DEPTH. A chunk whose targets are all
+/// forward can still nest arbitrarily, and nesting is what the recursive
+/// walkers consume stack on. See
+/// `tests/verify_hostile_termination.rs`, which measures where that stands.
+fn check_forward_control_flow_targets(chunk: &Chunk) -> Result<(), VerifyError> {
+    let ops = &chunk.ops;
+    let n = ops.len();
+    for (ip, op) in ops.iter().enumerate() {
+        let (what, target) = match op {
+            Op::If(t) => ("If", *t as usize),
+            Op::Else(t) => ("Else", *t as usize),
+            Op::Loop(t) => ("Loop", *t as usize),
+            _ => continue,
+        };
+        // `<= n` rather than `< n`: a target of exactly `n` denotes the
+        // position one past the last instruction, which the walkers use as an
+        // exclusive region end and never dereference.
+        if target <= ip || target > n {
+            return Err(VerifyError {
+                chunk_name: chunk.name.clone(),
+                message: alloc::format!(
+                    "{what} at {ip} targets {target}, which is not a forward position \
+                     within the chunk (len={n}); a non-forward target makes the region \
+                     walks non-terminating"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Classify which chunks yield on *every* path from entry to return, accounting
@@ -314,6 +484,43 @@ fn wcet_region(
     clamp_productive_yield_loops: bool,
     wcet_extra: &[u32],
 ) -> Result<WcetOutcome, VerifyError> {
+    wcet_region_at(
+        chunk,
+        start,
+        end,
+        break_costs,
+        cost_model,
+        clamp_productive_yield_loops,
+        wcet_extra,
+        0,
+    )
+}
+
+/// [`wcet_region`] with the region-nesting depth carried explicitly.
+///
+/// Beyond [`MAX_REGION_DEPTH`] the chunk is refused. This entry is reachable
+/// from the public standalone cost pass, where no earlier pass has looked at
+/// the chunk at all.
+#[allow(clippy::too_many_arguments)]
+fn wcet_region_at(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    break_costs: &mut Vec<u32>,
+    cost_model: &crate::bytecode::CostModel,
+    clamp_productive_yield_loops: bool,
+    wcet_extra: &[u32],
+    nest: u32,
+) -> Result<WcetOutcome, VerifyError> {
+    if nest > MAX_REGION_DEPTH {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "control-flow regions nest deeper than {MAX_REGION_DEPTH}, which the \
+                 worst-case-execution-time walk cannot cost without exhausting the stack"
+            ),
+        });
+    }
     let ops = &chunk.ops;
     let mut cost: u32 = 0;
     let mut ip = start;
@@ -361,7 +568,7 @@ fn wcet_region(
                     } else {
                         unreachable!()
                     };
-                    let then_cost = wcet_region(
+                    let then_cost = wcet_region_at(
                         chunk,
                         ip + 1,
                         target - 1,
@@ -369,8 +576,9 @@ fn wcet_region(
                         cost_model,
                         clamp_productive_yield_loops,
                         wcet_extra,
+                        nest + 1,
                     )?;
-                    let else_cost = wcet_region(
+                    let else_cost = wcet_region_at(
                         chunk,
                         target,
                         endif_pos,
@@ -378,21 +586,36 @@ fn wcet_region(
                         cost_model,
                         clamp_productive_yield_loops,
                         wcet_extra,
+                        nest + 1,
                     )?;
                     // Exactly one branch runs, so the cost is the maximum of
                     // the two. Taken unconditionally, including from a branch
                     // that exits: an exiting branch still spent its cycles.
-                    cost += if then_cost.cost > else_cost.cost {
-                        then_cost.cost
+                    //
+                    // The markers are executed instructions and are charged. The
+                    // then-path dispatches its `Else`, which jumps to the `EndIf`,
+                    // and both paths dispatch the `EndIf`. Until 2026-10-25 the
+                    // walk charged neither, so the bound fell short of the cost
+                    // model by up to two cycles per `if`. The hosted runtime's
+                    // instruction count found it.
+                    let else_op = op_wcet_cycles(chunk, target - 1, cost_model, wcet_extra)?;
+                    let then_total = then_cost.cost.saturating_add(else_op);
+                    cost = cost.saturating_add(if then_total > else_cost.cost {
+                        then_total
                     } else {
                         else_cost.cost
-                    };
+                    });
+                    if endif_pos < ops.len() {
+                        cost = cost.saturating_add(op_wcet_cycles(
+                            chunk, endif_pos, cost_model, wcet_extra,
+                        )?);
+                    }
                     if !then_cost.falls_through && !else_cost.falls_through {
                         return Ok(WcetOutcome::exits(cost));
                     }
                     ip = endif_pos + 1;
                 } else {
-                    let then_cost = wcet_region(
+                    let then_cost = wcet_region_at(
                         chunk,
                         ip + 1,
                         target,
@@ -400,12 +623,19 @@ fn wcet_region(
                         cost_model,
                         clamp_productive_yield_loops,
                         wcet_extra,
+                        nest + 1,
                     )?;
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
                     // Taken unconditionally: a then-branch that exits via Trap
                     // or Return still spent its cycles on the path that took it.
-                    cost += then_cost.cost;
+                    // Both paths then dispatch the `EndIf` at the target, which is
+                    // charged for the reason given above.
+                    cost = cost.saturating_add(then_cost.cost);
+                    if target < ops.len() {
+                        cost = cost
+                            .saturating_add(op_wcet_cycles(chunk, target, cost_model, wcet_extra)?);
+                    }
                     ip = target + 1;
                 }
             }
@@ -417,7 +647,7 @@ fn wcet_region(
                 // valid input always has exit >= 1, so this is unchanged there.
                 let endloop_ip = loop_exit_target.saturating_sub(1);
                 let mut loop_break_costs: Vec<u32> = Vec::new();
-                let body_cost = wcet_region(
+                let body_cost = wcet_region_at(
                     chunk,
                     ip + 1,
                     endloop_ip,
@@ -425,6 +655,7 @@ fn wcet_region(
                     cost_model,
                     clamp_productive_yield_loops,
                     wcet_extra,
+                    nest + 1,
                 )?;
                 if loop_break_costs.is_empty() && !body_cost.falls_through {
                     return Ok(WcetOutcome::exits(cost.saturating_add(body_cost.cost)));
@@ -440,10 +671,10 @@ fn wcet_region(
                 // a loop that is not provably productive keeps its full
                 // iteration bound, so a conditional yield (which a resume
                 // could skip across many iterations) is never under-counted.
-                let iter_count = if !body_cost.falls_through
+                let single_pass = !body_cost.falls_through
                     || (clamp_productive_yield_loops
-                        && loop_body_all_paths_yield_no_inner_loop(ops, ip + 1, endloop_ip))
-                {
+                        && loop_body_all_paths_yield_no_inner_loop(ops, ip + 1, endloop_ip));
+                let iter_count = if single_pass {
                     1
                 } else {
                     match extract_loop_iteration_bound(chunk, ip) {
@@ -462,18 +693,36 @@ fn wcet_region(
                         }
                     }
                 };
-                let body_cost_total = body_cost.cost.saturating_mul(iter_count);
-                let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
-                cost += if max_break > body_cost_total {
-                    max_break
+                // Each completed iteration also dispatches the `EndLoop`
+                // back-edge, which the body region stops short of. A body that
+                // never falls through never reaches it.
+                let endloop = if body_cost.falls_through
+                    && endloop_ip < ops.len()
+                    && matches!(&ops[endloop_ip], Op::EndLoop(_))
+                {
+                    op_wcet_cycles(chunk, endloop_ip, cost_model, wcet_extra)?
                 } else {
-                    body_cost_total
+                    0
                 };
+                let body_cost_total = body_cost
+                    .cost
+                    .saturating_add(endloop)
+                    .saturating_mul(iter_count);
+                let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
+                // A counted loop runs its full passes and then one more partial
+                // pass, the header check that takes the break. Until 2026-10-25
+                // this took the maximum of the two, which left that last header
+                // pass uncharged. A single-pass loop ends inside the pass the body
+                // cost already covers, so it keeps the maximum.
+                cost = cost.saturating_add(if single_pass {
+                    max_break.max(body_cost_total)
+                } else {
+                    body_cost_total.saturating_add(max_break)
+                });
                 ip = loop_exit_target;
             }
-            Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
-                ip += 1;
-            }
+            // A marker met outside the structured arms above, as at a segment
+            // edge, is charged like any instruction. That can only raise the bound.
             _ => {
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 ip += 1;
@@ -538,7 +787,7 @@ fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
     }
 
     if end_val >= start_val {
-        let count = (end_val - start_val) as u64;
+        let count = end_val.checked_sub(start_val)? as u64;
         if count > u32::MAX as u64 {
             None
         } else {
@@ -870,6 +1119,41 @@ fn wcmu_region(
     resolver: &CallResolver,
     value_slot_bytes: u32,
 ) -> Result<McuOutcome, VerifyError> {
+    wcmu_region_at(
+        chunk,
+        start,
+        end,
+        break_results,
+        resolver,
+        value_slot_bytes,
+        0,
+    )
+}
+
+/// [`wcmu_region`] with the region-nesting depth carried explicitly.
+///
+/// Beyond [`MAX_REGION_DEPTH`] the chunk is refused, for the same reason as
+/// [`wcet_region_at`]: the public standalone memory pass reaches it with
+/// nothing having inspected the chunk first.
+#[allow(clippy::too_many_arguments)]
+fn wcmu_region_at(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    break_results: &mut Vec<McuResult>,
+    resolver: &CallResolver,
+    value_slot_bytes: u32,
+    nest: u32,
+) -> Result<McuOutcome, VerifyError> {
+    if nest > MAX_REGION_DEPTH {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "control-flow regions nest deeper than {MAX_REGION_DEPTH}, which the \
+                 worst-case-memory-usage walk cannot bound without exhausting the stack"
+            ),
+        });
+    }
     let ops = &chunk.ops;
     let mut current_offset: i32 = 0;
     let mut peak: u32 = 0;
@@ -972,6 +1256,7 @@ fn wcmu_region(
                         break_results,
                         resolver,
                         value_slot_bytes,
+                        nest,
                     )?;
                     let else_branch = wcmu_subregion(
                         chunk,
@@ -981,6 +1266,7 @@ fn wcmu_region(
                         break_results,
                         resolver,
                         value_slot_bytes,
+                        nest,
                     )?;
                     // Exactly one branch executes, so the peak and heap are the
                     // maximum across the two. This is taken unconditionally,
@@ -1008,6 +1294,7 @@ fn wcmu_region(
                         break_results,
                         resolver,
                         value_slot_bytes,
+                        nest,
                     )?;
                     // Taken unconditionally: a then-branch that exits via Trap
                     // still consumed operand slots and arena bytes, and the
@@ -1044,6 +1331,7 @@ fn wcmu_region(
                     &mut loop_breaks,
                     resolver,
                     value_slot_bytes,
+                    nest,
                 )?;
                 // Taken from the outcome unconditionally: a body that always
                 // traps still runs once and consumes what it consumes.
@@ -1108,8 +1396,7 @@ fn wcmu_region(
                 current_offset += 1 - n;
                 ip += 1;
             }
-            Op::CallVerifiedNative(native_idx, n_args)
-            | Op::CallExternalNative(native_idx, n_args) => {
+            Op::CallVerifiedNative(native_idx, _) | Op::CallExternalNative(native_idx, _) => {
                 // Native function runs in host code. The operand-stack
                 // effect is just the argument pop and return push. Heap
                 // contribution comes from the host attestation. Both
@@ -1117,12 +1404,18 @@ fn wcmu_region(
                 // structural effect at the operand-stack level; the
                 // per-class WCET budget distinction is observed by the
                 // pipelined-cycle pass.
+                // The high bit of the argument count is the error-reify
+                // flag, not part of the count, and a reified call pushes
+                // the value and a flag. Reading the raw byte as the count
+                // once moved the offset by 1 - 129 for a one-argument
+                // reified call and so understated the bound.
                 let native_heap = resolver.resolve_native(*native_idx);
-                let n = *n_args as i32;
-                let during_peak = (current_offset + 1).max(0) as u32;
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(native_heap);
-                current_offset += 1 - n;
+                current_offset += growth - shrink;
                 ip += 1;
             }
             Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
@@ -1151,6 +1444,7 @@ fn wcmu_region(
 /// and adjusts the result back to the caller's frame of reference. The
 /// returned `peak_above_initial` is the peak above the caller's initial
 /// position before this subregion.
+#[allow(clippy::too_many_arguments)]
 fn wcmu_subregion(
     chunk: &Chunk,
     start: usize,
@@ -1159,15 +1453,20 @@ fn wcmu_subregion(
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
     value_slot_bytes: u32,
+    nest: u32,
 ) -> Result<McuOutcome, VerifyError> {
     let mut sub_breaks: Vec<McuResult> = Vec::new();
-    let result = wcmu_region(
+    // `_at` rather than the wrapper (audit H1 residual): the wrapper restarts
+    // the nesting count at zero, so routing the recursion through it would
+    // leave the walk unbounded however deep the chunk nests.
+    let result = wcmu_region_at(
         chunk,
         start,
         end,
         &mut sub_breaks,
         resolver,
         value_slot_bytes,
+        nest + 1,
     )?;
     // Lift breaks from the subregion into the caller's frame of reference.
     for b in sub_breaks {
@@ -1221,6 +1520,11 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
             message: String::from("wcmu_stream_iteration requires a Stream block"),
         });
     }
+    // Audit H1: this entry is public and documented as standalone, so
+    // `verify_chunk`'s pass 1 has not run and no target has been validated.
+    // The region walk below follows those operands, and a backward one does
+    // not terminate.
+    check_forward_control_flow_targets(chunk)?;
 
     let ops = &chunk.ops;
     let stream_pos = ops
@@ -1273,7 +1577,21 @@ fn chunk_wcet_extra(
     cost_model: &crate::bytecode::CostModel,
     native_bounds: &[NativeIterationBound],
 ) -> Vec<u32> {
-    let mut extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
+    chunk_wcet_extra_with_callees(chunk, cost_model, native_bounds, &[])
+}
+
+/// [`chunk_wcet_extra`] with each callee's text-ness known, indexed by chunk.
+fn chunk_wcet_extra_with_callees(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
+    callee_returns_text: &[bool],
+) -> Vec<u32> {
+    let mut extra = crate::text_size::chunk_text_wcet_cycles_with_callees(
+        chunk,
+        cost_model.text_byte_cycles,
+        callee_returns_text,
+    );
     if !native_bounds.is_empty() {
         for (ip, op) in chunk.ops.iter().enumerate() {
             if let Op::CallVerifiedNative(idx, _) = op
@@ -1341,6 +1659,11 @@ pub fn wcet_stream_iteration_with_cost_model(
             message: String::from("wcet_stream_iteration requires a Stream block"),
         });
     }
+    // Audit H1: this entry is public and documented as standalone, so
+    // `verify_chunk`'s pass 1 has not run and no target has been validated.
+    // The region walk below follows those operands, and a backward one does
+    // not terminate.
+    check_forward_control_flow_targets(chunk)?;
 
     let ops = &chunk.ops;
     let stream_pos = ops
@@ -1426,19 +1749,61 @@ pub fn wcet_whole_chunk_with_cost_model(
     cost_model: &crate::bytecode::CostModel,
     native_bounds: &[NativeIterationBound],
 ) -> Result<u32, VerifyError> {
+    wcet_whole_chunk_with_callees(chunk, cost_model, native_bounds, &[])
+}
+
+/// Whether each chunk may return text, in chunk order, from its declared return shape.
+///
+/// A chunk is recorded as returning no text only when its signature's return is a scalar of a
+/// non-text kind, `Unit`, `bool`, `Byte`, `Word`, `Fixed` or `Float`. Any other shape, including
+/// `Top`, a composite and a module without signatures, is recorded as possibly text, which is
+/// the conservative reading. The text-heap analysis's own `returns_text` is not used here,
+/// because it tracks where strings are allocated rather than their type, so a function that
+/// returns its own text parameter is not marked by it.
+pub fn module_chunk_returns_text(module: &Module) -> Result<Vec<bool>, VerifyError> {
+    Ok((0..module.chunks.len())
+        .map(|i| {
+            !matches!(
+                module.signatures.get(i).map(|s| s.ret),
+                Some(crate::bytecode::WireShape::Scalar { kind: 0..=5 })
+            )
+        })
+        .collect())
+}
+
+/// [`wcet_whole_chunk_with_cost_model`] with each callee's text-ness known, as
+/// [`module_chunk_returns_text`] gives it.
+///
+/// A chunk-only query must treat every call result as possibly unbounded text, so a
+/// comparison of two calls' `Word` results, such as `peek_at(i) != peek_at(j)` in the
+/// self-hosted lexer's `intern_id`, is reported unboundable. Given the callees' text-ness the
+/// comparison bears no text term. The operator ruled first-hand on 2026-10-28 that this
+/// refusal is to be fixed. The chunk-only functions keep their conservative behaviour, since
+/// the compiler's debug witnesses depend on them.
+pub fn wcet_whole_chunk_with_callees(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
+    callee_returns_text: &[bool],
+) -> Result<u32, VerifyError> {
     if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
             message: String::from("wcet_whole_chunk requires a non-Stream block"),
         });
     }
+    // Audit H1, extended to the whole-chunk entries. This entry is public and
+    // standalone, so no target has been validated, and the region walks below
+    // do not terminate on a backward one.
+    check_forward_control_flow_targets(chunk)?;
     // The once-per-chunk external-native body contribution (#50) applies to
     // either path below.
     let external = external_native_wcet(chunk, native_bounds);
     // A Reentrant chunk's per-resume WCET is the exact maximum inter-yield
     // segment cost when the yields are top-level.
     if chunk.block_type == BlockType::Reentrant
-        && let Some(segmented) = reentrant_segmented_wcet(chunk, cost_model, native_bounds)?
+        && let Some(segmented) =
+            reentrant_segmented_wcet(chunk, cost_model, native_bounds, callee_returns_text)?
     {
         return Ok(segmented.saturating_add(external));
     }
@@ -1448,7 +1813,8 @@ pub fn wcet_whole_chunk_with_cost_model(
     // clamp applies.
     let clamp = chunk.block_type == BlockType::Reentrant;
     let mut break_costs: Vec<u32> = Vec::new();
-    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
+    let wcet_extra =
+        chunk_wcet_extra_with_callees(chunk, cost_model, native_bounds, callee_returns_text);
     let body_cost = wcet_region(
         chunk,
         0,
@@ -1482,12 +1848,13 @@ pub fn module_wcet_with_bounds(
     bounds: &[NativeIterationBound],
     cost_model: &crate::bytecode::CostModel,
 ) -> Result<Vec<u32>, VerifyError> {
+    let returns_text = module_chunk_returns_text(module)?;
     module
         .chunks
         .iter()
         .map(|chunk| match chunk.block_type {
             BlockType::Stream => wcet_stream_iteration_with_cost_model(chunk, cost_model, bounds),
-            _ => wcet_whole_chunk_with_cost_model(chunk, cost_model, bounds),
+            _ => wcet_whole_chunk_with_callees(chunk, cost_model, bounds, &returns_text),
         })
         .collect()
 }
@@ -1510,6 +1877,7 @@ fn reentrant_segmented_wcet(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
     native_bounds: &[NativeIterationBound],
+    callee_returns_text: &[bool],
 ) -> Result<Option<u32>, VerifyError> {
     // Collect Yield positions, bailing to None if any is nested.
     let mut depth: i32 = 0;
@@ -1534,7 +1902,8 @@ fn reentrant_segmented_wcet(
     }
 
     let len = chunk.ops.len();
-    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
+    let wcet_extra =
+        chunk_wcet_extra_with_callees(chunk, cost_model, native_bounds, callee_returns_text);
     let mut max_cost: u32 = 0;
     let mut seg_start: usize = 0;
     // Each segment ends just past its terminating yield, so the yield
@@ -1602,6 +1971,8 @@ pub fn wcmu_whole_chunk_with_value_slot_bytes(
             message: String::from("wcmu_whole_chunk requires a non-Stream block"),
         });
     }
+    // Audit H1, as in `wcet_whole_chunk_with_cost_model`.
+    check_forward_control_flow_targets(chunk)?;
     let mut breaks: Vec<McuResult> = Vec::new();
     let resolver = CallResolver::empty();
     let body = wcmu_region(
@@ -1750,6 +2121,214 @@ pub fn module_call_depth(module: &Module) -> Result<u32, VerifyError> {
         depth[idx] = d;
     }
     Ok(depth.into_iter().max().unwrap_or(0))
+}
+
+/// The cost of one instruction under the yield-counting walk: one for a
+/// `Yield`, zero for anything else.
+fn yield_count_cycles(op: &Op) -> u32 {
+    u32::from(matches!(op, Op::Yield))
+}
+
+/// A cost model whose worst-case "cycle" count is the number of `Yield`
+/// instructions executed. The region walk then reports the largest number of
+/// yields any path through the region executes, with each bounded loop's body
+/// multiplied by its iteration bound. Text operations cost nothing here.
+const YIELD_COUNT_MODEL: crate::bytecode::CostModel = crate::bytecode::CostModel {
+    value_slot_bytes: 0,
+    op_cycles: yield_count_cycles,
+    text_byte_cycles: 0,
+};
+
+/// The largest number of `Yield` instructions one run of the region
+/// `[start, end)` of `chunk` executes, with each `Call` charged the callee's
+/// whole-body count from `callee_counts`.
+fn region_yield_count(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    callee_counts: &[u32],
+) -> Result<u32, VerifyError> {
+    // The walk follows control-flow operands, which this standalone entry has
+    // not had validated, and a backward target would not terminate (audit H1).
+    check_forward_control_flow_targets(chunk)?;
+    let mut extra: Vec<u32> = alloc::vec![0; chunk.ops.len()];
+    for (ip, op) in chunk.ops.iter().enumerate() {
+        if let Op::Call(callee, _) = op {
+            let n = callee_counts
+                .get(*callee as usize)
+                .copied()
+                .ok_or_else(|| VerifyError {
+                    chunk_name: chunk.name.clone(),
+                    message: alloc::format!(
+                        "call at instruction {ip} names chunk {callee}, which does not exist"
+                    ),
+                })?;
+            // `u32::MAX` is the walk's reserved "unboundable text" marker, so a
+            // saturated count stays one below it. The bound only grows.
+            extra[ip] = n.min(u32::MAX - 1);
+        }
+    }
+    let mut breaks: Vec<u32> = Vec::new();
+    let outcome = wcet_region(
+        chunk,
+        start,
+        end,
+        &mut breaks,
+        &YIELD_COUNT_MODEL,
+        false,
+        &extra,
+    )?;
+    Ok(outcome.cost)
+}
+
+/// An upper bound on the number of resume values the host delivers to the
+/// chunk at `chunk_idx` between one arena reset and the next, not counting the
+/// value that starts the run.
+///
+/// For a `Stream` chunk this is the largest number of `Yield` instructions one
+/// iteration executes, from the chunk's first instruction to its `Reset`. For
+/// any other chunk it is the largest number executed by one whole call. Each
+/// `Yield` suspends the virtual machine once and is completed by exactly one
+/// `resume`, so the count of executed yields is the count of resume values.
+///
+/// # How the bound is computed
+///
+/// The worst-case-execution-time region walk is reused under a cost model in
+/// which a `Yield` costs one and every other instruction costs zero. The walk
+/// takes the larger branch at every `If` and multiplies each loop body by the
+/// loop's statically extracted iteration bound, so a yield inside a bounded
+/// loop is counted once per iteration. The walk is shallow with respect to
+/// `Call`, so each chunk's whole-body count is computed first, bottom-up over
+/// the acyclic call graph, and charged as a per-instruction extra at every
+/// call site of that chunk. A yield inside a `yield fn` callee is therefore
+/// counted at its caller.
+///
+/// # Where it is conservative
+///
+/// - Both arms of a branch are not summed, but the larger arm is taken even
+///   when the program never takes it.
+/// - A loop is charged its full iteration bound plus the partial pass that
+///   takes the exit, which is the same over-approximation the time bound makes.
+/// - A `Stream` chunk is counted from instruction zero, so instructions before
+///   its `Stream` marker, which run only on the first call, are charged to
+///   every iteration.
+/// - A callee is charged its whole-body count at every call site, even when a
+///   run reaches only part of it.
+///
+/// # Failure modes
+///
+/// A chunk that cannot yield, directly or through a callee, is never walked
+/// and contributes zero. A chunk that can yield is walked with the strict loop
+/// rule, so a loop with a yield, a fall-through body, and no extractable
+/// iteration bound is refused, since it admits an unbounded number of resumes
+/// before the next reset. A call cycle, which the verifier rejects elsewhere,
+/// is refused here as well.
+pub fn max_resumes_before_reset(module: &Module, chunk_idx: usize) -> Result<u32, VerifyError> {
+    let n = module.chunks.len();
+    let chunk = module.chunks.get(chunk_idx).ok_or_else(|| VerifyError {
+        chunk_name: String::from("<module>"),
+        message: alloc::format!("chunk index {chunk_idx} is out of range for {n} chunks"),
+    })?;
+    // Which chunks can yield at all, directly or transitively. A fixpoint
+    // over the call graph, terminating within `n + 1` passes because each
+    // productive pass flips at least one entry from false to true.
+    let mut may_yield: Vec<bool> = module
+        .chunks
+        .iter()
+        .map(|c| c.ops.iter().any(|op| matches!(op, Op::Yield)))
+        .collect();
+    for _ in 0..=n {
+        let mut changed = false;
+        for (i, c) in module.chunks.iter().enumerate() {
+            if may_yield[i] {
+                continue;
+            }
+            let reaches = c.ops.iter().any(|op| {
+                matches!(op, Op::Call(callee, _) if may_yield.get(*callee as usize).copied().unwrap_or(false))
+            });
+            if reaches {
+                may_yield[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    if !may_yield[chunk_idx] {
+        return Ok(0);
+    }
+    // Only chunks reachable from `chunk_idx` are walked, so a yielding chunk
+    // the entry never calls cannot make this query fail. A worklist over the
+    // call graph; each chunk is pushed at most once, so it ends within `n`
+    // pops.
+    let mut reachable: Vec<bool> = alloc::vec![false; n];
+    let mut work: Vec<usize> = alloc::vec![chunk_idx];
+    reachable[chunk_idx] = true;
+    while let Some(i) = work.pop() {
+        for op in &module.chunks[i].ops {
+            if let Op::Call(callee, _) = op
+                && let Some(seen) = reachable.get_mut(*callee as usize)
+                && !*seen
+            {
+                *seen = true;
+                work.push(*callee as usize);
+            }
+        }
+    }
+    // Whole-body counts, bottom-up. A chunk is computed once every callee it
+    // calls is computed. Each productive pass computes at least one chunk, so
+    // `n + 1` passes suffice for an acyclic call graph; a chunk left over
+    // afterwards lies on a cycle.
+    let mut counts: Vec<Option<u32>> = may_yield
+        .iter()
+        .zip(&reachable)
+        .map(|(&y, &r)| if y && r { None } else { Some(0) })
+        .collect();
+    for _ in 0..=n {
+        let mut progressed = false;
+        for i in 0..n {
+            if counts[i].is_some() {
+                continue;
+            }
+            let c = &module.chunks[i];
+            let ready = c.ops.iter().all(|op| match op {
+                Op::Call(callee, _) => counts.get(*callee as usize).is_none_or(|x| x.is_some()),
+                _ => true,
+            });
+            if !ready {
+                continue;
+            }
+            let known: Vec<u32> = counts.iter().map(|x| x.unwrap_or(0)).collect();
+            counts[i] = Some(region_yield_count(c, 0, c.ops.len(), &known)?);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    if counts.iter().any(Option::is_none) {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from(
+                "the call graph has a cycle, so the number of resumes cannot be bounded",
+            ),
+        });
+    }
+    let known: Vec<u32> = counts.iter().map(|x| x.unwrap_or(0)).collect();
+    if chunk.block_type == BlockType::Stream {
+        let reset_pos = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Reset))
+            .ok_or_else(|| VerifyError {
+                chunk_name: chunk.name.clone(),
+                message: String::from("Stream block missing Reset instruction"),
+            })?;
+        region_yield_count(chunk, 0, reset_pos, &known)
+    } else {
+        Ok(known[chunk_idx])
+    }
 }
 
 /// Compute the module's [`RuntimeFootprint`] for arena pre-sizing.
@@ -1925,7 +2504,7 @@ pub fn module_chunk_text_analyses(
 }
 
 /// Topological order of the call graph. Leaves come first, roots last.
-fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
+pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
     let n = module.chunks.len();
     let mut visited = alloc::vec![false; n];
     let mut on_stack = alloc::vec![false; n];
@@ -2001,6 +2580,10 @@ fn compute_chunk_wcmu(
         }
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len()),
     };
+    // Audit H1. Every module entry that reaches this walk is public and may be
+    // handed an unverified module, so the targets are checked here once for
+    // all of them.
+    check_forward_control_flow_targets(chunk)?;
 
     let mut breaks: Vec<McuResult> = Vec::new();
     let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?;
@@ -2277,6 +2860,16 @@ pub fn chunk_verification_obligations(
 /// 5. Productivity rule (Stream chunks only): All control flow paths from
 ///    Stream to Reset pass through at least one Yield.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
+    // Control-flow targets first (audit H1). The productivity classification
+    // below walks regions using these operands, and it runs BEFORE
+    // `verify_chunk`'s pass 1, so without this nothing has validated them yet.
+    // A backward target does not merely give a wrong answer: it makes the walk
+    // non-terminating, or overflows the stack and aborts the process.
+    for chunk in &module.chunks {
+        #[cfg(not(feature = "floats"))]
+        check_no_float_opcodes(chunk)?;
+        check_forward_control_flow_targets(chunk)?;
+    }
     // Inter-procedural productivity classification, computed once for the module:
     // which chunks yield on every path (directly or by delegating to another
     // always-yielding chunk). A Stream chunk may satisfy its productivity
@@ -2286,6 +2879,9 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         verify_chunk(chunk, module, &always, None)?;
         verify_stack_depth(chunk)?;
     }
+    // Definite initialization, after the structural checks above have
+    // validated every control-flow target and slot index it reads.
+    crate::verify_init::verify_definite_initialization(module)?;
     // Typed operand-stack pass (A.2.1): reconstructs per-slot flat shapes and
     // validates baked flat offsets, branch/loop stack balance, and the
     // wire-carried layout tables. It runs in defer-on-`Top` mode — a value
@@ -2326,14 +2922,13 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
         Op::Dup => (1, 1),
         Op::SetLocal(_) | Op::SetData(_) => (1, -1),
-        Op::GetDataIndexed(_, _) => (1, 0),
-        Op::SetDataIndexed(_, _) => (2, -2),
-        Op::BoundsCheck(_) => (1, 0),
+        Op::GetDataIndexed(_, _) => (2, 5),
+        Op::SetDataIndexed(_, _) => (2, 4),
+        Op::BoundsCheck(_) => (1, 5),
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => (2, 5),
         Op::Add
         | Op::Sub
         | Op::Mul
-        | Op::Div
-        | Op::Mod
         | Op::CmpEq
         | Op::CmpNe
         | Op::CmpLt
@@ -2346,7 +2941,6 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         | Op::Shl
         | Op::Shr
         | Op::FixedMul(_)
-        | Op::FixedDiv(_)
         | Op::GetIndex(_) => (2, -1),
         Op::Neg
         | Op::Not
@@ -2377,13 +2971,18 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
             let c = op.count() as i32;
             (c, 1 - c)
         }
-        Op::CheckedAdd
+        Op::Div
+        | Op::Mod
+        | Op::FixedDiv(_)
+        | Op::CheckedAdd
         | Op::CheckedSub
         | Op::CheckedMod
         | Op::CheckedMul(_)
         | Op::CheckedDiv(_) => (2, 1),
         Op::CheckedNeg => (1, 2),
         Op::PopN(n) => (*n as i32, -(*n as i32)),
+        Op::Trap(kind) if *kind == crate::bytecode::TrapKind::IndexOutOfBounds.code() => (5, -5),
+        Op::Trap(kind) if *kind == crate::bytecode::TrapKind::HostError.code() => (1, -1),
         Op::If(_) | Op::BreakIf(_) => (1, -1),
         Op::Else(_)
         | Op::EndIf
@@ -2494,6 +3093,32 @@ fn verify_depth_region(
     entry: i32,
     breaks: &mut Vec<i32>,
 ) -> Result<Option<i32>, VerifyError> {
+    verify_depth_region_at(chunk, start, end, entry, breaks, 0)
+}
+
+/// [`verify_depth_region`] with the recursion depth carried explicitly.
+///
+/// Beyond [`MAX_REGION_DEPTH`] the chunk is refused. This walk returns a
+/// `Result`, so refusing is available to it where the yield-coverage walk
+/// must answer conservatively instead.
+#[allow(clippy::too_many_arguments)]
+fn verify_depth_region_at(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    entry: i32,
+    breaks: &mut Vec<i32>,
+    nest: u32,
+) -> Result<Option<i32>, VerifyError> {
+    if nest > MAX_REGION_DEPTH {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "control-flow regions nest deeper than {MAX_REGION_DEPTH}, which the \
+                 stack-depth walk cannot reconstruct without exhausting the stack"
+            ),
+        });
+    }
     let ops = &chunk.ops;
     let mut depth = entry;
     let mut ip = start;
@@ -2511,7 +3136,13 @@ fn verify_depth_region(
             // to the following instruction. A `loop` chunk therefore ends in
             // `Reset` rather than `Return`, which is correct and is why "the
             // reference compiler always emits a trailing Return" is false.
-            Op::Trap(_) | Op::Return | Op::Reset => return Ok(None),
+            Op::Trap(_) | Op::Return | Op::Reset => {
+                let (req, _) = op_depth_effect(op, chunk);
+                if depth < req {
+                    return Err(depth_underflow(chunk, ip, op, req, depth));
+                }
+                return Ok(None);
+            }
             Op::Break(_) => {
                 // Unconditional exit to after the enclosing loop, carrying
                 // the current operand depth.
@@ -2541,8 +3172,10 @@ fn verify_depth_region(
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
                     };
-                    let then_end = verify_depth_region(chunk, ip + 1, target - 1, depth, breaks)?;
-                    let else_end = verify_depth_region(chunk, target, endif, depth, breaks)?;
+                    let then_end =
+                        verify_depth_region_at(chunk, ip + 1, target - 1, depth, breaks, nest + 1)?;
+                    let else_end =
+                        verify_depth_region_at(chunk, target, endif, depth, breaks, nest + 1)?;
                     depth = match (then_end, else_end) {
                         (Some(a), Some(b)) => a.max(b),
                         (Some(a), None) => a,
@@ -2551,7 +3184,8 @@ fn verify_depth_region(
                     };
                     ip = endif + 1;
                 } else {
-                    let then_end = verify_depth_region(chunk, ip + 1, target, depth, breaks)?;
+                    let then_end =
+                        verify_depth_region_at(chunk, ip + 1, target, depth, breaks, nest + 1)?;
                     if let Some(a) = then_end {
                         depth = depth.max(a);
                     }
@@ -2568,7 +3202,14 @@ fn verify_depth_region(
                     // Saturating so a malformed `Loop(exit = 0)` cannot underflow
                     // the body delimiter (audit E1); the verify() path already
                     // rejects it in Pass 1, and valid input has exit >= 1.
-                    verify_depth_region(chunk, ip + 1, exit.saturating_sub(1), depth, &mut loop_breaks)?;
+                    verify_depth_region_at(
+                        chunk,
+                        ip + 1,
+                        exit.saturating_sub(1),
+                        depth,
+                        &mut loop_breaks,
+                        nest + 1,
+                    )?;
                 depth = loop_breaks
                     .iter()
                     .copied()
@@ -3006,16 +3647,7 @@ fn verify_chunk(
                     } else {
                         "SetDataIndexed"
                     };
-                    if data_len == 0 {
-                        return Err(VerifyError {
-                            chunk_name: name.clone(),
-                            message: alloc::format!(
-                                "{} at {} but module has no data layout declared",
-                                op_name,
-                                ip
-                            ),
-                        });
-                    }
+                    // Empty spans need no storage and still have total outcomes.
                     record(ip, P1, "data-range-layout-declared");
                     let base_usize = *base as usize;
                     let len_usize = *len as usize;
@@ -3114,6 +3746,25 @@ fn verify_chunk(
                         });
                     }
                     record(ip, P1, "call-target-and-arity-in-range");
+                }
+                // A native call must name an entry of the module's native table. An index past
+                // it used to be admitted and failed only when the call ran, which the operator
+                // ruled on 2026-10-28 should be a rejection at admission instead.
+                Op::CallVerifiedNative(native, _) | Op::CallExternalNative(native, _) => {
+                    let nnatives = module.native_names.len();
+                    if *native as usize >= nnatives {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} names native {} but the module declares {} native(s)",
+                                op,
+                                ip,
+                                native,
+                                nnatives
+                            ),
+                        });
+                    }
+                    record(ip, P1, "native-index-in-range");
                 }
                 // A Q-format fraction-bit count must be less than the
                 // declared word width: the fraction cannot meet or exceed
@@ -3369,7 +4020,7 @@ fn verify_chunk(
 }
 
 #[cfg(all(test, feature = "compile"))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
     use alloc::vec;
@@ -3420,7 +4071,13 @@ mod tests {
             constants: alloc::vec![crate::bytecode::ConstValue::Int(0)],
             struct_templates: Vec::new(),
             local_count,
-            param_count: 0,
+            // A stream or reentrant fixture reads slot 0 as its entry
+            // parameter, as the comment above says, so it declares one. The
+            // definite-initialization rule refuses a read of a local that no
+            // path writes, and a parameter is written on entry.
+            param_count: u8::from(
+                local_count > 0 && matches!(block_type, BlockType::Stream | BlockType::Reentrant),
+            ),
             block_type,
             param_types: Vec::new(),
             debug_pool: None,
@@ -3733,7 +4390,7 @@ mod tests {
             ],
             BlockType::Reentrant,
         );
-        let segmented = reentrant_segmented_wcet(&reentrant, cm, &[])
+        let segmented = reentrant_segmented_wcet(&reentrant, cm, &[], &[])
             .expect("no loop bound error")
             .expect("top-level yields segment");
         // Whole-body cumulative cost for comparison.
@@ -3818,7 +4475,10 @@ mod tests {
             BlockType::Reentrant,
         );
         // The yield is nested, so the top-level segment split declines.
-        assert_eq!(reentrant_segmented_wcet(&chunk, cm, &[]).unwrap(), None);
+        assert_eq!(
+            reentrant_segmented_wcet(&chunk, cm, &[], &[]).unwrap(),
+            None
+        );
         // The clamped per-resume cost succeeds (loop counted once).
         let clamped = wcet_whole_chunk_with_cost_model(&chunk, cm, &[])
             .expect("clamp succeeds for productive loop");
@@ -3858,7 +4518,7 @@ mod tests {
             BlockType::Reentrant,
         );
         assert_eq!(
-            reentrant_segmented_wcet(&nested, cm, &[]).expect("no bound error"),
+            reentrant_segmented_wcet(&nested, cm, &[], &[]).expect("no bound error"),
             None,
             "a nested yield declines per-segment analysis"
         );
@@ -4204,6 +4864,14 @@ mod tests {
         // `exit - 1` body delimiter to a verifier-time panic. A returned error
         // (rather than a panic) is itself the assertion that the totality of the
         // verifier is preserved.
+        //
+        // **The rejecting check changed with audit H1, and the contract did
+        // not.** An exit of zero is not a forward position, so
+        // `check_forward_control_flow_targets` now refuses it before pass 1's
+        // structured `expected exit` check is reached. E1's own check is still
+        // exercised, by `loop_exit_not_after_endloop_rejected`, whose hostile
+        // exit is forward and therefore reaches it. What this test asserts is
+        // what it always asserted: the verifier returns rather than panicking.
         let chunk = make_chunk(
             "hostile",
             vec![
@@ -4216,7 +4884,7 @@ mod tests {
         let module = make_module(vec![chunk]);
         let err = verify(&module).unwrap_err();
         assert!(
-            err.message.contains("expected exit"),
+            err.message.contains("expected exit") || err.message.contains("forward position"),
             "expected a Loop-exit rejection, got: {}",
             err.message
         );
@@ -4643,8 +5311,8 @@ mod tests {
         assert_eq!(Op::CmpEq.cost(), 2);
         assert_eq!(Op::Return.cost(), 2);
 
-        assert_eq!(Op::Div.cost(), 3);
-        assert_eq!(Op::Mod.cost(), 3);
+        assert_eq!(Op::Div.cost(), 5);
+        assert_eq!(Op::Mod.cost(), 5);
         assert_eq!(
             Op::GetField(crate::bytecode::StructField::Boxed { name_const: 0 }).cost(),
             3
@@ -4687,12 +5355,13 @@ mod tests {
 
     #[test]
     fn wcet_branching_takes_max() {
-        // Stream -> PushTrue -> If { Add(2) } Else { Div(3) + Mul(2) } ->
+        // Stream -> PushTrue -> If { Add(2) } Else { Div(5) + Mul(2) } ->
         //   Yield -> Pop -> Reset.
-        // Then body [3,4): Add = 2. Else body [5,7): Div(3) + Mul(2) = 5.
-        // Max branch = 5.
-        // Body: PushTrue(1) + If(1) + 5 + Yield(1) + Pop(1) = 9.
-        // Overhead: Stream(1) + Reset(1) = 2. Total = 11.
+        // Then path [3,4] with its Else: Add(2) + Else(1) = 3. Else body [5,7):
+        // Div(5) + Mul(2) = 7. Max branch = 7, and both paths dispatch EndIf(1).
+        // Body: PushTrue(1) + If(1) + 7 + EndIf(1) + Yield(1) + Pop(1) = 12.
+        // Overhead: Stream(1) + Reset(1) = 2. Total = 14. It was 13 until the
+        // markers were charged on 2026-10-25.
         let chunk = make_chunk(
             "tick",
             vec![
@@ -4711,7 +5380,7 @@ mod tests {
             BlockType::Stream,
         );
         let cost = wcet_stream_iteration(&chunk).unwrap();
-        assert_eq!(cost, 11);
+        assert_eq!(cost, 14);
     }
 
     #[test]
@@ -5042,8 +5711,9 @@ mod tests {
     // applicable; the opcodes do not exist and closure-shaped
     // source expressions are rejected at the type checker. The
     // type-checker-stage rejection is covered by
-    // `closures_rejected_at_typecheck` and
-    // `first_class_function_rejected_at_compile` in `typecheck.rs`.
+    // `closure_rejected_at_typecheck` and
+    // `recursive_closure_rejected_at_typecheck` in `typecheck.rs`.
+    // **Both names here previously resolved to nothing.**
 
     #[test]
     fn verify_resource_bounds_skips_non_stream() {
@@ -5607,8 +6277,9 @@ mod tests {
     /// against `wire_format::opcode_table`, which is the wire format's
     /// application binary interface: a new opcode has to appear there to be
     /// encodable at all, so an opcode added without a representative here is
-    /// reported BY NAME rather than silently skipped.
-    fn representative_ops() -> Vec<Op> {
+    /// reported BY NAME rather than silently skipped. The self-hosted trap
+    /// classifier's per-tag test in `selfhost/traps.rs` reuses it.
+    pub(crate) fn representative_ops() -> Vec<Op> {
         use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, StructField, TupleField};
         use crate::value_layout::{CompositeKind, ScalarKind};
         vec![

@@ -47,6 +47,24 @@ pub fn monomorphize(program: Program) -> Program {
 pub fn monomorphize_with_provenance(
     program: Program,
 ) -> (Program, BTreeMap<String, (String, String)>) {
+    monomorphize_with_resolved_resumes(program, &BTreeMap::new())
+}
+
+/// As [`monomorphize_with_provenance`], with the type the type checker
+/// resolved for each `yield` that no `loop main` parameter types.
+///
+/// `resolved` is the table [`crate::typecheck::check_with_target_resolving_resumes`]
+/// returns, keyed by function name and then by the `yield`'s span. A `yield`
+/// in a non-generic function is typed by `loop main`'s first parameter when
+/// there is one, and otherwise by its entry here, so a generic call on a
+/// resume value whose type a later use fixes specializes as the annotated
+/// form does. The operator ruled on 2026-10-31, option B, that
+/// monomorphization is fed the type checker's types. The table is consulted
+/// only for a `yield`, so every other specialization decision is unchanged.
+pub(crate) fn monomorphize_with_resolved_resumes(
+    program: Program,
+    resolved: &crate::typecheck::ResolvedResumes,
+) -> (Program, BTreeMap<String, (String, String)>) {
     let mut program = program;
 
     // Build a map from function name to FunctionDef for lookup.
@@ -97,6 +115,27 @@ pub fn monomorphize_with_provenance(
         })
         .collect();
 
+    // The type a `yield` resumes with in a `yield` or `loop` function, the
+    // first parameter of `loop main`, which is the one value `Vm::resume`
+    // checks. The type checker infers an unannotated resume binding from the
+    // same parameter, so a generic call on that binding specializes here as
+    // it does under the annotation `let r: T = yield v`. With no such
+    // parameter it is `None` and the binding stays unknown, which the type
+    // checker refuses when a generic call depends on it.
+    let main_resume: Option<TypeExpr> = program
+        .functions
+        .iter()
+        .find(|f| f.name == "main" && f.category == crate::ast::FunctionCategory::Loop)
+        .and_then(|f| f.params.first())
+        .and_then(|p| p.type_expr.clone());
+    let resume_for = |category: crate::ast::FunctionCategory| {
+        if category == crate::ast::FunctionCategory::Fn {
+            None
+        } else {
+            main_resume.clone()
+        }
+    };
+
     // Local-type information for argument-type inference.
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     // Specializations generated. Keyed on (function, type_args
@@ -124,6 +163,8 @@ pub fn monomorphize_with_provenance(
                     new_functions: &mut new_functions,
                     fn_returns: &fn_returns,
                     struct_table: &struct_table,
+                    resume: resume_for(func.category),
+                    resolved_resumes: resolved.get(&func.name),
                 };
                 visitor.visit_block(&mut func.body);
             }
@@ -184,6 +225,7 @@ pub fn monomorphize_with_provenance(
         // new_functions mutably for inserting nested specializations.
         let len_before = new_functions.len();
         let mut body_clone = new_functions[idx].body.clone();
+        let resume = resume_for(new_functions[idx].category);
         {
             use crate::visitor::MutVisitor;
             let mut visitor = CallSpecializer {
@@ -193,6 +235,8 @@ pub fn monomorphize_with_provenance(
                 new_functions: &mut new_functions,
                 fn_returns: &fn_returns,
                 struct_table: &struct_table,
+                resume,
+                resolved_resumes: None,
             };
             visitor.visit_block(&mut body_clone);
         }
@@ -474,6 +518,12 @@ fn specialize_enums(
             }
         }
         func.return_type = resolve_generic_type_to_spec(&func.return_type, &enum_specs);
+        LetAnnotationRewriter {
+            specs: &enum_specs,
+            structs: false,
+            renamed_locals: BTreeMap::new(),
+        }
+        .visit_block(&mut func.body);
     }
     program
         .types
@@ -849,6 +899,31 @@ fn specialize_structs(
     let mut new_structs: Vec<StructDef> = Vec::new();
     let mut spec_meta: Vec<SpecInstance> = Vec::new();
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    // A generic struct instance named in a signature needs its specialization even when the
+    // program never constructs one, as a host-built entry argument does not. Without it the
+    // signature keeps the template's name and a field read is baked from the template's field
+    // type, an unresolved type parameter. A generic function's own signature mentions its type
+    // parameters and is specialized by the function pass instead.
+    for func in &program.functions {
+        if !func.type_params.is_empty() || !func.const_params.is_empty() {
+            continue;
+        }
+        let types = func
+            .params
+            .iter()
+            .filter_map(|p| p.type_expr.as_ref())
+            .chain(core::iter::once(&func.return_type));
+        for t in types {
+            seed_struct_specs_from_type(
+                t,
+                &generic_structs,
+                &mut struct_specs,
+                &mut reverse_specs,
+                &mut new_structs,
+                &mut spec_meta,
+            );
+        }
+    }
     for func in &mut program.functions {
         local_types.clear();
         for param in &func.params {
@@ -875,9 +950,19 @@ fn specialize_structs(
     // `Buf<8>` in a signature resolves to `Buf__c8`, matching the
     // specialized construction (B40).
     for func in &mut program.functions {
+        let mut renamed_locals: BTreeMap<String, (String, String)> = BTreeMap::new();
         for param in &mut func.params {
             if let Some(t) = &param.type_expr {
                 let spec = resolve_generic_type_to_spec(t, &struct_specs);
+                if let (
+                    TypeExpr::Named(original, ..),
+                    TypeExpr::Named(spec_name, ..),
+                    Pattern::Variable(local, _),
+                ) = (t, &spec, &param.pattern)
+                    && original != spec_name
+                {
+                    renamed_locals.insert(local.clone(), (original.clone(), spec_name.clone()));
+                }
                 // **THE PATTERN MUST FOLLOW THE TYPE.** Rewriting `P<Word>` to `P__Word` here
                 // while leaving a `P { a, b }` pattern beside it naming `P` leaves the two
                 // disagreeing, and nothing downstream objects: a parameter pattern is bound but
@@ -894,11 +979,169 @@ fn specialize_structs(
             }
         }
         func.return_type = resolve_generic_type_to_spec(&func.return_type, &struct_specs);
+        LetAnnotationRewriter {
+            specs: &struct_specs,
+            structs: true,
+            renamed_locals,
+        }
+        .visit_block(&mut func.body);
     }
     program
         .types
         .extend(new_structs.into_iter().map(TypeDef::Struct));
     (program, spec_meta)
+}
+
+/// Rewrites a `let` annotation naming a generic instance, `Maybe<Word>` say, to the specialized
+/// name its value now carries, `Maybe__Word`, as the signature passes do for parameters and
+/// returns. Without it the re-check after monomorphization compares the two names and refuses
+/// the binding. For a struct the binding's destructuring pattern follows the type, for the reason
+/// the parameter pass gives.
+///
+/// In the struct pass it also rewrites the struct patterns of a `match` on a local whose type was
+/// renamed, a parameter or an annotated `let`. A parameter typed `P<Word>` takes `P__Word` once
+/// the signature pass seeds that specialization, and an arm pattern `P { .. }` left naming the
+/// template is refused by the re-check.
+struct LetAnnotationRewriter<'a> {
+    specs: &'a BTreeMap<(String, String), String>,
+    structs: bool,
+    /// Each local whose struct type was renamed, as (template name, specialization name).
+    renamed_locals: BTreeMap<String, (String, String)>,
+}
+
+impl crate::visitor::MutVisitor for LetAnnotationRewriter<'_> {
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Let(l) = stmt
+            && let Some(t) = &l.type_expr
+        {
+            let spec = resolve_generic_type_to_spec(t, self.specs);
+            if self.structs
+                && let (TypeExpr::Named(original, ..), TypeExpr::Named(spec_name, ..)) = (t, &spec)
+                && original != spec_name
+            {
+                let (original, spec_name) = (original.clone(), spec_name.clone());
+                rewrite_pattern_struct_name(&mut l.pattern, &original, &spec_name);
+                if let Pattern::Variable(local, _) = &l.pattern {
+                    self.renamed_locals
+                        .insert(local.clone(), (original.clone(), spec_name.clone()));
+                }
+            }
+            l.type_expr = Some(spec);
+        }
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        if self.structs
+            && let Expr::Match {
+                scrutinee, arms, ..
+            } = expr
+            && let Expr::Ident { name, .. } = scrutinee.as_ref()
+            && let Some((original, spec_name)) = self.renamed_locals.get(name).cloned()
+        {
+            for arm in arms.iter_mut() {
+                rewrite_pattern_struct_name(&mut arm.pattern, &original, &spec_name);
+            }
+        }
+        self.walk_expr(expr);
+    }
+}
+
+/// Ensure the specialization of every concrete generic struct instance `t` names, inner ones
+/// first, as a construction of it would. An instance whose arguments are not all concrete, or
+/// whose const arguments are not literals, is left for the passes that already handle it.
+fn seed_struct_specs_from_type(
+    t: &TypeExpr,
+    generic_structs: &BTreeMap<String, StructDef>,
+    specs: &mut BTreeMap<(String, String), String>,
+    reverse_specs: &mut BTreeMap<String, (String, Vec<TypeExpr>)>,
+    new_structs: &mut Vec<StructDef>,
+    spec_meta: &mut Vec<SpecInstance>,
+) {
+    let recurse = |inner: &TypeExpr,
+                   specs: &mut BTreeMap<(String, String), String>,
+                   reverse_specs: &mut BTreeMap<String, (String, Vec<TypeExpr>)>,
+                   new_structs: &mut Vec<StructDef>,
+                   spec_meta: &mut Vec<SpecInstance>| {
+        seed_struct_specs_from_type(
+            inner,
+            generic_structs,
+            specs,
+            reverse_specs,
+            new_structs,
+            spec_meta,
+        )
+    };
+    match t {
+        TypeExpr::Named(name, args, const_args, _) => {
+            for a in args {
+                recurse(a, specs, reverse_specs, new_structs, spec_meta);
+            }
+            let Some(def) = generic_structs.get(name) else {
+                return;
+            };
+            if args.len() != def.type_params.len() || const_args.len() != def.const_params.len() {
+                return;
+            }
+            // Every argument must be concrete: not a type parameter of any generic struct being
+            // seeded, which is the only way a bare name could remain unresolved here.
+            if args.iter().any(|a| mentions_type_param(a, def)) {
+                return;
+            }
+            let Some(const_values) = const_args
+                .iter()
+                .map(|c| c.as_lit())
+                .collect::<Option<Vec<i64>>>()
+            else {
+                return;
+            };
+            let type_args: Vec<TypeExpr> = args
+                .iter()
+                .map(|a| resolve_generic_type_to_spec(a, specs))
+                .collect();
+            let key = (
+                name.clone(),
+                generic_cache_canonical(&type_args, &const_values),
+            );
+            if specs.contains_key(&key) || new_structs.len() >= TYPE_SPECIALIZATION_LIMIT {
+                return;
+            }
+            let spec_name = mangle_struct_with_consts(name, &type_args, &const_values);
+            let specialized =
+                specialize_struct(def, &type_args, &const_values, spec_name.clone(), specs);
+            specs.insert(key, spec_name.clone());
+            reverse_specs.insert(spec_name.clone(), (name.clone(), type_args.clone()));
+            spec_meta.push(SpecInstance {
+                orig: name.clone(),
+                spec_name,
+                type_args,
+                const_values,
+            });
+            new_structs.push(specialized);
+        }
+        TypeExpr::Tuple(items, _) => {
+            for i in items {
+                recurse(i, specs, reverse_specs, new_structs, spec_meta);
+            }
+        }
+        TypeExpr::Array(inner, _, _) => {
+            recurse(inner, specs, reverse_specs, new_structs, spec_meta)
+        }
+        _ => {}
+    }
+}
+
+/// Whether `t` names one of `def`'s own type parameters.
+fn mentions_type_param(t: &TypeExpr, def: &StructDef) -> bool {
+    match t {
+        TypeExpr::Named(n, args, _, _) => {
+            def.type_params.iter().any(|p| p.name == *n)
+                || args.iter().any(|a| mentions_type_param(a, def))
+        }
+        TypeExpr::Tuple(items, _) => items.iter().any(|i| mentions_type_param(i, def)),
+        TypeExpr::Array(inner, _, _) => mentions_type_param(inner, def),
+        _ => false,
+    }
 }
 
 /// AST visitor that rewrites generic `Expr::StructInit` constructions
@@ -1269,6 +1512,10 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
             format!("arr_{}_{}", type_arg_canonical(elem), n)
         }
         TypeExpr::Multiword(n, f, _) => format!("Multiword{}_{}", n, f),
+        // The capacity is part of the mangled name: `Text<4>` and `Text<8>` are
+        // different types with different sizes, so they must not share an
+        // instantiation.
+        TypeExpr::TextN(n, _) => format!("Text{}", n),
         TypeExpr::Option(inner, _) => format!("opt_{}", type_arg_canonical(inner)),
         TypeExpr::Labelled(inner, _, _) => type_arg_canonical(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_arg_canonical(inner),
@@ -1316,6 +1563,11 @@ fn infer_arg_type(
             *span,
         )),
         Expr::Call { name, .. } => fn_returns.get(name).cloned(),
+        // A pipe into a declared function has that function's return type, as the
+        // call it stands for does. Without this a generic call whose argument was a
+        // pipe, `x |> d() |> id()` once the outer pipe is rewritten to `id(..)`,
+        // kept the generic chunk where `id(d(x))` specialized it.
+        Expr::Pipeline { func, .. } => fn_returns.get(func).cloned(),
         Expr::Cast { target, .. } => Some(target.clone()),
         Expr::TupleLiteral { elements, span } => {
             let parts: Option<Vec<TypeExpr>> = elements
@@ -1462,7 +1714,11 @@ fn infer_arg_type(
             }
         }
         Expr::MethodCall {
-            receiver, method, ..
+            receiver,
+            method,
+            #[cfg(feature = "text")]
+            args,
+            ..
         } => {
             // Resolve the receiver's nominal type, take its head, and
             // look up the impl method's return type in fn_returns
@@ -1471,12 +1727,65 @@ fn infer_arg_type(
             // `program.impls`. When the lookup fails (no impl found,
             // or the receiver type is not yet concrete), return None.
             let recv_ty = infer_arg_type(receiver, locals, fn_returns, structs)?;
+            // A bundled text operation is decided by the receiver type, as the
+            // type checker and the compiler decide it, so its result type is
+            // read here rather than from an impl.
+            #[cfg(feature = "text")]
+            if let Some(result) = text_method_result(&recv_ty, method, args, |e| {
+                infer_arg_type(e, locals, fn_returns, structs)
+            }) {
+                return result;
+            }
             let head = type_head_for_impl(&recv_ty);
             let key = alloc::format!("{}::{}", head, method);
             fn_returns.get(&key).cloned()
         }
         _ => None,
     }
+}
+
+/// The result type of a bundled text operation called as a method, for the
+/// instantiation inference above.
+///
+/// `None` when the call is not an operation, so the caller resolves it through
+/// impls. `Some(None)` when it is an operation whose result type cannot be
+/// inferred here, which is a concatenation with a capacity that is not yet a
+/// literal. `infer` types an argument.
+#[cfg(feature = "text")]
+fn text_method_result(
+    recv_ty: &TypeExpr,
+    method: &str,
+    args: &[Expr],
+    infer: impl Fn(&Expr) -> Option<TypeExpr>,
+) -> Option<Option<TypeExpr>> {
+    use crate::text_intrinsic::TextOp;
+    let unlabelled = |t: &TypeExpr| -> TypeExpr {
+        let mut t = t.clone();
+        // Bounded by the nesting depth of the parsed type expression.
+        while let TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) = t {
+            t = *inner;
+        }
+        t
+    };
+    let TypeExpr::TextN(cap, span) = unlabelled(recv_ty) else {
+        return None;
+    };
+    let op = crate::text_intrinsic::resolve_method(method).ok()??;
+    Some(match op {
+        TextOp::Len | TextOp::Capacity => Some(TypeExpr::Prim(PrimType::Word, span)),
+        TextOp::Eq => Some(TypeExpr::Prim(PrimType::Bool, span)),
+        TextOp::Slice => Some(TypeExpr::TextN(cap, span)),
+        TextOp::Concat => {
+            let other = args.first().and_then(&infer).map(|t| unlabelled(&t));
+            match (cap.as_lit(), other) {
+                (Some(a), Some(TypeExpr::TextN(b, _))) => b
+                    .as_lit()
+                    .and_then(|b| a.checked_add(b))
+                    .map(|sum| TypeExpr::TextN(ConstExpr::Lit(sum, span), span)),
+                _ => None,
+            }
+        }
+    })
 }
 
 /// Compute the head string for a `TypeExpr` used to key impl method
@@ -1501,6 +1810,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Tuple(_, _) => "tuple".to_string(),
         TypeExpr::Array(_, _, _) => "array".to_string(),
         TypeExpr::Multiword(_, _, _) => "Multiword".to_string(),
+        TypeExpr::TextN(_, _) => "Text".to_string(),
         TypeExpr::Option(_, _) => "Option".to_string(),
         TypeExpr::Labelled(inner, _, _) => type_head_for_impl(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_head_for_impl(inner),
@@ -1514,6 +1824,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
 fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr {
     match t {
         TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => t.clone(),
+        TypeExpr::TextN(_, _) => t.clone(),
         TypeExpr::Named(name, args, const_args, span) => {
             if args.is_empty()
                 && const_args.is_empty()
@@ -1621,6 +1932,11 @@ fn subst_const_expr(
 fn subst_const_dims_in_type(te: &TypeExpr, const_subst: &BTreeMap<String, i64>) -> TypeExpr {
     match te {
         TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => te.clone(),
+        // The capacity is a const expression and MUST be substituted here. A
+        // Text<N> inside a generic body would otherwise keep a symbolic N past
+        // monomorphization, which is exactly what B40 exists to prevent and
+        // what would put the worst-case memory bound beyond static reach.
+        TypeExpr::TextN(n, span) => TypeExpr::TextN(subst_const_expr(n, const_subst), *span),
         TypeExpr::Array(elem, n, span) => TypeExpr::Array(
             Box::new(subst_const_dims_in_type(elem, const_subst)),
             subst_const_expr(n, const_subst),
@@ -2189,6 +2505,29 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
                 .collect(),
             span: *span,
         },
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => Expr::DataIndexStore {
+            data_name: data_name.clone(),
+            field: field.clone(),
+            indices: indices.iter().map(|e| subst_in_expr(e, subst)).collect(),
+            value: Box::new(subst_in_expr(value, subst)),
+            arms: arms
+                .iter()
+                .map(|arm| crate::ast::CheckedArm {
+                    kind: arm.kind.clone(),
+                    guard: arm.guard.as_ref().map(|g| subst_in_expr(g, subst)),
+                    body: subst_in_expr(&arm.body, subst),
+                    span: arm.span,
+                })
+                .collect(),
+            span: *span,
+        },
         Expr::SaturateMax { span } => Expr::SaturateMax { span: *span },
         Expr::SaturateMin { span } => Expr::SaturateMin { span: *span },
         Expr::Classify {
@@ -2225,6 +2564,29 @@ struct CallSpecializer<'a> {
     new_functions: &'a mut Vec<FunctionDef>,
     fn_returns: &'a BTreeMap<String, TypeExpr>,
     struct_table: &'a BTreeMap<String, StructDef>,
+    /// The type a `yield` in the function being rewritten resumes with, when
+    /// `loop main` declares it.
+    resume: Option<TypeExpr>,
+    /// The type the type checker resolved for each `yield` in the function
+    /// being rewritten, by span, when `loop main` does not declare it. `None`
+    /// for a specialization, whose source function is generic and has no
+    /// entry.
+    resolved_resumes: Option<&'a BTreeMap<crate::token::Span, TypeExpr>>,
+}
+
+impl CallSpecializer<'_> {
+    /// An expression's type for specialization, with a `yield` typed by the
+    /// resume type, which `infer_arg_type` has no context to know.
+    fn infer(&self, expr: &Expr) -> Option<TypeExpr> {
+        if let Expr::Yield { span, .. } = expr {
+            return self.resume.clone().or_else(|| {
+                self.resolved_resumes
+                    .and_then(|table| table.get(span))
+                    .cloned()
+            });
+        }
+        infer_arg_type(expr, self.locals, self.fn_returns, Some(self.struct_table))
+    }
 }
 
 impl crate::visitor::MutVisitor for CallSpecializer<'_> {
@@ -2234,14 +2596,7 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
             // Record local type for subsequent type inference at call
             // sites that reference this binding.
             if let Pattern::Variable(name, _) = &l.pattern
-                && let Some(t) = l.type_expr.clone().or_else(|| {
-                    infer_arg_type(
-                        &l.value,
-                        self.locals,
-                        self.fn_returns,
-                        Some(self.struct_table),
-                    )
-                })
+                && let Some(t) = l.type_expr.clone().or_else(|| self.infer(&l.value))
             {
                 self.locals.insert(name.clone(), t);
             }
@@ -2277,8 +2632,7 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
                 if let Some(TypeExpr::Named(n, _, _, _)) = &param.type_expr
                     && *n == tp.name
                     && let Some(arg) = args.get(param_idx)
-                    && let Some(t) =
-                        infer_arg_type(arg, self.locals, self.fn_returns, Some(self.struct_table))
+                    && let Some(t) = self.infer(arg)
                 {
                     inferred = Some(t);
                     break;

@@ -1,0 +1,70 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. THE BARE `for` FORM IS REFUSED BY NAME.
+   Compiling a program containing `for v in a..b { ... }` through the
+   self-hosted front end produces a refusal whose message identifies the
+   construct as an unsupported loop form. It does not name an unrelated
+   symbol, and it is not a bare virtual-machine fault. A test asserts the
+   message names the construct.
+
+2. THE REFUSAL NAMES THE REMEDY.
+   The message tells the reader that the counted form with an explicit
+   static bound is accepted, since that is what a user hitting this needs
+   next. A test asserts the remedy appears.
+
+3. THE CONTROL PASSES AND IS PART OF THE EVIDENCE.
+   A program using the counted form still compiles through the
+   self-hosted front end and agrees with the reference compiler. Without
+   this, "the bare form is refused" is satisfied by refusing everything.
+
+4. THE REFUSAL IS A DIAGNOSIS, NOT A CRASH.
+   The failure is delivered through the front end's own diagnostic
+   channel and is observable as a returned error rather than only as a
+   process abort. A test obtains it as a value.
+
+5. NOTHING PREVIOUSLY ACCEPTED IS NOW REJECTED.
+   Every program the self-hosted front end compiled before still
+   compiles, and every byte-identity result it produced before is
+   unchanged. The construct-support boundary's counts either hold, or
+   move with a statement of which category changed and why.
+
+6. THE EXISTING GAP PIN SURVIVES.
+   The test recording that the bare form is unsupported still exists and
+   still fails if the gap closes. Its subject may change from "how it
+   fails" to "that it fails"; it is not deleted or weakened to
+   accommodate this change.
+
+7. DIAGNOSTIC IDENTIFIERS ARE APPENDED, NOT RENUMBERED.
+   No existing diagnostic code changes value or meaning. Any table
+   mapping codes to messages still covers every code the front end can
+   produce, and an unknown code is still reported as unknown rather than
+   mapped onto a neighbour.
+
+8. EVERY NEW TEST IS FALSIFIABLE, AND THE MUTATION COMPILES.
+   For each new assertion, the tree's evidence states what change makes
+   it fail, and that change compiles. A mutation that does not build
+   proves nothing.
+
+9. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The test suite passes with zero failures under default features and
+   under the self-host feature, formatting is clean, clippy is clean at
+   deny-warnings, and the workspace documentation builds without
+   warnings. Any step skipped or goal abandoned is stated plainly with
+   its reason rather than omitted.
+
+10. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If any item proved impossible without an operator decision, the tree
+    names the specific decision required and the evidence establishing
+    it, and the remaining items still satisfy their conditions.
+
+THIS CONDITION DOES NOT REQUIRE SUPPORTING THE CONSTRUCT. The bare form
+compiles to a materially different and much smaller instruction sequence
+than the counted form, so support is a second lowering across several
+stage sources rather than a relaxation of one. Implementing it would
+satisfy item 1 differently and would retire item 6; neither is asked for
+here, and claiming support that was not built would be worse than a
+smaller true result.

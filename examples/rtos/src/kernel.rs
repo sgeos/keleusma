@@ -168,8 +168,37 @@ impl<P: Platform> Kernel<P> {
     /// can yield to an executor (embassy, tokio, or the
     /// minimal block-on for the std demonstrator).
     pub async fn run(&mut self) {
+        self.run_until(None).await
+    }
+
+    /// Run the scheduler, optionally stopping after a wall-clock budget.
+    ///
+    /// `run_for_ms` of `None` is [`Self::run`]: the kernel never returns, which is
+    /// what a deployed cooperative kernel does. `Some(ms)` returns cleanly once
+    /// that many milliseconds have elapsed since entry, checked at the scheduler
+    /// iteration boundary where the clock is already read, so it costs one
+    /// comparison per iteration and nothing at all in the unbounded case.
+    ///
+    /// **WHY IT EXISTS.** `src/bin/three_task_std.rs` recorded the need: "The
+    /// kernel runs forever; a later iteration will add a wall-clock budget for
+    /// CI." Without it the host demonstrator could not be exercised by anything,
+    /// and measured 2026-09-27 nothing did — continuous integration cross-built
+    /// the two STM32N6 binaries and never touched the host target, so the
+    /// demonstrator, its supervised-restart policy, and six Keleusma task scripts
+    /// were covered by documentation alone.
+    ///
+    /// The budget is a FLOOR on elapsed time, not a deadline on a task: a task
+    /// mid-slice finishes, because preempting one would change what the
+    /// demonstrator demonstrates.
+    pub async fn run_until(&mut self, run_for_ms: Option<u64>) {
+        let stop_at_ms = run_for_ms.map(|ms| P::now_ms() + ms);
         loop {
             let now = P::now_ms();
+            if let Some(stop_at) = stop_at_ms
+                && now >= stop_at
+            {
+                return;
+            }
             // Feed the platform watchdog at the top of every
             // scheduler iteration. The default `Platform::feed_watchdog`
             // implementation is a no-op; platforms that arm a

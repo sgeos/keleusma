@@ -1,0 +1,86 @@
+name: Fuzz
+
+# A NIGHTLY RUN OF THE cargo-fuzz TARGETS UNDER fuzz/.
+#
+# The operator adopted this on 2026-10-30, recommendation R6 of
+# docs/process/kaizen/2026-10-30-ci-practices-spike.md, item K7 of
+# docs/process/kaizen/2026-10-30-open-decisions.md, and confirmed its shape on
+# 2026-10-31 as item N1 of docs/process/kaizen/2026-10-31-open-decisions.md. The
+# committed corpus is replayed on every pull request by tests/fuzz_corpus_replay.rs.
+# This workflow is the part that searches for new inputs, which is too slow for a
+# pull request.
+#
+# WHERE IT RUNS. GitHub starts a scheduled workflow only from the default branch,
+# `main`, while the fuzz package lives on the version branch. The schedule therefore
+# checks out the version branch named in FUZZ_REF. When a new version branch is cut,
+# change FUZZ_REF in the same commit that changes `target-branch` in
+# .github/dependabot.yml. A manual run fuzzes the branch it is started on.
+#
+# WHAT IT COSTS. One job of about 45 minutes a night, one build of about 10 minutes and
+# then each target in turn for TARGET_SECONDS, at an hour when the account is otherwise
+# idle. One job rather than one per target keeps the account's concurrent-job load to
+# one. The build took 8.5 minutes on a local machine on 2026-10-31.
+#
+# WHAT A FINDING LOOKS LIKE. Every target runs even after another has crashed. The
+# job then fails, naming each target that crashed, and uploads fuzz/artifacts/, which
+# holds each crashing input. Reproduce one with
+# `cargo +nightly fuzz run <target> <artifact>` from fuzz/. The corpus grown during
+# the run is discarded, because only `seed-` entries are tracked.
+on:
+  schedule:
+    - cron: '17 10 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second run of the same ref waits rather than doubling the load.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  FUZZ_REF: v0.2.3
+  TARGET_SECONDS: 360
+
+jobs:
+  fuzz:
+    name: Fuzz the hostile-input surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && env.FUZZ_REF || github.ref }}
+      - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Build every target
+        run: |
+          cd fuzz
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo fuzz build
+      - name: Run each target
+        run: |
+          cd fuzz
+          failed=""
+          for target in $(cargo fuzz list); do
+            echo "::group::$target"
+            if ! cargo fuzz run "$target" -- -max_total_time="$TARGET_SECONDS"; then
+              failed="$failed $target"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Crashing targets:$failed"
+            exit 1
+          fi
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

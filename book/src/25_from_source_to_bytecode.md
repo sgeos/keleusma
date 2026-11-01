@@ -21,6 +21,7 @@ time, and the result saved.
 
 Write a small program and save it as `tune.kel`:
 
+<!-- verify: accept -->
 ```
 fn main() -> Word { 60 + 7 }
 ```
@@ -31,11 +32,10 @@ Compile it:
 keleusma compile tune.kel -o tune.kel.bin
 ```
 
-The tool prints:
-
-```
-wrote tune.kel.bin (2400 bytes)
-```
+The tool prints a line naming the file it wrote and that file's size in
+bytes. The size is not quoted here: it moves with the bytecode format and
+with the compiler's output, so a number written into this guide would go
+stale without anything noticing.
 
 `tune.kel.bin` is the compiled bytecode. Run it directly:
 
@@ -88,6 +88,12 @@ The recognised target names are `host` (the default), `wasm32`,
 controls word, address, and float widths and validates the program
 against the configuration. A program that uses literals or constants
 outside the target's representable range is rejected at compile time.
+
+The compiler also refuses a program whose worst-case memory use cannot be
+computed, such as one that calls itself recursively. No machine could run
+such a program at any memory size, so the compiler says so at once rather
+than writing a file that every runtime would refuse. Chapter 19 explains
+why a program is rejected.
 
 ## What you now know
 

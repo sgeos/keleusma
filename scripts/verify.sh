@@ -23,7 +23,7 @@
 # failures; the script exits non-zero if any check failed.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 FAILED=()
 section() { printf '\n\033[1m========== %s ==========\033[0m\n' "$1"; }
@@ -72,12 +72,16 @@ run "compiler: clippy --all-targets -D warnings" "cd compiler && cargo clippy --
 run "compiler: test" "cd compiler && cargo test"
 
 section "Optional cross-config checks (skipped when the toolchain/target is absent)"
-if rustup target list --installed 2>/dev/null | grep -qx 'thumbv7em-none-eabihf'; then
+# Captured first: under pipefail, `grep -q` exiting at its first match can end the
+# producer with SIGPIPE and make a found target read as absent.
+installed_targets="$(rustup target list --installed 2>/dev/null)"
+if grep -qx 'thumbv7em-none-eabihf' <<<"$installed_targets"; then
   run "no_std build (thumbv7em-none-eabihf)" "cargo build -p keleusma --target thumbv7em-none-eabihf"
 else
   echo "  SKIP no_std build -- target not installed (rustup target add thumbv7em-none-eabihf)"
 fi
-if rustup toolchain list 2>/dev/null | grep -q '^1\.88'; then
+installed_toolchains="$(rustup toolchain list 2>/dev/null)"
+if grep -q '^1\.88' <<<"$installed_toolchains"; then
   run "MSRV check (1.88)" \
     "cargo +1.88 check -p keleusma && cargo +1.88 check -p keleusma --no-default-features && cargo +1.88 check -p keleusma --features signatures && cargo +1.88 check -p keleusma --tests"
 else

@@ -608,8 +608,10 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
 /// format's application binary interface, so a new opcode must be added here to
 /// be encodable at all, which makes this the authority on what the opcode set
 /// is. A check driven from it reports a newly added opcode by name instead of
-/// silently not covering it.
-#[cfg(test)]
+/// silently not covering it. Gated like the test modules that call it, in
+/// `verify.rs` and `vm_operand_effect_tests.rs`, so a build without those
+/// features does not carry it as dead code.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 pub(crate) fn opcode_table() -> &'static [(&'static str, u8)] {
     OPCODE_ID_TABLE
 }
@@ -1202,6 +1204,11 @@ pub fn parse_signature_metadata(
             WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES,
         )));
     }
+    // The precondition above is the caller's, and this function is public, so
+    // a buffer shorter than the declared header is refused rather than indexed.
+    if bytes.len() < header_length {
+        return Err(LoadError::Truncated);
+    }
     let scheme_id = bytes[64];
     let reserved_byte = bytes[65];
     let signature_length = u16::from_le_bytes([bytes[66], bytes[67]]) as usize;
@@ -1269,10 +1276,17 @@ pub fn parse_signature_metadata(
 const WIRE_FORMAT_CRC32_RESIDUE: u32 = 0x2144DF1C;
 
 /// Wire-format chunk metadata. Mirrors [`Chunk`] but moves the
-/// `ops` vector out of the rkyv-archived body and into the
-/// opcode stream section. Carries the byte offset and record
-/// count needed to recover the chunk's opcode sequence from the
+/// `ops` vector out of the auxiliary body and into the opcode
+/// stream section. Carries the byte offset and record count
+/// needed to recover the chunk's opcode sequence from the
 /// section-partitioned body.
+///
+/// The `Archive`/`Serialize`/`Deserialize` derives below are
+/// VESTIGIAL as of wire format v2: nothing in this module calls
+/// rkyv, and the auxiliary body is built and read by the schema
+/// layer. Recorded rather than removed because the derives sit on
+/// a public type; see
+/// `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md`.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct WireChunk {
     /// Function name; matches `Chunk::name`.
@@ -1392,7 +1406,9 @@ pub struct WireSections<'a> {
     /// Bytes of the operand pool section. Length is a multiple
     /// of [`OPERAND_POOL_ENTRY_BYTES`].
     pub operand_pool: &'a [u8],
-    /// Bytes of the rkyv-archived auxiliary body.
+    /// Bytes of the auxiliary body. Wire format v2: a
+    /// word-oriented container, byte-addressed, NOT an rkyv
+    /// archive.
     pub aux_body: &'a [u8],
 }
 
@@ -1592,8 +1608,8 @@ pub fn decode_op_stream(
 }
 
 /// Encode a [`Module`] into the V0.2.0 wire format: 64-byte
-/// framing header, opcode stream, operand pool, rkyv-archived
-/// auxiliary body, 4-byte CRC-32 trailer.
+/// framing header, opcode stream, operand pool, auxiliary body,
+/// 4-byte CRC-32 trailer.
 ///
 /// The opcode stream packs every chunk's opcodes as 4-byte
 /// records in chunk declaration order. The auxiliary body's
@@ -1704,8 +1720,21 @@ fn assemble_wire_bytes(
     // Compute section offsets. The opcode stream begins
     // immediately after the framing header. Each section is then
     // padded to an 8-byte boundary so the next section starts
-    // aligned. The aux body is rkyv-archived and requires 8-byte
-    // alignment for in-place access.
+    // aligned.
+    //
+    // CORRECTED 2026-09-27. This said the aux body "is
+    // rkyv-archived and requires 8-byte alignment for in-place
+    // access". Wire format v2 replaced that body, and
+    // `Module::validate_bytes` documents the opposite in as many
+    // words: "No alignment requirement. The wire format v2
+    // auxiliary body is byte-addressed." A host implementer
+    // reading the old comment would provision alignment the
+    // public contract calls unnecessary.
+    //
+    // The PADDING ITSELF IS RETAINED and is what the code below
+    // does; only its stated justification was stale. Whether it is
+    // still needed is a separate question, unanswered here, and
+    // changing it would change the wire format.
     let opcode_stream_offset = header_length as u32;
     let opcode_stream_length = opcode_stream.len() as u32;
     let mut after_opcodes = opcode_stream_offset + opcode_stream_length;
@@ -1843,14 +1872,33 @@ pub fn module_to_signed_wire_bytes_with_ecc(
     module_to_signed_wire_bytes_opt(module, signing_key, true)
 }
 
+/// The three body sections of a signed module, before framing.
+///
+/// Produced by [`signing_sections`]. The signed encoders frame these, and the
+/// self-hosted cryptographic framing (Order 5) frames the same bytes, so the two
+/// differ only in the framing under comparison.
 #[cfg(feature = "signatures")]
-fn module_to_signed_wire_bytes_opt(
-    module: &Module,
-    signing_key: &ed25519_dalek::SigningKey,
-    ecc: bool,
-) -> Result<Vec<u8>, LoadError> {
-    use ed25519_dalek::Signer;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningSections {
+    /// The opcode stream.
+    pub opcodes: Vec<u8>,
+    /// The operand pool.
+    pub operands: Vec<u8>,
+    /// The auxiliary body, whose flags carry `FLAG_REQUIRES_SIGNATURE`, with a
+    /// parity plane per region when requested.
+    pub auxiliary: Vec<u8>,
+}
 
+/// Encode the body sections a signed module carries. The auxiliary body records
+/// the module's flags with `FLAG_REQUIRES_SIGNATURE` set, as the signed header
+/// does. With `ecc` each auxiliary region carries a (72,64) SECDED parity plane.
+///
+/// # Errors
+///
+/// `LoadError::Codec` when an instruction or the auxiliary body cannot be
+/// encoded.
+#[cfg(feature = "signatures")]
+pub fn signing_sections(module: &Module, ecc: bool) -> Result<SigningSections, LoadError> {
     // Re-run the per-chunk encoding so we have the opcode stream,
     // operand pool, and aux body bytes to hand to the shared
     // assembler. This is a small duplication of `module_to_wire_bytes`
@@ -1908,13 +1956,29 @@ fn module_to_signed_wire_bytes_opt(
     for entry in &operand_pool {
         operand_pool_bytes.extend_from_slice(&entry.0);
     }
+    Ok(SigningSections {
+        opcodes: opcode_stream,
+        operands: operand_pool_bytes,
+        auxiliary: aux_bytes,
+    })
+}
+
+#[cfg(feature = "signatures")]
+fn module_to_signed_wire_bytes_opt(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    ecc: bool,
+) -> Result<Vec<u8>, LoadError> {
+    use ed25519_dalek::Signer;
+
+    let sections = signing_sections(module, ecc)?;
 
     // Assemble with a zeroed signature payload.
     let mut buf = assemble_wire_bytes(
         module,
-        &opcode_stream,
-        &operand_pool_bytes,
-        &aux_bytes,
+        &sections.opcodes,
+        &sections.operands,
+        &sections.auxiliary,
         Some(SIGNATURE_SCHEME_ED25519),
     )?;
     let total_length = buf.len();
@@ -1966,7 +2030,12 @@ pub fn verify_module_signature(
     }
     let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
     let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    if total_length > bytes.len() {
+    // The declared total must hold the declared header and the trailer, as
+    // `module_from_wire_bytes` requires. Without the lower bound a header that
+    // declares a signed length over a shorter total indexed past the slice
+    // below, so an untrusted artifact panicked the host from
+    // `Vm::load_signed_bytes` instead of being refused.
+    if total_length > bytes.len() || total_length < header_length + WIRE_FORMAT_FOOTER_BYTES {
         return Err(LoadError::Truncated);
     }
     let bytes = &bytes[..total_length];
@@ -2256,6 +2325,13 @@ pub fn decrypt_encrypted_signed_to_signed_bytes(
     // and ensures the encryption metadata has not been tampered
     // with.
     verify_module_signature(bytes, verifying_keys)?;
+    // The verified region ends at the declared total, which the signature check has bounded
+    // by the buffer. Bytes appended after it are not part of the artifact, so the ciphertext
+    // ends there too, as the operator ruled first-hand on 2026-10-28. It used to run to the end
+    // of the buffer, so an encrypted artifact with trailing bytes failed authentication while
+    // the same signed artifact loaded.
+    let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    let bytes = &bytes[..total_length];
 
     // Step 3. Parse the encryption metadata.
     let encrypted_header_len = encrypted_signed_header_length();
@@ -2353,9 +2429,9 @@ fn patch_section_offsets_subtract(buf: &mut [u8], shift: usize) {
 ///
 /// Validates the framing header, the CRC residue, and the
 /// declared section offsets/lengths. Reads the opcode stream
-/// and operand pool, deserializes the rkyv-archived auxiliary
-/// body, and reconstructs each chunk's `ops` from its byte
-/// offset and record count.
+/// and operand pool, decodes the auxiliary body through the
+/// wire format v2 schema layer, and reconstructs each chunk's
+/// `ops` from its byte offset and record count.
 ///
 /// V0.2.0 Phase 7b ships this function as a parallel route to
 /// [`Module::from_bytes`]; the cutover is Phase 7c.

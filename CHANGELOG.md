@@ -4,10 +4,383 @@ All notable changes to `keleusma` will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Changes not yet released are also kept as fragments in [`changelog.d/`](changelog.d/README.md),
+which are assembled into the `[Unreleased]` section at release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The wrapping default of a checked arithmetic construct is typed.** An
+  outcome class with no unguarded catch-all arm falls to the wrapping default,
+  which yields the operation's own value, but the type checker never compared
+  the construct's type with the operand's. `fn main(x: Word) -> bool { x + 1 {
+  ok(v) => v > 0 } }` was admitted and returned a `Word` from a `bool`
+  function on overflow. Such a construct is now refused unless it produces
+  the operand's type. When unguarded catch-all arms cover every class that can
+  arise and no zero-divisor trap is pending, the default cannot run. Both
+  compilers then omit the last arm's class test and the default, so the
+  construct's value has only the arms' kind and no trap is added. This
+  changes bytecode for covered constructs and adds no opcode. An `underflow` arm is now admissible on `Fixed` division, where the
+  virtual machine already set that flag. Pinned by
+  `tests/checked_wrap_default.rs`.
+
+- **A registered trust matrix governs the in-memory hot swap too.** With the
+  `signatures` feature and a verifying key registered, `Vm::replace_module`
+  and `Vm::replace_module_unchecked` accepted an unsigned in-memory module,
+  although `Vm::replace_module_from_bytes` refused unsigned bytes in the same
+  state. Both now return `LoadError::InvalidSignature` and keep the running
+  module. A host that means to swap an in-memory module clears the matrix
+  first with `Vm::clear_verifying_keys`. Reported by the pykeleusma line.
+
+- **A cast to the operand's own primitive type is identity.** The reference
+  compiler lowered `Word as Word` to `FloatToInt`, `Float as Float` to
+  `IntToFloat`, `Byte as Byte` to `WordToByte` and `Fixed as Fixed` to
+  `WordToFixed`. Each program compiled and verified and then failed at run time
+  with a `TypeError`. These casts now emit nothing, as a newtype cast already
+  did, and the self-hosted compiler matches for the `Word` and `Byte` forms. A
+  source whose type the compiler cannot infer keeps the validated conversion.
+
+- **The module and whole-chunk verifier entries terminate on an unverified
+  module.** `module_runtime_footprint`, `module_wcmu`, `module_wcet_with_bounds`,
+  `wcmu_whole_chunk`, `wcet_whole_chunk` and `verify_resource_bounds` reached a
+  region walk without validating control-flow targets, and each hung on a
+  backward `If` operand. They now apply the forward-target check that the
+  stream entries and `verify` already apply, and refuse such a module. This is
+  a pykeleusma finding. The reported stack overflow was not reproduced, only
+  the hang. Pinned by `tests/verify_hostile_termination.rs`.
+
+- **A signed header over a short declared total is refused rather than
+  panicking.** `verify_module_signature` read the signature metadata, the
+  signature and the trailer at offsets fixed by the declared header without
+  checking that the declared total covered them, so an untrusted artifact with
+  the signature flag ended the host from `Vm::load_signed_bytes`. It now returns
+  `LoadError::Truncated`, as does `parse_signature_metadata` for a buffer
+  shorter than its header. See `docs/decisions/SIGNATURE_VERIFY_BOUNDS.md`.
+
+- **The verified time bound charges every dispatched instruction.** The time
+  walk and its Keleusma mirror in `analyze.kel` charged nothing for `Else`,
+  `EndIf` and `EndLoop`, and omitted a counted loop's final header pass, so the
+  bound fell short of the nominal cost model on every path through an `if` or a
+  loop. Verified time bounds involving either now rise. Found by the hosted
+  runtime's instruction count. See `docs/decisions/WCET_STRUCTURAL_MARKERS.md`.
+
+- **A yield whose value does not have the declared return type is rejected.**
+  The type checker unified the body tail and `return` with the return type and
+  never a `yield`. A same-size body of another layout was admitted, and decoding
+  it could read a scalar as a pointer. Reported by the pykeleusma line. See
+  `docs/decisions/FLAT_TEXT_DECODE_SOUNDNESS.md`.
+
+- **Decoding a flat `Text` field no longer trusts its two words.** `Vm::decode`
+  and native argument marshalling now require the field's bytes to lie inside
+  the VM's arena or bytecode image and to be valid UTF-8, and return a
+  `TypeError` otherwise. Decoding a well-typed body with a mismatched host type
+  previously ended the process with a segmentation fault.
+
+### Changed
+
+- `RefContext` and `NativeCtx` gain a public `rodata` field holding the VM's
+  bytecode image. Code that builds either struct with a literal must add it. An
+  empty slice is safe and rejects constant strings rather than trusting them.
+
 ### Added
+
+- **`hosted::seeded_shared` and `hosted::protocol`.** The shared buffer of
+  `interp.kel` seeded for an admitted program, exactly as `Interpreter::run`
+  seeds it, and the command and status constants of the interpreter's
+  protocol. Another executor of `interp.kel`, such as a native build of it,
+  can now drive a program with the same encoder. `Interpreter` uses the
+  constants itself. Pinned by `tests/hosted_seed.rs`. Requested by the V0.3.X
+  line for its seeded `interp.kel` differential.
+
+- **The cryptographic framing in Keleusma, Order 5.** `src/crypto_frame/frame.kel` decides the
+  signed and encrypted header layouts, the metadata blocks, the bytes a signature covers, every
+  framing check and its order, verification before decryption, the recipient fingerprint
+  comparison and the CRC trailer, with Ed25519, X25519, HKDF, AES-GCM and SHA-256 as host
+  natives and no key entering the program. Its driver is `keleusma::crypto_frame`, behind
+  `signatures`, with encryption behind `encryption`. Its output and verdicts equal the Rust
+  reference's over the harness corpus. `keleusma compile --compiler self-hosted` now signs and
+  encrypts through it and refuses a divergence. See
+  `docs/decisions/ORDER5_COMPLETION_AUDIT.md`.
+- `wire_format::signing_sections` and `SigningSections` expose the body sections a signed
+  module carries, which the reference signer now takes its sections from.
+
+- **The hosted runtime, Order 4.** `src/hosted/interp.kel` is a bytecode interpreter written
+  in Keleusma that runs on the Rust virtual machine at most 32 interpreted instructions per
+  tick, so its own bounds are constants. Its driver, `keleusma::hosted` behind the
+  `self-host` feature, admits a verified module only when its instructions, constants and
+  tables fit and its transitive time bound exists, and then drives ticks. Over a corpus of
+  125 programs compiled by the self-hosted compiler, every admitted case agrees with the Rust
+  virtual machine. See `docs/decisions/ORDER4_COMPLETION_AUDIT.md`.
+
+- A fallible self-hosted structural and typed verifier API distinguishes completed
+  verdicts from stage capacity, work-budget, execution and protocol failures.
+
+- Keleusma now computes call-graph order and cycle rejection for the self-hosted
+  analysis path, with explicit graph capacity errors and staged-decision controls.
+
+- The self-hosted compiler supports bounded loop outcome handlers with count and index
+  bindings, defensive guards, scoped locals and the existing default trap behavior.
+
+- **Protocol-level tests for the language server, whose wire layer had none.**
+  Its existing tests call the analysis, symbol and completion helpers directly.
+  Those are pure functions, and a correct analysis says nothing about whether a
+  reply is framed in a way an editor can read — the same shape as the task
+  runner, which was wholly non-functional while its unit-level pieces passed.
+  The new tests spawn the built server and speak the real protocol to it,
+  establishing that initialization succeeds and advertises the capabilities the
+  server implements, that a malformed document publishes a diagnostic carrying
+  a range and a message, that a valid document publishes none, and that symbols
+  and completions come back over the protocol. The valid-document case is the
+  control without which the malformed one would be satisfied by a server that
+  reported an error for every document. Every read is bounded, so a server that
+  stops replying fails a test rather than hanging the suite, and silence is
+  never treated as success.
+
+  **A harness trap is recorded with them, because the naive version produces a
+  confident false negative.** The server's input must stay open for as long as
+  replies are expected. Driving it by piping a finite file closes the input
+  immediately, at which point the server cancels work in flight, answers the
+  handshake with a cancellation error, and refuses every later request as
+  uninitialized — indistinguishable from a broken server, and entirely an
+  artefact of the harness. The first probe written for this work did exactly
+  that. Closing the input early is demonstrated to make these tests fail rather
+  than pass, so the trap can cost a wrong diagnosis but not a false pass.
+
+- **Integration tests for the arena crate's published interface, which the
+  project instructions claimed already existed.** The instructions stated, in
+  two places, fifty-one library tests plus eight integration tests for that
+  crate. Measured: fifty-one, all library, and the crate's tests directory did
+  not exist at all. That is not a figure drifting but an assertion of a body of
+  tests that was not there. The crate is published, so the gap was real rather
+  than clerical: an integration test can reach only the public interface, which
+  makes it a different check from a unit test, catching an item that is not
+  actually exported and an interface that cannot be used without a private
+  helper. The tests assert the guarantees the crate exists to provide, as a
+  consumer sees them: that the ordinary workflow is reachable using only
+  exported items, that the two allocation heads meet and report exhaustion as
+  an error rather than a panic, that the persistent region survives a reset
+  while the ephemeral heads do not, that zeroing it actually clears it so the
+  survival result is a property of reset rather than of nothing overwriting,
+  that the budget check asks whether a budget is admissible for the capacity
+  rather than whether current usage fits it, and that an impossible capacity is
+  refused rather than aborting.
+
+- **A guard for the statically derivable half of that claim.** Whether the
+  crate has a tests directory, and how many tests it holds, needs no test run,
+  unlike the library and bench figures the existing guard correctly says it
+  cannot check. That guard's own header named the remaining claims as
+  unguarded, and this is the second defect found in exactly that region. Both
+  sides are derived and neither is pinned, so adding a test and updating the
+  instructions together stays green while doing only one of the two does not.
+
+- **Tests for the task-runner scheduler behaviours that had never executed.**
+  Until the arena-move and yield-decode defects were repaired the runner could
+  not run a single task, so its documented behaviour had never run at all: the
+  restart policy, the restart rate limit, isolation between tasks, and periodic
+  scheduling. Each was probed first and each is correct, which is when a guard
+  costs least. The restart path carries the most weight, because it
+  re-allocates a task's arena and re-instantiates its virtual machine, and that
+  is the path whose defect was just repaired, so a regression there is that
+  defect returning. A faulting task is shown to restart up to its limit, then
+  be disabled, while the runner and its sibling task continue unaffected; a
+  task configured never to restart is shown not to; and a periodically
+  scheduled task is shown to keep running.
+
+- **A correction to the task-runner design document.** It distinguished the
+  restart-on-error mode from the always mode by what happens on voluntary
+  termination, hedging that case as unusual for a stream entry point. It is
+  more than unusual: a stream entry point that never yields cannot be compiled
+  at all, because structural verification requires at least one yield. The
+  distinction therefore rests on a case valid source does not readily produce,
+  which the document now states and the tests record as the reason that one
+  behaviour is not covered.
+
+- **The success paths of the command-line subcommands a coverage census found
+  unexercised.** The previous increment found the task runner completely
+  non-functional, and the reason was that nothing exercised it end to end.
+  Counting how often each subcommand is actually invoked by a test that runs
+  the binary showed the same shape elsewhere: the artifact-stripping
+  subcommand appeared once, in a refusal case only, and the version subcommand
+  not at all. Stripping is now pinned by the property it exists for rather than
+  by a smoke test, namely that stripping a debug-built artifact reproduces the
+  non-debug build exactly, compared as bytes rather than as lengths, since two
+  artifacts of equal length can differ. Stripping is also shown idempotent, and
+  a stripped artifact shown to still run and agree with the unstripped one. The
+  reported version is checked against the crate's own version, so a hardcoded
+  string cannot drift unnoticed until someone reads a release note against a
+  binary.
+
+- **Two defects that made the task runner unable to run any task at all, found
+  by writing its first integration test.** The first moved a task's arena after
+  handing the virtual machine a reference into it: the arena was built by value,
+  a reference was taken, and the arena was then moved into the task structure
+  and again into the task vector, so the machine read a stale address. The
+  safety comment reasoned that the arena was kept alive, which was true and not
+  sufficient, because moving it invalidates the address; it presented as an
+  arena reporting forty-eight bytes of capacity and every task failing on its
+  first composite allocation. The arena is now boxed, so it keeps one heap
+  address however often its owner moves. The second decoded a task's yielded
+  pair without the arena, and since the flat-composite work a yielded tuple's
+  body is arena-resident, so the decode could not read it and the scheduler
+  treated every task as having yielded a non-tuple value and finished it; the
+  decode now resolves against the task's arena at the module's declared widths.
+  Either defect alone ended the runner within a second of start, and both
+  survived because the subcommand had no integration test.
+
+- **The task runner reloads its manifest on a hangup signal.** The signal
+  previously set a flag that led only to a message saying the feature was not
+  implemented. The runner now re-reads and re-parses the manifest and applies
+  what needs no change to a running task: the scheduler-wide tick interval and
+  shutdown grace, which are consulted while it runs, and each task's restart
+  policy, which is consulted only when a task restarts. A manifest that cannot
+  be read or parsed leaves the runner running on its previous configuration and
+  reports the refusal, which is the behaviour an operator depends on rather
+  than a fallback. Changes the slice cannot make are reported as deferred
+  rather than silently ignored, so nobody is left believing a change took
+  effect when it did not; adding or removing a task, and changing a bytecode
+  path, arena capacity, period, priority or event identifier, all remain
+  deferred because they need a task's arena and virtual machine rebuilt.
+
+- **A census of the runtime faults a verified, compiler-produced module can
+  raise, and whether it carries a trap opcode when it does.** The unhandled-trap
+  workstream proposes making trap reachability decidable by turning every
+  non-trap opcode total and reducing the validator to a scan, which is a
+  bytecode-version-bumping instruction-set change. Two things that proposal
+  rests on were unmeasured: how large making every other opcode total actually
+  is, and whether such a scan would be honest today. Both are measured now,
+  by execution rather than by reading source, against the partial operations
+  the proposal enumerates rather than against whichever cases were easy to
+  provoke. Exactly two operation families fault with no trap opcode anywhere in
+  the module, division or modulo by zero and array bounds, so a scan would not
+  be honest under the current instruction set even for compiler output. Several
+  entries on the proposal's list are already in the shape it wants: arithmetic
+  overflow does not fault at all, because the specification defines the bare
+  operator as wrapping and the outcome flag the proposal asks for already
+  exists and is simply discarded; a cast out of range truncates rather than
+  faulting; the assertion construct is compiled out of a release build
+  entirely; and the bounded loop already lowers to an explicit trap, as do the
+  match and enum-discrimination fallbacks. No trap-freedom verdict is shipped,
+  because an interface that cannot deliver its guarantee is worse than none.
+  The two-family result is pinned so that a change resizes the obligation
+  deliberately rather than silently.
+
+- **Accepted hostile modules are now driven through the execution protocol that
+  reaches the retained runtime guards.** The corpus had been generating mutants
+  faster than it drove them: every module verification accepted received a
+  single argument-free call, with no shared-data buffer and no resume, so the
+  coroutine reentry path was never entered. That path matters because the typed
+  operand-stack pass is documented as deferring on a per-yield reentrant reply,
+  a load-time check deliberately traded for a runtime guard, which makes resume
+  exactly where the guard is load-bearing. An accepted mutant is now called
+  with arguments derived from its own declared parameter types, since guessed
+  ones are refused by the call's type check before any bytecode runs and would
+  leave the phase vacuous while still looking green, with a shared-data buffer
+  sized from the module's own declaration, and resumed while it keeps yielding
+  under a bound, a bound being necessary because a loop block is productively
+  divergent and yielding forever is the healthy outcome rather than a defect.
+  How far execution actually got is counted and asserted rather than assumed:
+  six hundred and eight mutants ran bytecode, one hundred and nineteen yielded,
+  and one hundred and nineteen were resumed. No new defect was found, which
+  establishes for the first time by execution rather than by reasoning that the
+  retained runtime guards hold across the reentrant path on hostile input.
+
+- **The hostile-bytecode corpus reaches the descriptor tables, the coroutine
+  paths, and the hot swap.** It previously mutated instructions and chunk
+  metadata only, so the module-level tables the typed operand-stack pass seeds
+  operand shapes from were exercised on the consuming side and never on the
+  seeding side, although four of the audit findings it descends from were about
+  trusting a compiler-baked value an attacker supplies. Per-chunk signatures,
+  native return shapes, enum layouts and the schema hash are now mutated, two
+  coroutine programs and a native-calling program were added so the stream,
+  productivity and native-shape paths receive mutants of their own, and every
+  mutant is now carried through both documented untrusted arrivals rather than
+  one: a fresh load, and a hot swap into a machine that is already live. The
+  second matters because a hot swap runs compatibility checks a fresh load has
+  no occasion to, the schema hash being compared only there, so before this
+  every mutation of that field was accepted and counted as a pass. The census
+  is now per family, with a floor each, after an aggregate count of five
+  thousand one hundred and eighty four mutants looked healthy while one entire
+  table had never been touched, because no program in the corpus called a
+  native. Five thousand two hundred and eighty eight mutants across seven
+  families: four thousand two hundred and eighty six refused by verification,
+  one hundred and thirty one refused at the swap, and eight hundred and
+  seventy one hot-swapped into a live machine and run. No further defect was
+  found, which is a result about the enumerated mutations rather than a general
+  claim.
+
+- **The parser's recursion limit now documents its measured margin, replacing a
+  claim that measurement refutes.** The constant asserted that the limit keeps a
+  maximally nested admissible program well under two mebibytes of stack even in
+  a debug build. Measured with the limit lifted on a two-mebibyte stack, nested
+  conditionals survive one hundred and fifty nine levels in a release build and
+  twenty in a debug one, and nested parentheses one hundred and ninety eight and
+  twenty four, so a release build has roughly six times the headroom the limit
+  of twenty four needs while a debug build aborts below it. The limit is
+  unchanged, because no single value both admits the deepest source in this
+  repository, which reaches depth twenty one, and prevents the abort; charging
+  blocks against the budget as well was tried and moved the binding shape rather
+  than fixing it. The residual is recorded rather than papered over, since
+  narrowing the accepted nesting to accommodate an artefact of debug frame sizes
+  would cost more than the defect, which affects no shipping build.
+
+- **A hostile-bytecode mutation corpus driven through the full safe `Vm::new`,
+  and the verifier defect it found on its first run.** The security audit's own
+  coverage note named this corpus as the most valuable missing addition and it
+  had never been built. It mutates a compiled module and re-encodes the artifact
+  around the mutation rather than flipping bytes in a serialized one, because a
+  measurement already in the tree records that a byte edit is caught by a
+  checksum before the header is read, so a byte fuzz measures the checksum and
+  not the verifier; an attacker who constructs bytecode computes a valid
+  checksum as readily as the compiler does. Four thousand two hundred and
+  sixteen mutants over six programs now carry the invariant that every mutant is
+  refused by the encoder, the loader or the verifier, or else runs without
+  panicking and without hanging, and the reach census fails if mutants stop
+  arriving at the stages under test. On the tree as it stands, three thousand
+  five hundred and sixty-two are refused by verification and six hundred and
+  fifty-four verify and run.
+
+- **The verifier no longer hangs or aborts the process on a hostile module.**
+  Every region walker in the verifier advances a cursor to a position taken from
+  a conditional, alternative, or loop operand. A backward operand sends the
+  cursor to a position already passed and the walk repeats forever; where the
+  operand instead selects the recursive alternative arm, the sub-region still
+  contains the same conditional and the recursion does not bottom out,
+  overflowing the stack and aborting. Three public entries reached a walker with
+  the operand unvalidated: verification computed its productivity classification
+  before the pass that validates targets, and the two standalone worst-case
+  execution time and memory usage entries are documented as usable without
+  verification and ran that pass at no point. Measured on a module differing
+  from a valid one by a single conditional operand, verification hung at four of
+  seventeen instruction positions and aborted at four more; an abort does not
+  unwind, so a host could not defend itself by wrapping the call. Control-flow
+  targets are now required to be forward and in range on every chunk before any
+  walk reads them, at all three entries. The check is weaker than the structured
+  position validation, which still runs unchanged, and exists to make the walks
+  terminate. This is a denial of service on the component whose contract is to
+  bound an untrusted input rather than a memory-safety defect, and it is
+  unreachable from compiler output, which emits only forward targets. It does
+  not bound recursion depth on its own, which the companion entry below closes.
+
+- **The verifier bounds how deeply control-flow regions may nest.** Forward
+  targets make the region walks terminate; they do not bound how deeply the
+  walks nest, and each of the four recurses once per nested region. Measured
+  with the bound lifted, on a two-mebibyte stack, the walks survive a
+  hand-built chunk nested four thousand six hundred deep and abort the process
+  at four thousand eight hundred, which is well inside the roughly sixteen
+  thousand levels a sixteen-bit target can address, so the exposure was
+  reachable rather than theoretical. The bound is two hundred and fifty six,
+  chosen from measurement rather than by analogy: the deepest nesting the
+  compiler can emit is twenty, because the parser itself overflows at
+  twenty-two, so the bound is about thirteen times what a program can reach and
+  about nineteen times below the depth at which the walk aborts. Past the bound
+  the productivity classification answers conservatively, since it has no error
+  channel and its conservative direction is to decline to classify, and the
+  three walks that return a result refuse. The first boundary measured here was
+  wrong, because the test builder producing the nested chunk was itself
+  recursive and overflowed alongside its subject; the builder derives its
+  layout in closed form now, and an instrument that shares a failure mode with
+  its subject reports the sum of the two.
 
 - **The wholly-default private-slot initialiser pool is elided, taking the
   auxiliary body down by a factor of 6.9.** A private slot with no explicit
@@ -151,9 +524,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and lean; `keleusma-cli` enables it so the flag ships). The new
   `keleusma::selfhost::self_hosted_compile` entry runs a program through the
   Keleusma-written pipeline at the host target and cross-checks its output
-  against the reference compiler, so any program outside the self-hosted subset
-  (floats, generics, `Text`, a non-host `--target`) fails loudly with a
-  `retry with --compiler rust` hint rather than emitting a wrong module. The
+  against the reference compiler, so a program outside the self-hosted subset
+  (a float literal, float `+`/`-`/`*`, generics, the four unparsed constructs)
+  or at a non-host `--target` fails loudly with a `retry with --compiler rust`
+  hint rather than emitting a wrong module, naming the offending construct or
+  the diverging chunk. Float division and comparison, and passing float values
+  around, DO compile. The cause is that the self-hosted codegen selects the op
+  word from the operator code alone, with no operand type, so it emits the
+  checked form where the reference emits the plain one; `Fixed<N>` diverges for
+  the same reason, and its `*` and `/` additionally diverge against the
+  scale-aware `FixedMul`/`FixedDiv`, which is a wrong-value hazard rather than a
+  checking difference. Unary `-` diverges for EVERY non-`Word` operand, `Byte`
+  included. Everything else agrees: all BINARY operators on `Word` and `Byte`,
+  the bitwise and shift families, the booleans, the comparisons, and `%`.
+  Measured per operand type and operator, with every cell run, in
+  `tests/selfhost_typed_opcode_boundary.rs`. `Text` is not a subset
+  restriction at all: the reference does not implement it either, so it reports
+  a plain source error and correctly withholds the hint. The
   `compiler/` subproject now re-exports the driver from `keleusma::selfhost`.
 - **The shared-data segment ceiling rises from 64 KB to 16 MB (the wire format
   widens but `BYTECODE_VERSION` stays 1, per the no-public-adoption stance).** The shared byte-offset, unified data-slot index, and
@@ -264,6 +651,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BYTECODE_VERSION` change.
 
 ### Fixed
+
+- Self-hosted typed verification now rejects loop bodies that consume operand values
+  below the loop-entry floor, and reports exhausted operand storage explicitly.
+
+- Self-hosted typed validation now checks call arguments beyond position eight,
+  retains module metadata when caller signatures are absent, recognizes float
+  constants as scalars and admits enum layouts through the first-pass 256-layout bound.
+
+- Reference compilation now ends loop-local name visibility before outcome handlers.
+  Outer bindings retain their source meaning, including Boolean and array values.
+  Explicit outcome bindings still read the allocated count or exit-index slots.
 
 - **A conflated figure that had been repeated across the roadmap, the handoff and
   the resume channels.** "Self-hosted type rejection is 7 tests against ~15 shapes"

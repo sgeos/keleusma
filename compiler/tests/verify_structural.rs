@@ -6,8 +6,8 @@
 //! (reference audits D2 and E1), and the operand-bounds family; the second pass -- the
 //! block-type marker constraints; the third pass -- productive divergence (`verify_yield.kel`);
 //! and the operand-stack depth-balance check (`verify_depth.kel`, reference `verify_stack_depth`,
-//! audit finding 3). Only the module-level A.2.1 typed operand-stack pass is checked separately
-//! (`verify_typed.rs` test). Two oracles bound it:
+//! audit finding 3). Both whole-module entries also run the typed operand-stack and data-layout
+//! passes. The dedicated `verify_typed.rs` suite adds typed rejection controls. Two oracles bound it:
 //!
 //!   * POSITIVE: every self-hosted stage source plus a minimal ephemeral program, and small
 //!     valid whole programs for each block type (including a Stream that delegates its yield to
@@ -25,8 +25,22 @@ use keleusma::bytecode::{Module, NewCompositeOperand, Op};
 use keleusma::value_layout::CompositeKind;
 use keleusma::verify::{compute_always_yielding, verify};
 use keleusma_selfhost::selfhost::{
-    compile_src, self_hosted_always_yielding, structural_reject_module_via_kel,
+    VerificationVerdict, compile_src, self_hosted_always_yielding,
+    structural_reject_module_via_kel as legacy_reject, verify_module_via_kel,
 };
+
+// Keep the full existing corpus on both whole-module entry points. The fallible
+// entry must finish with the same verdict, rather than return unavailable.
+fn structural_reject_module_via_kel(module: &Module) -> bool {
+    let legacy = legacy_reject(module);
+    let actual = verify_module_via_kel(module).unwrap();
+    assert_eq!(
+        matches!(actual, VerificationVerdict::Rejected { .. }),
+        legacy,
+        "{actual:?}"
+    );
+    legacy
+}
 
 /// The private-data-free ephemeral program the scaffold tests also use; a well-nested loop.
 const EPHEMERAL_SRC: &str = "require word >= 32;\n\
@@ -269,8 +283,11 @@ fn break_target_not_loop_exit_is_rejected() {
 // Well-nested fragments that satisfy every target-equality invariant must not be rejected,
 // guarding against a slice-2 false positive on structurally valid control flow. They are also
 // operand-stack-balanced (the condition an If/BreakIf pops is pushed first, both arms neutral),
-// so the depth-balance pass accepts them too; they are chunk fragments, not whole programs the
-// reference `verify()` accepts end to end.
+// so the depth-balance pass accepts them too. Each ends in a result and a `Return`, because a
+// chunk that runs off its end is rejected, by the reference since it was found to leave residue
+// the memory bound does not cover and by the self-hosted depth pass since Order 6 found it
+// discarding that check. The fragments here used to omit the terminator and passed only
+// because of that defect.
 
 fn assert_chunk_well_formed(label: &str, ops: Vec<Op>) {
     let m = mutated_module(ops);
@@ -286,7 +303,14 @@ fn well_formed_if_else_is_accepted() {
     // the EndIf at 3. Both arms are empty (operand-neutral).
     assert_chunk_well_formed(
         "if-else",
-        vec![Op::PushImmediate(1), Op::If(3), Op::Else(3), Op::EndIf],
+        vec![
+            Op::PushImmediate(1),
+            Op::If(3),
+            Op::Else(3),
+            Op::EndIf,
+            Op::PushImmediate(0),
+            Op::Return,
+        ],
     );
 }
 
@@ -301,6 +325,8 @@ fn well_formed_loop_with_breakif_is_accepted() {
             Op::PushImmediate(1),
             Op::BreakIf(4),
             Op::EndLoop(1),
+            Op::PushImmediate(0),
+            Op::Return,
         ],
     );
 }

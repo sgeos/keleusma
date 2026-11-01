@@ -44,6 +44,15 @@ use crate::compiler::CompileError;
 use crate::token::Span;
 use crate::visitor::Visitor;
 
+/// The narrowest word any runtime implements, taken from the trait impl rather
+/// than written as a literal so that widening or narrowing the [`crate::word::Word`]
+/// family moves this with it. `i8` is the narrowest type carrying the trait.
+const NARROWEST_WORD_BITS_LOG2: u8 = <i8 as crate::word::Word>::BITS_LOG2;
+
+/// The narrowest address any runtime implements, derived the same way from
+/// [`crate::address::Address`]. `u8` is the narrowest type carrying it.
+const NARROWEST_ADDRESS_BITS_LOG2: u8 = <u8 as crate::address::Address>::BITS_LOG2;
+
 /// Target descriptor describing word/address/float widths and
 /// feature flags for a compilation target.
 ///
@@ -180,8 +189,56 @@ impl Target {
 
     /// Validate that the target's widths are admissible by the
     /// current runtime. Returns an error describing the first
-    /// width that exceeds the runtime's capability.
+    /// width that is outside the runtime's capability, in either
+    /// direction.
+    ///
+    /// # Both ends are checked, and the floor was missing
+    ///
+    /// Only the ceilings were checked until 2026-09-10. The floor
+    /// argument was already written down — `validate_program_for_target`
+    /// refuses `float_bits_log2` below 5 on the grounds that widths
+    /// "are not formats, and the runtime's implemented-width predicate
+    /// does not admit them, so a target declaring one produces bytecode
+    /// nothing will run". That reasoning is not specific to floats.
+    /// [`crate::word::Word`] is implemented for `i8`, `i16`, `i32` and
+    /// `i64`, and [`crate::address::Address`] for `u8`, `u16`, `u32` and
+    /// `u64`, so the narrowest of either that any runtime can host is an eight-bit
+    /// one, and both floors are taken from those trait impls rather than written
+    /// as literals.
+    ///
+    /// **The consequence of the missing floor was measured, not
+    /// supposed.** A target with `addr_bits_log2 = 2` compiles without
+    /// complaint; the layout then sizes [`crate::value_layout::ScalarKind::Opaque`]
+    /// at four bits, which is ZERO BYTES, and the fault surfaces later
+    /// as a runtime `InvalidBytecode` about non-flat operands — a
+    /// downstream symptom naming neither the width nor the target.
+    /// It was found because a test derived such a target by clamping a
+    /// width to a floor of 2, and the derivation was wrong in exactly
+    /// the way this check now refuses.
+    ///
+    /// The float floor stays in `validate_program_for_target` because
+    /// it is conditional on `has_floats`, a program-facing capability
+    /// flag, rather than a property of the width alone. The split is
+    /// deliberate and is the reason the two checks are not adjacent.
     pub fn validate_against_runtime(&self) -> Result<(), CompileError> {
+        if self.word_bits_log2 < NARROWEST_WORD_BITS_LOG2 {
+            return Err(CompileError {
+                message: format!(
+                    "target word_bits_log2 = {} is below the narrowest implemented width {}                      (an 8-bit word); it is not a format any runtime hosts",
+                    self.word_bits_log2, NARROWEST_WORD_BITS_LOG2
+                ),
+                span: Span::default(),
+            });
+        }
+        if self.addr_bits_log2 < NARROWEST_ADDRESS_BITS_LOG2 {
+            return Err(CompileError {
+                message: format!(
+                    "target addr_bits_log2 = {} is below the narrowest implemented width {}                      (an 8-bit address); it is not a format any runtime hosts",
+                    self.addr_bits_log2, NARROWEST_ADDRESS_BITS_LOG2
+                ),
+                span: Span::default(),
+            });
+        }
         if self.word_bits_log2 > RUNTIME_WORD_BITS_LOG2 {
             return Err(CompileError {
                 message: format!(
@@ -252,6 +309,36 @@ pub(crate) fn validate_program_for_target(
     program: &Program,
     target: &Target,
 ) -> Result<(), CompileError> {
+    // A SELF-CONTRADICTORY TARGET IS REFUSED BEFORE THE PROGRAM IS EXAMINED.
+    //
+    // `float_bits_log2` is documented as honoured only when `has_floats` is
+    // true, and zero is the no-floats sentinel that `embedded_8` and
+    // `embedded_16` carry. A target claiming floats at a zero width asserts
+    // both at once.
+    //
+    // It is refused because it was ACCEPTED, and the result was a module that
+    // compiled, loaded and computed in the runtime's full precision while
+    // declaring a zero-bit float. That is precisely the defect the arithmetic
+    // narrowing exists to remove, surviving at the one width the narrowing
+    // treats as "nothing to do".
+    //
+    // Widths 1 and 2 are refused for the same reason a moment later: they are
+    // not formats, and the runtime's implemented-width predicate does not admit
+    // them, so a target declaring one produces bytecode nothing will run.
+    if target.has_floats && target.float_bits_log2 < 5 {
+        return Err(CompileError {
+            message: alloc::format!(
+                "target declares has_floats with float_bits_log2 = {}, which is not a \
+                 floating-point format this runtime implements. Zero is the no-floats \
+                 sentinel (pair it with has_floats = false); 1 and 2 are not formats; \
+                 3 and 4 are OFP8 E5M2 and IEEE binary16, which need software rounding \
+                 that does not exist yet",
+                target.float_bits_log2,
+            ),
+            span: crate::token::Span::default(),
+        });
+    }
+
     // Machine-property `require` directives are checked against the target
     // regardless of its capability flags, so this runs before the
     // floats-and-strings fast path below.

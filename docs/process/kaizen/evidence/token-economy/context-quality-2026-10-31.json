@@ -1,0 +1,447 @@
+{
+ "after_compaction": {
+  "calls": 2511,
+  "errors": 63,
+  "rate": 0.0251
+ },
+ "after_compaction_errors_by_tool": {
+  "Bash": 52,
+  "Edit": 11
+ },
+ "after_compaction_without_edit_guard": {
+  "calls": 2500,
+  "errors": 52,
+  "rate": 0.0208
+ },
+ "all_tools_by_context": {
+  "100k-200k": {
+   "calls": 3829,
+   "errors": 71,
+   "rate": 0.0185
+  },
+  "200k-400k": {
+   "calls": 6033,
+   "errors": 82,
+   "rate": 0.0136
+  },
+  "400k-700k": {
+   "calls": 5460,
+   "errors": 51,
+   "rate": 0.0093
+  },
+  "50k-100k": {
+   "calls": 1045,
+   "errors": 33,
+   "rate": 0.0316
+  },
+  "<50k": {
+   "calls": 56,
+   "errors": 2,
+   "rate": 0.0357
+  },
+  ">=700k": {
+   "calls": 2608,
+   "errors": 30,
+   "rate": 0.0115
+  }
+ },
+ "before_compaction": {
+  "calls": 2547,
+  "errors": 47,
+  "rate": 0.0185
+ },
+ "before_compaction_without_edit_guard": {
+  "calls": 2539,
+  "errors": 39,
+  "rate": 0.0154
+ },
+ "by_calls_since_compaction": {
+  "0-9": {
+   "calls": 510,
+   "errors": 19,
+   "rate": 0.0373
+  },
+  "10-24": {
+   "calls": 765,
+   "errors": 20,
+   "rate": 0.0261
+  },
+  "100-199": {
+   "calls": 3907,
+   "errors": 57,
+   "rate": 0.0146
+  },
+  "25-49": {
+   "calls": 1236,
+   "errors": 24,
+   "rate": 0.0194
+  },
+  "50-99": {
+   "calls": 2414,
+   "errors": 35,
+   "rate": 0.0145
+  }
+ },
+ "by_compaction_kind": {
+  "idle": {
+   "after": {
+    "calls": 1701,
+    "errors": 35,
+    "rate": 0.0206
+   },
+   "before": {
+    "calls": 1739,
+    "errors": 27,
+    "rate": 0.0155
+   },
+   "paired": {
+    "after_more": 16,
+    "before_more": 9,
+    "tied": 10
+   }
+  },
+  "threshold": {
+   "after": {
+    "calls": 799,
+    "errors": 17,
+    "rate": 0.0213
+   },
+   "before": {
+    "calls": 800,
+    "errors": 12,
+    "rate": 0.015
+   },
+   "paired": {
+    "after_more": 5,
+    "before_more": 4,
+    "tied": 7
+   }
+  }
+ },
+ "by_model_and_context": {
+  "claude-opus-5 100k-200k": {
+   "calls": 845,
+   "errors": 11,
+   "rate": 0.013
+  },
+  "claude-opus-5 200k-400k": {
+   "calls": 1703,
+   "errors": 13,
+   "rate": 0.0076
+  },
+  "claude-opus-5 400k-700k": {
+   "calls": 2309,
+   "errors": 21,
+   "rate": 0.0091
+  },
+  "claude-opus-5 50k-100k": {
+   "calls": 276,
+   "errors": 5,
+   "rate": 0.0181
+  },
+  "claude-opus-5 >=700k": {
+   "calls": 1522,
+   "errors": 9,
+   "rate": 0.0059
+  },
+  "claude-opus-5-5 100k-200k": {
+   "calls": 2958,
+   "errors": 60,
+   "rate": 0.0203
+  },
+  "claude-opus-5-5 200k-400k": {
+   "calls": 4307,
+   "errors": 67,
+   "rate": 0.0156
+  },
+  "claude-opus-5-5 400k-700k": {
+   "calls": 3095,
+   "errors": 30,
+   "rate": 0.0097
+  },
+  "claude-opus-5-5 50k-100k": {
+   "calls": 755,
+   "errors": 27,
+   "rate": 0.0358
+  },
+  "claude-opus-5-5 >=700k": {
+   "calls": 1086,
+   "errors": 21,
+   "rate": 0.0193
+  }
+ },
+ "compaction_window_calls": 50,
+ "compactions_paired": {
+  "after_more": 21,
+  "before_more": 13,
+  "tied": 17
+ },
+ "edit_after_compaction": {
+  "calls": 129,
+  "errors": 11,
+  "rate": 0.0853
+ },
+ "edit_before_compaction": {
+  "calls": 90,
+  "errors": 8,
+  "rate": 0.0889
+ },
+ "edit_error_classes": {
+  "not read or modified since read": 33
+ },
+ "edit_tools_by_context": {
+  "100k-200k": {
+   "calls": 218,
+   "errors": 14,
+   "rate": 0.0642
+  },
+  "200k-400k": {
+   "calls": 254,
+   "errors": 14,
+   "rate": 0.0551
+  },
+  "400k-700k": {
+   "calls": 97,
+   "errors": 5,
+   "rate": 0.0515
+  },
+  "50k-100k": {
+   "calls": 20,
+   "errors": 0,
+   "rate": 0.0
+  },
+  "<50k": {
+   "calls": 1,
+   "errors": 0,
+   "rate": 0.0
+  },
+  ">=700k": {
+   "calls": 22,
+   "errors": 0,
+   "rate": 0.0
+  }
+ },
+ "fresh_session_start": {
+  "calls": 402,
+  "errors": 14,
+  "rate": 0.0348
+ },
+ "fresh_session_start_without_edit_guard": {
+  "calls": 402,
+  "errors": 14,
+  "rate": 0.0348
+ },
+ "idle_gap_minutes": 30,
+ "idle_gap_resumptions": {
+  "compacted": {
+   "after": {
+    "calls": 1801,
+    "errors": 36,
+    "rate": 0.02
+   },
+   "first_call_cache_read_median": 28910,
+   "first_call_cache_write_median": 51357,
+   "resumptions": 37
+  },
+  "uncompacted_past_cache_ttl": {
+   "after": {
+    "calls": 6009,
+    "errors": 73,
+    "rate": 0.0121
+   },
+   "first_call_cache_read_median": 26351,
+   "first_call_cache_write_median": 345545,
+   "resumptions": 125
+  },
+  "uncompacted_within_cache_ttl": {
+   "after": {
+    "calls": 10311,
+    "errors": 122,
+    "rate": 0.0118
+   },
+   "first_call_cache_read_median": 361651,
+   "first_call_cache_write_median": 576,
+   "resumptions": 211
+  }
+ },
+ "idle_gap_resumptions_by_day": {
+  "2026-08-31": {
+   "compacted": 0,
+   "uncompacted": 5
+  },
+  "2026-09-01": {
+   "compacted": 0,
+   "uncompacted": 4
+  },
+  "2026-09-02": {
+   "compacted": 0,
+   "uncompacted": 9
+  },
+  "2026-09-03": {
+   "compacted": 0,
+   "uncompacted": 6
+  },
+  "2026-09-04": {
+   "compacted": 0,
+   "uncompacted": 4
+  },
+  "2026-09-05": {
+   "compacted": 0,
+   "uncompacted": 9
+  },
+  "2026-09-06": {
+   "compacted": 0,
+   "uncompacted": 3
+  },
+  "2026-09-07": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-09-08": {
+   "compacted": 0,
+   "uncompacted": 10
+  },
+  "2026-09-09": {
+   "compacted": 0,
+   "uncompacted": 9
+  },
+  "2026-09-10": {
+   "compacted": 0,
+   "uncompacted": 7
+  },
+  "2026-09-11": {
+   "compacted": 0,
+   "uncompacted": 1
+  },
+  "2026-09-12": {
+   "compacted": 0,
+   "uncompacted": 12
+  },
+  "2026-09-13": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-09-14": {
+   "compacted": 0,
+   "uncompacted": 1
+  },
+  "2026-09-16": {
+   "compacted": 1,
+   "uncompacted": 1
+  },
+  "2026-09-17": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-09-18": {
+   "compacted": 0,
+   "uncompacted": 3
+  },
+  "2026-09-19": {
+   "compacted": 0,
+   "uncompacted": 3
+  },
+  "2026-09-23": {
+   "compacted": 0,
+   "uncompacted": 1
+  },
+  "2026-09-24": {
+   "compacted": 0,
+   "uncompacted": 4
+  },
+  "2026-09-25": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-09-26": {
+   "compacted": 1,
+   "uncompacted": 1
+  },
+  "2026-09-28": {
+   "compacted": 0,
+   "uncompacted": 1
+  },
+  "2026-09-29": {
+   "compacted": 0,
+   "uncompacted": 8
+  },
+  "2026-09-30": {
+   "compacted": 0,
+   "uncompacted": 3
+  },
+  "2026-10-01": {
+   "compacted": 0,
+   "uncompacted": 1
+  },
+  "2026-10-04": {
+   "compacted": 0,
+   "uncompacted": 3
+  },
+  "2026-10-20": {
+   "compacted": 1,
+   "uncompacted": 5
+  },
+  "2026-10-22": {
+   "compacted": 3,
+   "uncompacted": 16
+  },
+  "2026-10-23": {
+   "compacted": 1,
+   "uncompacted": 5
+  },
+  "2026-10-24": {
+   "compacted": 5,
+   "uncompacted": 19
+  },
+  "2026-10-25": {
+   "compacted": 9,
+   "uncompacted": 30
+  },
+  "2026-10-26": {
+   "compacted": 3,
+   "uncompacted": 28
+  },
+  "2026-10-27": {
+   "compacted": 0,
+   "uncompacted": 32
+  },
+  "2026-10-28": {
+   "compacted": 3,
+   "uncompacted": 21
+  },
+  "2026-10-29": {
+   "compacted": 3,
+   "uncompacted": 15
+  },
+  "2026-10-30": {
+   "compacted": 5,
+   "uncompacted": 21
+  },
+  "2026-10-31": {
+   "compacted": 2,
+   "uncompacted": 27
+  }
+ },
+ "permission_denials_excluded": 11,
+ "recovery_reads": {
+  "compaction": {
+   "calls": 1530,
+   "context_at_window_end_total": 6258464,
+   "context_at_window_start_total": 3813261,
+   "result_chars": 3456709,
+   "startup_doc_calls": 261,
+   "startup_doc_chars": 919604,
+   "windows": 51
+  },
+  "fresh": {
+   "calls": 262,
+   "context_at_window_end_total": 1029868,
+   "context_at_window_start_total": 542497,
+   "result_chars": 749696,
+   "startup_doc_calls": 56,
+   "startup_doc_chars": 289704,
+   "windows": 13
+  }
+ },
+ "recovery_window_calls": 30
+}

@@ -1,0 +1,18 @@
+// Struct declaration, construction, and field access.
+//
+// Run: keleusma run examples/scripts/02_struct_field.kel
+// Expected output: 7
+
+struct Point {
+    x: Word,
+    y: Word,
+}
+
+fn manhattan_norm(p: Point) -> Word {
+    p.x + p.y
+}
+
+fn main() -> Word {
+    let origin_offset = Point { x: 3, y: 4 };
+    manhattan_norm(origin_offset)
+}

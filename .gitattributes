@@ -28,3 +28,7 @@ keleusma-bench/measured_cost_models/*.rs linguist-generated
 # Git LFS hooks (no-op until/unless LFS is enabled, but documents
 # the intent).
 *.kel.bin filter=lfs diff=lfs merge=lfs -text
+
+# Gate-summary fixtures are captured tool output, kept byte for byte, so
+# their trailing whitespace is exempt from whitespace checks.
+scripts/gate_summary_fixtures/*.txt -whitespace

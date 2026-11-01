@@ -93,12 +93,31 @@ GATE_DIR="$TREES_DIR/${KEL_GATE_NAME:-gate}"
 # cache survives and only changed crates recompile. Inside the worktree it would
 # be discarded with the tree; shared with the main tree it would thrash, because
 # the two are usually on different commits.
-GATE_TARGET="${KEL_GATE_TARGET:-"$TREES_DIR/.gate-target"}"
+#
+# When SCRATCH_BASE names a scratch volume, the default lives there, under the
+# repository's folder that scripts/scratch.sh uses, rather than on the system disk.
+# It is a plain directory named in CARGO_TARGET_DIR, not a link, so `cargo clean`
+# cannot strand it. The dot keeps `worktree.sh list` from reporting it as an unused
+# tree folder. Four gate directories of 19.4 GB, unused since 2026-08-10, were
+# deleted from ../keleusma-worktrees on the operator's decision of 2026-10-31, which
+# also adopted this default.
+if [ -n "${SCRATCH_BASE:-}" ]; then
+  if [ ! -d "$SCRATCH_BASE" ] || [ ! -w "$SCRATCH_BASE" ]; then
+    echo "gate-worktree: SCRATCH_BASE '$SCRATCH_BASE' is not a writable directory" >&2
+    exit 1
+  fi
+  DEFAULT_GATE_TARGET="$SCRATCH_BASE/$(basename "$REPO_ROOT")/.gate-target"
+else
+  DEFAULT_GATE_TARGET="$TREES_DIR/.gate-target"
+fi
+GATE_TARGET="${KEL_GATE_TARGET:-"$DEFAULT_GATE_TARGET"}"
 
 # Reuse the worktree across runs; just move it to the commit under test. A stale
 # tree from an interrupted run is reset rather than refused, since the whole
 # point is that its contents are disposable.
-if git worktree list --porcelain | grep -qx "worktree $GATE_DIR"; then
+# Captured first, so `grep -q` exiting early cannot SIGPIPE the producer under pipefail.
+worktrees="$(git worktree list --porcelain)"
+if grep -qx "worktree $GATE_DIR" <<<"$worktrees"; then
   git -C "$GATE_DIR" reset --hard --quiet
   git -C "$GATE_DIR" clean -fdq
   git -C "$GATE_DIR" checkout --detach --quiet "$COMMIT"
@@ -125,7 +144,7 @@ LOG="${KEL_GATE_LOG:-"$TREES_DIR/${KEL_GATE_NAME:-gate}-$SHORT.log"}"
 # reading someone else's mailbox in time.
 if pgrep -f "release-gate.sh" >/dev/null 2>&1; then
   echo "gate-worktree: a gate is ALREADY RUNNING on this machine; refusing to start a second." >&2
-  pgrep -fl "release-gate.sh" | head -3 >&2
+  pgrep -fl "release-gate.sh" | sed -n 1,3p >&2
   echo "gate-worktree: stop it with a PATH-SCOPED kill, never a bare pkill -f release-gate.sh," >&2
   echo "gate-worktree: which would also kill a sibling session's run:" >&2
   echo "gate-worktree:   pkill -f \"\$GATE_DIR\" ; pkill -f \"\$GATE_TARGET/debug/deps\"" >&2

@@ -41,6 +41,7 @@ Non-atomic means it may pause partway through. A `yield` function can hand
 a value to the host and pause, then continue when the host resumes it. It
 may pause many times, but it must eventually finish.
 
+<!-- verify: accept -->
 ```
 yield main(input: Word) -> Word {
     let reply = yield input;
@@ -59,6 +60,7 @@ Divergent means it never finishes. A `loop` function repeats forever. The
 word productive is the condition attached: it must hand a value to the
 host on every single cycle.
 
+<!-- verify: compile -->
 ```
 loop main(input: Word) -> Word {
     let _ = yield input;

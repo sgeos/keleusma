@@ -1,0 +1,407 @@
+# Brief: the driver's discard-arm reachability census
+
+> **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
+
+**Status**: brief, self-directed. **MEASURED 2026-09-04, extended by pass six 2026-09-06; the result is below and the headline is that
+the instrument under-measures, proven by a failed positive control.**
+
+## The observation
+
+`src/selfhost/mod.rs` carries **19 silent-discard match arms** (`_ => {}`, `_ => 0`, `_ => None`,
+`_ => continue`). `src/wire_schema.rs` carries none.
+
+Exactly one of the nineteen is measured: the `_ => continue` in the windowed region loop, whose
+consequence is that unrouted kinds are left as zeros and which `tests/selfhost_region_coverage.rs`
+exists to quantify. That arm is the model for what the other eighteen lack -- and it is worth noting
+that routing `SHARED_LAYOUT` out of it took one increment once someone looked.
+
+## DO NOT AUDIT THESE BY READING. This is the whole point of the brief.
+
+The obvious move is to read all nineteen and judge each benign or suspect. **That produces a list of
+"probably fine" with no evidence attached, which is worse than no list because it looks like
+coverage.** This tree has recorded the failure repeatedly: three wrong sizings came from reasoning
+about a structure instead of reading its consumer, and this session alone produced eight instrument
+errors, one of which reached a merged commit message.
+
+More pointedly: on this codebase, in this session, measurement overturned my reading of what code
+must do **three times out of three** -- the borrowed-argument coherence question, the region batch
+bound, and the corpus's escape content. A reading-based verdict on nineteen arms would be a
+confident guess dressed as an audit.
+
+## The instrument that would work, and it has a precedent here
+
+**Measure which arms are REACHED while compiling the corpus.** This repository has done exactly
+this: an emit-command census on 2026-08-14 instrumented every command over the whole corpus and
+found two kinds whose emitters existed but which no caller ever selected.
+
+The three outcomes and what each means:
+
+| observation | meaning |
+|---|---|
+| never reached on any corpus input | **unmeasured**, not safe. Its safety is unknown |
+| reached often, discarding | the candidate defect: something real arrives and is dropped |
+| reached only outside the corpus | the interesting middle, and where the string-literal class lives |
+
+## The trap, stated because it is the likely wrong turn
+
+**Do not convert this into a rule that a `_ =>` arm is a defect.** Most exhaustive-by-construction
+matches want one, and replacing them with panics in `no_std` code that runs a verifier would trade a
+silent discard for a crash. **The claim to establish is per-arm REACHABILITY, not per-arm style.**
+
+Second trap: do not fix what the census finds in the same increment. A reached-and-discarding arm may
+be correct, may be a defect, or may be a decision that is not this line's to make. Measure first,
+record, and let the disposition be its own work with its own evidence.
+
+## What "done" is not
+
+It is not nineteen paragraphs of judgement. It is a figure the tree recomputes, with the unmeasured
+arms named as unmeasured rather than assumed benign.
+
+## The census, run 2026-09-04
+
+Nineteen arms confirmed by re-derivation, matching the brief. Instrumented with per-arm counters,
+driven over 27 corpus sources (15 under `examples/scripts/`, 12 stage sources under
+`src/selfhost/kel/`) through nine public driver entry points, then reverted.
+
+| arm | line | hits |
+|---|---|---|
+| 0 | 646 | 94,392 |
+| 1 | 771 | 659,696 |
+| 2 | 1090 | 3 |
+| 3 | 1862 | 19,068 |
+| 4-18 | 2400, 2727, 2861, 3113, 3226, 3357, 3570, 4068, 4303, 4572, 4641, 4692, 4755, 5302, 6899 | 0 |
+
+**Four reached. Fifteen at zero.**
+
+## THE FINAL FIGURE: NINE OF NINETEEN, ACROSS FOUR PASSES
+
+| pass | workload | arms reached |
+|---|---|---|
+| 1 | 27 corpus sources through 9 hand-picked entry points | 0, 1, 2, 3 |
+| 2 | every stage through the windowed region emitter | 17, 18 |
+| 3 | the assembly entry points | 17 |
+| 4 | 5 tiny sources through all 7 `*_from_pipeline` entry points | 1, 2, 3, 4, 5, 6 |
+| **union** | | **9 of 19** |
+
+### The result that matters is not the nine
+
+**Five toy programs reached more arms than twenty-seven real ones.** Pass 1 fed the entire corpus --
+including stage sources costing minutes each -- through nine entry points chosen by hand, and reached
+four arms. Pass 4 fed five trivial programs through all seven entry points of one family, derived by
+grep, and reached six.
+
+**Workload BREADTH dominated workload SIZE.** The constraint was never how much source went in; it
+was which functions were called. Pass 1 was slow *and* narrow, and its slowness disguised its
+narrowness: forty minutes of work feels like thorough coverage.
+
+**And the entry-point list was chosen, not derived.** Seven `*_from_pipeline` functions exist and
+pass 1 called two. The other five hid three arms. That is the same substitution -- a hand-picked
+sample presented as a population -- that produced this session's other wrong figures, committed
+inside the instrument built to detect exactly that class.
+
+### PASS FIVE CLOSES IT TO FOURTEEN OF NINETEEN, AND MY DEFERRAL WAS WRONG
+
+**I recorded pass five as "the obvious next step rather than run here", on the grounds that four
+passes were already disproportionate. That was effort-reasoning about something pass four had
+already shown costs minutes**, and the genuine question -- whether the remaining functions are
+drivable at all -- I had not asked.
+
+Asked and answered: of 52 public functions, **18 take exactly `(src: &str)` and 8 take exactly
+`(module: &Module)`.** Twenty-six are trivially drivable, including both entry points the call-site
+analysis had already fingered.
+
+Pass five drove all 26 against six small programs and reached **13 arms by itself**. The union
+across five passes is **14 of 19**, up from nine.
+
+**Arms 13, 14 and 15 -- `assemble_data_slots`, `assemble_shared_layout`, `assemble_private_init` --
+are now reached**, exactly as predicted, through `self_host_compile_full` and
+`self_host_compile_scratch`. The structural hypothesis held.
+
+### THE REMAINING FIVE ARE A FIXTURE PROBLEM, NOT A HARNESS PROBLEM
+
+Call-site analysis of all five, after pass five:
+
+| arm | function | called from | so |
+|---|---|---|---|
+| 7, 8 | `reconstruct_via_kel`, `..._multihead` | four sites inside the `*_from_pipeline` family | **driven** |
+| 9 | `analyze_op_heap` | one analysis site | driven |
+| 11 | `const_scalar_size` | the `Op::Const` arm of a size walk | **driven** -- every fixture has constants |
+| 16 | `assemble_enum_layouts` | `self_host_compile_full` and `..._scratch` | **driven** in pass five |
+
+**Every one of the five sits inside a function the passes DID call.** The entry-point gap is closed;
+
+> **REFUTED BY PASS SEVEN, and left in place because the reasoning is the lesson.** Arm 9's function
+> is reached only through drivers pass five never called, and it fires sixty times when they are.
+> The claim below was arrived at by tracing each arm to its *immediately enclosing* function and
+> stopping there; the question is whether a PUBLIC entry point reaches it, which is a longer chain.
+> See the pass-seven section.
+
+what remains is that these are fallback branches for constructs the six small fixtures never
+contained -- a constant kind not used, an enum layout shape a payload-free enum does not produce, a
+reconstruction case those programs do not reach.
+
+**So a sixth pass is a FIXTURE problem, and that is a different and cheaper kind of work.** It needs
+richer programs, not more functions: payload-bearing enums, the full constant-kind range, multiheaded
+functions. The harness from pass five is reusable as-is.
+
+This also retires the earlier framing. "Ten arms not reached by 37% of the surface" was right when
+written; after pass five the surface is no longer the limiting factor, and saying so is the
+difference between a live caveat and a stale one.
+
+### PASS SIX: THE FIXTURE HYPOTHESIS WAS RIGHT, AND ONE ARM CLOSES
+
+Pass five's diagnosis was that the last five are a **fixture** problem needing richer programs --
+payload-bearing enums, the full constant-kind range, multiheaded functions. Pass six tested the two
+arms that diagnosis makes concrete predictions about.
+
+**Arm 16 is REACHED.** `assemble_enum_layouts`' discard arm fires on a payload-bearing enum
+(`enum E { A, B(bool) }` constructed and matched), and does **not** fire on either control -- a plain
+`Word` function or one returning a `Word` constant. The union across six passes is **15 of 19**.
+
+**Arm 11 is NOT reached by the fixture predicted for it.** `const_scalar_size` discards a
+`ConstValue` outside `Int`/`Byte`/`Fixed`/`StaticStr`, and its comment names `Float`. `ConstValue`
+also has `Bool` and `Unit`, so a `bool` constant looked like a fixture needing no float support. It
+did not fire. **The hypothesis is refuted, not the arm's reachability**: bool constants evidently do
+not arrive at that function, and why is not established here.
+
+### A misattribution caught before it was published, and it is the reason to record method
+
+The arm first instrumented as "16" was found by scanning the lines after `assemble_enum_layouts`.
+**It sits in a different function** -- `wire_shape_of` -- and its `_ => WireShape::Top` fires for a
+`bool`-typed function rather than for anything enum-related. Reported as arm 16, that would have
+credited the right conclusion to the wrong code, exactly as this session's earlier mutation of a
+boundary mechanism was aimed at the wrong call site and passed.
+
+The correct arm was then instrumented and behaves as the brief predicted. **Both facts are kept**:
+`wire_shape_of`'s discard arm is reached by a `bool` return type, and whether it is among the
+nineteen is **not established** -- it was never part of this census's numbering.
+
+### An incidental observation, not chased
+
+A function returning a `Byte` constant **panics** through `self_host_compile_full` rather than
+refusing cleanly. Whether that construct is inside the supported subset is not determined here; it is
+recorded because a panic and a refusal are different outcomes and only one is a documented boundary.
+
+### PASS SEVEN: ARM 9 IS REACHED, AND THE ENTRY-POINT GAP WAS NOT CLOSED
+
+**Arm 9 fires sixty times** on a six-fixture spread, driven through
+`validate_module_via_kel` and `analyze_stream_chunk`. The union is **16 of 19**.
+
+**It was a false zero, and pass five's central conclusion is wrong because of it.**
+That pass declared "the entry-point gap is closed" and "every one of the five sits
+inside a function the passes DID call". `analyze_op_heap` is reached only through
+`run_analyze_kel`, whose public drivers are `validate_module_via_kel`,
+`analyze_stream_chunk` and `assemble_resource_bounds`. **Had pass five driven any
+of them, arm 9 would have fired sixty times rather than zero.** It did not, so it
+did not.
+
+So the remaining arms were never purely a fixture problem. **They are a mix**, and
+the way to tell which is to trace an arm's callers up to a public entry point
+before concluding anything about its fixtures.
+
+**This is the third time this census has produced a false zero from an undriven
+driver** -- arm 18 first, whose failure the brief retains as its lesson, then the
+`*_from_pipeline` family in pass five, now this. The lesson has been recorded twice
+and repeated anyway, which suggests the check needs to be procedural rather than
+remembered: **trace the call chain to a public entry point before reporting an arm
+unreached.**
+
+### The pass-seven probe was itself vacuous before it was fixed
+
+Six fixtures were first driven through `self_host_compile_full` and neither arm
+fired. That entry point calls neither function. **The probe was measuring nothing,
+in exactly the way it was written to detect** -- and was caught only by asking why
+an arm that should fire on nearly every op had fired on none.
+
+### Arm 11 is still unreached, and the attempt is recorded rather than the verdict
+
+`const_scalar_size` is reached only through `typed_desc`, whose only caller is
+`seed_verify_typed_shared`. Driving that with a virtual machine built from the
+USER module panics: it expects the stage's machine, not the subject's. **So the
+arm has no witness and no honest verdict from this pass** -- what is recorded is
+that the driver was identified, the setup attempted was wrong, and the correct
+harness is the one the typed-verifier tests already build.
+
+### PASS EIGHT: ARM 11 IS REACHED, AND ITS OWN COMMENT WAS RIGHT ALL ALONG
+
+**Arm 11 fires three times** on a float constant, driven through
+`typed_reject_module_via_kel` -- the public entry above `typed_run`,
+`seed_verify_typed_shared` and `typed_desc`. **Five controls do not fire it**: a
+`Word` constant, a string constant, a `bool` constant, a `bool` in a branch, and a
+unit-returning call. The union is **17 of 19**.
+
+**The arm's own comment named `Float` and was correct.** Pass six doubted it --
+`ConstValue` also has `Bool` and `Unit`, so a bool constant looked like a fixture
+needing no float support -- and that doubt was reasonable and wrong.
+
+**Why the bool fixture failed, which pass six could not say.** A `bool` literal
+compiles to `PushImmediate`, not to a pool constant, so no `ConstValue::Bool` ever
+reaches `const_scalar_size`. That fact came from an unrelated census in the same
+session, of the load-time pass's operand-range checking; **two threads explained a
+third**, which is an argument for keeping findings in one place rather than one
+document per investigation.
+
+**The route matters as much as the fixture.** Pass seven established that this
+census's recurring failure is reporting an arm unreached when its DRIVER was never
+called. Arm 11 needed both halves: the right entry point (traced up four levels to
+a public function) and the right fixture (a float constant). Either alone still
+measures nothing.
+
+### PASS NINE: ARMS 7 AND 8 ARE DEAD, NOT UNREACHED — NINETEEN OF NINETEEN
+
+**Both are the same `_ => 0` fallback, in two copies of one closure**, and
+neither can fire. The census's difficulty throughout has been telling *unreached*
+from *unreachable*; here the type system settles it.
+
+`rd_diag` is called exactly twice, both times with `RC_ERR_CODE` or
+`RC_ERR_DETAIL`. Those map to `err_code: Word` and `err_detail: Word` in
+`reconstruct.kel`'s `shared data io` block. `Vm::get_shared` reads a slot at the
+kind the module's layout declares and hands it to `read_scalar_le`, so a `Word`
+slot yields `Value::Int` and nothing else. **The second arm has no input that
+reaches it.**
+
+**The zero it returned was the wrong value to pick.** Zero is `RC_ERR_CODE`'s
+"no error" code, so a fallback that *could* fire would report success while
+discarding the diagnostic it was reading. Ten lines below, the sibling closure
+`rd` reads the same kind of slot and PANICS on a non-`Int`. One function was
+reading `Word` slots two ways, one asserting the invariant and one silently
+substituting a value that means the opposite of what had happened.
+
+Both arms are now the assertion `rd` already was. **The match stays exhaustive
+rather than being deleted**: a slot later declared `Float` would make the arm
+live, and that is the case worth failing loudly on.
+
+#### The proof is the change, and the probe that nearly lied
+
+Replacing a dead arm with a panic and running the corpus green *is* the evidence:
+the arm cannot be both taken and silent.
+
+That only holds if the changed code runs. A first probe counted **zero**
+entries — which would have made the green run silence rather than evidence, the
+census's own recurring failure. The zero was an artefact: `cargo test` captures
+output from passing tests. With `--nocapture` the same probe counts **507**
+entries in `reconstruct_failure_modes` and **6** in `selfhost_bare_for`. The path
+is exercised heavily, and both binaries pass with the assertions in place.
+
+#### The scope of the claim
+
+**"Cannot fire at these two call sites, given these slot declarations."** Not
+"unreachable in general" — this tree carries a retraction for that distinction,
+and the `Float` case above is exactly how it would come back.
+
+**Arms 9, 11 and 16 are closed and their rows are removed**, rather than left in a table under a heading that
+contradicts it. Its note read: "the corpus source used a payload-free enum, which is the likely gap
+and is a lead rather than a conclusion". **The lead was right** -- a payload-bearing enum reaches it,
+with two controls that do not. A lead recorded as a lead, and later confirmed, is the cheapest kind
+of finding there is.
+
+With arms 7 and 8 closed by the type argument above, **the census reaches nineteen of nineteen**:
+17 driven and observed across passes one to eight, plus these two shown to have no reaching input.
+
+### THE CENSUS'S OWN COVERAGE, QUANTIFIED -- 19 OF 52
+
+**The driver has 52 public functions. Four passes drove 19 of them.** Every figure above is
+conditioned on that and the earlier text did not say so.
+
+The gap is not abstract. Arms 13-16 sit in the `assemble_*` family, reachable through
+`self_host_compile_full` and `self_host_compile_scratch` -- **two public entry points that appear in
+none of the four passes**, neither in the nine picked by hand nor in the seven-function family
+derived by grep.
+
+**That is the same error a third time, at a third level of scope.** Pass 1 picked entry points by
+hand. Pass 4 corrected it by deriving one FAMILY -- and calling a family the surface is the same
+substitution one level up. The population was always `pub fn` in the driver, and it was always
+countable.
+
+So "ten arms unmeasured" should be read as: **ten arms not reached by 37% of the driver's public
+surface.** A fifth pass driving the other 33 functions is the obvious next step and would very
+likely close the assembly cluster outright.
+
+### The ten that remain, and where they live
+
+Named by their enclosing function, so the next pass targets a subsystem rather than sweeping again:
+
+| arms | functions | surface |
+|---|---|---|
+| 7, 8 | `reconstruct_via_kel`, `reconstruct_via_kel_multihead` | reconstruction |
+| 9-12 | `analyze_op_heap`, `structural_marker`, `const_scalar_size`, `seed_verify_typed_shared` | analysis and seeding |
+| 13-16 | `assemble_data_slots`, `assemble_shared_layout`, `assemble_private_init`, `assemble_enum_layouts` | region assembly |
+
+These need real workloads rather than another entry-point sweep, and the assembly cluster lines up
+with the region kinds still skipped, which is a lead rather than a conclusion.
+
+**They remain UNMEASURED, not safe.** Four workloads missing them is stronger than one and is still
+not evidence of unreachability. Pass 1 stands as the standing proof of how a workload gap
+manufactures zeros.
+
+## SECOND PASS, SAME DAY: THE CONTROL NOW PASSES AND THE FIGURE IS SIX
+
+The gap the first pass identified was closed by driving the WIRE path, reusing the
+region-coverage harness rather than building a fresh one -- **66 seconds against the first pass's
+40 minutes**, because that harness already drives every stage through the windowed emitter.
+
+| pass | driver | arms reached |
+|---|---|---|
+| corpus | nine source-taking entry points | 0, 1, 2, 3 |
+| wire | the windowed region emitter | 17, 18 |
+| **union** | | **6 of 19** |
+
+**Arm 18, the positive control, now reads 120 hits.** It read zero in the first pass and the
+diagnosis -- that its driver `wire_windowed_via_kel` was never called -- was exactly right.
+
+**Arm 17, at line 5302, was reached 3,560 times and was invisible to the first pass entirely.**
+That is the sharper form of the lesson: a missing driver does not only hide the arm you already
+suspect, it hides arms you have no reason to suspect, and those are the ones a census exists to
+find.
+
+**Thirteen arms remain at zero: 4 through 16.** Still UNMEASURED rather than safe. Two independent
+workloads missing them is weak evidence of unreachability and not evidence of it -- the first pass
+is the standing proof of how a workload gap manufactures zeros.
+
+**The expensive route was not the informative one.** The first pass recompiles the largest stage
+sources through nine entry points; the region harness drives every stage through the emitter once.
+A third pass should reuse an existing harness before building another.
+
+## What a third pass would need
+
+Both passes cover source-taking entry points and the windowed emitter. Whatever drives arms 4-16 is
+neither. The cheapest next probe is the assembly path `tests/selfhost_wire.rs` exercises, the
+largest remaining self-host surface not yet used as a census workload.
+
+## THE FIRST PASS, RETAINED BECAUSE THE FAILURE IS THE LESSON
+
+**Arm 18, at line 6899, is the one arm the brief names as already measured** -- the `_ => continue`
+in the windowed region loop, whose consequence `tests/selfhost_region_coverage.rs` exists to
+quantify, and which the brief calls "the model for what the other eighteen lack". Its own comment
+states that five kinds reach it.
+
+**This census reports it as zero.**
+
+An arm with independent evidence of reachability, and a test that counts what flows through it,
+measured as unreached. The cause is identified and specific: the arm's driver is
+`wire_windowed_via_kel`, and the census never called it. The nine entry points probed cover the
+lexing, parsing, reconstruction and codegen path; they do not cover wire emission.
+
+**So the fifteen zeros are a statement about this workload's reach, not about those arms.** Four is
+a FLOOR on reachability, not a count of reachable arms. Reporting "fifteen arms are never reached"
+would have been the confident guess dressed as an audit that the brief warned against -- arrived at
+by measurement instead of by reading, which makes it more persuasive and no more true.
+
+## What the next run needs, so it is not re-derived
+
+Add the wire-emission drivers, `wire_windowed_via_kel` foremost, which need a compiled `Module` and
+a region list rather than a source string. `tests/selfhost_region_coverage.rs` has the setup to copy.
+Until then the census covers one half of the driver.
+
+## Two incidental findings worth keeping
+
+**The corpus is dominated by two sources.** `parse.kel` and `wire.kel` cost minutes per entry point
+-- 243 seconds for a single `try_parse_functions` on `parse.kel`, 138 for `self_host_compile` on
+`wire.kel`. That is why the self-host binaries dominate the release gate, and why that gate could
+not finish under machine load on 2026-09-03.
+
+**A count of sources that "compiled" is not available from this harness.** After each probe was
+given its own `catch_unwind` -- necessary, because one guard around all nine meant a source panicking
+on the first never exercised the other eight -- the outer success count became structurally always
+true. An earlier, narrower run measured 10 of 27 sources panicking through `self_host_compile`
+alone. **Do not read a compiled-count out of this harness; it cannot produce one.**

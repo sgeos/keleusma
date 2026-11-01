@@ -1,4 +1,5 @@
-//! What the `CONSTS` region of the eleven stage artifacts is actually made of.
+//! What the `CONSTS` region of the stage artifacts is actually made of, measured when the
+//! corpus held eleven stages.
 //!
 //! # Why this file exists
 //!
@@ -70,6 +71,10 @@ const CORPUS_STAGES: &[(&str, &str)] = &[
     (
         "verify_yield",
         include_str!("../src/selfhost/kel/verify_yield.kel"),
+    ),
+    (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
     ),
     (
         "verify_depth",

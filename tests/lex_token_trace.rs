@@ -15,10 +15,30 @@
 #![cfg(all(feature = "self-host", feature = "compile"))]
 
 /// The four-line reproduction of the mis-naming defect.
+///
+/// **It uses the BARE `for` form, which `parse.kel` now refuses by name.** That
+/// is the defect this reproduction was built to chase, and the refusal is its
+/// resolution: the stage says which construct it cannot lower instead of
+/// letting the failure surface five layers downstream as a missing chunk name.
+///
+/// So this source is still the right subject for the LEXER instrument below —
+/// the token stream is what it always was — and it can no longer be fed to the
+/// parse instruments, which is why they use `PARSEABLE`.
 const REPRO: &str = "private data d { a: Word, b: Word }\n\
                      fn y() -> Word { for j in 0..8 { d.a = 3; } d.a }\n\
                      fn z() -> Word { 9 }\n\
                      fn main() -> Word { y() + z() }\n";
+
+/// `REPRO` with the loop written in the counted form, which `parse.kel` accepts.
+///
+/// The sampling-rate property below is a property of the two INSTRUMENTS, not of
+/// the bare loop, so it is measured on a source the parser will run. Everything
+/// else about the two sources is identical, which is what keeps this a change of
+/// subject rather than of question.
+const PARSEABLE: &str = "private data d { a: Word, b: Word }\n\
+                         fn y() -> Word { for j in 0..8 limit 8 { d.a = 3; } d.a }\n\
+                         fn z() -> Word { 9 }\n\
+                         fn main() -> Word { y() + z() }\n";
 
 /// **THE TOKEN STREAM IS CORRECT, SO THE LEXER IS NOT AT FAULT.**
 ///
@@ -67,10 +87,16 @@ fn every_declaration_keyword_is_followed_by_its_own_name_token() {
 /// **THE CURSOR TRACE AND THE RECORD TRACE CANNOT BE ZIPPED, AND I TRIED.**
 ///
 /// `parse_cursor_trace` samples once per virtual-machine step and
-/// `parse_record_trace` once per emitted record: for this reproduction, 1,232
-/// against 78. Pairing them by index correlates a record with an unrelated
-/// cursor position, and the result *looks* like data — it produced a neat table
-/// attributing `y`'s header to the token `{`.
+/// `parse_record_trace` once per emitted record — a difference of roughly an
+/// order of magnitude. Pairing them by index correlates a record with an
+/// unrelated cursor position, and the result *looks* like data — it produced a
+/// neat table attributing `y`'s header to the token `{`.
+///
+/// **The assertion is the RATIO, and the counts are deliberately not stated.**
+/// An earlier version quoted 1,232 against 78 for the bare-loop reproduction;
+/// those figures were both unenforced and specific to a source this test no
+/// longer uses. A number in a file of tests reads as a record, and a record
+/// reads as already checked.
 ///
 /// **A wrong answer in the shape of a right one is worse than no answer**, so the
 /// mismatch is pinned rather than left as a trap for whoever reaches for the same
@@ -82,8 +108,8 @@ fn every_declaration_keyword_is_followed_by_its_own_name_token() {
 /// and both deserve a reader.
 #[test]
 fn the_two_traces_sample_at_different_rates_and_must_not_be_paired() {
-    let (_, records) = keleusma::selfhost::parse_record_trace(REPRO);
-    let cursor = keleusma::selfhost::parse_cursor_trace(REPRO);
+    let (_, records) = keleusma::selfhost::parse_record_trace(PARSEABLE);
+    let cursor = keleusma::selfhost::parse_cursor_trace(PARSEABLE);
 
     assert!(
         !records.is_empty() && !cursor.is_empty(),

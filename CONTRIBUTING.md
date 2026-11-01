@@ -27,7 +27,7 @@ cargo tn     # the FULL workspace suite under nextest (parallel; needs cargo-nex
 cargo tw     # the full workspace suite under cargo's serial runner
 ```
 
-**Test tiers (process audit item 1).** The ~198 self-hosted byte-identity tests (the `selfhost_*` binaries) each compile whole `.kel` stage files and dominate the suite's wall-clock. They are a merge-gate-only differential-oracle check: `cargo tnq` (the routine tier) skips them and is what the pre-push hook runs; the FULL suite including them runs in [`scripts/release-gate.sh`](scripts/release-gate.sh) before a merge. The trade-off is deliberate — a self-host regression on a feature branch surfaces at the merge gate, not at push time — so when working on a self-host stage, iterate with `scripts/fast-check.sh` (below) and trust the mandatory pre-merge gate for the whole-corpus check.
+**Test tiers (process audit item 1).** The ~198 self-hosted byte-identity tests (the `selfhost_*` binaries) each compile whole `.kel` stage files and dominate the suite's wall-clock. They are a differential-oracle check that the routine tier skips: `cargo tnq` omits them and is what the pre-push hook runs, while the full suite including them runs **in continuous integration on every pull request**, and in [`scripts/release-gate.sh`](scripts/release-gate.sh) for a local or offline pass. The trade-off is deliberate — a self-host regression on a feature branch surfaces at the merge gate, not at push time — so when working on a self-host stage, iterate with `scripts/fast-check.sh` (below) and let continuous integration carry the whole-corpus check. (This paragraph said "the mandatory pre-merge gate" until 2026-09-08; CI has authorized merges since 2026-08-11 and runs the self-host tier itself.)
 
 Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so a check pairs a nextest run with `cargo test --workspace --doc`.
 
@@ -105,7 +105,7 @@ These checks also run automatically before every `git push` through a [cargo-hus
 
 The hook fails the push if any check fails. To push a work-in-progress branch without running it, bypass with `git push --no-verify`. If the CI feature set or the checklist above changes, update the hook script to match.
 
-If your change is user-visible, add an entry to [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
+If your change is user-visible, add a changelog fragment under [`changelog.d/`](changelog.d/README.md) rather than editing [`CHANGELOG.md`](CHANGELOG.md). The fragments are assembled into its `[Unreleased]` section at release.
 
 If your change touches the surface language (new keyword, new operator, new construct), update the relevant section of [`docs/spec/GRAMMAR.md`](docs/spec/GRAMMAR.md) and consider whether the syntax highlighters under [`editors/`](editors/README.md) need to learn the new construct.
 
@@ -122,12 +122,12 @@ If your program lexes and parses but `Vm::new` or `compile` rejects it, the reje
 Soundness is the load-bearing property of the language. Any change to `verify::wcet_stream_iteration`, `verify::wcmu_stream_iteration`, `verify::verify`, or the surrounding analysis machinery should:
 
 - Carry tests in the affected module that exercise the soundness boundary.
-- Be paired with a CHANGELOG entry that names the soundness invariant the change preserves or relaxes.
+- Be paired with a changelog fragment that names the soundness invariant the change preserves or relaxes.
 - Be reviewed against the rationale in [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the conservative-verification stance.
 
 ## Code of conduct
 
-Interactions on issues, pull requests, and other project communication channels are expected to be civil and focused on the technical substance. There is no formal code-of-conduct document at V0.2.0; the project will adopt one if and when external contributor activity grows to a point where a written policy is useful.
+Participation in the project's spaces is governed by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). It applies to automated contributors, such as agent lines, as it does to people.
 
 ## License
 

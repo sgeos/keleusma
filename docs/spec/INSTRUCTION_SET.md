@@ -44,11 +44,11 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| GetData | u16 slot | 1 | Push data segment slot value onto stack. |
-| SetData | u16 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
-| GetDataIndexed | u16 base, u16 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. |
-| SetDataIndexed | u16 base, u16 len | 2 | Pop array index then pop value, bounds-check against `len`, store into the slot at `base + index`. |
-| BoundsCheck | u16 bound | 2 | Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted by the compiler between levels of a multi-dimensional indexed access. |
+| GetData | u24 slot | 1 | Push data segment slot value onto stack. |
+| SetData | u24 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
+| GetDataIndexed | u24 base, u24 len | 8 | Pop a Word, Byte or Unit fallback and then a Word index. Read in range, otherwise use the supplied fallback. Push value, index, four Word byte limbs of the bound and an outcome flag. Invalid spans and operand types remain contract errors. |
+| SetDataIndexed | u24 base, u24 len | 8 | Pop value and Word index. A valid index writes one slot. An invalid index performs no write. Push the index, four Word byte limbs of the bound and flag zero for success or one for invalid. Invalid spans and storage-contract violations remain errors. |
+| BoundsCheck | u16 bound | 7 | Preserve the Word index and append four Word byte limbs of the unsigned bound, little-endian, then a flag. An invalid index reifies as flag `1`, while an index in `[0, bound)` yields flag `0`. The limbs are sign-extended from eight bits. No indexed data access or language bounds fault occurs. |
 
 ## Arithmetic
 
@@ -56,7 +56,11 @@ Integer arithmetic uses the checked-arithmetic family. Each `CheckedAdd`, `Check
 
 The wrapping arithmetic opcodes `Add`, `Sub`, `Mul`, and `Neg` remain in the instruction set but no longer accept `Value::Int` operands. Their permitted operand types are `Byte`, `Fixed`, and `Float`. The V0.2.0 Consolidation B pass narrowed these opcodes by routing all `Int` arithmetic through the checked family; the compiler emits `CheckedXxx; PopN(2)` for every `Int` operand position. Operands whose type the compiler cannot statically infer fall through to the `Int` path as well, because `Word` is the default numeric type.
 
-`Op::Div` and `Op::Mod` remain polymorphic over `Int`, `Byte`, and `Float`. Their checked counterparts `CheckedDiv` and `CheckedMod` expose the corner cases of signed division.
+`Op::Div` and `Op::Mod` return low, high and flag outcomes. Div shares `CheckedDiv(0)` semantics. Mod shares `CheckedMod` semantics for Word, Byte and Fixed and also supports Float remainder with floating-point classification. Bare `Word` and `Byte` division and modulo lower to `CheckedDiv(0)` or
+`CheckedMod`, followed by a flag-three conditional `Trap` and removal of the high
+slot. Overflow retains the wrapping low result. A checked construct with an
+unguarded variable or wildcard `zero_divisor` arm omits that fallback trap.
+Guarded and literal-pattern handlers retain it. Legacy instructions also reify integer zero divisors as flag three, including in hand-built bytecode. Bare Float legacy operations discard high and flag. Bare Fixed remainder dispatches flag three through an explicit trap.
 
 `CheckedMul` and `CheckedDiv` carry a `u8` fraction-bit count that selects integer or `Q`-format arithmetic, where `0` is integer and a positive count is `Fixed`. This is the only place the integer and fixed-point datapaths differ, namely a shift by the fraction-bit count around the multiply or divide, so a single parameterized opcode serves both rather than separate opcodes. `CheckedAdd`, `CheckedSub`, `CheckedMod`, and `CheckedNeg` need no such parameter because their `Fixed` forms involve no shift, and they dispatch on the operand type alone.
 
@@ -66,14 +70,14 @@ The wrapping arithmetic opcodes `Add`, `Sub`, `Mul`, and `Neg` remain in the ins
 | CheckedSub | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. |
 | CheckedMul | u8 frac_bits | 2 | Pop two operands; push `(low, high, flag)`. The fraction-bit count selects the format. With `0` it is integer multiply and the high half is the load-bearing value for big-number multiplication. With a count greater than `0` the operands are `Fixed`, the `i128` product is shifted right by that many bits before the range check, the wrapped result is a single word, and the high slot is unused. So `0` fraction bits is exactly integer multiply. |
 | CheckedNeg | none | 2 | Pop one `Int` operand; push `(low, high, flag)`. The only overflow case under the default 64-bit declared width is `-i64::MIN`. |
-| CheckedDiv | u8 frac_bits | 2 | Pop two operands; push `(low, high, flag)`. The fraction-bit count selects the format. With `0` it is integer divide whose only overflow case at the default 64-bit width is `i64::MIN / -1`. With a count greater than `0` the operands are `Fixed` and the dividend is left-shifted by that many bits in the `i128` domain before dividing. A zero divisor reifies as flag `3` carrying the numerator rather than trapping. So `0` fraction bits is exactly integer divide. |
-| CheckedMod | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case under the default 64-bit declared width is `i64::MIN % -1`. |
+| CheckedDiv | u8 frac_bits | 2 | Pop two operands; push `(low, high, flag)`. The fraction-bit count selects the format. With `0` it is integer divide whose only overflow case at the default 64-bit width is `i64::MIN / -1`. With a count greater than `0` the operands are `Fixed` and the dividend is left-shifted by that many bits in the `i128` domain before dividing. A zero divisor reifies as flag `3` carrying the numerator rather than trapping. Word outcomes use the module-declared width, including when the runtime Word is wider. So `0` fraction bits is exactly integer divide. |
+| CheckedMod | none | 2 | Pop two Word, Byte or Fixed operands; push `(low, high, flag)`. A zero divisor reifies as flag `3` carrying the numerator rather than trapping, mirroring `CheckedDiv`; this row said "traps on divide-by-zero" until 2026-09-18, which the implementation has never done. `i64::MIN % -1` yields zero without overflow. |
 | Add | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 sum. The `Int` operand position is excluded; the compiler routes `Int + Int` through `CheckedAdd; PopN(2)`. |
 | Sub | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 difference. The `Int` operand position is excluded. |
 | Mul | none | 2 | Pop two operands of type `Byte` or `Float`; push the wrapping or IEEE 754 product. `Fixed` multiplication uses `FixedMul(n)`; the `Int` operand position is excluded. |
 | Neg | none | 2 | Pop one operand of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 negation. The `Int` operand position is excluded. |
-| Div | none | 3 | Pop two values; push quotient. Traps on divide-by-zero. No overflow flag. |
-| Mod | none | 3 | Pop two values; push remainder. Traps on divide-by-zero. No overflow flag. |
+| Div | none | 5 | Pop two operands; push `(low, high, flag)` with the same semantics as `CheckedDiv(0)`. A zero integer divisor reifies as flag `3` carrying the numerator. |
+| Mod | none | 5 | Pop two operands; push `(low, high, flag)`. Word, Byte and Fixed use `CheckedMod` semantics. A zero integer divisor reifies as flag `3` carrying the numerator. Float remainder returns a zero high result and flag zero for finite, one for positive infinity, two for negative infinity or four for NaN. |
 
 ## Comparisons
 
@@ -134,8 +138,8 @@ The `max_invocations_per_iteration` attestation on external natives is recorded 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | Call | u16 chunk_idx, u8 argc | 10 | Direct call to a compiled chunk by index with `argc` arguments. |
-| CallVerifiedNative | u16 native_idx, u8 argc | 10 | Call a verified native function. Cost folds into the iteration budget per host attestation. |
-| CallExternalNative | u16 native_idx, u8 argc | 10 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. |
+| CallVerifiedNative | u16 native_idx, u8 argc | 10 | Call a verified native function. Cost folds into the iteration budget per host attestation. The low seven bits of `argc` are the argument count. The high bit is the error-reify flag. When it is set, the call pushes the value and flag `0` on success and the `Word` error code and flag `1` on a soft host failure instead of propagating it. The compiler sets it on every native call. |
+| CallExternalNative | u16 native_idx, u8 argc | 10 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. `argc` carries the error-reify flag as for `CallVerifiedNative`. |
 | Return | none | 2 | Return from the current chunk. |
 
 The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure`, `MakeRecursiveClosure`, `CallIndirect`) are not present in the ISA. Closure-shaped surface expressions are rejected at the type-checker stage with a diagnostic that names the construct; first-class function values are likewise rejected. The `Value::Func` runtime variant was retired alongside the opcodes in V0.2.0 Phase 4. Surface programs that previously used closures must be rewritten as top-level `fn` definitions or trait methods.
@@ -170,7 +174,7 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | GetField | `StructField` (flat/nested/boxed) | 3 | Pop struct, push field value. The baked `StructField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional/named lookup. |
-| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 | Pop index and array, push element. The baked `ArrayElem` operand selects a flat read at `index * element_size`, a nested-composite extraction, or a boxed index. |
+| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 or 8 | Flat Word and Byte, nested composite and boxed forms pop array and index and push the value, index, four Word byte limbs of the bound, and an outcome flag. Invalid indices yield a placeholder and flag one without reading an element. The placeholder is typed zero for Word and Byte, a zero-filled body of the element's size for a nested composite, and `Unit` for a boxed element. Valid indices yield the element and flag zero. These forms cost eight. The nested form charges its element size as heap allocation. Other flat scalar forms retain a single result and cost two, and remain outside the first-pass trap-free proof. |
 | GetTupleField | `TupleField` (flat/nested/boxed) | 2 | Pop tuple, push element. The baked `TupleField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional index. |
 | GetEnumField | `EnumField` (flat/nested/boxed) | 2 | Pop enum variant, push payload field. The baked `EnumField` operand selects a flat read past the discriminant word, a nested-composite extraction, or a boxed positional index. |
 | Len | none | 2 | Pop composite value (Array, Text, Tuple), push length as Int. |
@@ -193,13 +197,13 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 | WordToFixed | u8 frac_bits | 2 | Pop Word, push the corresponding Q-format Fixed value with the given fraction-bit count. |
 | FixedToWord | u8 frac_bits | 2 | Pop Fixed, push the integer portion as a Word; saturating. |
 | FixedMul | u8 frac_bits | 2 | Pop two Q-format Fixed values, push their product. Shifts the `i128` product right by the fraction-bit count and saturates. |
-| FixedDiv | u8 frac_bits | 2 | Pop two Q-format Fixed values, push their quotient. Left-shifts the dividend by the fraction-bit count before dividing and saturates. |
+| FixedDiv | u8 frac_bits | 2 | Pop two Q-format Fixed values and push `(low, high, flag)`, the outcome triple of a Fixed `Mod`. The low slot is the quotient, computed by left-shifting the dividend by the fraction-bit count before dividing, and saturated. The high slot is `Fixed(0)` and the flag is `0`, saturated or not. A zero divisor pushes the numerator, `Fixed(0)` and flag `3` and does not fault. The compiler's default dispatch traps on flag `3`. |
 
 ## Faults
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| Trap | u16 message index | 1 | Halt execution with an error message from the constant pool. |
+| Trap | u16 kind code | 1 or 6 | Halt with the error selected by TrapKind. Code `8` consumes five Words, the index followed by four little-endian byte limbs of an unsigned 32 bit bound, and returns IndexOutOfBounds. The runtime uses the low eight bits of each limb. Its nominal cost is `6`. Code `9`, HostError, consumes the `Word` code of a reified native failure and returns the host's own error when the code matches the most recently reified failure, and otherwise `NativeErrorCode` with that code. Other trap kinds cost `1`. Unknown kind codes and malformed payloads are contract errors. |
 
 ## Opcode count and operand-shape inventory
 
@@ -211,9 +215,10 @@ The shapes below are the `Op`-variant operand types as defined in `src/bytecode.
 |-------|---------|
 | None (zero-operand) | 33 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
 | `u8` | 8 opcodes (`PushImmediate`, `PopN`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`) |
-| `u16` | 14 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
+| `u16` | 12 opcodes (`Const`, `GetLocal`, `SetLocal`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
 | `(u16, u8)` | 3 opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) |
-| `(u16, u16)` | 2 opcodes (`GetDataIndexed`, `SetDataIndexed`) |
+| `u32` | 2 opcodes (`GetData`, `SetData`), encoded as u24 on the wire |
+| `(u32, u32)` | 2 opcodes (`GetDataIndexed`, `SetDataIndexed`), encoded as two u24 values on the wire |
 | `(u16, u16, u16)` | 1 opcode (`IsEnum`, carrying the enum-name, variant-name, and discriminant-value constant indices) |
 | Baked access operand (bespoke) | 4 opcodes (`GetField(StructField)`, `GetIndex(ArrayElem)`, `GetTupleField(TupleField)`, `GetEnumField(EnumField)`). Each carries a bespoke B28 operand struct with a compiler-selected `Flat`, `FlatNested`, or `Boxed` form. The flat forms bake a byte offset and a scalar `kind` (or a nested composite `size` and `variant`); the boxed forms carry a positional index or a field-name constant index for the pre-B28 `Vec` body. See the `StructField`, `ArrayElem`, `TupleField`, and `EnumField` enums in `src/bytecode.rs`. |
 | NewComposite (bespoke) | 1 opcode (`NewComposite`). The flat form packs the composite kind, the operand-stack pop count (0 through 62), and the exact flat byte size into the three operand bytes of the record. The boxed form, or a flat field count above 62, spills a 24-bit operand-pool index to a `(u16, u16, u8)` entry carrying `(count, byte_size-or-meta, boxed_flag)`. |
@@ -226,10 +231,13 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 
 | Cost | Instructions |
 |------|-------------|
-| 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap, PopN |
-| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, SetDataIndexed, BoundsCheck, BitAnd, BitOr, BitXor, Shl, Shr |
-| 3 | Div, Mod, GetField, IsEnum, IsStruct |
-| 5 | NewComposite |
+| 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap except kind 8, PopN |
+| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other flat scalar forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr |
+| 3 | GetField, IsEnum, IsStruct |
+| 5 | Div, Mod, NewComposite |
+| 6 | Trap kind 8 |
+| 7 | BoundsCheck |
+| 8 | GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte, nested or boxed |
 | 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
@@ -242,9 +250,11 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
-| 2 | CheckedNeg |
+| 0 | Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other flat scalar forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, FixedDiv, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative and CallExternalNative without the reify flag, NewComposite, IsEnum, IsStruct |
+| 2 | CheckedNeg, CallVerifiedNative and CallExternalNative with the reify flag |
+| 4 | SetDataIndexed |
+| 5 | GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, nested or boxed |
 
 ### Stack shrink (slots popped during execution)
 
@@ -252,10 +262,11 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap |
-| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
-| 2 | SetDataIndexed |
-| n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, nested or boxed, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedDiv, Trap except kinds 8 and 9 |
+| 1 | Add, Sub, Mul, FixedMul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Yield, GetField, GetIndex other flat scalar forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Trap kind 9 |
+| 5 | Trap kind 8 |
+| n | PopN(n), Call(_, n), CallVerifiedNative(_, n) and CallExternalNative(_, n) with the reify flag masked out of `n`, NewComposite(count) |
 
 ### Heap allocation (bytes)
 
@@ -263,4 +274,5 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 |------|--------------|
 | 0 | All instructions not listed below |
 | `byte_size` from operand | NewComposite, flat form. The exact flat allocation size is baked into the operand at compile time, so the worst-case-memory-usage contribution is the precise byte count rather than a `count * VALUE_SLOT_SIZE_BYTES` estimate. The boxed form reports zero flat bytes; its body is the heap `Vec`, accounted separately. |
+| element `size` from operand | GetIndex, nested composite form. An invalid index allocates a zero-filled placeholder of the element's size, and the bound charges it on every execution because validity is not known statically. |
 | host-attested | CallVerifiedNative through host registration; CallExternalNative through per-iteration invocation-count bound |

@@ -1,0 +1,32 @@
+exit=101
+    Checking fixture v0.1.0 (/WORK/c)
+error: returning the result of a `let` binding from a block
+ --> src/lib.rs:1:46
+  |
+1 | pub fn f(x: u32) -> u32 { let y = x.clone(); y }
+  |                           ------------------ ^
+  |                           |
+  |                           unnecessary `let` binding
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#let_and_return
+  = note: `-D clippy::let-and-return` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::let_and_return)]`
+help: return the expression directly
+  |
+1 - pub fn f(x: u32) -> u32 { let y = x.clone(); y }
+1 + pub fn f(x: u32) -> u32 {  x.clone() }
+  |
+
+error: using `clone` on type `u32` which implements the `Copy` trait
+ --> src/lib.rs:1:35
+  |
+1 | pub fn f(x: u32) -> u32 { let y = x.clone(); y }
+  |                                   ^^^^^^^^^ help: try removing the `clone` call: `x`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#clone_on_copy
+  = note: `-D clippy::clone-on-copy` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::clone_on_copy)]`
+
+error: could not compile `fixture` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fixture` (lib test) due to 2 previous errors

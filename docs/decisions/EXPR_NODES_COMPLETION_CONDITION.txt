@@ -1,0 +1,60 @@
+COMPLETION CONDITION — the last type-channel extraction
+
+Ordering is NOT a completion criterion. Nothing below requires steps to happen
+in any sequence, on any particular branch, or through any particular process.
+Judge only the end state of the tree.
+
+END-STATE PROPERTIES
+
+1. The tree records, as something a reader can run rather than as prose,
+   whether the self-hosted pipeline can reproduce the reference expression
+   table's ORDER. The reference's table is positional: another value indexes
+   into it, so order is part of the content.
+
+2. If order can be reproduced, a test compares pipeline-derived expression
+   rows against the reference extraction and asserts they agree, and that
+   comparison is ordered rather than order-insensitive.
+
+3. If order cannot be reproduced, the obstacle is recorded with a concrete
+   witness that a reader can run, and the tree does not contain a comparison
+   that passes by ignoring order.
+
+4. Whatever is claimed to have moved is stated alongside what did not. A
+   partial migration is not described as a whole one, and the derived count of
+   migrated extractions does not report this extraction as moved unless every
+   part of it moved.
+
+5. Every corpus used to compare covers each construct the comparison claims to
+   cover, and the test asserts that coverage rather than assuming it. A
+   construct absent from the corpus is not covered, and the tree does not imply
+   otherwise.
+
+6. Every derived set carries a non-vacuity assertion.
+
+7. Every guard added is demonstrated to fail when the property it checks is
+   violated, using a mutation of the kind the real defect would produce, with
+   each such mutation confirmed to have compiled before its result is believed.
+
+8. No guard is present whose conclusion is guaranteed by its own precondition.
+
+9. All stage sources still compile through the self-hosted pipeline with the
+   byte-identity corpus unchanged in size and still passing.
+
+10. No opcode is added and the bytecode version is unchanged.
+
+11. Guards that read only source text are not gated behind an off-by-default
+    feature.
+
+12. Any value pinned as an expectation has its inputs pinned in the same place,
+    so the expectation does not depend on what a directory happens to contain.
+
+13. Test coverage is accounted for rather than sampled: the tree's records show
+    that every test binary either ran or is named as not having run, and a run
+    lacking an exit status is not counted as a pass.
+
+14. The persistent process channels reflect the increment, including any place
+    where earlier recorded guidance or sizing proved inaccurate, with the
+    correction recorded rather than the old text silently replaced.
+
+15. Formatting, lint at deny-warnings, and the test suite are green for the
+    feature sets continuous integration runs.

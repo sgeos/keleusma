@@ -117,10 +117,10 @@ shared data ty {
     // block is addressed by SLOT, and every field after the insertion point
     // silently shifted.
     dn: Word,
-    dparams: [Word; 128],
+    dparams: [Word; 640],
     csn: Word,
-    csite: [Word; 128],
-    cargs: [Word; 128],
+    csite: [Word; 640],
+    cargs: [Word; 640],
     // PART 2 SLICE b: struct field sets and field accesses arrive SEPARATELY
     // and the stage SEARCHES.
     //
@@ -164,11 +164,11 @@ shared data ty {
     //
     // Appended last.
     dnn: Word,
-    dname: [Word; 128],
+    dname: [Word; 640],
     on: Word,
-    oname: [Word; 256],
-    olocal: [Word; 256],
-    ocall: [Word; 256],
+    oname: [Word; 640],
+    olocal: [Word; 640],
+    ocall: [Word; 640],
     // A program the collector could not decide about at all, for instance one
     // with a wildcard import bringing in names it cannot enumerate. The stage
     // then makes no resolution claim, because a name it cannot see is not
@@ -185,19 +185,22 @@ shared data ty {
     //                                      6 index on a value
     //                                      7 struct literal
     //                                      8 function tail against its return
+    //                                      9 scalar comparison, 10 scalar shift
+    //                                      12 numeric unary, 13 boolean binary
+    //                                      14 numeric binary, 15 Word/Byte cast
+    // Scalar result rows also feed form-2 bindings. Kind 11 is unused.
     //   ea[e]/eb[e]  the two quantities the kind compares. For a binop they are
     //                operand tags; for a struct literal, declared and actual
     //                field counts; for a condition, the tag and 0.
     //
-    // ONE TABLE RATHER THAN ONE PER KIND. Every rule here is "these two must
-    // agree" or "this must be bool", and a channel per kind would multiply the
-    // slot chain that has already produced two off-by-one defects.
+    // Reuse the same table for result rules and constraints. Separate tables
+    // would multiply the slot chain that has already produced two offset defects.
     //
     // Appended last.
     en: Word,
-    ekind: [Word; 256],
-    ea: [Word; 256],
-    eb: [Word; 256],
+    ekind: [Word; 640],
+    ea: [Word; 640],
+    eb: [Word; 640],
     // SLICE 6: LOCAL RESOLUTION. Until this, `ea`/`eb` were always tags, so a
     // rule could only fire where the operand was a literal. Every ill-typed case
     // in the corpus placed its operands as literals, so that limit was invisible
@@ -206,6 +209,9 @@ shared data ty {
     // `eaf[e]`/`ebf[e]` give the FORM of each operand:
     //   0  the value is a TAG, as before
     //   1  the value is a NAME id, and the stage resolves it here
+    //   2  the value indexes a field-read row
+    //   3  the value is a source integer literal, before contextual coercion
+    // These operand forms are independent of the binding forms below.
     //
     // THE HOST SUPPLIES SYNTAX; THE STAGE DOES THE JOIN. A declared parameter
     // type, a declared return type and a literal initialiser are all written in
@@ -217,8 +223,8 @@ shared data ty {
     //
     // Appended last.
     bn: Word,
-    bname: [Word; 128],
-    btag: [Word; 128],
+    bname: [Word; 640],
+    btag: [Word; 640],
     // The FORM of each binding row, so an initialiser that is not a literal can
     // still be reported syntactically:
     //   0  `btag[b]` is a tag        -- `fn f(a: Word)`, `let b = true`
@@ -228,10 +234,102 @@ shared data ty {
     // that `a` takes whatever `g` returns; turning that into a TAG needs `g`'s
     // declared return row as well, and performing that join host-side is exactly
     // what this slice moved into the stage.
-    bform: [Word; 128],
+    bform: [Word; 640],
     alias: Word,
-    eaf: [Word; 256],
-    ebf: [Word; 256],
+    eaf: [Word; 640],
+    ebf: [Word; 640],
+    // SLICE 7: A FIELD READ AS AN INITIALISER.
+    //
+    // `let a = p.x` was the last initialiser shape in the corpus whose operand
+    // this stage could not type. It needs TWO joins, and neither of them belongs
+    // to the host:
+    //
+    //   1. the base name `p` to a STRUCT TYPE, and
+    //   2. that type together with the field name `x` to the field's DECLARED TAG.
+    //
+    // **STRUCT IDENTITY IS DELIBERATELY NOT A TAG.** Scalar tags 1..4 are what
+    // `ty_pair_disagrees` compares, and folding struct indices into the same
+    // space would put struct-typed operands into every channel that predicate
+    // feeds -- the argument-claim rows among them -- where a mismatch this slice
+    // never reasoned about would REJECT a valid program. A type checker has no
+    // conservative direction in the rejecting sense, so the identity travels in
+    // a channel nothing else reads.
+    //
+    //   sftag[i]              the declared TAG of the field named by `sfield[i]`
+    //   sbname[s]/sbval[s]    a name whose struct type the source states
+    //   sbform[s]             0  `sbval[s]` is a struct type index
+    //                         1  `sbval[s]` is a NAME id, reached by one alias hop
+    //   fbbase[k]/fbfield[k]  field read `k`: the base NAME id and the field NAME
+    //                         index, addressed by a form-3 binding row's value
+    //
+    // Appended last, per the convention the earlier slices learned the hard way.
+    sftag: [Word; 256],
+    sbn: Word,
+    sbname: [Word; 128],
+    sbval: [Word; 128],
+    sbform: [Word; 128],
+    fbn: Word,
+    fbbase: [Word; 128],
+    fbfield: [Word; 128],
+    // Scratch, one per search. `ty.hit` is shared by three searches that never
+    // nest; these two DO nest -- the field lookup runs inside the struct lookup's
+    // result -- so sharing an accumulator would have the inner search overwrite
+    // the outer one's answer.
+    sbhit: Word,
+    sbali: Word,
+    ftag: Word,
+    // SLICE 8: A MATCH ARM'S BINDING HAS A DECLARED TYPE, AND AN EARLIER NOTE OF
+    // MINE SAID OTHERWISE.
+    //
+    // That note claimed the payload type is "stated nowhere". It is stated in the
+    // ENUM DECLARATION, which lists each variant's payload types in order, and the
+    // PATTERN states which variant and which position a name binds. Both are
+    // syntax, and the join between them is this stage's -- the same shape as the
+    // field-access search above, where the host says "type 2, field name 7" and
+    // the stage looks.
+    //
+    //   pbname[b]                     a name a pattern binds, and
+    //   pbenum[b]/pbvar[b]/pbpos[b]   the three coordinates it binds AT
+    //   epenum[e]/epvar[e]/eppos[e]   the same three, from the DECLARATION, and
+    //   epty[e]                       the struct type declared there
+    //
+    // **THE ENUM INDEX SPACE IS NOT THE STRUCT INDEX SPACE.** `pbenum` and
+    // `epenum` address enums; `epty` and `sbval` address structs. A row that
+    // crossed them would look up a real declaration and the wrong one, which is
+    // worse than looking up nothing.
+    //
+    // Appended last.
+    pbn: Word,
+    pbname: [Word; 128],
+    pbenum: [Word; 128],
+    pbvar: [Word; 128],
+    pbpos: [Word; 128],
+    epn: Word,
+    epenum: [Word; 128],
+    epvar: [Word; 128],
+    eppos: [Word; 128],
+    epty: [Word; 128],
+    // Its own two accumulators, for the reason the pair above records.
+    pbhit: Word,
+    epfound: Word,
+}
+
+// Keep solver storage before its first use. The streaming parser resolves data
+// fields from declarations already encountered when it parses a function body.
+// THE DERIVED-OPERAND SOLVER'S SCRATCH.
+//
+// `bres[b]` is the tag the solver has proved for binding `b`, or 0 for "not
+// proved". PRIVATE, for the same reason the cursors below are: the host supplies
+// SYNTAX, and a conclusion it could write here is exactly the join this stage
+// exists to perform.
+private data tyb {
+    bres: [Word; 640],
+    // Set when a round proved something it had not proved before, so the loop can
+    // stop early on a fixpoint instead of always running its full cap.
+    moved: Word,
+    // Scratch for one node's two operand tags while a round resolves them.
+    la: Word,
+    lb: Word,
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -242,7 +340,8 @@ fn ty_reject() -> Word { 0 - 1 }
 
 fn ty_unknown() -> Word { 0 }
 
-// Two operands disagree when BOTH are known and they differ.
+// Two operands disagree when their known constraints conflict. Private tag 7
+// preserves an empty array's zero length without constraining its element type.
 //
 // **The unknown case accepts, and the asymmetry is the whole of the soundness
 // argument.** `verify_*.kel` may over-approximate because an over-approximation
@@ -253,7 +352,9 @@ fn ty_unknown() -> Word { 0 }
 fn ty_pair_disagrees(l: Word, r: Word) -> Word {
     if l == ty_unknown() { 0 } else {
     if r == ty_unknown() { 0 } else {
-    if l == r { 0 } else { 1 } } }
+    if l == r { 0 } else {
+    if l == 7 andalso ty_array_length(r) == 0 { 0 } else {
+    if r == 7 andalso ty_array_length(l) == 0 { 0 } else { 1 } } } } }
 }
 
 // Slice 1: reject when any operand pair disagrees.
@@ -297,7 +398,7 @@ fn ty_occurrences() -> Word {
 // Whether a top-level declaration carries this name.
 fn ty_declared(f: Word) -> Word {
     ty.hit = 0;
-    for i in 0..ty_bounded128(ty.dnn) limit 128 {
+    for i in 0..ty_bounded640(ty.dnn) limit 640 {
         ty.hit = if ty.dname[i] == f { 1 } else { ty.hit };
     }
     ty.hit
@@ -305,6 +406,10 @@ fn ty_declared(f: Word) -> Word {
 
 fn ty_bounded128(v: Word) -> Word {
     if v > 128 { 0 } else { v }
+}
+
+fn ty_bounded640(v: Word) -> Word {
+    if v > 640 { 0 } else { v }
 }
 
 // The two refusals, derived rather than received.
@@ -342,6 +447,16 @@ fn ty_kind_needs_composite(k: Word) -> Word {
     if k == 6 { 1 } else { 0 } }
 }
 
+// Nominal and structural composites share a disjoint low-bit vocabulary.
+// The tuple-list terminator is internal and is not itself a composite value.
+fn ty_is_composite(tag: Word) -> Word {
+    let cls = tag % 16;
+    if tag == 7 { 1 } else {
+    if tag >= 16 andalso (cls == 1 orelse cls == 2 orelse cls == 3 orelse
+        cls == 4 orelse cls == 6 orelse cls == 8 orelse cls == 9) { 1 } else { 0 }
+    }
+}
+
 // Whether a node is a rejection.
 //
 // The unknown tag never rejects, for the reason established in slice 1: this
@@ -356,9 +471,9 @@ fn ty_node_bad(k: Word, a: Word, b: Word) -> Word {
         } else { ty_pair_disagrees(a, b) }
     } else {
     if ty_kind_needs_composite(k) == 1 {
-        // The operand is a known scalar, which a field access or an index
-        // cannot be. The host reports the tag; a 0 means it could not tell.
-        if a == ty_unknown() { 0 } else { 1 }
+        // Unknown remains undecided. A known composite passes this scalar
+        // exclusion rule; field membership and index compatibility are separate.
+        if a == ty_unknown() orelse ty_is_composite(a) == 1 { 0 } else { 1 }
     } else {
     if k == 3 {
         // A condition must be bool.
@@ -379,14 +494,18 @@ fn ty_node_bad(k: Word, a: Word, b: Word) -> Word {
 // it saves -- the same reasoning `intern_run`'s batch-local scan records.
 fn ty_direct(v: Word) -> Word {
     ty.hit = ty_unknown();
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         ty.hit = if ty.bname[b] == v {
             // Form 0 states a tag outright. Form 2 is a DERIVED initialiser whose
             // tag the solver proved before the fold began; both are direct as far
             // as a lookup is concerned, and keeping them in one arm is what stops
             // a rule from reaching one and missing the other.
             if ty.bform[b] == 0 { ty.btag[b] } else {
-            if ty.bform[b] == 2 { tyb.bres[b] } else { ty.hit } }
+            if ty.bform[b] == 2 { tyb.bres[b] } else {
+            // FORM 3, a FIELD READ, is direct for the same reason form 2 is: the
+            // solver proved it before the fold began, so a lookup finds a tag
+            // rather than a shape it would have to re-derive per row.
+            if ty.bform[b] == 3 { tyb.bres[b] } else { ty.hit } } }
         } else { ty.hit };
     }
     ty.hit
@@ -394,7 +513,7 @@ fn ty_direct(v: Word) -> Word {
 
 fn ty_alias_of(v: Word) -> Word {
     ty.alias = 0;
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         ty.alias = if ty.bname[b] == v {
             if ty.bform[b] == 1 { ty.btag[b] } else { ty.alias }
         } else { ty.alias };
@@ -402,40 +521,52 @@ fn ty_alias_of(v: Word) -> Word {
     ty.alias
 }
 
-// THE DERIVED-OPERAND SOLVER'S SCRATCH.
-//
-// `bres[b]` is the tag the solver has proved for binding `b`, or 0 for "not
-// proved". PRIVATE, for the same reason the cursors below are: the host supplies
-// SYNTAX, and a conclusion it could write here is exactly the join this stage
-// exists to perform.
-private data tyb {
-    bres: [Word; 128],
-    // Set when a round proved something it had not proved before, so the loop can
-    // stop early on a fixpoint instead of always running its full cap.
-    moved: Word,
-    // Scratch for one node's two operand tags while a round resolves them.
-    la: Word,
-    lb: Word,
+// Each productive round proves at least one previously unknown binding. With at most
+// 640 bindings, 640 rounds reach every acyclic dependency reachable from known facts.
+// The moved flag suppresses work after a fixed point; the loop remains statically bounded.
+fn tyb_rounds() -> Word { 640 }
+
+// Exact structural identities. For unique, stable bindings, each construction row
+// interns at most one entry. Malformed changing bindings can exhaust the arena and
+// produce unavailable evidence. Tuple cons and non-scalar arrays occupy
+// distinct low-bit classes, separate from scalar arrays and nominal struct/enum identities.
+private data tys {
+    n: Word,
+    full: Word,
+    kind: [Word; 640],
+    a: [Word; 640],
+    b: [Word; 640],
 }
 
-// HOW MANY ROUNDS THE DERIVED-OPERAND SOLVER RUNS.
-//
-// A DECLARED CAP, NOT A DISCOVERED ONE. Each round can prove a binding whose
-// operands were proved in the round before, so `k` rounds reach a chain of `k`
-// derived bindings: `let a = 1 + 2; let b = a + 1; let c = b + 1` needs three.
-// Four is what the corpus needs plus margin; a program with a longer chain
-// resolves to UNKNOWN and is therefore ACCEPTED, which is the safe direction and
-// the same one `ty_resolve`'s single alias hop already takes.
-//
-// **This must never become "as many rounds as it takes".** The language is total
-// and every loop needs a static bound; a fixpoint that runs until nothing moves
-// still needs a cap, and naming it here is what keeps the bound visible.
-fn tyb_rounds() -> Word { 4 }
+fn ty_structural_tag(kind: Word, a: Word, b: Word) -> Word {
+    if a == 0 orelse (kind == 1 andalso b == 0) { ty_unknown() } else {
+        let cls = if kind == 1 { 4 } else { 6 };
+        // Scratch uses the existing host-visible search flag, like the other resolvers.
+        ty.hit = 0;
+        for i in 0..tys.n limit 640 {
+            if tys.kind[i] == kind andalso tys.a[i] == a andalso tys.b[i] == b {
+                ty.hit = (i + 1) * 16 + cls;
+            }
+        }
+        if ty.hit != 0 { ty.hit } else {
+            if tys.n < 640 {
+                let at = tys.n;
+                tys.kind[at] = kind;
+                tys.a[at] = a;
+                tys.b[at] = b;
+                tys.n = at + 1;
+                (at + 1) * 16 + cls
+            } else { tys.full = 1; ty_unknown() }
+        }
+    }
+}
+
+fn ty_unavailable() -> Word { 64 }
 
 // The tag of binding `b` as the solver has proved it, or 0.
 fn tyb_of(v: Word) -> Word {
     ty.hit = ty_unknown();
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         ty.hit = if ty.bname[b] == v {
             if tyb.bres[b] != 0 { tyb.bres[b] } else { ty.hit }
         } else { ty.hit };
@@ -447,28 +578,241 @@ fn tyb_of(v: Word) -> Word {
 //
 // Form 0 is already a tag. Form 1 is a NAME, which resolves first against the
 // solver's proved bindings and then against the declared rows, so a derived
-// binding and a declared one are reached by the same call.
+// binding and a declared one are reached by the same call. Form 2 is a FIELD
+// READ, addressed by row index, which needs neither: both its joins read declared
+// tables, so it resolves the same way in every round.
 fn tyb_operand(v: Word, f: Word) -> Word {
+    if f == 3 { 1 } else {
     if f == 0 { v } else {
+    if f == 2 { ty_field_operand(v) } else {
         ty.hit = tyb_of(v);
         if ty.hit != 0 { ty.hit } else { ty_resolve(1, v) }
+    } } }
+}
+
+// Scalar operator pairs retain literal syntax so Byte coercion happens here.
+// The reference permits a non-negative integer literal through 255 to adopt
+// the other operand's Byte type for arithmetic and comparisons, but not shifts.
+fn tyb_pair(e: Word) -> Word {
+    tyb.la = tyb_operand(ty.ea[e], ty.eaf[e]);
+    tyb.lb = tyb_operand(ty.eb[e], ty.ebf[e]);
+    if ty.ekind[e] == 9 orelse ty.ekind[e] == 14 {
+        if ty.eaf[e] == 3 andalso ty.ea[e] >= 0 andalso ty.ea[e] <= 255 andalso tyb.lb == 3 {
+            tyb.la = 3;
+        }
+        if ty.ebf[e] == 3 andalso ty.eb[e] >= 0 andalso ty.eb[e] <= 255 andalso tyb.la == 3 {
+            tyb.lb = 3;
+        }
+    }
+    0
+}
+
+// These are type-input row kinds, not bytecode opcodes. A comparison yields
+// bool; a shift retains its left operand type; arithmetic retains matching tags.
+fn ty_array_tag(element: Word, length: Word) -> Word {
+    // The empty literal has known array shape and length, with an unknown element.
+    // A dedicated private tag avoids consuming a structural-pool entry.
+    if element == 0 andalso length == 0 { 7 } else {
+    if element >= 1 andalso element <= 3 andalso length >= 0 andalso length <= 134217726 {
+        (length + 1) * 16 + element
+    } else {
+        if length >= 0 { ty_structural_tag(2, element, length) } else { ty_unknown() }
+    }
     }
 }
 
-// The tag expression node `e` yields, or 0 when the stage cannot prove one.
-//
-// ONLY A BINOP, AND ONLY WHEN BOTH OPERANDS AGREE. A binop over two operands of
-// the same type yields that type; over disagreeing operands it yields nothing,
-// because the disagreement is itself the rejection and inventing a result would
-// hide it. Every other node kind yields 0, which accepts.
-fn tyb_node_tag(e: Word) -> Word {
-    if ty.ekind[e] == 1 {
-        tyb.la = tyb_operand(ty.ea[e], ty.eaf[e]);
-        tyb.lb = tyb_operand(ty.eb[e], ty.ebf[e]);
-        if tyb.la != 0 andalso tyb.la == tyb.lb { tyb.la } else { ty_unknown() }
-    } else {
-        ty_unknown()
+fn ty_array_length(tag: Word) -> Word {
+    if tag == 7 { 0 } else {
+        let cls = tag % 16;
+        if tag >= 16 andalso cls >= 1 andalso cls <= 3 { tag / 16 - 1 } else {
+            let at = tag / 16 - 1;
+            if tag >= 16 andalso cls == 6 andalso at < tys.n {
+                if tys.kind[at] == 2 { tys.b[at] } else { 0 - 1 }
+            } else { 0 - 1 }
+        }
     }
+}
+
+// Project the declared element identity, independent of its byte width.
+fn ty_array_element(tag: Word) -> Word {
+    let cls = tag % 16;
+    if tag >= 16 andalso cls >= 1 andalso cls <= 3 { cls } else {
+        let at = tag / 16 - 1;
+        if tag >= 16 andalso cls == 6 andalso at < tys.n {
+            if tys.kind[at] == 2 { tys.a[at] } else { ty_unknown() }
+        } else { ty_unknown() }
+    }
+}
+
+private data tp { cursor: Word, hit: Word, }
+fn ty_tuple_element(tag: Word, position: Word) -> Word {
+    tp.cursor = tag; tp.hit = 0;
+    if position >= 0 andalso position < 640 {
+        for i in 0..(position + 1) limit 640 {
+            let at = tp.cursor / 16 - 1;
+            if tp.cursor >= 16 andalso tp.cursor % 16 == 4 andalso at < tys.n {
+                if tys.kind[at] == 1 {
+                    if i == position { tp.hit = tys.a[at]; }
+                    tp.cursor = tys.b[at];
+                } else { tp.cursor = 0; }
+            } else { tp.cursor = 0; }
+        }
+    }
+    tp.hit
+}
+
+fn tyb_node_tag(e: Word) -> Word {
+    tyb_pair(e);
+    if ty.ekind[e] == 19 { ty_tuple_element(tyb.la, tyb.lb) } else {
+    if ty.ekind[e] == 18 { ty_array_element(tyb.la) } else {
+    if ty.ekind[e] == 17 { ty_structural_tag(1, tyb.la, tyb.lb) } else {
+    if ty.ekind[e] == 16 { ty_array_tag(tyb.la, tyb.lb) } else {
+    if ty.ekind[e] == 3 orelse ty.ekind[e] == 9 orelse ty.ekind[e] == 13 { 2 } else {
+    if ty.ekind[e] == 10 orelse ty.ekind[e] == 12 { tyb.la } else {
+    if ty.ekind[e] == 15 { tyb.lb } else {
+    if ty.ekind[e] == 8 { if tyb.lb != 0 { tyb.lb } else { tyb.la } } else {
+    if ty.ekind[e] == 1 orelse ty.ekind[e] == 4 orelse ty.ekind[e] == 14 {
+        if tyb.la != 0 andalso tyb.la == tyb.lb { tyb.la } else { ty_unknown() }
+    } else { ty_unknown() } } } } } } } } }
+}
+
+// An unknown operand remains undecided. The scalar subset permits Word or Byte.
+fn ty_scalar_numeric_bad(tag: Word) -> Word {
+    if tag == 0 orelse tag == 1 orelse tag == 3 { 0 } else { 1 }
+}
+
+fn ty_expression_bad(e: Word) -> Word {
+    tyb_pair(e);
+    if ty.ekind[e] == 19 {
+        if tyb.la == 0 orelse ty_tuple_element(tyb.la, tyb.lb) != 0 { 0 } else { 1 }
+    } else {
+    if ty.ekind[e] == 18 {
+        if tyb.la == 0 orelse ty_array_length(tyb.la) >= 0 { 0 } else { 1 }
+    } else {
+    if ty.ekind[e] == 12 orelse ty.ekind[e] == 15 {
+        // A source-declared enum may be cast to its Word discriminant.
+        if ty.ekind[e] == 15 andalso tyb.la > 0 andalso tyb.la % 16 == 9 andalso tyb.lb == 1 {
+            0
+        } else { ty_scalar_numeric_bad(tyb.la) }
+    } else {
+    if ty.ekind[e] == 13 {
+        if ty_pair_disagrees(tyb.la, 2) == 1 { 1 } else { ty_pair_disagrees(tyb.lb, 2) }
+    } else {
+    if ty.ekind[e] == 9 {
+        ty_pair_disagrees(tyb.la, tyb.lb)
+    } else {
+    if ty.ekind[e] == 10 {
+        if ty_scalar_numeric_bad(tyb.la) == 1 { 1 } else { ty_pair_disagrees(tyb.lb, 1) }
+    } else {
+    if ty.ekind[e] == 14 {
+        if ty_scalar_numeric_bad(tyb.la) == 1 orelse ty_scalar_numeric_bad(tyb.lb) == 1 {
+            1
+        } else { ty_pair_disagrees(tyb.la, tyb.lb) }
+    } else { ty_node_bad(ty.ekind[e], tyb.la, tyb.lb) } } } } } } }
+}
+
+// The struct type of name `n`, OFFSET BY ONE so that 0 can mean "not stated".
+//
+// Index 0 is a real struct, so a bare index cannot carry "unknown" as well. The
+// offset is the cheapest way to keep the two apart, and getting it wrong would
+// type every unbound name as the first declared struct.
+//
+// Struct aliases still use one hop. Scalar aliases use the full binding-table bound:
+// `let p = g()` states that `p` takes whatever `g` returns, and `g`'s own row is
+// direct, so one hop reaches it. A longer chain yields 0, which types nothing and
+// therefore ACCEPTS.
+fn ty_struct_of(n: Word) -> Word {
+    ty.sbhit = 0;
+    for s in 0..ty_bounded128(ty.sbn) limit 128 {
+        ty.sbhit = if ty.sbname[s] == n {
+            if ty.sbform[s] == 0 { ty.sbval[s] + 1 } else { ty.sbhit }
+        } else { ty.sbhit };
+    }
+    if ty.sbhit != 0 { ty.sbhit } else {
+        ty.sbali = 0;
+        for s in 0..ty_bounded128(ty.sbn) limit 128 {
+            ty.sbali = if ty.sbname[s] == n {
+                if ty.sbform[s] == 1 { ty.sbval[s] } else { ty.sbali }
+            } else { ty.sbali };
+        }
+        ty.sbhit = 0;
+        for s in 0..ty_bounded128(ty.sbn) limit 128 {
+            ty.sbhit = if ty.sbname[s] == ty.sbali {
+                if ty.sbform[s] == 0 { ty.sbval[s] + 1 } else { ty.sbhit }
+            } else { ty.sbhit };
+        }
+        // A name id of 0 is no name, so an absent alias cannot match a row by
+        // accident. The second scan runs regardless because the language is total
+        // and a skipped loop would cost the same bound anyway.
+        if ty.sbali == 0 { ty_payload_struct_of(n) } else {
+        if ty.sbhit == 0 { ty_payload_struct_of(n) } else { ty.sbhit } }
+    }
+}
+
+// The struct type a name takes from an enum VARIANT PAYLOAD, offset by one.
+//
+// TWO SCANS AND A TRIPLE MATCH. The first finds the row that says this name binds
+// at some `(enum, variant, position)`; the second finds the declaration row at the
+// same three coordinates and reads the type declared there. Neither side of that
+// pair knows about the other: one comes from a pattern in a function body, the
+// other from an enum declaration, and matching them is the whole of the work.
+//
+// **THE ROW INDEX IS A SENTINEL AND IS NEVER SUBSCRIPTED UNCHECKED.** A miss
+// leaves `pbhit` at -1, and the guard below keeps it out of `pbenum` and friends.
+// Using a not-found marker as an index is how a search that fails becomes a read
+// that succeeds at the wrong address.
+fn ty_payload_struct_of(n: Word) -> Word {
+    ty.pbhit = 0 - 1;
+    for b in 0..ty_bounded128(ty.pbn) limit 128 {
+        ty.pbhit = if ty.pbname[b] == n { b } else { ty.pbhit };
+    }
+    if ty.pbhit < 0 { 0 } else {
+        ty.epfound = 0;
+        for e in 0..ty_bounded128(ty.epn) limit 128 {
+            ty.epfound = if ty.epenum[e] == ty.pbenum[ty.pbhit] {
+                if ty.epvar[e] == ty.pbvar[ty.pbhit] {
+                if ty.eppos[e] == ty.pbpos[ty.pbhit] { ty.epty[e] + 1 } else { ty.epfound } }
+                else { ty.epfound } }
+            else { ty.epfound };
+        }
+        ty.epfound
+    }
+}
+
+// The DECLARED TAG of field name `f` in struct type `t`, or 0 when `t` declares
+// no such field.
+//
+// The same walk `ty_field_declared` performs, reading the PARALLEL tag table at
+// whichever position matched instead of reporting a boolean. Two functions rather
+// than one returning both, because the membership rule wants only the boolean and
+// should not pay for a tag it discards.
+fn ty_field_tag(t: Word, f: Word) -> Word {
+    ty.ftag = 0;
+    for i in 0..ty_bounded(ty.scount[t]) limit 64 {
+        ty.ftag = if ty.sfield[ty.sfirst[t] + i] == f {
+            ty.sftag[ty.sfirst[t] + i]
+        } else { ty.ftag };
+    }
+    ty.ftag
+}
+
+// The tag a form-3 binding row proves, or 0.
+//
+// `k` addresses the field-read table. BOTH JOINS HAPPEN HERE: the base name to a
+// struct type, then that type and the field name to the declared tag. A host that
+// supplied either conclusion would be marshalling the answer, which is the
+// objection this file records at its head, and
+// `withholding_the_field_sets_accepts_the_same_field_read_program` is what makes
+// the claim checkable rather than asserted.
+//
+// An out-of-range type index yields UNKNOWN rather than a rejection. A host and a
+// stage that disagree about the table are not evidence that the subject program
+// is ill-typed, and this stage may not refuse a program it cannot type.
+fn tyb_field_tag(k: Word) -> Word {
+    ty.sbhit = ty_struct_of(ty.fbbase[k]);
+    if ty.sbhit == 0 { ty_unknown() } else {
+    if ty.sbhit - 1 >= ty_bounded(ty.stn) { ty_unknown() } else {
+        ty_field_tag(ty.sbhit - 1, ty.fbfield[k]) } }
 }
 
 // Prove what can be proved, in at most `tyb_rounds()` passes.
@@ -478,16 +822,31 @@ fn tyb_node_tag(e: Word) -> Word {
 // and `let b = a + 1` only after `a`. Each round walks every binding once; a
 // round that proves nothing new stops the loop.
 fn tyb_solve() -> Word {
-    for b in 0..ty.bn limit 128 {
+    tys.n = 0;
+    tys.full = 0;
+    for b in 0..ty.bn limit 640 {
         tyb.bres[b] = 0;
     }
     tyb.moved = 1;
-    for r in 0..tyb_rounds() limit 8 {
+    for r in 0..tyb_rounds() limit 640 {
         if tyb.moved == 1 {
             tyb.moved = 0;
-            for b in 0..ty.bn limit 128 {
+            for b in 0..ty.bn limit 640 {
                 if ty.bform[b] == 2 andalso tyb.bres[b] == 0 {
                     tyb.bres[b] = tyb_node_tag(ty.btag[b]);
+                    tyb.moved = if tyb.bres[b] != 0 { 1 } else { tyb.moved };
+                }
+                // A FIELD READ, proved by the SAME fixpoint rather than a pass of
+                // its own. It does not need the rounds today -- both its joins read
+                // declared tables -- but a later slice that lets a base name be
+                // proved rather than declared gets the ordering for free, and a
+                // second solver would be a second place for the two to disagree.
+                if ty.bform[b] == 3 andalso tyb.bres[b] == 0 {
+                    tyb.bres[b] = if ty.btag[b] >= ty_bounded128(ty.fbn) {
+                        ty_unknown()
+                    } else {
+                        tyb_field_tag(ty.btag[b])
+                    };
                     tyb.moved = if tyb.bres[b] != 0 { 1 } else { tyb.moved };
                 }
             }
@@ -497,22 +856,39 @@ fn tyb_solve() -> Word {
 }
 
 fn ty_resolve(f: Word, v: Word) -> Word {
+    if f == 3 { 1 } else {
     if f == 0 { v } else {
+    if f == 2 { ty_field_operand(v) } else {
         ty.hit = ty_direct(v);
         if ty.hit == 0 {
-            // ONE ALIAS HOP, AND THE BOUND IS DELIBERATE. `let a = g()` binds
-            // `a` to the name `g`, whose declared return type is a direct row,
-            // so one hop reaches it. A longer chain -- `let a = g(); let c = a;`
-            // -- resolves to UNKNOWN and therefore ACCEPTS, which is the safe
-            // direction: this stage may not refuse a program it cannot type.
-            //
-            // A bounded hop count rather than a fixpoint because the language is
-            // total and every loop needs a static cap. Raising the bound is a
-            // decision about how much chaining to admit, not a bug fix.
-            ty.alias = ty_alias_of(v);
-            if ty.alias == 0 { ty_unknown() } else { ty_direct(ty.alias) }
+            // At most bn edges reach every acyclic alias chain in this table.
+            // Cycles and missing targets remain unknown. Once a declared or
+            // solver-proved tag is found, later iterations do no more lookups.
+            ty.alias = v;
+            for hop in 0..ty.bn limit 640 {
+                if ty.hit == 0 andalso ty.alias != 0 {
+                    ty.alias = ty_alias_of(ty.alias);
+                    if ty.alias != 0 { ty.hit = ty_direct(ty.alias); }
+                }
+            }
+            ty.hit
         } else { ty.hit }
-    }
+    } } }
+}
+
+// An operand that IS a field read, addressed by its row index.
+//
+// **THE OPERAND CASE AND THE BINDING CASE ARE THE SAME JOIN**, which is why this
+// is `tyb_field_tag` with a range check rather than a second resolver. `let a =
+// p.x; a + true` and `p.x + true` differ only in whether a name stands between
+// the read and the comparison, and giving them separate paths is how the two come
+// to disagree about a program that means one thing.
+//
+// An index outside the table yields UNKNOWN rather than a rejection, for the same
+// reason the type-index check inside does: a host and a stage that disagree about
+// a table are not evidence that the subject program is ill-typed.
+fn ty_field_operand(k: Word) -> Word {
+    if k >= ty_bounded128(ty.fbn) { ty_unknown() } else { tyb_field_tag(k) }
 }
 
 // --- THE FOLD, AS A RESUMABLE STREAM ----------------------------------------
@@ -594,7 +970,7 @@ fn tyc_row_rejects(p: Word, i: Word) -> Word {
     if p == 4 {
         // THE EXPRESSION RULES, applied from shapes rather than received as
         // verdicts, with each operand resolved through the binding table.
-        ty_node_bad(ty.ekind[i], ty_resolve(ty.eaf[i], ty.ea[i]), ty_resolve(ty.ebf[i], ty.eb[i]))
+        ty_expression_bad(i)
     } else {
     if p == 5 {
         // A required tag of 0 is no requirement, so this reuses the operand
@@ -634,7 +1010,7 @@ fn ty_step() -> Word {
     // the one part of this stage that is not row-at-a-time. That is inherent
     // rather than incidental: a derived binding's tag depends on operands that
     // may be bound later in the table, so no forward pass over rows can prove it.
-    // The cost is bounded by `tyb_rounds()` passes over at most 128 bindings.
+    // The cost is bounded by `tyb_rounds()` passes over at most 640 bindings.
     //
     // Guarded on `phase == 0 andalso i == 0` rather than on a "did I run" flag,
     // because the host may refill the tables and restart the fold, and a flag
@@ -642,6 +1018,7 @@ fn ty_step() -> Word {
     if tyc.phase == 0 andalso tyc.i == 0 {
         tyb_solve();
     }
+    if tys.full == 1 { ty_unavailable() } else {
     if tyc.phase >= tyc_phases() {
         tyc.verdict
     } else {
@@ -657,7 +1034,7 @@ fn ty_step() -> Word {
         };
         tyc.i = tyc.i + 1;
         tyc_pending()
-    } }
+    } } }
 }
 
 // The most resumes a complete fold can need, so a host can bound its drive loop
@@ -678,7 +1055,7 @@ fn ty_step() -> Word {
 // counting the run -- the `v0.3.0` differential drives 60 ticks and does the
 // latter, refusing a subject that does not reach a verdict rather than comparing
 // a prefix of a fold.
-fn ty_max_steps() -> Word { 256 + 128 + 128 + 256 + 256 + 256 + 256 + 256 + 8 + 1 }
+fn ty_max_steps() -> Word { 256 + 128 + 640 + 640 + 640 + 256 + 256 + 256 + 8 + 1 }
 
 // `resume` is unused: this stage has one job and no commands. It is named rather
 // than dropped because a Stream function's parameter slot is rewritten on every

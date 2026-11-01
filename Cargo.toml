@@ -6,8 +6,17 @@ members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli"
 # still point at source); the dev/test loop does not need full DWARF. The `test`
 # profile inherits this from `dev`. Set in the workspace root so it applies to
 # every crate. Release builds are unaffected.
+#
+# opt-level 1 because the self-host tests run whole compiler stages inside the
+# VM, and an unoptimised interpreter dominates the suite. Measured 2026-10-24 on
+# `selfhost_typecheck::pipeline_declarations_and_indices_agree_with_reference`,
+# by CPU time on a loaded host: 94.1 s at opt-level 0, 9.1 s at 1, 8.2 s at 2 and
+# 8.1 s at 3, for 26, 90, 98 and 102 s of build CPU. Level 1 takes nearly all of
+# the gain for the least build cost. Only `opt-level` changes, so debug
+# assertions and overflow checks stay on and panicking behaviour is unchanged.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 [package]
 name = "keleusma"
@@ -30,9 +39,11 @@ rust-version = "1.88"
 #     file-type detection (vim, future vscode/sublime/emacs).
 #   - tools/ holds project-side development tooling such as the
 #     cloc language definition.
-#   - tmp/ and secret/ each carry only a `.gitkeep` marker so the
-#     directories remain present in fresh clones; the marker has
-#     no value to a consumer downloading the tarball.
+#   - tmp/ carries only a `.gitkeep` marker so the directory remains
+#     present in fresh clones; the marker has no value to a consumer
+#     downloading the tarball. secret/ is ignored whole and tracks
+#     nothing. It stays listed as a second guard in case a file under
+#     it is ever tracked by mistake.
 exclude = [
     "editors/",
     # Host-side developer tooling crates. They depend on the core crate but ship
@@ -43,6 +54,8 @@ exclude = [
     "tools/",
     "tmp/",
     "secret/",
+    # Changelog fragments are assembled into CHANGELOG.md before a release is cut.
+    "changelog.d/",
     # Internal audit narrative and process logs are kept out of the published
     # tarball (audit 8859acb publication review); user-facing docs/reference/,
     # docs/spec/, docs/architecture/, and docs/standard/ still ship.
@@ -60,6 +73,10 @@ exclude = [
     # package with its own detached workspace; it is developed alongside the
     # V0.2.x line but is not part of the runtime a downstream embedder consumes.
     "compiler/",
+    # The cargo-fuzz targets and their seed corpus are a detached nightly-only package for
+    # contributors. tests/fuzz_corpus_replay.rs reads them, and like the other tests that
+    # read excluded files it runs from a checkout rather than from the tarball.
+    "fuzz/",
     # AI-agent and contributor operating instructions, not consumer
     # documentation (release audit v0.2.1: named as iffy for the tarball).
     "CLAUDE.md",
@@ -134,6 +151,15 @@ verify = []
 # leave this feature off; the Shell library is not compiled.
 shell = []
 
+# Enables the bundled text operations over `Text<N>`, the compiler intrinsics
+# called as methods `t.len()`, `t.capacity()`, `a.concat(b)`, `a.eq(b)` and
+# `t.slice(start, end)`. Each lowers to existing opcodes with a static cost, so
+# the feature adds no opcode, no native and no runtime dependency, and it is
+# `no_std`. With the feature off, calling one of these methods on a `Text<N>` is
+# refused at compile time naming the feature. See
+# `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+text = []
+
 # Enables compiled-module signing and signature verification at
 # load time. Adds `ed25519-dalek` as a dependency for the Ed25519
 # scheme (the only scheme V0.2.0 ships). With the feature off, the
@@ -207,7 +233,7 @@ rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytech
 # memory on drop. `rand_core` is intentionally absent because the
 # crate consumes pre-existing signing keys rather than generating
 # them; key generation is host-side responsibility.
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"], optional = true }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "zeroize"], optional = true }
 # X25519 elliptic-curve Diffie-Hellman for the optional `encryption`
 # feature. Companion to `ed25519-dalek` in the same dalek crate
 # family. `static_secrets` exposes the static-private-key constructor
@@ -217,15 +243,15 @@ x25519-dalek = { version = "2", default-features = false, features = ["alloc", "
 # AES-256-GCM authenticated encryption for the body cipher. `no_std`
 # compatible with the `alloc` feature; pure-Rust implementation
 # acceptable for the targets V0.2.x supports.
-aes-gcm = { version = "0.10", default-features = false, features = ["alloc", "aes"], optional = true }
+aes-gcm = { version = "0.11", default-features = false, features = ["alloc", "aes"], optional = true }
 # HKDF-SHA-256 derivation of the AES key and nonce from the X25519
 # shared secret. The `hkdf` crate is no_std-compatible and pulls in
 # `sha2` transitively.
-hkdf = { version = "0.12", default-features = false, optional = true }
+hkdf = { version = "0.13", default-features = false, optional = true }
 # SHA-256 for the recipient-key fingerprint and for HKDF. Pure-Rust
 # implementation suitable for no_std + alloc.
-sha2 = { version = "0.10", default-features = false, optional = true }
-sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
+sha2 = { version = "0.11", default-features = false, optional = true }
+sdl3 = { version = "0.20", features = ["build-from-source-static"], optional = true }
 
 [dev-dependencies]
 # Installs the version-controlled git hooks under `.cargo-husky/hooks/`

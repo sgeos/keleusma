@@ -68,6 +68,10 @@ const CORPUS_STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_yield.kel"),
     ),
     (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
+    ),
+    (
         "verify_depth",
         include_str!("../src/selfhost/kel/verify_depth.kel"),
     ),
@@ -80,6 +84,14 @@ const CORPUS_STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_types.kel"),
     ),
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,17 +290,15 @@ fn the_self_hosted_share_of_the_corpus_is_the_one_recorded() {
     assert!(total > 0, "the corpus emitted no regions at all");
     let share = (covered * 100) / total;
 
-    assert!(
-        share >= 88,
+    // **100%, AND THE UPPER BOUND IS GONE BECAUSE THERE IS NOWHERE LEFT FOR IT
+    // TO GO.** Every region kind the corpus emits is routed and byte-identical.
+    // The bound that used to sit above this figure existed to catch an
+    // unrecorded advance; an advance past completeness is not available.
+    assert_eq!(
+        covered, total,
         "the self-hosted path produces {share}% of the corpus's region bytes ({covered} of \
-         {total}). It was 93% when `SHAPES` and `SIGNATURES` landed, and 81% before them; a \
-         fall means a region stopped being routed"
-    );
-    assert!(
-        share < 97,
-        "the self-hosted path now produces {share}% of the corpus's region bytes, past what \
-         the record describes. That is good news and it needs recording: update the coverage \
-         statement rather than widening this bound"
+         {total}). It reached 100% on 2026-09-11 and a fall means a region stopped being \
+         routed -- which is a regression, not a stale figure"
     );
 }
 
@@ -345,36 +355,56 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
     }
     skipped.sort_unstable();
 
-    // Derived from the tree, not listed: whatever the driver does not route.
-    // Recorded 2026-08-22 as SHAPES, SIGNATURES, ENUM_VARIANTS, ENUM_LAYOUTS,
-    // DATA_SLOTS, SHARED_LAYOUT, DATA_INIT and PARAM_TYPES.
+    // **THE SET IS EMPTY, AND THIS TEST NOW ASSERTS COMPLETENESS.**
+    //
+    // It used to assert the set was NON-empty and then bound its size, with a
+    // message asking whoever emptied it to "replace this test with one asserting
+    // completeness". That day came on 2026-09-11. The history is kept because
+    // the sequence is the evidence: eight kinds skipped on 2026-08-22, six after
+    // `SHARED_LAYOUT` on 08-31, five after `DATA_INIT` on 09-04, then
+    // `DATA_SLOTS`, `ENUM_VARIANTS`, `ENUM_LAYOUTS` and `PARAM_TYPES` on 09-11.
+    //
+    // **A kind counts as skipped if it is skipped for ANY stage**, so this
+    // reaching zero means every kind is routed for EVERY stage, which is the
+    // conservative reading and the right one.
+    //
+    // **THE FOUR THAT LANDED LAST WERE NOT ONE OBLIGATION.** Three carry a NAME
+    // index, which is why they needed the interner route, and each took a
+    // different shape: `DATA_SLOTS` indexes a flat section, `ENUM_VARIANTS`
+    // walks one interleaved with type names, `ENUM_LAYOUTS` steps a whole enum
+    // at a time while accumulating a variant range. `PARAM_TYPES` carries no
+    // name at all and is a byte POOL the stage copies rather than encodes --
+    // recorded at that weaker standing in the provenance table below, because
+    // closing the set must not launder a memcpy into coverage.
     assert!(
-        !skipped.is_empty(),
-        "no region kind is skipped any more. That is a real advance: state the new coverage \
-         in the driver's doc comment and in the handoff, and replace this test with one \
-         asserting completeness"
-    );
-    assert!(
-        skipped.len() <= 6,
-        "{} kinds are skipped: {skipped:02x?}. SIX were on record after `SHAPES` and \
-         `SIGNATURES` were routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS`, \
-         `SHARED_LAYOUT`, `DATA_INIT`, `PARAM_TYPES`. More means the driver has stopped \
-         routing something it used to",
+        skipped.is_empty(),
+        "{} region kind(s) are skipped again: {skipped:02x?}. The set reached EMPTY on \
+         2026-09-11, so a kind reappearing here is a regression in the driver rather than an \
+         unrecorded gap",
         skipped.len()
     );
 }
 
 /// **THE 81% IS NOT ALL ONE THING, AND SAYING SO IS THE POINT OF THIS TEST.**
 ///
-/// "The self-hosted path produces 81% of the corpus's region bytes" is true and
-/// invites a stronger reading than it supports. The handoff's provenance table
+/// "The self-hosted path produces 100% of the corpus's region bytes" is true and
+/// invites a far stronger reading than it supports. **The four kinds that took
+/// it from 81 to 100 on 2026-09-11 raised the computed share not at all.** Three
+/// supply only their NAME from the stage's interner, which is the `CHUNKS`
+/// standing rather than the `NAMES` one; the fourth, `PARAM_TYPES`, is a byte
+/// pool the stage COPIES and does not encode at all.
+///
+/// **So 100% of the BYTES pass through the stage, and the share the stage
+/// DERIVES is unchanged.** Those are different claims and the gap between them
+/// is now at its widest, which is exactly when the distinction matters most. The handoff's provenance table
 /// distinguishes three standings and they are not comparable:
 ///
 /// | standing | regions | what Keleusma decides |
 /// |---|---|---|
 /// | **computed** | `NAMES`, `STRING_POOL`, `CONSTS` | the stage walks the module blob and derives every byte |
-/// | **mixed** | `CHUNKS` | the stage computes the name index and three range cursors; ten fields per record come from the host |
+/// | **mixed** | `CHUNKS`, `DATA_SLOTS`, `ENUM_VARIANTS`, `ENUM_LAYOUTS` | the stage computes the name index, plus three range cursors for `CHUNKS` and a variant range for `ENUM_LAYOUTS`; the remaining fields per record come from the host |
 /// | **encoded, not derived** | `HEADER` | the host reads the scalars off the `Module`; the stage decides offsets, widths and endianness |
+/// | **copied, not encoded** | `PARAM_TYPES` | the host supplies the bytes and the stage moves them; a byte POOL has no offsets, widths or endianness to decide, so this is weaker even than `HEADER` |
 ///
 /// `wire.kel` makes the same distinction about the record formatters it carries
 /// for the still-skipped kinds: *"COVERAGE IS WHAT THESE ARE, WHICH IS

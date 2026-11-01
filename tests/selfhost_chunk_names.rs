@@ -33,6 +33,14 @@ const CORPUS: &[(&str, &str)] = &[
     // delegates to `first_pass`, which already computed this table, and the
     // exclusion went with the hand-rolled derivation.
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 /// **THE DERIVED NUMBERING IS THE COMPILER'S NUMBERING.**
@@ -125,56 +133,66 @@ fn consecutive_same_named_heads_collapse_into_one_chunk() {
     );
 }
 
-/// **THE SELF-HOSTED COMPILER CANNOT COMPILE `wire.kel`, AND NOTHING SAID SO.**
+/// **`wire.kel` COMPILES NOW.** This pin recorded that it could not, and is retired here.
 ///
-/// `self_host_compile(wire.kel)` panics with ``no chunk named `acc` ``: the
-/// declaration that should be `crc_end` is named after a private-data field, and
-/// no chunk carries that name.
+/// # Why it is retired rather than followed to the letter
 ///
-/// # Why this was invisible
+/// The pin's own instruction was to add `wire.kel` to `assert_stage_byte_identical`'s corpus
+/// and delete this test. **When it first fired, that instruction was premature**: `wire.kel`
+/// compiled but two of 486 chunks still diverged, so obeying it would have put a
+/// non-identical stage into the oracle, or forced the oracle to be relaxed — which is how a
+/// corpus quietly stops meaning anything. The claim was held in a separate file until it was
+/// true.
 ///
-/// **`wire.kel` is not in the byte-identity corpus.** That oracle covers ten
-/// stages — `lexer`, `parse`, `reconstruct`, `codegen`, `analyze`, and the five
-/// `verify_*` — via `assert_stage_byte_identical` in
-/// `tests/selfhost_codegen.rs`. `wire.kel` appears in the wire-format tests only
-/// as a **reference-compiled input**, which never runs the self-hosted compiler
-/// over it.
+/// **It is true now.** `wire.kel` self-compiles byte-identically and
+/// `self_host_compiles_wire_kel_byte_identically` owns that claim. What survives here is only
+/// the chunk-count figure, which the channels quote.
 ///
-/// So the largest stage in the corpus, at 486 chunks, has never been self-hosted
-/// and nothing recorded the gap. *Any construct the corpus does not contain is
-/// unverified by construction* — the lesson that produced the boolean-literal and
-/// `Byte`-cast miscompiles — and here the uncovered thing is an entire stage.
+/// # What the original recorded, kept because the lesson outlived the defect
 ///
-/// # This is a REPORT, not a regression
+/// `wire.kel` was never in the byte-identity corpus, so the largest stage at 486 chunks had
+/// never been self-hosted and nothing said so. *Any construct the corpus does not contain is
+/// unverified by construction* — the lesson that produced the boolean-literal and `Byte`-cast
+/// miscompiles, and here the uncovered thing was an entire stage.
 ///
-/// Nothing broke. `wire.kel` was never self-compiled, so no capability was lost;
-/// what changed is that the tree now says so. A reader must not read this as
-/// "self-hosting regressed".
-///
-/// Pinned in the firing direction, and the control is what makes it a statement
-/// about `wire.kel` rather than about the compiler.
+/// Three causes stood in the way and **two were first diagnosed wrongly**: a capacity bound
+/// read off an index message (wrong), the lexer's missing radix literals (correct), a cap of
+/// 256 on the declaration count (wrong), and a `Call` record whose chunk field overflowed at
+/// index 256 (correct).
 #[test]
-fn the_self_hosted_compiler_cannot_yet_compile_wire_kel() {
+fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    const LEXER: &str = include_str!("../src/selfhost/kel/lexer.kel");
 
-    // THE CONTROL FIRST. Without it a compiler that failed on everything would
-    // satisfy the assertion below and look like a fact about `wire.kel`.
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let control = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(LEXER));
-    let subject = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(WIRE));
-    std::panic::set_hook(prev);
-
-    assert!(
-        control.is_ok(),
-        "`lexer.kel` no longer self-compiles, so the failure on `wire.kel` below says \
-         nothing about `wire.kel` specifically"
-    );
-    assert!(
-        subject.is_err(),
-        "`wire.kel` now self-compiles. That closes a recorded gap and is worth saying \
-         plainly: add it to `assert_stage_byte_identical`'s corpus in \
-         `tests/selfhost_codegen.rs` and delete this pin rather than relaxing it"
+    let module = keleusma::selfhost::self_host_compile(WIRE);
+    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
+    // removed to keep the stage inside the type stage's 640-row name channel.
+    // Previously 562 after separating the module-forest and raw-node capacities.
+    // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
+    // Previously 566 after the auxiliary-directory begin and step functions.
+    // Previously 564 after six semantic opcode decoder functions.
+    // Previously 558 after a forest-input mode, four storage accessors and two forest handlers.
+    // Previously 551 after six initializer protocol functions.
+    // Previously 545 after two debug-span stream functions.
+    // Previously 543 after five template functions and ten literal helpers.
+    // Previously 528 after six native functions and six literal helpers.
+    // Previously 516 after six signature-stream functions and five literal helpers.
+    // Previously 505 after four opcode-stream functions and four literal helpers.
+    // The helpers recover the constant-node reserve without enlarging buffers.
+    // 497 since 2026-10-04. Five framing functions add begin, feed, finish,
+    // read-begin and read-finish to the previous 492 chunks.
+    // **492 SINCE 2026-09-11, UP FROM 486.** The name-aware slot, variant and enum-layout streams added six
+    // functions to this stage -- three begin/step pairs -- and a function is a chunk, so the
+    // figure moved by exactly six.
+    //
+    // The move is recorded with its cause rather than merely updated. `wire.kel` is itself one
+    // of the eleven measured stages, so growing it perturbs every figure the corpus takes from
+    // it; `tests/module_input_node_budget.rs` guards the constant-forest node count for the same
+    // reason, and this is the chunk count.
+    assert_eq!(
+        module.chunks.len(),
+        561,
+        "`wire.kel`'s chunk count moved. A function is a chunk, so this figure moves whenever \
+         the stage gains or loses one -- update it WITH the cause, as the comment above does"
     );
 }

@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # release-gate.sh — the local pre-release verification gate.
 #
-# Runs the checks the CI workflow (.github/workflows/ci.yml) enforces PLUS the
-# detached compiler/ subproject that CI never sees, so a green run here means CI
-# will be green AND the self-hosted compiler subproject is sound. It is a superset
-# of the everyday `cargo test && cargo clippy` and, critically, includes `cargo doc`
-# under
-# `-D warnings` — the check whose absence let a red CI Doc job ship alongside
-# V0.2.1 (broken intra-doc links). Do not cut this gate down to a subset before a
-# release; run it whole.
+# Runs a subset of the checks the CI workflow (.github/workflows/ci.yml) enforces,
+# plus the detached compiler/ subproject's own checks, for a pre-publication run and
+# for working without a network. Since 2026-08-11 a merge into a version branch waits
+# on CI rather than on this gate, and CI runs jobs this gate does not, so a green run
+# here does not by itself predict a green CI run. It includes `cargo doc` under
+# `-D warnings`, the check whose absence let a red CI Doc job ship alongside V0.2.1
+# (broken intra-doc links). Do not cut this gate down before a release. Run it whole.
 #
 # Usage:
 #   scripts/release-gate.sh          # fmt, clippy, tests, doc, doc-links
@@ -57,8 +56,19 @@ cargo fmt --check
 step "Clippy (workspace, all targets, -D warnings)"
 cargo clippy --workspace --all-targets -- -D warnings
 
-step "Tests — default features"
-cargo test --workspace
+step "Tests — workspace defaults, without the self-host binaries"
+# keleusma-cli enables keleusma's `self-host` feature, so feature unification turns
+# it on for every workspace build, and a plain `cargo test --workspace` here ran
+# each selfhost_* binary that the self-host step below runs again. This mirrors the
+# CI `test` job since PR 494. The filter drops those binaries here, and the
+# self-host step is their run of record. nextest skips doctests, so they run
+# separately.
+command -v cargo-nextest >/dev/null || {
+  echo "error: this step needs cargo-nextest. Install it with: cargo install cargo-nextest" >&2
+  exit 1
+}
+cargo nextest run --profile ci --workspace -E 'not (package(keleusma) & binary(~selfhost))'
+cargo test --workspace --doc
 
 step "Tests — keleusma no default features"
 cargo test -p keleusma --no-default-features
@@ -70,6 +80,8 @@ step "Tests — keleusma signatures,shell (broad / docs.rs surface)"
 cargo test -p keleusma --features signatures,shell
 
 step "Tests — keleusma self-host (the self-hosted compile backend)"
+# The run of record for the heavy selfhost_* binaries, which the workspace step
+# above filters out.
 cargo test -p keleusma --features self-host
 
 # keleusma-wire ships an off-by-default `derive` feature, and its READER is meant
@@ -107,12 +119,25 @@ cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 # The self-hosted compiler at compiler/ is a DETACHED workspace: excluded from the
 # crate tarball, run by neither the pre-push hook nor CI. It reads the shared
 # kel/*.kel stage sources, so a change to those or to its Rust driver can break it
-# silently. Including it here is where that is caught before a merge to the release
-# line, and it makes this gate a SUPERSET of CI (which never sees the subproject). A
-# stale decoder here shipped `unknown op tag 62` into v0.2.3 undetected; the
-# `decoder_drift_guard` unit test in compiler/src/selfhost.rs is the fast standing
+# silently. A stale decoder here shipped `unknown op tag 62` into v0.2.3 undetected;
+# the `decoder_drift_guard` unit test in compiler/src/selfhost.rs is the fast standing
 # regression, and this step is the full check. (Process-audit 2026-07-22, item 4.)
-step "Detached compiler/ subproject (fmt, clippy, tests — gated nowhere else)"
+#
+# CORRECTED 2026-09-27. This comment used to assert the reverse relationship: that
+# including the subproject made this gate the broader of the two instruments, and that
+# no other check covered it. Both were true when written at a5f646bd and were falsified
+# by 4483f43e, which added the `selfhost-compiler` CI job, and then by fa978eff, whose
+# subject is "close the coverage holes so CI is a superset of the local gate". The
+# relationship was deliberately inverted and this comment kept asserting the old one.
+#
+# The retracted wording is PARAPHRASED rather than quoted on purpose.
+# `nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject` in
+# tests/gate_ci_correspondence.rs asserts the ABSENCE of those phrases, and a quoted
+# retraction satisfies the search as surely as a live claim. The first draft of this
+# very comment quoted them and turned that test red -- the tenth instance of the
+# comment-matching class the repository's own sweep documents, committed inside the
+# increment that added the guard against it.
+step "Detached compiler/ subproject (fmt, clippy, tests — also the selfhost-compiler CI job)"
 ( cd compiler && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
 
 if [ "$RUN_MIRI" -eq 1 ]; then

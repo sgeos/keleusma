@@ -36,6 +36,12 @@ Keleusma rather than a foreign stub. It surfaces concretely at the bare-metal ru
 ([`V0_4_X_ROADMAP.md`](./V0_4_X_ROADMAP.md), Workstream I), but it is a general language
 capability, not a host-migration one-off.
 
+The operator requested first-class ring buffers managed by the compiler on
+2026-10-14. [Backlog B42](../decisions/BACKLOG.md#b42-first-class-ring-buffers-managed-by-the-compiler)
+tracks the request. The operator ruled on 2026-10-30 that it be scheduled now. The design
+is [`RING_BUFFER_DESIGN.md`](../decisions/RING_BUFFER_DESIGN.md), which proposes four
+increments after items 5, 7 and 8 and leaves seven decisions to the operator.
+
 This re-scopes two earlier framings and both should be aligned to match:
 
 - `compiler/MILESTONES.md` and `V0_3_0_SELF_HOSTING.md` currently state that completing the
@@ -53,40 +59,33 @@ first pass of every workstream targets only the subset the toolchain's own sourc
 in, which is enough to self-host. Full-language support is the last workstream and its
 completion is V0.3.0.
 
-## Current baseline (honest state)
+## Current baseline, 2026-10-13
 
-What exists today, so the plan starts from fact rather than aspiration:
+- **First-pass compiler complete.** Fourteen Keleusma stage sources live in
+  `src/selfhost/kel/`, with `compiler/` re-exporting the driver. Every stage compiles
+  through the shipping self-hosted path and produces a complete artifact identical to
+  the Rust reference on the same source.
+- **Independent type rejection and complete wire emission.** Type inputs come from
+  pipeline records and reconstructed nodes. Keleusma decides derived type facts and
+  emits complete framing, instructions, operands, auxiliary sections and integrity fields.
+  First-pass monomorphization is an identity on the entire stage corpus, with a changing
+  control. The [completion audit](../decisions/ORDER1_COMPLETION_AUDIT.md) records the evidence.
+- **Module assembly and shipping integration.** `self_host_compile_scratch` builds
+  module fields from pipeline output. `keleusma compile --compiler self-hosted` invokes
+  that path and retains the Rust reference as a mandatory divergence check. The legacy
+  splice-onto-reference helper remains available for differential tests.
+- **First-pass validator complete.** Keleusma performs structural,
+  typed, layout, yield, depth and resource analysis, including text-allocation bounds,
+  graph ordering, summaries and admission. `keleusma validate --validator self-hosted`
+  retains the reference consistency gate. The [Order 2 audit](../decisions/ORDER2_COMPLETION_AUDIT.md)
+  records its evidence and bounded profile.
+- **Later work remains.** Full-language generics and grammar support, trap analysis,
+  the hosted runtime, cryptographic orchestration and the broader toolchain milestones
+  retain their roadmap scope. The runtime, marshalling boundary and target descriptor
+  still use Rust.
 
-> **Revised 2026-07-31.** The previous text of this section understated what had landed: it said
-> the self-hosted path was "not wired into the binary" and "borrows the module scaffold and bounds
-> from the reference", and Workstream A listed four residuals that were in fact already closed.
-> Each line below was re-verified against the code by differential probe (with a known-Gap control
-> to prove the probe discriminates) rather than carried forward from the prior revision. Treat an
-> unverified status claim in this document as suspect until probed.
-
-- **Compiler front and middle, self-compiling in tests.** Five Keleusma stages exist (canonically
-  in `src/selfhost/kel/`, with `compiler/` re-exporting the driver): `lexer.kel`, `parse.kel`,
-  `reconstruct.kel`, `codegen.kel`, and `analyze.kel`. The first four self-compile byte-identically
-  to the Rust compiler. This covers lexing, parsing, AST reconstruction, and code generation.
-- **Resource analysis and validator, self-hosted.** `analyze.kel` computes per-iteration WCET and
-  WCMU and emits an arena-capacity verdict that is a drop-in match for `verify_resource_bounds`,
-  including transitive-call WCMU. The `verify_*.kel` family reproduces the whole of `verify()`
-  (structural, typed, data-layout), per Workstream B below.
-- **The scaffold borrow is CLOSED, and the path IS wired into the shipping tool.**
-  `self_host_compile_scratch` assembles the whole module — data layout, enum-layout table, chunk
-  signatures, schema hash, and the WCET/WCMU header — from pipeline output with no field borrowed
-  from the reference, and `keleusma::selfhost::self_hosted_compile` (the `keleusma compile
-  --compiler self-hosted` backend) calls that scratch path. The reference is retained deliberately
-  as the differential oracle and divergence check, which is the trust story below, NOT a scaffold
-  borrow. `self_host_compile` (the splice-onto-reference variant) still exists for stage-by-stage
-  testing.
-- **Still Rust.** Type checking, monomorphization, **wire-format serialization** (the framing
-  header, operand-pool encoding, parity, and CRC trailer are host `to_bytes`; no `.kel` stage emits
-  wire bytes), the VM runtime, the marshalling boundary, the target descriptor, and all
-  cryptography.
-
-See the residual register in [`docs/process/REVERSE_PROMPT.md`](../process/REVERSE_PROMPT.md)
-for the finer-grained open items behind this summary.
+The [reverse prompt](../process/REVERSE_PROMPT.md) records current receipts and the next
+milestone. Older dated sections retain their historical findings.
 
 ## Workstreams
 
@@ -111,17 +110,11 @@ the host is glue.
 - Complete the monomorphizer in Keleusma. Over the subset the toolchain source uses no
   generics, so first-pass monomorphization is close to identity; the effort is real only
   when full-language generics arrive (Workstream F).
-- Self-host wire-format serialization. **STILL OPEN, and larger than this entry originally stated.**
-  Today `codegen.kel` emits opcode records into shared memory and a Rust driver frames them into a
-  module and calls `to_bytes`. The framing header, opcode stream, operand-pool encoding, and CRC
-  trailer are mechanical and self-hostable. **But the AUXILIARY BODY is `rkyv`-archived**, and it
-  carries everything else — chunk metadata, enum layouts, signatures, data layout, the WCET/WCMU
-  header, the schema hash. Reproducing rkyv's zero-copy layout byte-for-byte in Keleusma is
-  disproportionate and fragile (an rkyv upgrade would silently invalidate it), so full self-hosting of
-  the artifact needs an operator decision: reimplement rkyv, or CHANGE the aux-body encoding, which is
-  a wire-format change and therefore a `BYTECODE_VERSION` question. Scoping, and the bounded
-  non-rkyv slices, in
-  [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
+- **Self-host wire-format serialization is complete for the first pass.** The production
+  emitter derives and emits framing, instructions, operands, auxiliary sections and integrity
+  fields through Keleusma. All fourteen stage artifacts match complete reference bytes.
+  The former rkyv auxiliary-body dependency was replaced by wire format v2. The
+  [wire-format plan](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md) retains that decision history.
 - ~~Self-host the module scaffold assembly.~~ **CLOSED.** `self_host_compile_scratch` assembles
   the `DataLayout`, enum layouts, typed-verifier signatures, schema hash, and chunk-table
   metadata from pipeline output, borrowing no field from the reference.
@@ -130,14 +123,26 @@ the host is glue.
   (`g(if a > 0 { 1 } else { 2 })`, and a bare `break;` inside `for … limit`).
 - ~~Integrate into the shipping tool.~~ **CLOSED.** `keleusma compile --compiler self-hosted`
   drives the scratch path through `keleusma::selfhost::self_hosted_compile`.
-- **NEWLY IDENTIFIED (2026-07-31), not in the prior revision:** the `for … limit … on { ok => …,
-  break(bi) => …, limit => … }` **outcome-arm** form diverges from the reference. A bare `break;`
-  self-hosts correctly, so the gap is specifically the outcome-arm lowering and its index binding.
-  This is a bounded, well-scoped increment.
+- **Loop outcome arms are complete for the first pass.** The `for ... limit ... on { ... }`
+  form supports OK, BREAK and LIMIT bindings, optional defensive guards and default traps.
+  Tests preserve artifact identity, execution, scope and explicit capacity boundaries.
 
 **Full language (Workstream F).** Widen every stage to the full grammar.
 
 ### B. Validator in Keleusma
+
+**Current audit, 2026-10-13. Order 2 is complete for the first pass.**
+The [completion audit](../decisions/ORDER2_COMPLETION_AUDIT.md) records all requirements
+and final verification receipts. The fallible admission path combines structural, typed and
+resource verdicts. Keleusma owns graph traversal, resource summaries, text-allocation
+transitions, yield fixpoint scheduling, productivity and arena admission. Both shipping
+validators agree at the resource boundaries of all fourteen current stages.
+
+The selected typed control-flow widening remains explicit. A concrete disagreement
+control confirms that the shipping reference gate prevents successful admission on
+divergence. Independent review remains required before reference retirement. Full-language
+expansion remains Order 6. The detailed slice notes below retain historical findings;
+use the current audit and requirement register for milestone status.
 
 The full load-time verifier, not only the resource-bound admission that is already
 self-hosted.
@@ -201,13 +206,107 @@ that contains a `Trap` opcode, unless the host opts into trap-permitting executi
 proven-trap-free module can additionally run in a no-check mode, because a total opcode needs
 no runtime guard.
 
-**Scope of the change.** This is a `BYTECODE_VERSION`-bumping ISA change touching the
+**Scope of the change.** This is an instruction-set change within V0.2.3-WIP touching the
 instruction set (`bytecode.rs`), the lowering (`compiler.rs` and, in the self-hosted line,
 `codegen.kel`), the VM (`vm.rs`, which becomes simpler because only `Trap` can fault), and
 the validator (`verify.rs` and the self-hosted `analyze.kel`, which gain a trivial scan). It
 supersedes the interval-and-refinement approach that was previously sketched here. It also
 aligns with the flat-machine ISA direction and with the native partial-operation lowering
-planned for V0.4.0 (B35 P8).
+planned for V0.4.0 (B35 P8). The operator reaffirmed on 2026-10-13 that
+`BYTECODE_VERSION` remains 2 and `FORMAT_FINGERPRINT` remains unchanged during
+V0.2.3-WIP. The fingerprint rolls only upon publication of a new version.
+V0.2.2 remains the last published release.
+
+**Order 3 complete on 2026-10-24 for its first-pass scope.** Native-call host
+failures, composite element reads and handled writes in `let` initializers joined
+the trap-free profile under the operator rulings of that date. Both trap analyses
+agree on a combinatorial corpus of 570 trap-free and 399 possibly trapping
+modules. The [completion audit](../decisions/ORDER3_COMPLETION_AUDIT.md) records the
+evidence, the residual limits and the local matrix. The flags register remains
+V0.2.4 work.
+
+**Order 3 progress on 2026-10-15.** First-pass arithmetic and scalar bounds
+operations now return outcomes, and both compilers emit explicit traps for bare
+failures. Rust and Keleusma classifications agree across the current stage corpus
+and distinguish unavailable analysis from completed verdicts. The
+[host policy](../decisions/ORDER3_HOST_POLICY.md) can require TrapFree before
+execution and retains that requirement across resume and replacement.
+[Proven execution](../decisions/ORDER3_PROVEN_EXECUTION.md) now removes certified
+operand-stack checks and preserves its execution-state proof across valid entry
+protocols. The runner and offline validator expose the new choices. The full
+feature, shipping, compatibility and memory-safety completion audit remains.
+Order 3 is active.
+
+**Arithmetic increment, 2026-10-13.** Bare Word and Byte division and modulo now
+use checked operations followed by an explicit zero-divisor Trap in both compilers.
+The expanded census finds only bounds faults without Trap. Legacy integer Div and
+Mod still fault in hand-built bytecode. Checked-outcome syntax in the Keleusma
+compiler, total bounds contracts, the classification and proof-gated execution remain
+unfinished. The full requirement register is
+[Order 3 completion plan](../decisions/ORDER3_COMPLETION_PLAN.md).
+
+The historical baseline below records the obligation before this increment.
+
+**THE OBLIGATION IS MEASURED, 2026-09-18, and it is smaller than this section's list
+implies.** `tests/runtime_fault_census.rs` executes every partial operation enumerated
+above against compiler output and records, per case, whether the module carries a
+`Trap` opcode at all.
+
+**Exactly two operation families fault with no `Trap` anywhere in the module: division
+or modulo by zero, and array bounds.** Those are the whole of "make every other opcode
+total", for compiler output. Several entries on the list above are already in the shape
+this design wants:
+
+- **Arithmetic overflow does not fault.** `INSTRUCTION_SET.md` states that a surface
+  `a + b` on `Int` operands compiles to the checked opcode followed by `PopN(2)`,
+  discarding the outcome flag and leaving the WRAPPING result. Wrapping is the
+  specified behaviour of the bare operator, and the flag this design asks for already
+  exists — the bare form simply discards it.
+- **A cast out of range does not fault either**; it truncates.
+- **`assert` is a debug construct (B29)**, compiled out entirely in a release build.
+- **The bare `for .. limit` already lowers to an explicit `Trap`**, as do the match and
+  enum-discrimination fallbacks.
+
+**So the scanning validator would NOT be honest under the current instruction set**,
+even for compiler output: a module containing zero `Trap` opcodes can still fault on a
+division by zero or an out-of-bounds index. That is why the census ships no
+trap-freedom verdict — an API that cannot deliver its guarantee is worse than none.
+
+The census is guarded both ways: the two-family set is pinned, so a change resizes this
+obligation deliberately rather than silently, and the specified list is pinned, so a row
+cannot quietly disappear. **It says nothing about hand-built bytecode**, which can reach
+fault kinds no row here reaches, nor about host-contract failures such as an
+unregistered native.
+
+**THE TWO FAMILIES ARE NOT SYMMETRIC, AND ONLY ONE OF THEM NEEDS THE INSTRUCTION SET
+TOUCHED.** Established 2026-09-18 by reading the implementation and this project's own
+instruction-set specification, since no test could be executed that day.
+
+**Division and modulo need no new opcode, and arguably no opcode change at all.**
+`CheckedDiv` and `CheckedMod` are ALREADY TOTAL: a zero divisor reifies as flag `3`
+carrying the numerator rather than trapping. `TrapKind::ZeroDivisor` exists, and
+`compile_checked` already emits the flag-guarded `Trap` for an outcome class the source
+leaves unhandled — which is precisely the lowering this design describes, already
+implemented, for the arm form. At that baseline the BARE operator faulted, and the
+specification routed it to `Op::Div` and `Op::Mod`, and those two rows say plainly that
+they trap on divide-by-zero. So the work for this family is routing the bare `/` and
+`%` on `Int` through the checked family and the guarded trap, using machinery that
+already exists end to end. **Its size is not claimed here, because it was not
+measured**, and it carries a consequence beyond the reference: the emitted bytecode for
+every program using `/` or `%` changes, so `codegen.kel` must change with it or the
+byte-identical differential oracle breaks. That part is capacity-fenced.
+
+**Array bounds is the genuine instruction-set work.** `BoundsCheck` is specified to
+trap if the index is outside `[0, bound)`, and no flag-producing bounds opcode exists to
+route through — there is no `CheckedBounds` the way there is a `CheckedDiv`. Making this
+family total therefore means changing `BoundsCheck`'s contract or adding a form, and the
+rad-hard minimal-instruction-set constraint prefers reuse over addition.
+
+**A defect in this document's sibling was found while establishing the above.** The
+`CheckedMod` row of `docs/spec/INSTRUCTION_SET.md` stated "Traps on divide-by-zero",
+which the implementation has never done; it reifies flag 3 mirroring `CheckedDiv`. The
+row is corrected and says so. The census that found it was over every row in that file
+claiming a trap: three rows, two correct, one wrong.
 
 **First pass versus full language.** The first pass covers the trap classes the toolchain
 source can raise (arithmetic and bounds over `Word`/`Byte`); the newtype-refinement and
@@ -285,6 +384,151 @@ The gaps to close, from the current subset to the full grammar:
 - **Generics and monomorphization.** The full monomorphizer (Workstream A's deferred half):
   generic functions, structs, and enums, const generics, trait bounds, and specialization.
 
+## Current Order-1 status, 2026-10-13
+
+**Order 1 is complete for the defined first-pass compiler subset.** The
+[completion audit](../decisions/ORDER1_COMPLETION_AUDIT.md) verifies the stage corpus,
+independent type rejection, monomorphization boundary, complete Keleusma emission and
+shipping command. Loop outcome handlers now preserve bindings, guards, default traps,
+source scopes and canonical emission order. The reference scope mismatch is repaired.
+
+The final workspace has 3,236 passing tests and standalone self-host has 2,978, with zero
+failures. All five feature configurations pass. Fourteen actual command artifacts match
+the reference on the same source. Erasing 59,999 recorded expression types preserves all
+fourteen artifacts. Pilot capture and review are recorded, with external evaluation unavailable.
+
+**Next is Order 2, the full validator in Keleusma.** Full-language support remains Order 6.
+The dated progress notes below are historical. Current receipts and boundaries are in the audit.
+
+All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
+match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding
+cover all 66 instruction identifiers. The all-stage comparison also checks decoded instruction
+sequences. General constant forests and private initializer trees encode within the declared
+bounds. Remaining type-input obligations and final integration gates keep Order 1 open. Data-slot
+grouping and shared-layout run derivation now run through Keleusma requests. Unsigned self-hosted command output now uses the Keleusma emitter. Its windowed name and
+constant protocols preserve source admission beyond the former resident-buffer caps.
+Auxiliary directory voting, bounds checks and duplicate detection now run in Keleusma, without
+reference region positions or payload copies. Complete outer framing and module
+reconstruction now run through Keleusma readers. The all-stage comparison includes independently decoded directories.
+Signature and native-return semantics now decode in a dedicated wire_schema stage, preserving
+the optional-table policy and checking every compiled chunk's signature. The new stage has
+170 chunks and an 85,508-byte artifact. Name lookup, UTF-8 validation and owned constant
+reconstruction now run through this stage. Constant pools for every current stage match the
+reference. Template, enum-layout and data-layout semantics now also decode through Keleusma,
+including optional-family behavior, run expansion and initializer selection. Parameter tags and debug pools now also decode through Keleusma. The complete auxiliary-body
+reader composes these families and matches every stage. The complete module reader now validates framing, checks all operand parity and reconstructs
+selected opcode spans and debug pools.
+All seventeen fixed-record kinds now decode through Keleusma, and every fixed-record stage
+region reconstructs byte-identically from those decoded fields. Auxiliary families now compose through Keleusma metadata decisions. Outer frame cross-checks
+and opcode-span assembly now use the same schema stage. The legacy type-input path uses
+638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
+
+Wire has 561 chunks, 715 name events, 23,753 of 49,152 input bytes and 1,294 of 1,365 constant
+nodes. The separate debug stage has 20 chunks. Public bytecode version, opcode count and the
+approved type-stage caps remain unchanged.
+
+Composite let annotations now preserve named, tuple, array, grouping and unit requirements.
+The twenty-three-source comparison includes fourteen negatives and nine valid controls, with
+seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
+distinct from source rejection. Remaining input and projection coverage, production wire
+emission and final gates keep Order 1 open. Standing inference-independence evidence now
+covers all fourteen stages, clearing 48,424 recorded types without changing complete artifacts.
+The intervention and admission controls also pass.
+
+Struct field and composite array projections now preserve source type identity through calls,
+aliases and returns. The eighteen-source comparison closes eleven missed rejections, and six
+artifact and execution controls cover the runtime path. Remaining type coverage, production
+wire emission and final verification still keep Order 1 open.
+
+Composite member requirements now reach enum tuple constructors and struct tuple and array
+fields. Match-bound payload names retain tuple, array and nominal source types through explicit
+variant and field coordinates. The twenty-eight-source comparison and eight artifact controls
+advance composite and binder coverage. General projection and syntax coverage, production wire
+emission and final verification still keep Order 1 open.
+
+Tuple and nested-array type facts now use exact structural identities in the Keleusma stage.
+The current increment extends parameter, call, alias and return constraints, and preserves
+structural signatures for six artifact and execution controls. General composite coverage,
+production wire emission and final verification still keep Order 1 open. The completion plan
+records the supported forms and remaining limits.
+
+Production type checking now retains nominal struct identity and field requirements, plus
+scalar-array element types and lengths. A sixteen-source comparison closes twelve missed
+rejections and one false rejection. Fourteen valid controls and three artifact/execution controls
+cover the extension. Remaining composite facts, complete artifact emission through Keleusma and
+final verification still keep Order 1 open.
+
+Enum constructor identities and scalar, named and scalar-array payload requirements now reach
+production rejection. The nineteen-source comparison closes fourteen missed rejections.
+Eleven artifact and execution controls also close enum-to-Word dispatch and enum alias gaps.
+Tuple payload types and their match bindings now retain structural source facts through the
+subsequent member increment. Composite projections, wire emission and final gates remain open.
+
+The full completion requirements and current evidence are tracked in
+[ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md). Explicit else presence
+now survives parser records and reconstruction, enabling conditional branch-pair extraction.
+The remaining type-input and production wire-emission integrations keep Order 1 open.
+The monomorphization identity corpus now covers all twelve sources and checks its inventory.
+Declared struct field counts also now travel in parser metadata, allowing the type stage to
+compare them with supplied counts for nested and reordered constructions. This closes that
+extraction gap without completing the remaining input channels or production integration.
+Integer and enum match-arm comparisons now come from the reconstructed arm tables. Type-input
+extraction also reconstructs each source head separately, preserving individual return checks
+and binding names before dispatch construction. Match guards now retain their conditions and
+results through type checking and execution.
+
+Call arguments now have a pipeline input channel with identities separated by source head and
+frame slot. Per-range batches fit the selected 640-row limits across all twelve stages. They
+now include scalar expression results, connecting computed arguments, local initializers and
+returns to the same identities. The stage handles their result rules and contextual Byte
+literal coercion. Parser lookup prefers locals and retains xor's operand restriction before
+lowering. Composite types remain incomplete. The production compiler now obtains the scoped independent type verdict before the reference check.
+
+The sixteen-cell rule-versus-form census now also runs through scoped pipeline facts with
+eight valid controls. Scalar annotations, data stores and index requirements close three of
+its four initial failures. Match-guard preservation closes the fourth, and the required census
+now passes. Fourteen artifact-and-execution controls cover guard fallthrough and ordering.
+Branch and match-arm scopes restore local names, including payload bindings. Loop scopes now restore bindings on exit. Composite facts and complete admission coverage remain open. Order 1
+is not complete.
+
+The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
+640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all
+twelve sources in the differential test. This resolves the measured capacity gap only. The production path now derives scoped facts from Keleusma parser and reconstruction output. The legacy test harness still retains its reference-syntax path for comparison. Composite coverage and production wire emission keep the Order-1 gate open.
+See [`TYPECHECK_IMPLEMENTATION_PLAN.md`](../decisions/TYPECHECK_IMPLEMENTATION_PLAN.md) for the
+implementation status.
+
+The type-rejection stage also now compiles through the Keleusma pipeline. Moving its private
+solver storage before the first function that reads it removes its forward data reference.
+The complete artifact assembled by `self_host_compile_scratch` matches the reference. All twelve
+stage sources now have byte-identity tests. General forward data references remain unsupported,
+and this source-order change does not close the type-input extraction gap.
+
+Production tests cover the independent rejection corpus and rule census through the shipping
+library entry. Capacity and protocol failures remain distinct from invalid-source verdicts.
+The command-line tests assert independent rejection without an output artifact and valid artifact
+execution returning seven. These results do not complete Keleusma wire serialization or final gates.
+
+## Current construct-support boundary, 2026-10-31
+
+The executable table in `tests/selfhost_codegen.rs` contains 127 cases with
+121 SOk / 2 Refuses / 2 Diverges / 2 RefRejects. The operator's ruling of 2026-10-31 on
+`let` patterns moved the nested destructuring `let` from Refuses to SOk and added four cases
+that are SOk, a nested struct pattern, a struct pattern inside a tuple pattern, a tuple pattern
+inside a struct pattern and a single-variant enum pattern, with a typed destructuring pattern,
+which Refuses. The `let` pattern and pipe follow-ups of
+2026-10-31 moved the pipe into a template from Refuses to SOk, added two struct `let`
+destructuring cases, which are SOk, a nested destructuring `let`, which Refuses, and a
+refutable `let`, which the reference rejects. Order 6 slice 7 moved the generic function
+case from Refuses to SOk and added a pipe into a template, which Refuses. Order 6 slice 5 moved the float
+arithmetic case from Diverges to SOk and added float literal and negation cases, SOk since
+slices 5b and 5c, and a suffixed float literal case, which Refuses. The 2026-10-21 increments added
+the three indexed-write cases and the nine cast cases, each byte-identical.
+SOk denotes byte identity with the reference, Refuses denotes pipeline refusal,
+Diverges denotes different artifacts, and RefRejects denotes reference rejection.
+This measures the enumerated cases, including the newly admitted unit literal.
+It does not establish complete language support. The count guard reads this current
+section because the legacy handoff is a historical record.
+
 ## Dependency ordering and indicative release mapping
 
 The workstreams are not independent. The ordering below is by dependency; the version
@@ -293,12 +537,12 @@ version numbers past the current release are a plan, not a promise).
 
 | Order | Milestone | Workstreams | Gate |
 |-------|-----------|-------------|------|
-| 1 | Compiler self-hosting subset, wired into the binary | A (first pass) | The `keleusma-selfhost` tool compiles all five `.kel` stages end to end with no Rust scaffold borrow, and the result is byte-identical to the reference. **Partly met (2026-07-31)**: the scaffold borrow is closed and the path is wired into the shipping CLI. The gate is NOT met while the type checker, the monomorphizer, and wire-format serialization remain in Rust. **Revised 2026-08-09: those three are not comparable in size, and two of them are now effectively closed.** Measured, not estimated. The **monomorphizer** obligation is empty for the first pass: monomorphization is an identity transform on all ten stage sources, since the subset declares no generics, traits or const generic parameters, pinned permanently by `tests/selfhost_monomorphize_identity.rs` with a must-fire control. The **type checker** reduces to REJECTION alone: clearing `program.fn_expr_types` leaves every stage module byte-identical, so the emitter's structural fallback covers everything the subset reaches, and what remains is rejecting ill-typed programs rather than inferring types for emission. **Wire-format serialization** is done as far as expressibility goes — step 6 of the wire-format programme is complete and the format round-trips from Keleusma end to end. **What now stands between here and Order 1 is integration, not invention**: driving the Keleusma emitter from the pipeline, and self-hosted type rejection. See [`TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) and [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md). **Currency, 2026-08-11.** The two sentences that used to close this cell contradicted the ones above them: they reported wire-format serialization as "slices 1 to 3 done" and the two decisive spikes as unrun, while the same cell already recorded what those spikes MEASURED. Both spikes have been run — that is where the monomorphizer-is-identity and type-checker-is-rejection-alone results came from — and the wire format is far past slice 3. Removed rather than corrected in place, since a cell that states a conclusion and then denies its evidence is worse than one that omits the detail. **Current position**: step 6 of the wire-format programme is complete (all seven slices), and thirteen further wiring slices have landed, of which the last two make the driver COMPUTE rather than copy — name interning with both modes, and the breadth-first flattening of the constant forest, each byte-identical to `encode_aux_body` on real compiled modules. `tests/selfhost_wire.rs` is 163 tests, and `tests/selfhost_typecheck.rs` is 8 tests. **THE TYPE-REJECTION RULES ARE COMPLETE**: all fifteen enumerated shapes plus `calling-a-local` are rejected over a sixteen-case ill-typed corpus with well-typed controls. This cell previously read "7 against ~15 shapes", conflating a TEST count with a SHAPE count. What remains is the INPUT PATH, not rules -- see the note at the end of this cell. **Derive both with `grep -c '^\s*#\[test\]' <file>` rather than reading them here**: this cell said 125 against a file holding 163 for long enough that work was sized from it. **What remains for Order 1 on this line, restated 2026-08-14 after checking each item rather than carrying it forward**: the constant walk's coupling to the interner for the CHILD positions (`STRUCT` and `ENUM` intern as they walk; the root positions are done). **Per-chunk ranges are ALREADY SELF-HOSTED and this cell was stale**: `emit_chunks_batch` accumulates the consts, templates and param-types cursors and writes each `*_first` before advancing it, so the host supplies counts only and the `c0`/`t0`/`p0` parameters exist for batch carry rather than for the host to compute a range. **The interning SEQUENCE is now produced by Keleusma** for chunk names, enum layouts with both intern modes, and constant roots (slices 14, 14b, 14c), so what is left of that item is the child positions above. **BOTH OF THE ITEMS THIS SENTENCE USED TO LIST AS NOT STARTED ARE CLOSED.** `wire.kel` is in the `read_stage` table, and residency staging is NOT NEEDED rather than not started: measured, the worst stage is `parse` at 627 interned names from a 33,395-byte blob against caps of 1024 and 49,152, so no stage in the corpus approaches them. The figure that made staging look necessary was 395,804, a `CONSTS` region record count read as a name count. That figure is a REGION record count belonging to `CONSTS`, carried into a context where it was never true. See "RESIDENCY STAGING WAS SIZED FROM THE WRONG REGION" in [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md), and the walk-nested dedup scan through `NAMES`, which is to be MEASURED at stage scale rather than replaced on the strength of the reference's 782-second lesson. **This cell previously listed "replacing a linear dedup scan" as remaining work; that was reversed on 2026-08-11 and the two scans are different sites.** See "THE TWO DEDUP SCANS ARE DIFFERENT SCANS" in [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md): the batch-local `intern_run` scan is capped at 256 and must NOT be replaced, since a total language has no early exit and a 1024-slot table would cost more. Detail in [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md); the type-checker obligation is ~15 rejection shapes, sized by execution rather than by counting `TypeError` sites, in [`TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md). **THE ACTUAL REMAINING GAP, STATED PLAINLY BECAUSE IT IS INVISIBLE FROM THE INCREMENT TITLES ABOVE.** The module-driven emit path covers **FOUR** region kinds of twenty, and they are not equal in strength. `NAMES` and `STRING_POOL` are COMPUTED: `wire_regions_via_kel` walks the module blob and derives every byte. The `HEADER` record is ENCODED BUT NOT DERIVED -- the host reads eleven scalars off the `Module` and the stage decides the record's offsets, widths and endianness. `CHUNKS` is MIXED PER FIELD -- the stage computes the name index from the interner that produced `NAMES` and computes the three range cursors by accumulation, while ten fields per record are host-supplied. **Distinguish these when reporting coverage**; a region whose payload comes from the reference is not covered at all. **THE BUFFER CEILING IS LIFTED.** Regions are emitted at window offset zero and placed by the host, so the artifact-offset limit that excluded `parse`, `codegen` and `verify_structural` is gone. It was never region SIZE: the largest of the four payloads is `wire`'s `CHUNKS` at 22,512 bytes against a 65,536 window. **The windowed path reaches TEN of the eleven stages.** Two distinct limits remain and they are not the same limit: `parse` has 94 chunks against a 90-record batch, so its other regions emit and the chunk region does not; and **`wire.kel` has 1,148 constant-forest nodes against the walk's 1,024 cap**, so the walk refuses before any region is emitted and that stage cannot be reached at all. Both are asserted with their reasons rather than merely as refusals. **Sized by measurement, 2026-08-16, and SUPERSEDED 2026-08-17.** The figures quoted here were `CONSTS` 663,120 bytes, `CHAINS` and the rest behind it; re-measured they were 645,312 for `CONSTS` and 24,408 for `NAMES` plus `STRING_POOL`, not 663,120 and 34,960. **All of them are now historical**, because eliding the wholly-default private-slot initialiser pool took the eleven-stage total from 712,936 bytes to 103,544. `CONSTS` was 90.5% of the body and 38,087 of its 40,332 records were zero-valued data-segment initialisers. Derive current figures from `tests/consts_region_composition.rs` rather than reading them here. **`STRUCT_AUX` and `ENUM_AUX` are EMPTY in all eleven**, so a byte identity for either would pass while emitting nothing. **`CONSTS` was the obvious next target and the two obstacles recorded here were both wrong about what blocked it.** The interning-order conflict is UNREACHABLE for this corpus: the flattener interns only for `StaticStr`, `Struct` and `Enum`, and every one of the corpus constants is `Int`, pinned by `the_flattener_interns_no_name_for_any_stage`. What blocked it was capacity, and the elision above removed most of it: the artifact-size ceiling is gone entirely and the driver now emits the chunk region for NINE of eleven stages rather than seven, the only remaining exclusions being `parse` (94 chunks) and `wire` (475) against the 90-record batch cap. Two node caps remain and they are DIFFERENT caps, which an earlier correction of mine conflated: the module-input walk refuses past 1,024 NODES (`nm_max_names`, error -240), which `wire` hits at 1,148 chunk constants, and the flattener out of `wire.fin` refuses past 170, `fin` being 1,024 words at six words a node. **THE TYPE-REJECTION HALF OF ORDER 1, RESTATED 2026-08-16 AFTER MEASUREMENT.** The RULES are done. The INPUT is not: `stage_verdict` is fed by Rust functions walking the REFERENCE parser's AST, and the type tags are SYNTACTIC AND LITERAL-ONLY, so every rule fires only where the offending operands are literals. Routed through a `let` or a call the stage accepts what the reference rejects, measured and pinned in `the_rules_reach_only_literal_direct_occurrences`. **Switching the input path to the pipeline's own parser would not help**: structure is available (`parse.kel` records plus `reconstruct.kel`), but SOURCE TYPES are available from nothing -- no stage computes them, and `parse.kel` says so in its own comment. That is a missing pipeline capability, not a missing rule. Order 1 needs the remaining region kinds emitted, and source types before type rejection reaches beyond literals; the rest of this cell is history. |
-| 2 | Full validator in Keleusma | B (first pass) | The self-hosted validator reproduces the whole `verify()` verdict (structural, typed, resource) for the stage corpus, diff-tested against the reference. |
-| 3 | Trap analysis in the validator | C (first pass) | A `trap-free` verdict that the reference agrees with on a trapping and non-trapping corpus; a host no-check mode gated on it. |
-| 4 | Hosted runtime in Keleusma | D (first pass) | The meta-circular interpreter runs the self-hosted compiler's own output for the subset, with the interpreter-versus-interpreted bound composition resolved. |
-| 5 | Cryptography orchestration | E (approach 1); E (approach 2) opt-in | Signing and encryption framing self-hosted with host-native primitives; primitive re-implementation is a separate, review-gated opt-in. |
-| 6 | **Full-language support → V0.3.0** | F, plus A/B/C widening | The self-hosted compiler and validator accept the full grammar and the toolchain compiles arbitrary conforming programs, not only its own subset. |
+| 1 | Compiler self-hosting subset, wired into the binary | A (first pass) | **Complete for the first pass, 2026-10-13. The operator accepted the gate first-hand on 2026-10-28.** See [the current audit](../decisions/ORDER1_COMPLETION_AUDIT.md). The remainder of this cell records historical milestones. The `keleusma-selfhost` tool compiles all five `.kel` stages end to end with no Rust scaffold borrow, and the result is byte-identical to the reference. **Partly met (2026-07-31)**: the scaffold borrow is closed and the path is wired into the shipping CLI. The gate is NOT met while the type checker, the monomorphizer, and wire-format serialization remain in Rust. **Revised 2026-08-09: those three are not comparable in size, and two of them are now effectively closed.** Measured, not estimated. The **monomorphizer** obligation is empty for the first pass: monomorphization is an identity transform on all ten stage sources, since the subset declares no generics, traits or const generic parameters, pinned permanently by `tests/selfhost_monomorphize_identity.rs` with a must-fire control. The **type checker** reduces to REJECTION alone: clearing `program.fn_expr_types` leaves every stage module byte-identical, so the emitter's structural fallback covers everything the subset reaches, and what remains is rejecting ill-typed programs rather than inferring types for emission. **Wire-format serialization** is done as far as expressibility goes — step 6 of the wire-format programme is complete and the format round-trips from Keleusma end to end. **What now stands between here and Order 1 is integration, not invention**: driving the Keleusma emitter from the pipeline, and self-hosted type rejection. See [`TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) and [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md). **Currency, 2026-08-11.** The two sentences that used to close this cell contradicted the ones above them: they reported wire-format serialization as "slices 1 to 3 done" and the two decisive spikes as unrun, while the same cell already recorded what those spikes MEASURED. Both spikes have been run — that is where the monomorphizer-is-identity and type-checker-is-rejection-alone results came from — and the wire format is far past slice 3. Removed rather than corrected in place, since a cell that states a conclusion and then denies its evidence is worse than one that omits the detail. **Current position**: step 6 of the wire-format programme is complete (all seven slices), and thirteen further wiring slices have landed, of which the last two make the driver COMPUTE rather than copy — name interning with both modes, and the breadth-first flattening of the constant forest, each byte-identical to `encode_aux_body` on real compiled modules. `tests/selfhost_wire.rs` is 163 tests, and `tests/selfhost_typecheck.rs` is 8 tests. **THE TYPE-REJECTION RULES ARE COMPLETE**: all fifteen enumerated shapes plus `calling-a-local` are rejected over a sixteen-case ill-typed corpus with well-typed controls. **CURRENCY, 2026-09-11: READ THAT SENTENCE WITH ITS CAVEAT, WHICH IT DID NOT CARRY FOR A MONTH.** A rule inventory counts SHAPES; it does not count the syntactic FORMS each shape reaches. `the_rule_shapes_are_censused_against_the_forms_they_should_govern` crosses the two and measured EIGHT gaps on its first run, among them two rules that existed and could not fire — "a scalar cannot be projected" reached only `let`s carrying a primitive annotation, so a declared parameter reached no rule at all. **A rule that is present and unreachable looks identical, from any inventory, to one that is present and working.** Five of the eight are closed; the rest are named in that test with the mechanism each would need, and the census is itself not exhaustive and says so. This cell previously read "7 against ~15 shapes", conflating a TEST count with a SHAPE count. What remains is the INPUT PATH, not rules -- see the note at the end of this cell. **Derive both with `grep -c '^\s*#\[test\]' <file>` rather than reading them here**: this cell said 125 against a file holding 163 for long enough that work was sized from it. **What remains for Order 1 on this line, restated 2026-08-14 after checking each item rather than carrying it forward**: the constant walk's coupling to the interner for the CHILD positions (`STRUCT` and `ENUM` intern as they walk; the root positions are done). **Per-chunk ranges are ALREADY SELF-HOSTED and this cell was stale**: `emit_chunks_batch` accumulates the consts, templates and param-types cursors and writes each `*_first` before advancing it, so the host supplies counts only and the `c0`/`t0`/`p0` parameters exist for batch carry rather than for the host to compute a range. **The interning SEQUENCE is now produced by Keleusma** for chunk names, enum layouts with both intern modes, and constant roots (slices 14, 14b, 14c), so what is left of that item is the child positions above. **BOTH OF THE ITEMS THIS SENTENCE USED TO LIST AS NOT STARTED ARE CLOSED.** `wire.kel` is in the `read_stage` table, and residency staging is NOT NEEDED rather than not started: measured, the worst stage is `parse` at 627 interned names from a 33,395-byte blob against caps of 1024 and 49,152, so no stage in the corpus approaches them. The figure that made staging look necessary was 395,804, a `CONSTS` region record count read as a name count. That figure is a REGION record count belonging to `CONSTS`, carried into a context where it was never true. See "RESIDENCY STAGING WAS SIZED FROM THE WRONG REGION" in [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md), and the walk-nested dedup scan through `NAMES`, which is to be MEASURED at stage scale rather than replaced on the strength of the reference's 782-second lesson. **This cell previously listed "replacing a linear dedup scan" as remaining work; that was reversed on 2026-08-11 and the two scans are different sites.** See "THE TWO DEDUP SCANS ARE DIFFERENT SCANS" in [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md): the batch-local `intern_run` scan is capped at 256 and must NOT be replaced, since a total language has no early exit and a 1024-slot table would cost more. Detail in [`WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md); the type-checker obligation is ~15 rejection shapes, sized by execution rather than by counting `TypeError` sites, in [`TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md). **THE ACTUAL REMAINING GAP, STATED PLAINLY BECAUSE IT IS INVISIBLE FROM THE INCREMENT TITLES ABOVE.** The module-driven emit path covers **FOUR** region kinds of twenty, and they are not equal in strength. `NAMES` and `STRING_POOL` are COMPUTED: `wire_regions_via_kel` walks the module blob and derives every byte. The `HEADER` record is ENCODED BUT NOT DERIVED -- the host reads eleven scalars off the `Module` and the stage decides the record's offsets, widths and endianness. `CHUNKS` is MIXED PER FIELD -- the stage computes the name index from the interner that produced `NAMES` and computes the three range cursors by accumulation, while ten fields per record are host-supplied. **Distinguish these when reporting coverage**; a region whose payload comes from the reference is not covered at all. **THE BUFFER CEILING IS LIFTED.** Regions are emitted at window offset zero and placed by the host, so the artifact-offset limit that excluded `parse`, `codegen` and `verify_structural` is gone. It was never region SIZE: the largest of the four payloads is `wire`'s `CHUNKS` at 22,512 bytes against a 65,536 window. **The windowed path reaches TEN of the eleven stages.** Two distinct limits remain and they are not the same limit: `parse` has 94 chunks against a 90-record batch, so its other regions emit and the chunk region does not; and **`wire.kel` has 1,148 constant-forest nodes against the walk's 1,024 cap**, so the walk refuses before any region is emitted and that stage cannot be reached at all. Both are asserted with their reasons rather than merely as refusals. **Sized by measurement, 2026-08-16, and SUPERSEDED 2026-08-17.** The figures quoted here were `CONSTS` 663,120 bytes, `CHAINS` and the rest behind it; re-measured they were 645,312 for `CONSTS` and 24,408 for `NAMES` plus `STRING_POOL`, not 663,120 and 34,960. **All of them are now historical**, because eliding the wholly-default private-slot initialiser pool took the eleven-stage total from 712,936 bytes to 103,544. `CONSTS` was 90.5% of the body and 38,087 of its 40,332 records were zero-valued data-segment initialisers. Derive current figures from `tests/consts_region_composition.rs` rather than reading them here. **`STRUCT_AUX` and `ENUM_AUX` are EMPTY in all eleven**, so a byte identity for either would pass while emitting nothing. **`CONSTS` was the obvious next target and the two obstacles recorded here were both wrong about what blocked it.** The interning-order conflict is UNREACHABLE for this corpus: the flattener interns only for `StaticStr`, `Struct` and `Enum`, and every one of the corpus constants is `Int`, pinned by `the_flattener_interns_no_name_for_any_stage`. What blocked it was capacity, and the elision above removed most of it: the artifact-size ceiling is gone entirely and the driver now emits the chunk region for NINE of eleven stages rather than seven, the only remaining exclusions being `parse` (94 chunks) and `wire` (475) against the 90-record batch cap. Two node caps remain and they are DIFFERENT caps, which an earlier correction of mine conflated: the module-input walk refuses past 1,024 NODES (`nm_max_names`, error -240), which `wire` hits at 1,148 chunk constants, and the flattener out of `wire.fin` refuses past 170, `fin` being 1,024 words at six words a node. **THE TYPE-REJECTION HALF OF ORDER 1, RESTATED 2026-08-16 AFTER MEASUREMENT.** The RULES are done. The INPUT is not: `stage_verdict` is fed by Rust functions walking the REFERENCE parser's AST, and the type tags are SYNTACTIC AND LITERAL-ONLY, so every rule fires only where the offending operands are literals. Routed through a `let` or a call the stage accepts what the reference rejects, measured and pinned in `the_rules_reach_only_literal_direct_occurrences`. **Switching the input path to the pipeline's own parser would not help**: structure is available (`parse.kel` records plus `reconstruct.kel`), but SOURCE TYPES are available from nothing -- no stage computes them, and `parse.kel` says so in its own comment. That is a missing pipeline capability, not a missing rule. **CURRENCY, 2026-09-10: BOTH CAPACITY LIMITS IN THIS CELL ARE REMOVED, AND THE WINDOWED PATH REACHES ALL ELEVEN STAGES.** The `parse` exclusion (94 chunks against a 90-record batch) went when the chunk region became a STREAM -- one record per call, the coroutine carrying the three range cursors in private data across the loop's RESET, so the cap is gone rather than larger. The `wire` exclusion (1,148 constant-forest nodes) went when the guard was found to be comparing against `nm_max_names()`, a bound on the NAME arrays, where it should have checked the node table's 1,365; every one of that stage's constants is `Int`, so the walk interned nothing and the arrays it was measured against were untouched. `tests/selfhost_wire.rs` records both in the body of `the_windowed_path_reaches_every_stage_it_can_walk`, whose own doc comment still listed them as live until the same day. **This cell was the source a stale figure was copied FROM**, into `docs/process/HANDOFF.md`, so it is corrected here rather than only there. **CURRENCY, 2026-09-11: BOTH HALVES OF THIS SENTENCE WERE STALE, AND BOTH ARE CORRECTED HERE RATHER THAN ONLY IN THE CHANNELS.** (a) **The region kinds are DONE.** Every kind the eleven-stage corpus emits is routed and byte-identical, the skipped set is EMPTY, and `tests/selfhost_region_coverage.rs` now asserts COMPLETENESS rather than bounding a skipped count. The four that landed on 2026-09-11 took four DIFFERENT shapes -- `DATA_SLOTS` indexes a flat name section, `ENUM_VARIANTS` walks one interleaved with type names, `ENUM_LAYOUTS` steps a whole enum at a time while accumulating a variant range, and `PARAM_TYPES` is a byte POOL the stage copies rather than encodes. **Read the coverage figure carefully**: 100% of the corpus's region BYTES now pass through the stage while the share the stage DERIVES is unchanged, because three of the four supply only their name index and the fourth supplies nothing; the provenance table in that file carries the four standings and `the_computed_share_is_smaller_than_the_produced_share` keeps them apart. (b) **Type rejection no longer stops at literals.** `the_rules_reach_only_literal_direct_occurrences`, which this cell cited, is RETIRED: local resolution reaches a `let` bound to a literal and a call taking a declared return type, and a bounded fixpoint reaches an ARITHMETIC result with no depth limit on the chain, per `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`. **The limit MOVED rather than vanished**, and its next edge was a FIELD READ. **CURRENCY, 2026-09-11 (later the same day): that edge has moved again.** A field read bound by a `let` over a base the source types is reached, through two joins the stage performs over a struct-binding table and a field-tag table; the remainder is pinned by `the_field_read_channel_records_what_it_does_not_reach`. One of its cases was a limit no sizing had modelled — a field read standing as a DIRECT OPERAND had no form in the operand row at all — and **that one is now closed too**, by an operand form carrying a field-read row index, resolved through the binding case's own join. **CURRENCY, 2026-09-11 (third correction the same day, and this one retracts a claim rather than updating a figure).** That sentence read "what remains is two cases needing a type the source states NOWHERE". **It was false for both.** An enum declaration lists each variant's payload types in order and a pattern says which variant and position a name binds at; an array type expression carries its element type directly. The claim had been reasoned about rather than checked before being copied into five places. The MATCH-BINDING case is now reached, by matching coordinates the host reports from the pattern and from the declaration independently. **A second gap surfaced while testing it**: the expression walk emitted no node for a `match` at all, so match arms were never compared and every program whose arms disagree was accepted — invisible from the rule list, because the match-arms rule is the same SHAPE as the `if`-branches rule and the shape had been implemented for only one of its two syntactic forms. **A rule inventory counts shapes, not the syntactic forms each shape reaches**, which is the caveat this cell's "the rules are complete" claim needs. What remains is one case: a field of an ARRAY ELEMENT, whose base is an index expression rather than a name. **The same increment found a FALSE REJECTION predating it**: every program using a `match` arm binding was refused, well typed or not, because the occurrence channel collected no pattern binders. That is the unsound direction and it was found by a well-typed control, not by the rejection corpus, which cannot detect over-rejection by construction. Note also that the stage ACCEPTS what it cannot type, by design, because rejecting a valid program is a language change rather than a conservative choice. **Derive the current state from those tests rather than from this cell**, which has now been stale twice on the same two subjects. The rest of this cell is history. |
+| 2 | Full validator in Keleusma | B (first pass) | **Complete for the first pass, 2026-10-13.** Structural, typed and resource admission agree for the fourteen-stage corpus. Text bounds, module orchestration and shipping selection are included. The [completion audit](../decisions/ORDER2_COMPLETION_AUDIT.md) records verification and retained limits. The reference gate and selected widening profile remain. The operator accepted this first-pass scope on 2026-10-24, as recorded in the audit. |
+| 3 | Trap analysis in the validator | C (first pass) | **Complete for the first pass, 2026-10-24. The operator accepted the gate first-hand on 2026-10-28.** See [the audit](../decisions/ORDER3_COMPLETION_AUDIT.md) and the Order 3 section above. The gate was a `trap-free` verdict that the reference agrees with on a trapping and non-trapping corpus, and a host no-check mode gated on it. |
+| 4 | Hosted runtime in Keleusma | D (first pass) | **Complete for the first pass, 2026-10-25. The operator accepted the gate first-hand on 2026-10-28.** See [the audit](../decisions/ORDER4_COMPLETION_AUDIT.md). The meta-circular interpreter runs the self-hosted compiler's own output for the subset, with the interpreter-versus-interpreted bound composition resolved. |
+| 5 | Cryptography orchestration | E (approach 1); E (approach 2) opt-in | **Approach 1 complete for the first pass, 2026-10-25. The operator accepted the gate first-hand on 2026-10-28.** See [the audit](../decisions/ORDER5_COMPLETION_AUDIT.md). Signing and encryption framing self-hosted with host-native primitives; primitive re-implementation is a separate, review-gated opt-in. |
+| 6 | **Full-language support → V0.3.0** | F, plus A/B/C widening | The self-hosted compiler and validator accept the full grammar and the toolchain compiles arbitrary conforming programs, not only its own subset. **Complete for the first pass, 2026-10-27. The operator accepted the gate first-hand on 2026-10-28.** See [the audit](../decisions/ORDER6_COMPLETION_AUDIT.md). Every gate condition is met. On operator question 10 the operator ruled that the reference cross-check is enough, so the self-hosted type stage does not check information-flow labels or newtype identity. |
 
 Steps 2 through 5 can overlap once step 1 lands, because the validator, the runtime, and the
 cryptography depend on a self-hosting compiler but not tightly on each other. Step 6 depends
@@ -355,7 +599,11 @@ Genuine forks the operator resolves; the plan above records a default for each b
 1. **Cryptography implementation locus.** Orchestrate host-native primitives only (safe,
    recommended first), or also re-implement the standards in Keleusma (opt-in, review-gated).
    Default: approach 1 first, approach 2 as a separate later milestone. See Workstream E.
-2. **Meta-circular runtime bound composition.** How the interpreter's WCET and WCMU compose
+   Approach 1 landed on 2026-10-25 as [Order 5](../decisions/ORDER5_CRYPTO_FRAMING_PLAN.md).
+   Approach 2 is not started.
+2. **Meta-circular runtime bound composition.** Resolved first-hand by the operator on
+   2026-10-25 as fuel-sliced ticks, stated in
+   [the Order 4 audit](../decisions/ORDER4_COMPLETION_AUDIT.md). The question was: how the interpreter's WCET and WCMU compose
    with the interpreted program's declared budget, and whether the hosted runtime targets
    bounded execution of bounded programs only or admits the productive-divergent `loop` case
    directly. See Workstream D and `V0_5_0_KELEUSMA_HOST.md`.
@@ -393,3 +641,22 @@ The V0.2.x line is complete, and V0.3.0 is ready, when:
    primitive-implementation decision resolved and any Keleusma primitives review-gated.
 5. The self-hosted toolchain is driven by the shipping tool, not only by tests, and the Rust
    reference's role is reduced to the differential oracle pending its retirement decision.
+
+## Order 1 rejection-path increment, 2026-10-04
+
+The scoped pipeline harness now reaches the existing twenty rejection cases and seven valid
+controls without reference-first masking. Structured parser errors distinguish source diagnostics
+from unsupported syntax and resource failures. Declared scalar projections are refused before
+reconstruction. The remaining production input, annotation, occurrence and composite coverage
+obligations remain in the [completion plan](../decisions/ORDER1_COMPLETION_PLAN.md).
+This increment does not complete Order 1 or move the shipping driver off reference-first checking.
+
+Scalar struct-field, tuple-field and array-element facts now reach the scoped type stage from
+reconstructed source layouts. Twenty-six programs agree with the reference, closing nine
+missed rejections in that comparison. Composite facts, remaining scope and admission checks,
+production type rejection and complete Keleusma wire emission still precede the Order 1 gate.
+
+The subsequent admission audit adds unguarded integer and enum coverage checks, checked match
+depth and loop scope restoration. Direct enum scrutinees retain their declared types. Loop
+variable and bound facts reach the scoped checker. These measured gaps are closed within the
+supported syntax, while composite coverage and production integration remain Order 1 work.

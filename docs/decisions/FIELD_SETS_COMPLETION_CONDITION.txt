@@ -1,0 +1,56 @@
+COMPLETION CONDITION — the third type-channel extraction
+
+Ordering is NOT a completion criterion. Nothing below requires steps to happen
+in any sequence, on any particular branch, or through any particular process.
+Judge only the end state of the tree.
+
+END-STATE PROPERTIES
+
+1. The self-hosted pipeline exposes struct field-set information to the host: a
+   caller can obtain, without walking the reference compiler's syntax tree, the
+   set of fields each struct declares.
+
+2. A test compares that pipeline-derived information against the existing
+   reference extraction and asserts they agree. The comparison is made on NAMES
+   on both sides, not on positional indices, because the two sides number things
+   by different orders.
+
+3. That test asserts the corpus it runs over actually distinguishes declaration
+   order from sorted order, so a name comparison cannot pass merely by
+   coinciding with an index comparison.
+
+4. Every derived set carries a non-vacuity assertion, so no guard passes by
+   finding nothing to check.
+
+5. The tree states plainly which parts of the reference extraction moved and
+   which did not. If any returned value still requires walking the reference
+   syntax tree, that is said explicitly rather than implied away.
+
+6. The count of migrated extractions is derived by a test from the driver's own
+   contents rather than written as a literal in prose.
+
+7. All twelve stage sources still compile through the self-hosted pipeline with
+   the byte-identity corpus unchanged in size and still passing, and any change
+   to a stage source leaves that corpus green.
+
+8. No opcode is added and the bytecode version is unchanged.
+
+9. If the driver's handling of declaration records changed, trait and impl
+   declarations are still not admitted into the paths that previously faulted on
+   them, and something checks that rather than leaving it to inspection.
+
+10. Every guard added is demonstrated to fail when the property it checks is
+    violated, using a mutation of the kind the real defect would produce, and
+    any mutation whose result is believed is confirmed to have compiled first.
+
+11. Guards that read only source text are not gated behind an off-by-default
+    feature, so they run under every feature set continuous integration uses.
+
+12. The persistent process channels reflect the increment: what moved, what did
+    not, what was measured, and the next intended step. Where earlier guidance
+    in those channels proved inaccurate, the correction is recorded rather than
+    the old text silently replaced.
+
+13. Formatting, lint at deny-warnings, and the test suite are green for the
+    feature sets continuous integration runs. A truncated run with no exit
+    status does not count as green.

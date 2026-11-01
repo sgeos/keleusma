@@ -947,6 +947,27 @@ pub enum Expr {
         arms: Vec<CheckedArm>,
         span: Span,
     },
+    /// Handled indexed write into a data-segment array field:
+    /// `data_name.field[i] = value { ok(old, new) => .., invalid_index(j) => .. }`.
+    ///
+    /// The index is evaluated first and bounds-checked before the value is
+    /// evaluated, so an invalid index skips the value. The construct is an
+    /// expression whose type is the common type of its arms. With more than
+    /// one index, a failure at any level reaches `invalid_index`, which binds
+    /// the index that failed. See `docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md`.
+    DataIndexStore {
+        /// Name of the data block being assigned into.
+        data_name: String,
+        /// Field name being written.
+        field: String,
+        /// Index expressions in source order (outermost first).
+        indices: Vec<Expr>,
+        /// Value written when the index is in range.
+        value: Box<Expr>,
+        /// Arms in declaration order: `StoreOk` and `InvalidIndex`.
+        arms: Vec<CheckedArm>,
+        span: Span,
+    },
     /// `saturate_max` literal. Evaluates to the maximum
     /// representable value of the construct's expected type. The
     /// type checker assigns the context type; the compiler emits
@@ -1069,6 +1090,12 @@ pub enum CheckedArmKind {
     /// (B35 P7). Optional; an unhandled native error propagates the
     /// host failure as it would without the construct.
     Error(Pattern),
+    /// `ok(old, new)`: a handled indexed write succeeded. The first
+    /// pattern matches the element value before the write and the
+    /// second the value written. Each is a binder or `_`. Admissible
+    /// only on a handled indexed write, where the element is read
+    /// only when `old` is bound.
+    StoreOk(Pattern, Pattern),
 }
 
 impl Expr {
@@ -1098,6 +1125,7 @@ impl Expr {
             | Expr::Closure { span, .. }
             | Expr::ClosureRef { span, .. }
             | Expr::Checked { span, .. }
+            | Expr::DataIndexStore { span, .. }
             | Expr::SaturateMax { span }
             | Expr::SaturateMin { span }
             | Expr::Classify { span, .. }
@@ -1244,6 +1272,31 @@ pub enum TypeExpr {
     /// nominal type; its runtime representation is a flat array of N
     /// words.
     Multiword(ConstExpr, ConstExpr, Span),
+    /// Capacity-bounded mutable text: `Text<N>`, holding up to `N` content
+    /// bytes with no terminator.
+    ///
+    /// **Distinct from bare `Text`**, which is a pointer to `.rodata` and
+    /// carries no capacity in its type. A literal is static and has the bare
+    /// type; a value that can change has this one. They are two types, not one
+    /// parameterised family, because their residence rules differ: static text
+    /// lives in read-only memory for the module's lifetime, and a `Text<N>` is
+    /// an ordinary value.
+    ///
+    /// The runtime representation is a FLAT composite carrying no pointer,
+    /// handle, or epoch. That is the whole reason the type is admissible: a
+    /// handle implies unbounded lifetime, which is why it would need an epoch,
+    /// which puts worst-case memory beyond static reach and contradicts the
+    /// ecosystem's definitive-WCMU proposition. Because it carries no pointer,
+    /// a value containing one may cross a yield boundary, which bare dynamic
+    /// text may not.
+    ///
+    /// `N` is a const expression resolved to a literal at monomorphization
+    /// (B40), so neither worst-case analysis ever sees a symbolic bound.
+    ///
+    /// The governing analogy is the operator's: this is `for .. limit <const>`
+    /// applied to storage instead of iteration -- a runtime length under a
+    /// static cap.
+    TextN(ConstExpr, Span),
     /// Option type: `Option<T>`.
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
@@ -1331,6 +1384,7 @@ impl TypeExpr {
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Multiword(_, _, span)
+            | TypeExpr::TextN(_, span)
             | TypeExpr::Option(_, span)
             | TypeExpr::Unit(span)
             | TypeExpr::Labelled(_, _, span) => *span,

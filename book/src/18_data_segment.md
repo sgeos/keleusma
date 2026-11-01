@@ -19,6 +19,7 @@ The answer is the data segment. It is the one region of a program's
 memory that may be changed, and whose values survive from one cycle to
 the next. It is declared with the word `data`:
 
+<!-- verify: compile -->
 ```
 data state {
     steps: [Word; 4],
@@ -37,8 +38,9 @@ A `data` block looks like a struct, and its fields are read with a dot,
 as `state.steps`. The difference is that its fields may be assigned, with
 `=`, and what is assigned is still there on the next cycle.
 
-The data segment begins with every field zeroed. The program above has
-four counters. On the first cycle each becomes 1. On the second cycle,
+The data segment begins with every scalar field zeroed. A `Text` field
+and a struct field begin empty, so a program writes them before it reads
+them. The program above has four counters. On the first cycle each becomes 1. On the second cycle,
 having survived RESET, each becomes 2. The counters climb, cycle after
 cycle, because the data segment remembers.
 

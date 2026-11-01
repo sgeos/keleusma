@@ -1,0 +1,64 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. THE DIVISION OF LABOUR FOR THE BARE LOOP FORM IS PINNED BY A TEST.
+   A test establishes, against the stage sources themselves, which
+   stages already implement the bare loop form's lowering and which do
+   not. It does not restate a conclusion in prose alone.
+
+2. THE PIN NAMES THE STAGE THAT IS ALREADY DONE, AND SAYS SO ONLY
+   BECAUSE IT MEASURED IT.
+   The claim that one stage's lowering exists is derived from that
+   stage's source, not from a comment or a document asserting it.
+
+3. THE PIN NAMES THE STAGE THAT IS NOT DONE, PRECISELY.
+   Where a data structure exists but is never populated, the test
+   distinguishes "declared" from "written" rather than merely finding
+   the name present. A test satisfied by the declaration alone does not
+   satisfy this.
+
+4. THE PIN FAILS WHEN THE WORK LANDS.
+   It is a gap pin. Beginning to implement the missing stage makes it
+   fail, and its message says what the implementer should do with it
+   rather than leaving them to guess whether the failure is a
+   regression.
+
+5. THE RECORDED COST IS CORRECTED WHEREVER IT IS STATED.
+   Any document giving a stage count or scope for this work states the
+   measured figure. A corrected estimate in one place and the old one in
+   another does not satisfy this.
+
+6. THE CORRECTION SAYS WHAT WAS WRONG AND WHY, NOT ONLY WHAT IS RIGHT.
+   The reason the earlier estimate was reasonable and still wrong is
+   recorded, because the reasoning generalises further than the number
+   does.
+
+7. NO NUMBER IS INTRODUCED THAT A LIVE ASSERTION ALREADY HOLDS.
+   Where an existing test asserts a quantity, it is cited rather than
+   restated. Two figures for one claim does not satisfy this.
+
+8. NOTHING PREVIOUSLY ACCEPTED IS NOW REJECTED.
+   No behaviour changes. No construct's classification changes. No
+   opcode. No BYTECODE_VERSION change.
+
+9. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The test suite passes with zero failures under default features and
+   under the self-host feature, formatting is clean, clippy is clean at
+   deny-warnings, and the workspace documentation builds without
+   warnings. The suite's own exit status is read rather than a
+   pipeline's, and the run does not stop at the first failing binary.
+   Any step skipped or goal abandoned is stated plainly with its reason.
+
+10. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If any item proved impossible without an operator decision, the tree
+    names the decision required and the evidence establishing it, and
+    the remaining items still satisfy their conditions.
+
+THIS DOES NOT REQUIRE IMPLEMENTING THE CONSTRUCT. A better estimate is
+not a small estimate: the remaining work is real, in two stage sources,
+and claiming otherwise would be worse than a smaller true result. What
+is asked is that the next implementer starts from a measured state of
+the tree rather than re-deriving it.

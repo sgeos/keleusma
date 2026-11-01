@@ -1,0 +1,1826 @@
+// Semantic schema validation. Record unpacking remains in the wire stage.
+// Each command handles one record or one shape request, independent of table size.
+require word >= 64;
+
+shared data io {
+    arg: [Word; 8],
+    fin: [Word; 16],
+    bytes: [Byte; 1024],
+}
+
+private data sg {
+    mode: Word,
+    shapes: Word,
+    signatures: Word,
+    natives: Word,
+    strict: Word,
+    scanned: Word,
+    bad: Word,
+    decoded: Word,
+    native_at: Word,
+    first: Word,
+    count: Word,
+    ret: Word,
+    resume: Word,
+    cursor: Word,
+}
+
+fn schema_error() -> Word { 0 - 292 }
+fn unsigned32(n: Word) -> bool { n >= 0 andalso n <= 0xFFFFFFFF }
+fn range_ok(first: Word, count: Word, total: Word) -> bool {
+    unsigned32(first) andalso unsigned32(count)
+        andalso first <= total andalso count <= total - first
+}
+fn signature_ok() -> bool {
+    range_ok(io.fin[0], io.fin[1], sg.shapes)
+        andalso unsigned32(io.fin[2]) andalso io.fin[2] < sg.shapes
+        andalso unsigned32(io.fin[3]) andalso io.fin[3] < sg.shapes
+}
+
+// Optional signature parsing may fail without rejecting a module only when no
+// native return shape needs that same parsed view. Execution failures are separate.
+fn tables_absent() -> Word {
+    sg.mode = 0;
+    if sg.strict == 1 orelse sg.natives > 0 { 0 - 293 } else { 0 }
+}
+
+fn tables_begin() -> Word {
+    sg.mode = 0;
+    if io.arg[0] < 0 - 1 orelse io.arg[1] < 0 - 1 orelse io.arg[2] < 0 - 1
+        orelse io.arg[3] < 0 orelse io.arg[3] > 1 { schema_error() } else {
+        sg.strict = io.arg[3];
+        sg.natives = if io.arg[2] < 0 { 0 } else { io.arg[2] / 8 };
+        if io.arg[2] >= 0 andalso io.arg[2] % 8 != 0 { 0 - 294 } else {
+        if io.arg[0] < 0 orelse io.arg[0] % 8 != 0
+            orelse (io.arg[1] >= 0 andalso io.arg[1] % 16 != 0) { tables_absent() } else {
+            sg.shapes = io.arg[0] / 8;
+            sg.signatures = if io.arg[1] < 0 { 0 } else { io.arg[1] / 16 };
+            sg.scanned = 0;
+            sg.bad = 0;
+            sg.decoded = 0;
+            sg.native_at = 0;
+            sg.mode = 1;
+            io.fin[0] = sg.shapes;
+            io.fin[1] = sg.signatures;
+            io.fin[2] = sg.natives;
+            1
+        }}
+    }
+}
+
+// Complete every signature's bounds checks before interpreting any shape tag.
+fn signature_check() -> Word {
+    if sg.mode != 1 orelse sg.scanned >= sg.signatures { schema_error() } else {
+        if not signature_ok() { sg.bad = 1; }
+        sg.scanned = sg.scanned + 1;
+        0
+    }
+}
+
+fn tables_finish() -> Word {
+    if sg.mode != 1 orelse sg.scanned != sg.signatures { schema_error() } else {
+        if sg.bad != 0 { tables_absent() } else { sg.mode = 2; 1 }
+    }
+}
+
+fn signature_begin() -> Word {
+    if sg.mode != 2 orelse sg.decoded >= sg.signatures
+        orelse not signature_ok() { schema_error() } else {
+        sg.first = io.fin[0];
+        sg.count = io.fin[1];
+        sg.ret = io.fin[2];
+        sg.resume = io.fin[3];
+        sg.cursor = 0;
+        sg.mode = 3;
+        0
+    }
+}
+
+// Request roles are parameter, return and resume. The cursor advances only
+// after a valid shape reply, so a refused reply cannot silently skip a field.
+fn shape_next() -> Word {
+    if sg.mode != 3 { schema_error() } else {
+    if sg.cursor == sg.count + 2 {
+        sg.decoded = sg.decoded + 1;
+        sg.mode = 2;
+        0
+    } else {
+        if sg.cursor < sg.count {
+            io.fin[0] = sg.first + sg.cursor;
+            io.fin[1] = 0;
+        } else { if sg.cursor == sg.count {
+            io.fin[0] = sg.ret;
+            io.fin[1] = 1;
+        } else {
+            io.fin[0] = sg.resume;
+            io.fin[1] = 2;
+        }}
+        sg.mode = 4;
+        1
+    }}
+}
+
+// ShapeRecord::to_shape accepts arbitrary kind bytes. The later verifier owns
+// kind validation. Top ignores kind and size; Scalar ignores size.
+fn shape_reply() -> Word {
+    if sg.mode != 4 andalso sg.mode != 5 { schema_error() } else {
+    if io.fin[0] < 1 orelse io.fin[0] > 3 { 0 - 295 } else {
+    if io.fin[1] < 0 orelse io.fin[1] > 255 orelse io.fin[2] < 0
+        orelse io.fin[2] > 255 orelse not unsigned32(io.fin[3]) { schema_error() } else {
+        let form = io.fin[0] - 1;
+        let kind = if form == 0 { 0 } else { io.fin[1] };
+        let size = if form == 2 { io.fin[3] } else { 0 };
+        io.fin[0] = kind;
+        io.fin[1] = size;
+        if sg.mode == 4 {
+            sg.cursor = sg.cursor + 1;
+            sg.mode = 3;
+        } else {
+            sg.native_at = sg.native_at + 1;
+            sg.mode = 2;
+        }
+        form
+    }}}
+}
+
+fn native_begin() -> Word {
+    if sg.mode != 2 orelse sg.decoded != sg.signatures
+        orelse sg.native_at >= sg.natives orelse not unsigned32(io.arg[0])
+        orelse io.arg[0] >= sg.shapes { schema_error() } else {
+        io.fin[0] = io.arg[0];
+        sg.mode = 5;
+        1
+    }
+}
+
+fn schema_finish() -> Word {
+    if sg.mode != 2 orelse sg.decoded != sg.signatures
+        orelse sg.native_at != sg.natives { schema_error() } else {
+        sg.mode = 0;
+        0
+    }
+}
+
+// Requested names are checked individually. Unused records and pool bytes do
+// not acquire stronger validation requirements than the reference accessor.
+private data nr {
+    mode: Word,
+    pool: Word,
+    remaining: Word,
+    need: Word,
+    low: Word,
+    high: Word,
+    bad: Word,
+}
+
+fn name_begin() -> Word {
+    nr.mode = 0;
+    if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[0] % 8 != 0
+        orelse not unsigned32(io.arg[2]) orelse io.arg[2] >= io.arg[0] / 8 { 0 - 297 } else {
+        nr.pool = io.arg[1];
+        nr.mode = 1;
+        io.fin[0] = io.arg[2] * 8;
+        io.fin[1] = 8;
+        1
+    }
+}
+
+fn name_record() -> Word {
+    if nr.mode != 1 { 0 - 296 } else {
+    if not range_ok(io.fin[0], io.fin[1], nr.pool) { 0 - 297 } else {
+        nr.remaining = io.fin[1];
+        nr.need = 0;
+        nr.low = 128;
+        nr.high = 191;
+        nr.bad = 0;
+        nr.mode = 2;
+        1
+    }}
+}
+
+// Canonical UTF-8 byte constraints, including overlong forms, surrogates and
+// the upper scalar boundary. The first continuation may have narrower bounds.
+fn name_byte(b: Word) -> Word {
+    if nr.need != 0 {
+        if b < nr.low orelse b > nr.high { nr.bad = 1; } else {
+            nr.need = nr.need - 1;
+            nr.low = 128;
+            nr.high = 191;
+        }
+    } else {
+        nr.low = 128;
+        nr.high = 191;
+        if b <= 127 { nr.need = 0; } else {
+        if b >= 194 andalso b <= 223 { nr.need = 1; } else {
+        if b >= 224 andalso b <= 239 {
+            nr.need = 2;
+            if b == 224 { nr.low = 160; }
+            if b == 237 { nr.high = 159; }
+        } else {
+        if b >= 240 andalso b <= 244 {
+            nr.need = 3;
+            if b == 240 { nr.low = 144; }
+            if b == 244 { nr.high = 143; }
+        } else { nr.bad = 1; }}}}
+    }
+    0
+}
+
+fn name_feed() -> Word {
+    if nr.mode != 2 orelse io.arg[0] <= 0 orelse io.arg[0] > 1024
+        orelse io.arg[0] > nr.remaining { 0 - 296 } else {
+        for i in 0..io.arg[0] limit 1024 {
+            if nr.bad == 0 { name_byte(io.bytes[i] as Word); }
+        }
+        if nr.bad != 0 { nr.mode = 0; 0 - 298 } else {
+            nr.remaining = nr.remaining - io.arg[0];
+            0
+        }
+    }
+}
+
+fn name_finish() -> Word {
+    if nr.mode != 2 orelse nr.remaining != 0 { 0 - 296 } else {
+        nr.mode = 0;
+        if nr.need != 0 { 0 - 298 } else { 0 }
+    }
+}
+
+fn names_dispatch(cmd: Word) -> Word {
+    if cmd == 8 { name_begin() } else {
+    if cmd == 9 { name_record() } else {
+    if cmd == 10 { name_feed() } else {
+    if cmd == 11 { name_finish() } else { 0 - 296 }}}}
+}
+
+private data cs {
+    mode: Word,
+    total: Word,
+    saux: Word,
+    eaux: Word,
+    names: Word,
+    ranges: Word,
+    float_ok: Word,
+    scanned: Word,
+    range_at: Word,
+    at: Word,
+    form: Word,
+    payload: Word,
+    first: Word,
+    count: Word,
+    pos: Word,
+    aux: Word,
+    npos: Word,
+    type_name: Word,
+    variant: Word,
+    field_first: Word,
+    has_disc: Word,
+    disc: Word,
+    root_at: Word,
+}
+
+fn constant_error() -> Word { 0 - 299 }
+fn constant_fields_ok() -> bool {
+    io.fin[0] >= 0 andalso io.fin[0] <= 65535
+        andalso io.fin[1] >= 0 andalso io.fin[1] <= 65535 andalso unsigned32(io.fin[2])
+}
+fn constant_forward(index: Word, payload: Word) -> bool {
+    let first = payload band 0xFFFFFFFF;
+    let count = payload lsr 32;
+    first > index andalso range_ok(first, count, cs.total)
+}
+
+fn constants_begin() -> Word {
+    cs.mode = 0;
+    if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[2] < 0
+        orelse io.arg[3] < 0 orelse io.arg[4] < 0 orelse io.arg[5] < 0
+        orelse io.arg[6] < 0 orelse io.arg[6] > 1 { 0 - 300 } else {
+    if io.arg[0] % 16 != 0 orelse io.arg[1] % 8 != 0
+        orelse io.arg[3] % 8 != 0 orelse io.arg[4] % 16 != 0 { 0 - 300 } else {
+        cs.total = io.arg[0] / 16;
+        cs.names = io.arg[1] / 8;
+        cs.saux = io.arg[3] / 8;
+        cs.eaux = io.arg[4] / 16;
+        cs.ranges = io.arg[5];
+        cs.float_ok = io.arg[6];
+        cs.scanned = 0;
+        cs.range_at = 0;
+        cs.mode = 1;
+        io.fin[0] = cs.total;
+        0
+    }}
+}
+
+fn constant_check() -> Word {
+    if cs.mode != 1 orelse cs.scanned >= cs.total orelse not constant_fields_ok() { constant_error() } else {
+        let composite = io.fin[0] >= 8 andalso io.fin[0] <= 11;
+        if composite andalso not constant_forward(cs.scanned, io.fin[3]) {
+            cs.mode = 0; 0 - 300
+        } else { cs.scanned = cs.scanned + 1; 0 }
+    }
+}
+
+fn root_range_ok() -> bool {
+    io.fin[0] != 0xFFFFFFFF andalso range_ok(io.fin[0], io.fin[1], cs.total)
+}
+fn roots_check() -> Word {
+    if cs.mode != 1 orelse cs.scanned != cs.total orelse cs.range_at >= cs.ranges { constant_error() } else {
+        if not root_range_ok() { cs.mode = 0; 0 - 300 } else {
+            cs.range_at = cs.range_at + 1; 0
+        }
+    }
+}
+fn constants_validated() -> Word {
+    if cs.mode != 1 orelse cs.scanned != cs.total orelse cs.range_at != cs.ranges { constant_error() } else {
+        cs.at = cs.total;
+        cs.root_at = 0;
+        cs.mode = 2;
+        0
+    }
+}
+
+// Internal construction forms are distinct from the wire's tag numbering.
+fn constant_form(tag: Word) -> Word {
+    if tag == 1 { 0 } else {
+    if tag == 12 { 1 } else {
+    if tag >= 2 andalso tag <= 5 { tag } else {
+    if tag == 6 andalso cs.float_ok == 1 { 6 } else {
+    if tag >= 7 andalso tag <= 11 { tag } else { 0 - 1 }}}}}
+}
+
+fn constant_record() -> Word {
+    if cs.mode != 3 orelse not constant_fields_ok() { constant_error() } else {
+        cs.form = constant_form(io.fin[0]);
+        cs.payload = io.fin[3];
+        cs.aux = io.fin[2];
+        cs.count = 0;
+        cs.first = 0;
+        cs.pos = 0;
+        cs.npos = 0;
+        cs.has_disc = 0;
+        cs.disc = 0;
+        if cs.form >= 8 {
+            cs.first = cs.payload band 0xFFFFFFFF;
+            cs.count = cs.payload lsr 32;
+        }
+        if cs.form < 0 { cs.mode = 0; 0 - 301 } else {
+        if (cs.form >= 8 andalso not constant_forward(cs.at, cs.payload))
+            orelse (cs.form == 10 andalso cs.aux >= cs.saux)
+            orelse (cs.form == 11 andalso cs.aux >= cs.eaux) { cs.mode = 0; 0 - 300 } else {
+            if cs.form == 2 { cs.payload = if cs.payload == 0 { 0 } else { 1 }; }
+            if cs.form == 4 { cs.payload = cs.payload band 255; }
+            if cs.form == 11 { cs.has_disc = if (io.fin[1] band 1) == 0 { 0 } else { 1 }; }
+            cs.mode = if cs.form >= 10 { 4 } else { 5 };
+            io.fin[0] = cs.count;
+            io.fin[1] = cs.form;
+            0
+        }}
+    }
+}
+
+fn constant_aux() -> Word {
+    if cs.mode != 10 orelse not unsigned32(io.fin[0]) orelse not unsigned32(io.fin[1]) { constant_error() } else {
+        cs.type_name = io.fin[0];
+        if cs.form == 10 { cs.field_first = io.fin[1]; } else {
+            cs.variant = io.fin[1];
+            cs.disc = io.fin[2];
+        }
+        cs.mode = 5;
+        0
+    }
+}
+
+fn constant_name() -> Word {
+    let total = if cs.form == 7 { 1 } else {
+        if cs.form == 10 { cs.count + 1 } else { if cs.form == 11 { 2 } else { 0 } }
+    };
+    if cs.npos >= total { 0 } else {
+        let index = if cs.form == 7 { cs.aux } else {
+            if cs.npos == 0 { cs.type_name } else {
+                if cs.form == 10 { cs.field_first + cs.npos - 1 } else { cs.variant }
+            }
+        };
+        if index >= cs.names { cs.mode = 0; 0 - 300 } else {
+            io.fin[0] = index;
+            io.fin[1] = if cs.form == 7 { 0 } else {
+                if cs.npos == 0 { 1 } else { if cs.form == 10 { 2 } else { 3 } }
+            };
+            cs.mode = 6;
+            1
+        }
+    }
+}
+
+fn constant_next() -> Word {
+    if cs.mode == 2 {
+        if cs.at == 0 { cs.mode = 8; 0 } else {
+            cs.at = cs.at - 1;
+            io.fin[0] = cs.at;
+            cs.mode = 3;
+            1
+        }
+    } else { if cs.mode == 4 {
+        io.fin[0] = cs.aux;
+        cs.mode = 10;
+        if cs.form == 10 { 2 } else { 3 }
+    } else { if cs.mode == 5 {
+        let name = constant_name();
+        if name < 0 { name } else {
+        if name == 1 { 4 } else {
+        if cs.pos < cs.count {
+            io.fin[0] = cs.first + cs.pos;
+            cs.mode = 9;
+            5
+        } else {
+            io.fin[0] = cs.form;
+            io.fin[1] = cs.payload;
+            io.fin[2] = cs.has_disc;
+            io.fin[3] = cs.disc;
+            cs.mode = 7;
+            6
+        }}}
+    } else { if cs.mode == 11 {
+        if cs.pos == cs.count { cs.root_at = cs.root_at + 1; cs.mode = 8; 0 } else {
+            io.fin[0] = cs.first + cs.pos;
+            cs.mode = 12;
+            7
+        }
+    } else { constant_error() }}}}
+}
+
+fn root_begin() -> Word {
+    if cs.mode != 8 orelse cs.root_at >= cs.ranges { constant_error() } else {
+    if not root_range_ok() { cs.mode = 0; 0 - 300 } else {
+        cs.first = io.fin[0];
+        cs.count = io.fin[1];
+        cs.pos = 0;
+        cs.mode = 11;
+        io.fin[0] = cs.count;
+        0
+    }}
+}
+
+fn constant_ack() -> Word {
+    if cs.mode == 6 { cs.npos = cs.npos + 1; cs.mode = 5; 0 } else {
+    if cs.mode == 7 { cs.mode = 2; 0 } else {
+    if cs.mode == 9 orelse cs.mode == 12 {
+        if io.arg[0] != 1 { cs.mode = 0; 0 - 302 } else {
+            cs.pos = cs.pos + 1;
+            cs.mode = if cs.mode == 9 { 5 } else { 11 };
+            0
+        }
+    } else { constant_error() }}}
+}
+fn constants_finish() -> Word {
+    if cs.mode != 8 orelse cs.root_at != cs.ranges { constant_error() } else {
+        cs.mode = 0; 0
+    }
+}
+fn constants_dispatch(cmd: Word) -> Word {
+    if cmd == 12 { constants_begin() } else {
+    if cmd == 13 { constant_check() } else {
+    if cmd == 14 { roots_check() } else {
+    if cmd == 15 { constants_validated() } else {
+    if cmd == 16 { constant_next() } else {
+    if cmd == 17 { constant_record() } else {
+    if cmd == 18 { constant_aux() } else {
+    if cmd == 19 { root_begin() } else {
+    if cmd == 20 { constant_ack() } else {
+    if cmd == 21 { constants_finish() } else { constant_error() }}}}}}}}}}
+}
+
+private data lt {
+    mode: Word,
+    names: Word,
+    templates: Word,
+    variants: Word,
+    layouts: Word,
+    tscan: Word,
+    escan: Word,
+    form: Word,
+    strict: Word,
+    at: Word,
+    first: Word,
+    count: Word,
+    type_name: Word,
+    payload: Word,
+    pos: Word,
+    variant_name: Word,
+    disc: Word,
+}
+fn layout_error() -> Word { 0 - 304 }
+fn layout_reject() -> Word {
+    lt.mode = 0;
+    nr.mode = 0;
+    if lt.strict == 1 { 0 - 305 } else { 8 }
+}
+fn layout_begin() -> Word {
+    lt.mode = 0;
+    if io.arg[5] < 0 orelse io.arg[5] > 1 orelse io.arg[6] < 0 orelse io.arg[6] > 1 { layout_error() } else {
+        lt.form = io.arg[5];
+        lt.strict = io.arg[6];
+        if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[0] % 8 != 0
+            orelse io.arg[2] < 0 - 1 orelse io.arg[3] < 0 - 1 orelse io.arg[4] < 0 - 1
+            orelse (io.arg[2] >= 0 andalso io.arg[2] % 16 != 0)
+            orelse (io.arg[3] >= 0 andalso io.arg[3] % 16 != 0)
+            orelse (io.arg[4] >= 0 andalso io.arg[4] % 16 != 0) { layout_reject() } else {
+            lt.names = io.arg[0] / 8;
+            lt.templates = if io.arg[2] < 0 { 0 } else { io.arg[2] / 16 };
+            lt.variants = if io.arg[3] < 0 { 0 } else { io.arg[3] / 16 };
+            lt.layouts = if io.arg[4] < 0 { 0 } else { io.arg[4] / 16 };
+            lt.tscan = 0;
+            lt.escan = 0;
+            lt.at = 0;
+            lt.mode = 1;
+            io.fin[0] = lt.templates;
+            io.fin[1] = lt.layouts;
+            0
+        }
+    }
+}
+fn layout_row_ok(total: Word) -> bool {
+    unsigned32(io.fin[0]) andalso io.fin[0] < lt.names
+        andalso range_ok(io.fin[1], io.fin[2], total)
+}
+fn template_check() -> Word {
+    if lt.mode != 1 orelse lt.tscan >= lt.templates { layout_error() } else {
+        if not layout_row_ok(lt.names) { layout_reject() } else { lt.tscan = lt.tscan + 1; 0 }
+    }
+}
+fn enum_layout_check() -> Word {
+    if lt.mode != 1 orelse lt.tscan != lt.templates orelse lt.escan >= lt.layouts { layout_error() } else {
+        if not layout_row_ok(lt.variants) { layout_reject() } else { lt.escan = lt.escan + 1; 0 }
+    }
+}
+fn layouts_validated() -> Word {
+    if lt.mode != 1 orelse lt.tscan != lt.templates orelse lt.escan != lt.layouts { layout_error() } else { lt.mode = 2; 0 }
+}
+fn layout_record() -> Word {
+    if lt.mode != 3 { layout_error() } else {
+    if not layout_row_ok(if lt.form == 0 { lt.names } else { lt.variants })
+        orelse not unsigned32(io.fin[3]) { layout_reject() } else {
+        lt.type_name = io.fin[0];
+        lt.first = io.fin[1];
+        lt.count = io.fin[2];
+        lt.payload = io.fin[3];
+        lt.pos = 0;
+        lt.mode = 4;
+        io.fin[0] = lt.count;
+        0
+    }}
+}
+fn layout_variant() -> Word {
+    if lt.mode != 6 { layout_error() } else {
+        if not unsigned32(io.fin[0]) orelse io.fin[0] >= lt.names { layout_reject() } else {
+            lt.variant_name = io.fin[0];
+            lt.disc = io.fin[1];
+            lt.mode = 7;
+            0
+        }
+    }
+}
+fn layout_next() -> Word {
+    if lt.mode == 2 {
+        let total = if lt.form == 0 { lt.templates } else { lt.layouts };
+        if lt.at == total { lt.mode = 0; 0 } else { io.fin[0] = lt.at; lt.mode = 3; 1 }
+    } else { if lt.mode == 4 {
+        if lt.pos == 0 {
+            io.fin[0] = lt.type_name;
+            io.fin[1] = 0;
+            lt.mode = 5;
+            2
+        } else { if lt.pos <= lt.count {
+            io.fin[0] = lt.first + lt.pos - 1;
+            if lt.form == 0 { io.fin[1] = 1; lt.mode = 5; 2 } else { lt.mode = 6; 3 }
+        } else { io.fin[0] = lt.payload; lt.mode = 8; 4 }}
+    } else { if lt.mode == 7 {
+        io.fin[0] = lt.variant_name;
+        io.fin[1] = 2;
+        io.fin[2] = lt.disc;
+        lt.mode = 5;
+        2
+    } else { layout_error() }}}
+}
+fn layout_ack() -> Word {
+    if lt.mode == 5 {
+        if io.arg[0] == 0 { layout_reject() } else {
+        if io.arg[0] != 1 { layout_error() } else { lt.pos = lt.pos + 1; lt.mode = 4; 0 }}
+    } else { if lt.mode == 8 { lt.at = lt.at + 1; lt.mode = 2; 0 } else { layout_error() }}
+}
+fn layouts_dispatch(cmd: Word) -> Word {
+    if cmd == 22 { layout_begin() } else {
+    if cmd == 23 { template_check() } else {
+    if cmd == 24 { enum_layout_check() } else {
+    if cmd == 25 { layouts_validated() } else {
+    if cmd == 26 { layout_record() } else {
+    if cmd == 27 { layout_next() } else {
+    if cmd == 28 { layout_ack() } else {
+    if cmd == 29 { layout_variant() } else { layout_error() }}}}}}}}
+}
+
+private data dl {
+    mode: Word,
+    names: Word,
+    slot_rows: Word,
+    shared_rows: Word,
+    placement_rows: Word,
+    scanned: Word,
+    total: Word,
+    slot_at: Word,
+    shared_at: Word,
+    placement_at: Word,
+    name: Word,
+    visibility: Word,
+    run: Word,
+    offset: Word,
+    kind: Word,
+    span: Word,
+    stride: Word,
+    pos: Word,
+    out: Word,
+    init_count: Word,
+}
+fn data_error() -> Word { 0 - 306 }
+fn data_reject() -> Word { dl.mode = 0; 0 - 307 }
+fn short_unsigned(n: Word) -> bool { n >= 0 andalso n <= 65535 }
+fn byte_unsigned(n: Word) -> bool { n >= 0 andalso n <= 255 }
+fn data_begin() -> Word {
+    dl.mode = 0;
+    if io.arg[0] == 0 - 1 { 0 } else {
+    if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[2] < 0 orelse io.arg[3] < 0
+        orelse io.arg[4] < 0 orelse io.arg[5] < 8 orelse io.arg[0] % 8 != 0
+        orelse io.arg[1] % 8 != 0 orelse io.arg[3] % 16 != 0
+        orelse io.arg[4] % 8 != 0 orelse io.arg[5] % 8 != 0 { data_reject() } else {
+        dl.names = io.arg[1] / 8;
+        dl.slot_rows = io.arg[0] / 8;
+        dl.shared_rows = io.arg[3] / 16;
+        dl.placement_rows = io.arg[4] / 8;
+        dl.scanned = 0;
+        dl.total = 0;
+        dl.slot_at = 0;
+        dl.shared_at = 0;
+        dl.placement_at = 0;
+        dl.mode = 1;
+        io.fin[0] = dl.slot_rows;
+        io.fin[1] = dl.shared_rows;
+        io.fin[2] = dl.placement_rows;
+        1
+    }}
+}
+fn slot_valid() -> bool {
+    unsigned32(io.fin[0]) andalso io.fin[0] < dl.names
+        andalso (io.fin[1] == 1 orelse io.fin[1] == 2)
+        andalso short_unsigned(io.fin[2]) andalso io.fin[2] != 0
+}
+fn slot_check() -> Word {
+    if dl.mode != 1 orelse dl.scanned >= dl.slot_rows { data_error() } else {
+        if not slot_valid() { data_reject() } else {
+            dl.total = dl.total + io.fin[2];
+            dl.scanned = dl.scanned + 1;
+            0
+        }
+    }
+}
+fn slots_validated() -> Word {
+    if dl.mode != 1 orelse dl.scanned != dl.slot_rows { data_error() } else {
+        dl.mode = 2;
+        io.fin[0] = dl.total;
+        0
+    }
+}
+fn slot_begin() -> Word {
+    if dl.mode != 2 orelse dl.slot_at >= dl.slot_rows { data_error() } else {
+        if not slot_valid() { data_reject() } else {
+            dl.name = io.fin[0];
+            dl.visibility = io.fin[1] - 1;
+            dl.run = io.fin[2];
+            io.fin[0] = dl.name;
+            dl.mode = 3;
+            1
+        }
+    }
+}
+fn slot_name_ready() -> Word {
+    if dl.mode != 3 { data_error() } else {
+        io.fin[0] = dl.run;
+        io.fin[1] = dl.visibility;
+        dl.mode = 4;
+        0
+    }
+}
+fn slot_copied() -> Word {
+    if dl.mode != 4 orelse io.arg[0] != dl.run { data_error() } else {
+        dl.slot_at = dl.slot_at + 1;
+        dl.mode = 2;
+        0
+    }
+}
+fn shared_begin() -> Word {
+    if dl.mode != 2 orelse dl.slot_at != dl.slot_rows orelse dl.shared_at >= dl.shared_rows { data_error() } else {
+    if not unsigned32(io.fin[0]) orelse not byte_unsigned(io.fin[1])
+        orelse not short_unsigned(io.fin[2]) orelse not unsigned32(io.fin[3])
+        orelse not short_unsigned(io.fin[4]) orelse io.fin[4] == 0
+        orelse not short_unsigned(io.fin[5]) { data_reject() } else {
+        dl.offset = io.fin[0];
+        dl.kind = io.fin[1];
+        dl.span = io.fin[2];
+        dl.run = io.fin[4];
+        dl.stride = io.fin[5];
+        if not unsigned32(dl.offset + (dl.run - 1) * dl.stride) { data_reject() } else {
+            dl.pos = 0;
+            dl.mode = 5;
+            io.fin[0] = dl.run;
+            0
+        }
+    }}
+}
+// The owned decoder does not use first_slot. The borrowed accessor and later
+// verifier have their own contracts. Offsets are derived here, five per batch.
+fn shared_next() -> Word {
+    if dl.mode != 5 { data_error() } else {
+        if dl.pos == dl.run { dl.shared_at = dl.shared_at + 1; dl.mode = 2; 0 } else {
+            dl.out = 0;
+            for i in 0..5 {
+                if dl.pos < dl.run {
+                    io.fin[i * 3] = dl.offset + dl.pos * dl.stride;
+                    io.fin[i * 3 + 1] = dl.kind;
+                    io.fin[i * 3 + 2] = dl.span;
+                    dl.pos = dl.pos + 1;
+                    dl.out = dl.out + 1;
+                }
+            }
+            dl.out
+        }
+    }
+}
+fn placement_read() -> Word {
+    if dl.mode != 2 orelse dl.slot_at != dl.slot_rows orelse dl.shared_at != dl.shared_rows
+        orelse dl.placement_at >= dl.placement_rows { data_error() } else {
+        if not short_unsigned(io.fin[0]) orelse not unsigned32(io.fin[1]) { data_reject() } else {
+            dl.placement_at = dl.placement_at + 1;
+            0
+        }
+    }
+}
+fn initializer_plan() -> Word {
+    if dl.mode == 2 {
+        if dl.slot_at != dl.slot_rows orelse dl.shared_at != dl.shared_rows
+            orelse dl.placement_at != dl.placement_rows { data_error() } else {
+            io.fin[0] = 0;
+            dl.mode = 7;
+            3
+        }
+    } else { if dl.mode == 7 {
+        if not unsigned32(io.fin[0]) orelse not unsigned32(io.fin[1]) { data_reject() } else {
+            dl.init_count = io.fin[1];
+            dl.mode = 6;
+            if io.fin[0] == 0xFFFFFFFF {
+                io.fin[0] = dl.init_count;
+                io.fin[1] = 0;
+                1
+            } else { 2 }
+        }
+    } else { data_error() }}
+}
+fn initializer_ready() -> Word {
+    if dl.mode != 6 orelse io.arg[0] != dl.init_count { data_error() } else { dl.mode = 0; 0 }
+}
+fn data_dispatch(cmd: Word) -> Word {
+    if cmd == 30 { data_begin() } else {
+    if cmd == 31 { slot_check() } else {
+    if cmd == 32 { slots_validated() } else {
+    if cmd == 33 { slot_begin() } else {
+    if cmd == 34 { slot_name_ready() } else {
+    if cmd == 35 { slot_copied() } else {
+    if cmd == 36 { shared_begin() } else {
+    if cmd == 37 { shared_next() } else {
+    if cmd == 38 { placement_read() } else {
+    if cmd == 39 { initializer_plan() } else {
+    if cmd == 40 { initializer_ready() } else { data_error() }}}}}}}}}}}
+}
+
+private data pt { mode: Word, remaining: Word, bad: Word, }
+fn parameter_begin() -> Word {
+    pt.mode = 0;
+    if io.arg[0] == 0 - 1 { 0 } else {
+    if io.arg[0] < 0 orelse not range_ok(io.arg[1], io.arg[2], io.arg[0]) { 0 - 308 } else {
+        pt.remaining = io.arg[2];
+        pt.mode = 1;
+        io.fin[0] = io.arg[1];
+        io.fin[1] = io.arg[2];
+        1
+    }}
+}
+fn parameter_feed() -> Word {
+    if pt.mode != 1 orelse io.arg[0] <= 0 orelse io.arg[0] > 16 orelse io.arg[0] > pt.remaining { 0 - 310 } else {
+        pt.bad = 0;
+        for i in 0..io.arg[0] limit 16 {
+            let tag = io.bytes[i] as Word;
+            if tag < 1 orelse tag > 8 { pt.bad = 1; }
+            io.fin[i] = tag - 1;
+        }
+        if pt.bad != 0 { pt.mode = 0; 0 - 309 } else {
+            pt.remaining = pt.remaining - io.arg[0];
+            io.arg[0]
+        }
+    }
+}
+fn parameter_finish() -> Word {
+    if pt.mode != 1 orelse pt.remaining != 0 { 0 - 310 } else { pt.mode = 0; 0 }
+}
+fn parameters_dispatch(cmd: Word) -> Word {
+    if cmd == 41 { parameter_begin() } else {
+    if cmd == 42 { parameter_feed() } else {
+    if cmd == 43 { parameter_finish() } else { 0 - 310 }}}
+}
+
+private data dr {
+    mode: Word,
+    phase: Word,
+    total: Word,
+    cursor: Word,
+    remaining: Word,
+    operands: Word,
+    want: Word,
+    op: Word,
+    kind: Word,
+}
+fn debug_error() -> Word { 0 - 311 }
+fn debug_truncated() -> Word { dr.mode = 0; 0 - 312 }
+fn debug16(at: Word) -> Word {
+    (io.bytes[at] as Word) + ((io.bytes[at + 1] as Word) lsl 8)
+}
+fn debug32(at: Word) -> Word {
+    debug16(at) + (debug16(at + 2) lsl 16)
+}
+fn debug_begin() -> Word {
+    dr.mode = 0;
+    if io.arg[0] < 0 { debug_error() } else {
+        dr.total = io.arg[0];
+        dr.cursor = 0;
+        dr.phase = 0;
+        dr.remaining = 0;
+        dr.operands = 0;
+        dr.mode = 1;
+        0
+    }
+}
+fn debug_next() -> Word {
+    if dr.mode != 1 { debug_error() } else {
+        if dr.phase == 1 andalso dr.remaining == 0 { dr.phase = 2; }
+        if dr.phase == 3 andalso dr.remaining == 0 { dr.phase = 4; }
+        if dr.phase == 5 andalso dr.remaining == 0 { dr.phase = 6; }
+        if dr.phase == 7 andalso dr.remaining == 0 { dr.mode = 0; 0 } else {
+        if dr.phase == 8 andalso dr.operands == 0 { dr.mode = 4; 7 } else {
+            dr.want = if dr.phase == 3 { 10 } else {
+                if dr.phase == 7 { 7 } else {
+                    if dr.phase == 8 { (if dr.operands < 15 { dr.operands } else { 15 }) * 2 } else { 4 }
+                }
+            };
+            if dr.want > dr.total - dr.cursor { debug_truncated() } else {
+                io.fin[0] = dr.cursor;
+                io.fin[1] = dr.want;
+                dr.mode = 2;
+                1
+            }
+        }}
+    }
+}
+fn debug_count() -> Word {
+    let count = debug32(0);
+    let minimum = if dr.phase == 2 { 10 } else { if dr.phase == 6 { 7 } else { 4 } };
+    if count > (dr.total - dr.cursor) / minimum { debug_truncated() } else {
+        io.fin[0] = count;
+        io.fin[1] = dr.phase / 2;
+        dr.remaining = count;
+        dr.phase = dr.phase + 1;
+        dr.mode = 1;
+        2
+    }
+}
+fn debug_blob() -> Word {
+    let length = debug32(0);
+    if length > dr.total - dr.cursor { debug_truncated() } else {
+        io.fin[0] = dr.cursor;
+        io.fin[1] = length;
+        dr.cursor = dr.cursor + length;
+        dr.mode = 3;
+        if dr.phase == 1 {
+            nr.remaining = length;
+            nr.need = 0;
+            nr.low = 128;
+            nr.high = 191;
+            nr.bad = 0;
+            nr.mode = 2;
+            3
+        } else { 5 }
+    }
+}
+fn debug_reply() -> Word {
+    if dr.mode != 2 orelse io.arg[0] != dr.want { debug_error() } else {
+        dr.cursor = dr.cursor + dr.want;
+        if dr.phase == 0 orelse dr.phase == 2 orelse dr.phase == 4 orelse dr.phase == 6 { debug_count() } else {
+        if dr.phase == 1 orelse dr.phase == 5 { debug_blob() } else {
+        if dr.phase == 3 {
+            io.fin[0] = debug16(0);
+            io.fin[1] = debug32(2);
+            io.fin[2] = debug32(6);
+            dr.remaining = dr.remaining - 1;
+            dr.mode = 1;
+            4
+        } else { if dr.phase == 7 {
+            dr.op = debug32(0);
+            dr.kind = io.bytes[4] as Word;
+            dr.operands = debug16(5);
+            if dr.kind > 11 { dr.mode = 0; 0 - 313 } else {
+            if dr.operands * 2 > dr.total - dr.cursor { debug_truncated() } else {
+                io.fin[0] = dr.op;
+                io.fin[1] = dr.kind + 1;
+                io.fin[2] = dr.operands;
+                dr.phase = 8;
+                dr.mode = 1;
+                6
+            }}
+        } else {
+            let count = dr.want / 2;
+            for i in 0..count limit 15 { io.fin[i + 1] = debug16(i * 2); }
+            io.fin[0] = count;
+            dr.operands = dr.operands - count;
+            dr.mode = 1;
+            8
+        }}}}
+    }
+}
+fn debug_ack() -> Word {
+    if dr.mode == 3 {
+        if dr.phase == 1 andalso (nr.mode != 0 orelse nr.need != 0 orelse nr.remaining != 0 orelse nr.bad != 0) { debug_error() } else {
+            dr.remaining = dr.remaining - 1;
+            dr.mode = 1;
+            0
+        }
+    } else { if dr.mode == 4 {
+        dr.remaining = dr.remaining - 1;
+        dr.phase = 7;
+        dr.mode = 1;
+        0
+    } else { debug_error() }}
+}
+fn debug_dispatch(cmd: Word) -> Word {
+    if cmd == 44 { debug_begin() } else {
+    if cmd == 45 { debug_next() } else {
+    if cmd == 46 { debug_reply() } else {
+    if cmd == 47 { debug_ack() } else { debug_error() }}}}
+}
+
+// Module metadata orchestration. Payload readers use separate schema instances,
+// except names, whose nested transaction is permitted while a name is pending.
+private data mo {
+    mode: Word,
+    names: Word,
+    chunks: Word,
+    natives: Word,
+    chunk_at: Word,
+    native_at: Word,
+    params: Word,
+    debug: Word,
+    pending: Word,
+}
+fn module_error() -> Word { 0 - 314 }
+fn module_bad() -> Word { mo.mode = 0; 0 - 315 }
+fn module_begin() -> Word {
+    mo.mode = 0;
+    if io.arg[0] < 0 orelse io.arg[0] % 8 != 0 orelse io.arg[1] < 0
+        orelse io.arg[2] < 0 - 1 orelse (io.arg[2] >= 0 andalso io.arg[2] % 48 != 0)
+        orelse io.arg[3] < 0 - 1 orelse (io.arg[3] >= 0 andalso io.arg[3] % 8 != 0)
+        orelse io.arg[4] < 32 orelse io.arg[4] % 32 != 0
+        orelse io.arg[5] < 0 - 1 orelse io.arg[6] < 0 - 1
+        orelse io.arg[7] < 0 - 1 orelse (io.arg[7] >= 0 andalso io.arg[7] % 8 != 0) { module_bad() } else {
+        mo.names = io.arg[0] / 8;
+        mo.chunks = if io.arg[2] < 0 { 0 } else { io.arg[2] / 48 };
+        mo.natives = if io.arg[3] < 0 { 0 } else { io.arg[3] / 8 };
+        mo.params = io.arg[5];
+        mo.debug = io.arg[6];
+        mo.chunk_at = 0;
+        mo.native_at = 0;
+        mo.mode = 1;
+        io.fin[0] = mo.chunks;
+        io.fin[1] = mo.natives;
+        0
+    }
+}
+fn module_check_chunk() -> Word {
+    if mo.mode != 1 orelse mo.chunk_at >= mo.chunks { module_error() } else {
+        if io.fin[0] < 0 orelse io.fin[0] >= mo.names
+            orelse io.fin[13] < 1 orelse io.fin[13] > 3 { module_bad() } else {
+            io.fin[0] = io.fin[1];
+            io.fin[1] = io.fin[2];
+            mo.chunk_at = mo.chunk_at + 1;
+            0
+        }
+    }
+}
+fn module_check_native() -> Word {
+    if mo.mode != 1 orelse mo.chunk_at != mo.chunks orelse mo.native_at >= mo.natives { module_error() } else {
+        if io.fin[0] < 0 orelse io.fin[0] >= mo.names { module_bad() } else {
+            mo.native_at = mo.native_at + 1;
+            0
+        }
+    }
+}
+fn module_checked() -> Word {
+    if mo.mode != 1 orelse mo.chunk_at != mo.chunks orelse mo.native_at != mo.natives { module_error() } else {
+        mo.mode = 2;
+        io.fin[0] = 0;
+        io.fin[1] = 32;
+        0
+    }
+}
+fn module_header() -> Word {
+    if mo.mode != 2 { module_error() } else {
+        // Shift before replacing the entry sentinel with a presence flag.
+        for i in 0..9 limit 9 { io.fin[10 - i] = io.fin[9 - i]; }
+        let entry = io.fin[0];
+        io.fin[0] = if entry == 0xFFFFFFFF { 0 } else { 1 };
+        io.fin[1] = if entry == 0xFFFFFFFF { 0 } else { entry };
+        mo.chunk_at = 0;
+        mo.native_at = 0;
+        mo.mode = 3;
+        0
+    }
+}
+fn module_chunk() -> Word {
+    if mo.mode != 3 orelse mo.chunk_at >= mo.chunks { module_error() } else {
+        if not range_ok(io.fin[3], io.fin[4], io.arg[0])
+            orelse (mo.params >= 0 andalso not range_ok(io.fin[5], io.fin[6], mo.params)) { module_bad() } else {
+            let debug_present = io.fin[7] != 0xFFFFFFFF andalso mo.debug >= 0 andalso range_ok(io.fin[7], io.fin[8], mo.debug);
+            io.fin[1] = io.fin[13] - 1;
+            io.fin[2] = io.fin[3];
+            io.fin[3] = io.fin[4];
+            io.fin[4] = if mo.params < 0 { 0 } else { io.fin[5] };
+            io.fin[5] = if mo.params < 0 { 0 } else { io.fin[6] };
+            io.fin[6] = if debug_present { 1 } else { 0 };
+            mo.pending = 0;
+            mo.mode = 4;
+            0
+        }
+    }
+}
+fn module_native() -> Word {
+    if mo.mode != 3 orelse mo.chunk_at != mo.chunks orelse mo.native_at >= mo.natives { module_error() } else {
+        mo.pending = 1;
+        mo.mode = 4;
+        0
+    }
+}
+fn module_name_done() -> Word {
+    if mo.mode != 4 orelse nr.mode != 0 { module_error() } else {
+        if mo.pending == 0 { mo.chunk_at = mo.chunk_at + 1; }
+        else { mo.native_at = mo.native_at + 1; }
+        mo.mode = 3;
+        0
+    }
+}
+fn module_finish() -> Word {
+    if mo.mode != 3 orelse mo.chunk_at != mo.chunks orelse mo.native_at != mo.natives { module_error() } else {
+        mo.mode = 0;
+        0
+    }
+}
+fn module_dispatch(cmd: Word) -> Word {
+    if cmd == 48 { module_begin() } else {
+    if cmd == 49 { module_check_chunk() } else {
+    if cmd == 50 { module_check_native() } else {
+    if cmd == 51 { module_checked() } else {
+    if cmd == 52 { module_header() } else {
+    if cmd == 53 { module_chunk() } else {
+    if cmd == 54 { module_native() } else {
+    if cmd == 55 { module_name_done() } else {
+    if cmd == 56 { module_finish() } else { module_error() }}}}}}}}}
+}
+// Complete frame reader. Section offsets need not be canonical, ordered or
+// aligned. The checksum runs in the wire stage over the selected declared frame.
+private data fr {
+    mode: Word,
+    input: Word,
+    cursor: Word,
+    want: Word,
+    base: Word,
+    total: Word,
+    header: Word,
+    op_at: Word,
+    op_len: Word,
+    pool_at: Word,
+    pool_len: Word,
+    aux_at: Word,
+    aux_len: Word,
+    word: Word,
+    addr: Word,
+    float: Word,
+    flags: Word,
+    wcet: Word,
+    wcmu: Word,
+    shared_bytes: Word,
+    private_bytes: Word,
+    arena: Word,
+    persistent: Word,
+    max_word: Word,
+    max_addr: Word,
+    max_float: Word,
+    chunks: Word,
+    at: Word,
+}
+fn frame_error() -> Word { 0 - 316 }
+fn frame_bad() -> Word { fr.mode = 0; 0 - 317 }
+fn frame_request(at: Word, count: Word, mode: Word) -> Word {
+    if at < 0 orelse at > fr.input orelse count < 0 orelse count > fr.input - at { frame_bad() } else {
+        fr.cursor = at;
+        fr.want = count;
+        fr.mode = mode;
+        io.fin[0] = at;
+        io.fin[1] = count;
+        1
+    }
+}
+fn frame_base() -> Word {
+    if fr.input - fr.base < 68 { frame_bad() } else { frame_request(fr.base, 64, 3) }
+}
+fn frame_begin() -> Word {
+    fr.mode = 0;
+    fr.input = io.arg[0];
+    fr.base = 0;
+    fr.max_word = io.arg[1];
+    fr.max_addr = io.arg[2];
+    fr.max_float = io.arg[3];
+    if fr.input < 2 orelse fr.max_word < 0 orelse fr.max_word > 255
+        orelse fr.max_addr < 0 orelse fr.max_addr > 255
+        orelse fr.max_float < 0 orelse fr.max_float > 255 { frame_bad() } else {
+        frame_request(0, 2, 1)
+    }
+}
+fn frame_line_window() -> Word {
+    let remaining = fr.input - fr.cursor;
+    if remaining == 0 { frame_bad() } else {
+        frame_request(fr.cursor, if remaining < 1024 { remaining } else { 1024 }, 2)
+    }
+}
+fn frame_prefix() -> Word {
+    if io.bytes[0] == 35 as Byte andalso io.bytes[1] == 33 as Byte {
+        fr.cursor = 2;
+        frame_line_window()
+    } else { frame_base() }
+}
+fn frame_line() -> Word {
+    for i in 0..fr.want limit 1024 {
+        if fr.base == 0 andalso io.bytes[i] == 10 as Byte { fr.base = fr.cursor + i + 1; }
+    }
+    if fr.base > 0 {
+        frame_base()
+    } else {
+        fr.cursor = fr.cursor + fr.want;
+        frame_line_window()
+    }
+}
+fn frame_span(at: Word, length: Word) -> bool {
+    at >= fr.header andalso at <= fr.total - 4 andalso length <= fr.total - 4 - at
+}
+fn frame_ready() -> Word {
+    io.fin[0] = fr.base;
+    io.fin[1] = fr.total;
+    io.fin[2] = fr.base + fr.op_at;
+    io.fin[3] = fr.op_len;
+    io.fin[4] = fr.base + fr.pool_at;
+    io.fin[5] = fr.pool_len;
+    io.fin[6] = fr.base + fr.aux_at;
+    io.fin[7] = fr.aux_len;
+    io.fin[8] = fr.arena;
+    io.fin[9] = fr.persistent;
+    fr.mode = 5;
+    2
+}
+fn frame_header() -> Word {
+    if debug32(0) != 0x454C454B orelse debug16(4) != 2 { frame_bad() } else {
+        fr.header = debug16(6);
+        fr.total = debug32(8);
+        fr.word = io.bytes[12] as Word;
+        fr.addr = io.bytes[13] as Word;
+        fr.float = io.bytes[14] as Word;
+        fr.flags = io.bytes[15] as Word;
+        fr.wcet = debug32(16);
+        fr.wcmu = debug32(20);
+        fr.shared_bytes = debug32(24);
+        fr.private_bytes = debug32(28);
+        fr.op_at = debug32(32);
+        fr.op_len = debug32(36);
+        fr.pool_at = debug32(40);
+        fr.pool_len = debug32(44);
+        fr.aux_at = debug32(48);
+        fr.aux_len = debug32(52);
+        fr.arena = debug32(56);
+        fr.persistent = debug32(60);
+        if fr.header < 64 orelse fr.total < fr.header + 4 orelse fr.total > fr.input - fr.base
+            orelse fr.word > fr.max_word orelse fr.addr > fr.max_addr orelse fr.float > fr.max_float { frame_bad() } else {
+        if not frame_span(fr.op_at, fr.op_len) orelse not frame_span(fr.pool_at, fr.pool_len)
+            orelse not frame_span(fr.aux_at, fr.aux_len) orelse fr.op_len % 4 != 0 orelse fr.pool_len % 8 != 0 { frame_bad() } else {
+            if fr.header == 64 {
+                if (fr.flags band 2) != 0 { frame_bad() } else { frame_ready() }
+            } else {
+                if fr.header < 72 orelse (fr.flags band 2) == 0 { frame_bad() } else { frame_request(fr.base + 64, 8, 4) }
+            }
+        }}
+    }
+}
+fn frame_extension() -> Word {
+    let expected = if (fr.flags band 4) != 0 { 224 } else { 136 };
+    if io.bytes[0] != 1 as Byte orelse io.bytes[1] != 0 as Byte
+        orelse debug16(2) != 64 orelse debug32(4) != 0 orelse fr.header != expected { frame_bad() } else { frame_ready() }
+}
+fn frame_reply() -> Word {
+    if io.arg[0] != fr.want { frame_error() } else {
+    if fr.mode == 1 { frame_prefix() } else {
+    if fr.mode == 2 { frame_line() } else {
+    if fr.mode == 3 { frame_header() } else {
+    if fr.mode == 4 { frame_extension() } else { frame_error() }}}}}
+}
+fn frame_checksum() -> Word {
+    if fr.mode != 5 { frame_error() } else {
+        if io.arg[0] != 1 { frame_bad() } else { fr.mode = 6; 0 }
+    }
+}
+fn frame_mirror() -> Word {
+    if fr.mode != 6 orelse io.arg[0] < 0 { frame_error() } else {
+        if io.fin[0] != fr.word orelse io.fin[1] != fr.addr orelse io.fin[2] != fr.float
+            orelse io.fin[3] != fr.flags orelse io.fin[4] != fr.wcet orelse io.fin[5] != fr.wcmu
+            orelse io.fin[6] != fr.shared_bytes orelse io.fin[7] != fr.private_bytes { frame_bad() } else {
+            fr.chunks = io.arg[0];
+            fr.at = 0;
+            fr.mode = 7;
+            0
+        }
+    }
+}
+fn frame_chunk() -> Word {
+    if fr.mode != 7 orelse fr.at >= fr.chunks { frame_error() } else {
+        if not unsigned32(io.arg[0]) orelse not unsigned32(io.arg[1])
+            orelse io.arg[0] > fr.op_len orelse io.arg[1] * 4 > fr.op_len - io.arg[0] { frame_bad() } else {
+            io.fin[0] = io.arg[0];
+            io.fin[1] = io.arg[1] * 4;
+            fr.mode = 8;
+            0
+        }
+    }
+}
+fn frame_chunk_done() -> Word {
+    if fr.mode != 8 { frame_error() } else { fr.at = fr.at + 1; fr.mode = 7; 0 }
+}
+fn frame_finish() -> Word {
+    if fr.mode != 7 orelse fr.at != fr.chunks { frame_error() } else { fr.mode = 0; 0 }
+}
+fn frame_dispatch(cmd: Word) -> Word {
+    if cmd == 57 { frame_begin() } else {
+    if cmd == 58 { frame_reply() } else {
+    if cmd == 59 { frame_checksum() } else {
+    if cmd == 60 { frame_mirror() } else {
+    if cmd == 61 { frame_chunk() } else {
+    if cmd == 62 { frame_chunk_done() } else {
+    if cmd == 63 { frame_finish() } else { frame_error() }}}}}}}
+}
+// Streaming encoder state. The host stores names, hash buckets and the node queue.
+// Hash keys, equality, fresh/share policy, indices and ranges are stage decisions.
+private data en {
+    mode: Word, count: Word, pool: Word, length: Word, role: Word,
+    hash: Word, seen: Word, candidates: Word, position: Word, candidate: Word,
+    equal: Word, want: Word, last: Word, serial: Word,
+}
+private data bf {
+    mode: Word, next: Word, at: Word, tag: Word, payload: Word, kids: Word,
+    flags: Word, disc: Word, name_at: Word, name_count: Word, type_name: Word,
+    other_name: Word, field_first: Word, structs: Word, enums: Word, serial: Word,
+}
+private data ec {
+    consts: Word, templates: Word, params: Word, ops: Word, debug: Word,
+    variants: Word, template_mode: Word, template_type: Word,
+    template_first: Word, template_count: Word,
+}
+private data np {
+    enabled: Word, mode: Word, phase: Word, at: Word,
+    chunks: Word, enums: Word, natives: Word, slots: Word, templates: Word,
+    template_at: Word, type_pending: Word, variant_at: Word, variant_count: Word,
+    in_variants: Word, role: Word, serial: Word, constants: Word,
+}
+
+fn emit_error() -> Word { 0 - 318 }
+fn emit_bad() -> Word { 0 - 319 }
+fn encoder_reset() -> Word {
+    en.mode = 0; en.count = 0; en.pool = 0; en.serial = 0; np.enabled = 0; np.mode = 0;
+    bf.mode = 0;
+    ec.consts = 0; ec.templates = 0; ec.params = 0; ec.ops = 0;
+    ec.debug = 0; ec.variants = 0; ec.template_mode = 0;
+    0
+}
+fn forest_name_role() -> Word {
+    if bf.tag == 7 { 5 } else {
+    if bf.tag == 10 { if bf.name_at == 0 { 6 } else { 7 } } else {
+        if bf.name_at == 0 { 8 } else { 9 }
+    }}
+}
+fn encoder_role_allowed(role: Word) -> bool {
+    if np.enabled == 0 { true } else {
+    if role <= 4 { np.mode == 2 andalso role == np.role } else {
+    if role <= 9 { np.phase == 4 andalso bf.mode == 4 } else {
+    if role == 10 { np.phase == 5 andalso ec.template_mode == 0 andalso np.type_pending == 0 andalso np.template_at < np.templates } else {
+        np.phase == 5 andalso ec.template_mode == 1
+    }}}}
+}
+fn encoder_prefix_begin() -> Word {
+    if not unsigned32(io.arg[0]) orelse not unsigned32(io.arg[1])
+        orelse not unsigned32(io.arg[2]) orelse not unsigned32(io.arg[3])
+        orelse not unsigned32(io.arg[4]) orelse io.arg[5] < 0 orelse io.arg[5] > 1 { emit_bad() } else {
+        np.enabled = 1; np.mode = 1; np.phase = 0; np.at = 0;
+        np.chunks = io.arg[0]; np.enums = io.arg[1]; np.natives = io.arg[2];
+        np.slots = io.arg[3]; np.templates = io.arg[4];
+        np.constants = if np.chunks > 0 orelse io.arg[5] == 1 { 1 } else { 0 };
+        np.template_at = 0; np.type_pending = 0; np.in_variants = 0;
+        np.variant_at = 0; np.variant_count = 0;
+        0
+    }
+}
+fn encoder_prefix_next() -> Word {
+    if np.mode != 1 { emit_error() } else {
+        if np.phase == 0 andalso np.at == np.chunks { np.phase = 1; np.at = 0; }
+        if np.phase == 1 andalso np.at == np.enums { np.phase = 2; np.at = 0; }
+        if np.phase == 2 andalso np.at == np.natives { np.phase = 3; np.at = 0; }
+        if np.phase == 3 andalso np.at == np.slots { np.phase = if np.constants == 1 { 4 } else { 5 }; np.mode = 0; }
+        if np.mode == 0 { 0 } else {
+            np.role = if np.phase == 0 { 0 } else { if np.phase == 1 { if np.in_variants == 0 { 1 } else { 2 } } else { if np.phase == 2 { 3 } else { 4 } } };
+            io.fin[0] = np.role; io.fin[1] = np.at; io.fin[2] = if np.role == 2 { np.variant_at } else { 0 };
+            np.serial = en.serial + 1; np.mode = 2;
+            1
+        }
+    }
+}
+fn encoder_prefix_done() -> Word {
+    if np.mode != 2 orelse en.mode != 0 orelse en.serial != np.serial orelse en.role != np.role { emit_error() } else {
+    if np.role == 1 andalso not unsigned32(io.arg[0]) { emit_bad() } else {
+        if np.role == 1 {
+            np.variant_count = io.arg[0]; np.variant_at = 0;
+            if np.variant_count == 0 { np.at = np.at + 1; } else { np.in_variants = 1; }
+        } else { if np.role == 2 {
+            np.variant_at = np.variant_at + 1;
+            if np.variant_at == np.variant_count { np.in_variants = 0; np.at = np.at + 1; }
+        } else { np.at = np.at + 1; }}
+        np.mode = 1;
+        0
+    }}
+}
+fn encoder_names_finish() -> Word {
+    if np.enabled != 1 orelse np.phase != 5 orelse np.template_at != np.templates
+        orelse np.type_pending != 0 orelse ec.template_mode != 0 orelse en.mode != 0 orelse bf.mode != 0 { emit_error() } else {
+        np.phase = 6;
+        0
+    }
+}
+
+fn encoder_name_begin() -> Word {
+    if en.mode != 0 { emit_error() } else {
+    if not unsigned32(io.arg[0]) orelse io.arg[1] < 0 orelse io.arg[1] > 11
+        orelse not encoder_role_allowed(io.arg[1])
+        orelse (bf.mode == 4 andalso io.arg[1] != forest_name_role())
+        orelse (ec.template_mode == 1 andalso io.arg[1] != 11) { emit_bad() } else {
+        en.length = io.arg[0]; en.role = io.arg[1]; en.hash = 2166136261;
+        en.seen = 0; en.mode = 1;
+        if np.enabled == 1 andalso en.role == 10 { np.type_pending = 1; }
+        0
+    }}
+}
+fn encoder_name_hash() -> Word {
+    if en.mode != 1 orelse io.arg[0] <= 0 orelse io.arg[0] > 1024
+        orelse io.arg[0] > en.length - en.seen { emit_error() } else {
+        for i in 0..io.arg[0] limit 1024 {
+            en.hash = ((en.hash bxor (io.bytes[i] as Word)) * 16777619) band 0xFFFFFFFF;
+        }
+        en.seen = en.seen + io.arg[0];
+        0
+    }
+}
+fn encoder_name_key() -> Word {
+    if en.mode != 1 orelse en.seen != en.length { emit_error() } else {
+        io.fin[0] = en.hash; en.mode = 2; 0
+    }
+}
+fn encoder_name_result(index: Word, append: Word) -> Word {
+    io.fin[0] = index; io.fin[1] = en.pool; io.fin[2] = en.length;
+    io.fin[3] = append; io.fin[4] = en.hash;
+    en.last = index; en.serial = en.serial + 1; en.mode = 0;
+    0
+}
+fn encoder_name_append() -> Word {
+    if en.count >= 0xFFFFFFFF orelse en.length > 0xFFFFFFFF - en.pool { emit_bad() } else {
+        encoder_name_result(en.count, 1);
+        en.count = en.count + 1; en.pool = en.pool + en.length;
+        0
+    }
+}
+fn encoder_name_select() -> Word {
+    if en.candidates == 0 { encoder_name_append() } else {
+        en.position = en.candidates - 1;
+        io.fin[0] = en.position; en.mode = 3; 1
+    }
+}
+fn encoder_name_candidates() -> Word {
+    if en.mode != 2 { emit_error() } else {
+    if io.arg[0] < 0 orelse io.arg[0] > en.count { emit_bad() } else {
+        en.candidates = io.arg[0];
+        if en.role == 2 orelse en.role == 7 orelse en.role == 11 { encoder_name_append() } else { encoder_name_select() }
+    }}
+}
+fn encoder_name_next() -> Word {
+    en.candidates = en.position;
+    encoder_name_select()
+}
+fn encoder_name_window() -> Word {
+    en.want = if en.length - en.seen < 512 { en.length - en.seen } else { 512 };
+    io.fin[0] = en.seen; io.fin[1] = en.want;
+    en.mode = 4; 2
+}
+fn encoder_name_candidate() -> Word {
+    if en.mode != 3 { emit_error() } else {
+    if io.arg[0] < 0 orelse io.arg[0] >= en.count orelse not unsigned32(io.arg[1]) { emit_bad() } else {
+        if io.arg[1] != en.length { encoder_name_next() } else {
+            en.candidate = io.arg[0]; en.seen = 0; en.equal = 1;
+            if en.length == 0 { encoder_name_result(en.candidate, 0) } else { encoder_name_window() }
+        }
+    }}
+}
+fn encoder_name_compare() -> Word {
+    if en.mode != 4 orelse io.arg[0] != en.want { emit_error() } else {
+        for i in 0..en.want limit 512 { if io.bytes[i] != io.bytes[512 + i] { en.equal = 0; } }
+        en.seen = en.seen + en.want;
+        if en.seen == en.length {
+            if en.equal == 1 { encoder_name_result(en.candidate, 0) } else { encoder_name_next() }
+        } else { encoder_name_window() }
+    }
+}
+fn encoder_forest_begin() -> Word {
+    if bf.mode != 0 orelse (np.enabled == 1 andalso np.phase != 4) orelse not unsigned32(io.arg[0]) { emit_error() } else {
+        bf.next = io.arg[0]; bf.at = 0; bf.structs = 0; bf.enums = 0; bf.mode = 1; 0
+    }
+}
+fn encoder_forest_next() -> Word {
+    if bf.mode != 1 { emit_error() } else {
+        if bf.at == bf.next { bf.mode = 0; if np.enabled == 1 { np.phase = 5; } 0 } else { io.fin[0] = bf.at; bf.mode = 2; 1 }
+    }
+}
+fn encoder_forest_node() -> Word {
+    if bf.mode != 2 { emit_error() } else {
+    if io.arg[0] < 1 orelse io.arg[0] > 12 orelse not unsigned32(io.arg[2])
+        orelse io.arg[3] < 0 orelse io.arg[3] > 1 { emit_bad() } else {
+        bf.tag = io.arg[0]; bf.payload = io.arg[1]; bf.kids = io.arg[2]; bf.flags = io.arg[3]; bf.disc = io.arg[4];
+        if (bf.tag < 8 orelse bf.tag == 12) andalso bf.kids != 0 { emit_bad() } else {
+        if bf.kids > 0xFFFFFFFF - bf.next { emit_bad() } else {
+            bf.name_count = if bf.tag == 7 { 1 } else { if bf.tag == 10 { bf.kids + 1 } else { if bf.tag == 11 { 2 } else { 0 } } };
+            bf.name_at = 0; bf.type_name = 0; bf.other_name = 0; bf.field_first = 0; bf.mode = 3;
+            0
+        }}
+    }}
+}
+fn encoder_forest_name() -> Word {
+    if bf.mode != 3 { emit_error() } else {
+        if bf.name_at == bf.name_count { bf.mode = 5; 0 } else {
+            io.fin[0] = bf.name_at; io.fin[1] = forest_name_role();
+            bf.serial = en.serial + 1; bf.mode = 4; 1
+        }
+    }
+}
+fn encoder_forest_name_done() -> Word {
+    if bf.mode != 4 orelse en.mode != 0 orelse en.serial != bf.serial { emit_error() } else {
+        if bf.name_at == 0 { bf.type_name = en.last; bf.field_first = en.count; }
+        if bf.name_at == 1 { bf.other_name = en.last; }
+        bf.name_at = bf.name_at + 1; bf.mode = 3; 0
+    }
+}
+fn encoder_forest_emit() -> Word {
+    if bf.mode != 5 { emit_error() } else {
+        io.fin[0] = bf.tag; io.fin[1] = 0; io.fin[2] = 0; io.fin[3] = bf.payload;
+        io.fin[4] = 0; io.fin[5] = bf.type_name; io.fin[6] = bf.other_name; io.fin[7] = bf.disc;
+        io.fin[8] = bf.next; io.fin[9] = bf.kids;
+        if bf.tag >= 8 andalso bf.tag <= 11 { io.fin[3] = bf.next bor (bf.kids lsl 32); }
+        if bf.tag == 7 { io.fin[2] = bf.type_name; io.fin[3] = 0; }
+        if bf.tag == 1 orelse bf.tag == 12 { io.fin[3] = 0; }
+        if bf.tag == 2 { io.fin[3] = if bf.payload == 0 { 0 } else { 1 }; }
+        if bf.tag == 4 { io.fin[3] = bf.payload band 255; }
+        if bf.tag == 10 {
+            io.fin[2] = bf.structs; io.fin[4] = 1; io.fin[6] = bf.field_first;
+            bf.structs = bf.structs + 1;
+        }
+        if bf.tag == 11 {
+            io.fin[1] = bf.flags; io.fin[2] = bf.enums; io.fin[4] = 2;
+            bf.enums = bf.enums + 1;
+        }
+        bf.next = bf.next + bf.kids; bf.mode = 6; 0
+    }
+}
+fn encoder_forest_children() -> Word {
+    if bf.mode != 6 orelse io.arg[0] != bf.next { emit_error() } else { bf.at = bf.at + 1; bf.mode = 1; 0 }
+}
+fn encoder_chunk() -> Word {
+    if io.fin[0] < 0 orelse io.fin[0] >= en.count
+        orelse not range_ok(ec.consts, io.fin[1], 0xFFFFFFFF) orelse not range_ok(ec.templates, io.fin[2], 0xFFFFFFFF)
+        orelse not range_ok(ec.params, io.fin[3], 0xFFFFFFFF) orelse not unsigned32(io.fin[6])
+        orelse io.fin[6] * 4 > 0xFFFFFFFF - ec.ops
+        orelse io.fin[4] < 0 orelse io.fin[4] > 1 orelse (io.fin[4] == 0 andalso io.fin[5] != 0)
+        orelse not range_ok(ec.debug, io.fin[5], 0xFFFFFFFF)
+        orelse io.fin[7] < 0 orelse io.fin[7] > 65535 orelse io.fin[8] < 0 orelse io.fin[8] > 255
+        orelse io.fin[9] < 0 orelse io.fin[9] > 2 { emit_bad() } else {
+        let constants = io.fin[1]; let templates = io.fin[2]; let params = io.fin[3];
+        let debug = if io.fin[4] == 0 { 0xFFFFFFFF } else { ec.debug };
+        let debug_len = io.fin[5]; let ops = io.fin[6]; let locals = io.fin[7]; let param_count = io.fin[8]; let block = io.fin[9];
+        io.fin[1] = ec.consts; io.fin[2] = constants; io.fin[3] = ec.templates; io.fin[4] = templates;
+        io.fin[5] = ec.params; io.fin[6] = params; io.fin[7] = debug; io.fin[8] = debug_len;
+        io.fin[9] = ec.ops; io.fin[10] = ops; io.fin[11] = locals; io.fin[12] = param_count; io.fin[13] = block + 1;
+        ec.consts = ec.consts + constants; ec.templates = ec.templates + templates; ec.params = ec.params + params;
+        ec.ops = ec.ops + ops * 4; ec.debug = ec.debug + debug_len;
+        0
+    }
+}
+fn encoder_enum_layout() -> Word {
+    if not range_ok(ec.variants, io.fin[1], 0xFFFFFFFF) { emit_bad() } else {
+        let count = io.fin[1]; let payload = io.fin[2];
+        io.fin[1] = ec.variants; io.fin[2] = count; io.fin[3] = payload;
+        ec.variants = ec.variants + count; 0
+    }
+}
+fn encoder_template_begin() -> Word {
+    if ec.template_mode != 0 orelse en.role != 10 orelse not unsigned32(io.arg[0])
+        orelse io.arg[0] > 0xFFFFFFFF - en.count { emit_error() } else {
+        ec.template_mode = 1; ec.template_type = en.last; ec.template_first = en.count; ec.template_count = io.arg[0]; 0
+    }
+}
+fn encoder_template_finish() -> Word {
+    if ec.template_mode != 1 orelse en.count != ec.template_first + ec.template_count { emit_error() } else {
+        io.fin[0] = ec.template_type; io.fin[1] = ec.template_first; io.fin[2] = ec.template_count; io.fin[3] = 0;
+        ec.template_mode = 0;
+        if np.enabled == 1 { np.template_at = np.template_at + 1; np.type_pending = 0; }
+        0
+    }
+}
+fn encoder_header() -> Word {
+    if io.fin[0] < 0 orelse io.fin[0] > 1 orelse not unsigned32(io.fin[1]) { emit_bad() } else {
+        io.fin[0] = if io.fin[0] == 0 { 0xFFFFFFFF } else { io.fin[1] };
+        for i in 1..11 limit 10 { io.fin[i] = io.fin[i + 1]; }
+        0
+    }
+}
+fn encoder_params() -> Word {
+    if io.arg[0] < 0 orelse io.arg[0] > 16 { emit_error() } else {
+        en.equal = 1;
+        for i in 0..io.arg[0] limit 16 { if io.fin[i] < 0 orelse io.fin[i] > 7 { en.equal = 0; } }
+        if en.equal == 0 { emit_bad() } else {
+            for i in 0..io.arg[0] limit 16 { io.bytes[i] = (io.fin[i] + 1) as Byte; }
+            io.arg[0]
+        }
+    }
+}
+fn encoder_dispatch(cmd: Word) -> Word {
+    if cmd == 64 { encoder_reset() } else {
+    if cmd == 65 { encoder_name_begin() } else {
+    if cmd == 66 { encoder_name_hash() } else {
+    if cmd == 67 { encoder_name_key() } else {
+    if cmd == 68 { encoder_name_candidates() } else {
+    if cmd == 69 { encoder_name_candidate() } else {
+    if cmd == 70 { encoder_name_compare() } else {
+    if cmd == 71 { encoder_forest_begin() } else {
+    if cmd == 72 { encoder_forest_next() } else {
+    if cmd == 73 { encoder_forest_node() } else {
+    if cmd == 74 { encoder_forest_name() } else {
+    if cmd == 75 { encoder_forest_name_done() } else {
+    if cmd == 76 { encoder_forest_emit() } else {
+    if cmd == 77 { encoder_forest_children() } else {
+    encoder_metadata_dispatch(cmd) }}}}}}}}}}}}}}
+}
+fn encoder_metadata_dispatch(cmd: Word) -> Word {
+    if cmd == 79 { encoder_chunk() } else {
+    if cmd == 80 { encoder_enum_layout() } else {
+    if cmd == 81 { encoder_template_begin() } else {
+    if cmd == 82 { encoder_template_finish() } else {
+    if cmd == 83 { encoder_header() } else {
+    if cmd == 84 { encoder_params() } else {
+    if cmd == 85 { encoder_prefix_begin() } else {
+    if cmd == 86 { encoder_prefix_next() } else {
+    if cmd == 87 { encoder_prefix_done() } else {
+    if cmd == 88 { encoder_names_finish() } else { emit_error() }}}}}}}}}}
+}
+
+// Group logical slots through bounded metadata and byte-comparison windows.
+// The first name remains in host storage and is requested again by source index.
+private data dg {
+    mode: Word, total: Word, first: Word, scan: Word, length: Word, visibility: Word,
+    take: Word, prefix: Word, compared: Word, want: Word, equal_prefix: Word,
+    remaining: Word, groups: Word, valid: Word,
+}
+private data sr {
+    mode: Word, total: Word, first: Word, scan: Word, start: Word, last: Word,
+    kind: Word, length: Word, stride: Word, run: Word, done: Word, take: Word,
+    stopped: Word, valid: Word,
+}
+fn run_error() -> Word { 0 - 320 }
+fn run_bad() -> Word { 0 - 321 }
+fn data_group_head_request() -> Word {
+    if dg.first == dg.total { dg.mode = 0; io.fin[0] = dg.groups; 0 } else {
+        io.fin[0] = dg.first; dg.mode = 1; 1
+    }
+}
+fn data_group_begin() -> Word {
+    if dg.mode != 0 orelse not unsigned32(io.arg[0]) { run_error() } else {
+        dg.total = io.arg[0]; dg.first = 0; dg.groups = 0;
+        data_group_head_request()
+    }
+}
+fn data_group_ready() -> Word {
+    dg.remaining = dg.scan - dg.first;
+    io.fin[0] = dg.first; io.fin[1] = dg.remaining;
+    io.fin[2] = dg.visibility; io.fin[3] = dg.groups;
+    dg.mode = 4; 4
+}
+fn data_group_batch_request() -> Word {
+    if dg.scan == dg.total { data_group_ready() } else {
+        dg.take = if dg.total - dg.scan < 8 { dg.total - dg.scan } else { 8 };
+        io.fin[0] = dg.scan; io.fin[1] = dg.take;
+        dg.mode = 2; 2
+    }
+}
+fn data_group_head_reply() -> Word {
+    if dg.mode != 1 { run_error() } else {
+    if not unsigned32(io.arg[0]) orelse io.arg[1] < 0 orelse io.arg[1] > 1 { run_bad() } else {
+        dg.length = io.arg[0]; dg.visibility = io.arg[1] + 1;
+        dg.scan = dg.first + 1;
+        data_group_batch_request()
+    }}
+}
+fn data_group_compare_request() -> Word {
+    dg.want = if dg.length - dg.compared < 64 { dg.length - dg.compared } else { 64 };
+    io.fin[0] = dg.first; io.fin[1] = dg.scan; io.fin[2] = dg.equal_prefix;
+    io.fin[3] = dg.compared; io.fin[4] = dg.want;
+    dg.mode = 3; 3
+}
+fn data_group_compared() -> Word {
+    dg.scan = dg.scan + dg.equal_prefix;
+    if dg.equal_prefix < dg.take { data_group_ready() } else { data_group_batch_request() }
+}
+fn data_group_batch_reply() -> Word {
+    if dg.mode != 2 orelse io.arg[0] != dg.take { run_error() } else {
+        dg.prefix = dg.take; dg.valid = 1;
+        for i in 0..dg.take limit 8 {
+            if not unsigned32(io.fin[i * 2]) orelse io.fin[i * 2 + 1] < 0 orelse io.fin[i * 2 + 1] > 1 { dg.valid = 0; }
+            if dg.prefix == dg.take andalso (io.fin[i * 2] != dg.length orelse io.fin[i * 2 + 1] + 1 != dg.visibility) { dg.prefix = i; }
+        }
+        if dg.valid == 0 { run_bad() } else {
+            dg.equal_prefix = dg.prefix;
+            if dg.prefix == 0 { data_group_ready() } else {
+            if dg.length == 0 { data_group_compared() } else {
+                dg.compared = 0; data_group_compare_request()
+            }}
+        }
+    }
+}
+fn data_group_compare_reply() -> Word {
+    if dg.mode != 3 orelse io.arg[0] != dg.want { run_error() } else {
+        // Keep the original comparison width stable while the first mismatch shrinks the prefix.
+        for j in 0..dg.prefix limit 8 {
+            for i in 0..dg.want limit 64 {
+                if j < dg.equal_prefix andalso io.bytes[i] != io.bytes[(j + 1) * 64 + i] { dg.equal_prefix = j; }
+            }
+        }
+        dg.compared = dg.compared + dg.want;
+        if dg.equal_prefix == 0 orelse dg.compared == dg.length { data_group_compared() } else {
+            dg.prefix = dg.equal_prefix;
+            data_group_compare_request()
+        }
+    }
+}
+fn data_group_piece() -> Word {
+    if dg.mode != 4 { run_error() } else {
+        if dg.remaining == 0 {
+            dg.groups = dg.groups + 1; dg.first = dg.scan;
+            data_group_head_request()
+        } else {
+            let count = if dg.remaining < 65535 { dg.remaining } else { 65535 };
+            io.fin[0] = count; dg.remaining = dg.remaining - count;
+            5
+        }
+    }
+}
+fn shared_run_head_request() -> Word {
+    if sr.first == sr.total { sr.mode = 0; 0 } else {
+        io.fin[0] = sr.first; sr.mode = 1; 1
+    }
+}
+fn shared_run_begin() -> Word {
+    if sr.mode != 0 orelse not unsigned32(io.arg[0]) { run_error() } else {
+        sr.total = io.arg[0]; sr.first = 0; shared_run_head_request()
+    }
+}
+fn shared_run_emit() -> Word {
+    let count = if sr.run - sr.done < 65535 { sr.run - sr.done } else { 65535 };
+    io.fin[0] = (sr.start + sr.done * sr.stride) band 0xFFFFFFFF;
+    io.fin[1] = sr.kind; io.fin[2] = 0; io.fin[3] = sr.length;
+    io.fin[4] = sr.first + sr.done; io.fin[5] = count; io.fin[6] = sr.stride;
+    sr.done = sr.done + count; sr.mode = 3; 3
+}
+fn shared_run_batch_request() -> Word {
+    if sr.scan == sr.total { shared_run_emit() } else {
+        sr.take = if sr.total - sr.scan < 5 { sr.total - sr.scan } else { 5 };
+        io.fin[0] = sr.scan; io.fin[1] = sr.take; sr.mode = 2; 2
+    }
+}
+fn shared_run_head_reply() -> Word {
+    if sr.mode != 1 { run_error() } else {
+    if not unsigned32(io.arg[0]) orelse io.arg[1] < 0 orelse io.arg[1] > 255
+        orelse io.arg[2] < 0 orelse io.arg[2] > 65535 { run_bad() } else {
+        sr.start = io.arg[0]; sr.last = io.arg[0]; sr.kind = io.arg[1]; sr.length = io.arg[2];
+        sr.stride = 0; sr.run = 1; sr.done = 0; sr.scan = sr.first + 1;
+        shared_run_batch_request()
+    }}
+}
+fn shared_run_batch_reply() -> Word {
+    if sr.mode != 2 orelse io.arg[0] != sr.take { run_error() } else {
+        sr.valid = 1;
+        for i in 0..sr.take limit 5 {
+            if not unsigned32(io.fin[i * 3]) orelse io.fin[i * 3 + 1] < 0 orelse io.fin[i * 3 + 1] > 255
+                orelse io.fin[i * 3 + 2] < 0 orelse io.fin[i * 3 + 2] > 65535 { sr.valid = 0; }
+        }
+        if sr.valid == 0 { run_bad() } else {
+            sr.stopped = 0;
+            for i in 0..sr.take limit 5 {
+                if sr.stopped == 0 {
+                    let delta = (io.fin[i * 3] - sr.last) band 0xFFFFFFFF;
+                    if io.fin[i * 3 + 1] != sr.kind orelse io.fin[i * 3 + 2] != sr.length
+                        orelse (sr.run == 1 andalso delta > 65535) orelse (sr.run > 1 andalso delta != sr.stride) { sr.stopped = 1; } else {
+                        if sr.run == 1 { sr.stride = delta; }
+                        sr.last = io.fin[i * 3]; sr.run = sr.run + 1; sr.scan = sr.scan + 1;
+                    }
+                }
+            }
+            if sr.stopped == 1 { shared_run_emit() } else { shared_run_batch_request() }
+        }
+    }
+}
+fn shared_run_next() -> Word {
+    if sr.mode != 3 { run_error() } else {
+        if sr.done < sr.run { shared_run_emit() } else {
+            sr.first = sr.scan; shared_run_head_request()
+        }
+    }
+}
+fn run_dispatch(cmd: Word) -> Word {
+    if cmd == 89 { data_group_begin() } else {
+    if cmd == 90 { data_group_head_reply() } else {
+    if cmd == 91 { data_group_batch_reply() } else {
+    if cmd == 92 { data_group_compare_reply() } else {
+    if cmd == 93 { data_group_piece() } else {
+    if cmd == 94 { shared_run_begin() } else {
+    if cmd == 95 { shared_run_head_reply() } else {
+    if cmd == 96 { shared_run_batch_reply() } else {
+    if cmd == 97 { shared_run_next() } else { run_error() }}}}}}}}}
+}
+
+fn signatures_dispatch(cmd: Word) -> Word {
+    if cmd == 0 { tables_begin() } else {
+    if cmd == 1 { signature_check() } else {
+    if cmd == 2 { tables_finish() } else {
+    if cmd == 3 { shape_reply() } else {
+    if cmd == 4 { signature_begin() } else {
+    if cmd == 5 { shape_next() } else {
+    if cmd == 6 { native_begin() } else {
+    if cmd == 7 { schema_finish() } else { schema_error() }}}}}}}}
+}
+fn route(cmd: Word) -> Word {
+    if cmd >= 89 { run_dispatch(cmd) } else {
+    if cmd >= 64 { encoder_dispatch(cmd) } else {
+    if cmd >= 57 { frame_dispatch(cmd) } else {
+    if cmd >= 48 { module_dispatch(cmd) } else {
+    if cmd >= 44 { debug_dispatch(cmd) } else {
+    if cmd >= 41 { parameters_dispatch(cmd) } else {
+    if cmd >= 30 { data_dispatch(cmd) } else {
+    if cmd >= 22 { layouts_dispatch(cmd) } else {
+    if cmd >= 12 { constants_dispatch(cmd) } else {
+    if cmd >= 8 { names_dispatch(cmd) } else { signatures_dispatch(cmd) }}}}}}}}}}
+}
+fn dispatch(cmd: Word) -> Word {
+    if dg.mode != 0 andalso (cmd < 89 orelse cmd > 93) { run_error() } else {
+    if sr.mode != 0 andalso (cmd < 94 orelse cmd > 97) { run_error() } else {
+    if np.mode != 0 andalso cmd != 86 andalso cmd != 87 andalso cmd != 80 andalso not (np.mode == 2 andalso cmd >= 65 andalso cmd <= 70) { emit_error() } else {
+    if en.mode != 0 andalso (cmd < 65 orelse cmd > 70) { emit_error() } else {
+    if bf.mode != 0 andalso (cmd < 71 orelse cmd > 77) andalso not (bf.mode == 4 andalso cmd >= 65 andalso cmd <= 70) { emit_error() } else {
+    if ec.template_mode != 0 andalso cmd != 82 andalso (cmd < 65 orelse cmd > 70) { emit_error() } else {
+    if fr.mode != 0 andalso (cmd < 57 orelse cmd > 63) { frame_error() } else {
+    if mo.mode != 0 andalso (cmd < 48 orelse cmd > 56) andalso not (mo.mode == 4 andalso ((cmd >= 8 andalso cmd <= 11) orelse (cmd >= 41 andalso cmd <= 43))) { module_error() } else {
+    if pt.mode != 0 andalso (cmd < 41 orelse cmd > 43) { 0 - 310 } else {
+    if dr.mode != 0 andalso (cmd < 44 orelse cmd > 47) andalso not (dr.mode == 3 andalso dr.phase == 1 andalso (cmd == 10 orelse cmd == 11)) { debug_error() } else {
+    if dl.mode != 0 andalso (cmd < 30 orelse cmd > 40) andalso not (cmd >= 8 andalso cmd <= 11 andalso dl.mode == 3) { data_error() } else {
+    if lt.mode != 0 andalso (cmd < 22 orelse cmd > 29) andalso not (cmd >= 8 andalso cmd <= 11 andalso lt.mode == 5) { layout_error() } else {
+    if cs.mode != 0 andalso (cmd < 12 orelse cmd > 21) andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
+    if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) andalso not (cmd == 28 andalso lt.mode == 5 andalso io.arg[0] == 0) { 0 - 296 } else {
+    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else { route(cmd) }}}}}}}}}}}}}}}
+}
+
+loop main(cmd: Word) -> Word { yield dispatch(cmd) }

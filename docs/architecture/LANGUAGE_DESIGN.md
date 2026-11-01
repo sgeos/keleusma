@@ -232,6 +232,12 @@ The `KeleusmaType` trait defines the static marshalling contract between Rust ty
 
 The static marshalling approach contrasts with the dynamic approach of Rhai, which relies on `Box<dyn Any>` to carry arbitrary Rust types. Keleusma's discipline of fixed-size, fixed-layout interop types makes static dispatch sufficient and avoids the unsafe pointer manipulation and runtime type-erasure overhead of the dynamic approach. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 9 for the full comparison.
 
+### The Host Composite Contract
+
+A tuple, struct or array that the host passes as an entry argument or a resume value must have the script's declared field order and field types. The virtual machine packs a host value in the host's field order and the script reads it at offsets the compiler baked for the declared order, so a mismatch reads each field from another field's position. `#[derive(KeleusmaType)]` upholds the contract when the Rust declaration lists the same fields, of the same types, in the same order as the script's declaration, and it is the recommended way to build such a value.
+
+The virtual machine enforces part of the contract. Since the operator's ruling of 2026-10-30, a composite input whose packed body differs in kind or byte length from the chunk signature is refused with a `TypeError` before any instruction runs, and so is a scalar where a composite is declared. That catches a missing or extra field and a field of another width. It does not catch two fields of equal width in the opposite order, because the wire format carries each body's kind and size and not its field layout. A host that violates the contract in that way gets wrong values, and for a `Text` field read from a position that holds an integer the result is undefined, so the contract is a safety obligation on the host rather than a convenience. The operator ruled on 2026-10-31 to keep this as a host contract for now. Reordering the fields of a host type without updating the Keleusma code is a contract violation. A host that reorders its data must first replace or reload the program with a version patched to the new order, for example by a hot swap, and only then pass reordered values. Field layouts on the wire remain a possible later remedy and are not scheduled. Enum inputs are not checked, since an enum's body length varies with its variant. Pinned by `tests/host_composite_shape.rs`.
+
 ## Scope Inclusions and Exclusions
 
 Features implemented.

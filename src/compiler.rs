@@ -64,12 +64,21 @@ struct TypeInfo {
     function_returns: BTreeMap<String, TypeExpr>,
     /// Data block name to (field name to declared field type).
     data_field_types: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+    /// Names of the `private data` blocks. A read of a flat composite slot
+    /// in one of these yields a handle into the persistent pool body that a
+    /// later write overwrites in place, so it is a candidate for
+    /// [`alias_copy`]. A shared read already copies its bytes out.
+    private_data_blocks: alloc::collections::BTreeSet<String>,
     /// Names of declared newtypes. The compiler treats a call
     /// expression whose function name is a newtype as a transparent
     /// construction: the inner expression is compiled in place,
     /// without emitting `Op::Call`. The newtype wrapper exists only
     /// at the type-checker level.
     newtype_names: alloc::collections::BTreeSet<String>,
+    /// Newtype definitions, keyed by name, so that the canonical zero value
+    /// of a type, `crate::zero_value::zero_value`, can be computed for a
+    /// local the compiler writes before the program does.
+    newtype_defs: BTreeMap<String, NewtypeDef>,
     /// Newtypes with refinement predicates. Maps the newtype name
     /// to the predicate function name. The compiler emits a call
     /// to the predicate at every newtype construction site and
@@ -105,9 +114,27 @@ struct TypeInfo {
     /// Module-declared float width in bytes, the float companion of
     /// [`TypeInfo::word_bytes`].
     float_bytes: usize,
+    /// Module-declared ADDRESS width in bytes, which sizes an `Opaque`.
+    ///
+    /// Distinct from [`TypeInfo::word_bytes`] because the two widths are
+    /// selected independently and an `Opaque` is a handle to host memory
+    /// rather than a word. They coincide at eight bytes in the default
+    /// configuration, which is why sizing an `Opaque` by the word width was
+    /// latent rather than visibly wrong.
+    addr_bytes: usize,
 }
 
 impl TypeInfo {
+    /// The declarations [`crate::zero_value::zero_value`] consults.
+    fn zero_registry(&self) -> crate::zero_value::TypeRegistry<'_> {
+        crate::zero_value::TypeRegistry {
+            structs: &self.struct_defs,
+            enums: &self.enum_defs,
+            newtypes: &self.newtype_defs,
+            refinement_bodies: &self.refinement_bodies,
+        }
+    }
+
     /// Build a [`LayoutContext`] over this module's struct and enum
     /// definitions at the module widths (B28 P2). The flat layout
     /// arithmetic the access baking needs is computed through this context
@@ -117,13 +144,15 @@ impl TypeInfo {
     fn layout_context(&self) -> LayoutContext<'_> {
         // Opaque fallback is enabled because the compiler runs after the
         // type checker: a bare `Named` type that is not a struct, enum, or
-        // newtype is an opaque host reference, which is flat-eligible as a
-        // `word_bytes` registry index (B28 P3).
+        // newtype is an opaque host reference, which is flat-eligible as an
+        // `addr_bytes` registry index (B28 P3, resized per the operator's
+        // 2026-08-31 ruling that an `Opaque` follows the address width).
         LayoutContext::new(
             &self.struct_defs,
             &self.enum_defs,
             self.word_bytes,
             self.float_bytes,
+            self.addr_bytes,
         )
         .with_opaque_fallback(&self.newtype_names)
     }
@@ -213,6 +242,14 @@ struct FuncCompiler {
     /// reserves no registry (`aux_arena_bytes = 0`); one that does falls back
     /// to the sound heap-derived bound (B28 P3 item 5 registry tightening).
     may_intern_opaque: bool,
+    /// The private composite reads emitted so far, in emission order. The
+    /// first compile of a chunk records them without copying, and
+    /// [`alias_copy::plan`] decides from that chunk's ops which of them a
+    /// later write can reach while their value is live.
+    alias_reads: Vec<alias_copy::Read>,
+    /// The ordinals in `alias_reads` that the second compile copies right
+    /// after the read. Empty on the first compile.
+    alias_copies: alloc::collections::BTreeSet<usize>,
 }
 
 /// A debug annotation captured during codegen, pending assembly into a
@@ -319,6 +356,7 @@ fn intern_debug_type(pool: &mut crate::debug_meta::DebugPool, bytes: &[u8]) -> u
 fn render_type_expr(ty: &TypeExpr) -> String {
     use crate::ast::PrimType;
     match ty {
+        TypeExpr::TextN(n, _) => alloc::format!("Text<{}>", n),
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => String::from("Byte"),
             PrimType::Word => String::from("Word"),
@@ -518,6 +556,37 @@ impl FuncCompiler {
             emit_debug,
             pending_debug: Vec::new(),
             may_intern_opaque: false,
+            alias_reads: Vec::new(),
+            alias_copies: alloc::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Record a read of private data slots `[lo, lo + len)` whose flat
+    /// composite `element` is now on top of the operand stack, and copy it
+    /// when the plan for this chunk says a write can reach it.
+    ///
+    /// A shared block, a scalar element, and a boxed element are not
+    /// recorded, because their reads already yield values that no data
+    /// write changes. The ordinal is the read's position in emission order,
+    /// which is the same on both compiles because the copy only appends
+    /// straight-line ops.
+    fn note_data_read(&mut self, data_name: &str, lo: u32, len: u32, element: &TypeExpr) {
+        if !self.type_info.private_data_blocks.contains(data_name)
+            || !matches!(
+                classify_flat_field(element, &self.type_info),
+                FlatFieldForm::Nested(_, _)
+            )
+        {
+            return;
+        }
+        let ordinal = self.alias_reads.len();
+        self.alias_reads.push(alias_copy::Read {
+            at: self.chunk.ops.len(),
+            lo,
+            hi: lo.saturating_add(len),
+        });
+        if self.alias_copies.contains(&ordinal) {
+            emit_detach_data_element(self, element);
         }
     }
 
@@ -556,7 +625,25 @@ impl FuncCompiler {
         if !self.emit_debug {
             return;
         }
-        if let Some(idx) = self.chunk.ops.len().checked_sub(1) {
+        if let Some(last) = self.chunk.ops.len().checked_sub(1) {
+            let read = last.checked_sub(6).filter(|&at| {
+                (matches!(self.chunk.ops[at], Op::GetIndex(elem) if elem.has_bounds_outcome())
+                    || matches!(self.chunk.ops[at], Op::GetDataIndexed(_, _)))
+                    && self.chunk.ops[last] == Op::PopN(5)
+                    && self.chunk.ops[last - 2]
+                        == Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code())
+            });
+            if let Some(at) = read {
+                self.pending_debug.push(PendingDebug::SourceSpan {
+                    op_index: at,
+                    span: *span,
+                });
+                self.pending_debug.push(PendingDebug::BreakpointCandidate {
+                    op_index: at,
+                    span: *span,
+                });
+            }
+            let idx = if read.is_some() { last - 2 } else { last };
             self.pending_debug.push(PendingDebug::SourceSpan {
                 op_index: idx,
                 span: *span,
@@ -653,9 +740,40 @@ impl FuncCompiler {
     /// Infer the static array length of an expression used as a
     /// for-in source. Returns `Some(N)` when the expression's static
     /// type is `[T; N]`. Used to emit a `Const(N)` end bound that the
-    /// strict-mode WCMU verifier accepts. Falls back to `None` for
-    /// expressions whose array length is not statically known.
+    /// strict-mode WCMU verifier accepts.
+    ///
+    /// # Why this delegates rather than growing an arm per expression form
+    ///
+    /// The type checker admits a for-in iterable only when its type is
+    /// `Type::Array`, and an array type carries a [`crate::typecheck::ConstDim`]
+    /// that monomorphization has already resolved to a literal. **So the
+    /// length is statically available for every well-typed program**, and a
+    /// `None` here is a limitation of this function rather than a property of
+    /// the source.
+    ///
+    /// Growing the structural match one `Expr` variant at a time was measured
+    /// and rejected: of the seven expression forms that can realistically hold
+    /// an array type, the structural path can type exactly one, because
+    /// [`infer_expr_type`]'s own structural half has no arm for the other six
+    /// either. What closes them is that `infer_expr_type` consults the
+    /// authoritative per-span table recorded by the post-monomorphization
+    /// type-check pass BEFORE its structural half, so delegating to it reaches
+    /// the type checker's own answer for any form the pass resolved.
+    ///
+    /// The structural arms below are kept ahead of the delegation because they
+    /// answer from declared types, which are available even where the per-span
+    /// table has no entry.
     fn static_for_in_length(&self, expr: &Expr) -> Option<i64> {
+        if let Some(n) = self.structural_for_in_length(expr) {
+            return Some(n);
+        }
+        infer_expr_type(self, expr)
+            .as_ref()
+            .and_then(array_length_of_type)
+    }
+
+    /// The declared-type half of [`FuncCompiler::static_for_in_length`].
+    fn structural_for_in_length(&self, expr: &Expr) -> Option<i64> {
         match expr {
             Expr::ArrayLiteral { elements, .. } => Some(elements.len() as i64),
             Expr::Call { name, .. } => {
@@ -737,6 +855,101 @@ impl FuncCompiler {
         let idx = self.chunk.ops.len();
         self.chunk.ops.push(op);
         idx
+    }
+
+    fn emit_index_read(&mut self, elem: ArrayElem) -> usize {
+        let start = self.emit(Op::GetIndex(elem));
+        if elem.has_bounds_outcome() {
+            let one = self.add_constant(Value::Int(1));
+            self.emit(Op::Const(one));
+            self.emit(Op::CmpEq);
+            let valid = self.emit_jump(Op::If(0));
+            self.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            self.patch_jump(valid);
+            self.emit(Op::EndIf);
+            self.emit(Op::PopN(5));
+        }
+        start
+    }
+
+    /// Emit a native call with the error-reify flag set, so a soft host
+    /// failure arrives as an outcome instead of propagating. Every native
+    /// call is reified, bare or handled, which is what lets a bare call reach
+    /// an explicit default trap. The count must therefore leave the flag bit
+    /// free.
+    fn emit_native_call(
+        &mut self,
+        idx: u16,
+        arg_count: usize,
+        is_external: bool,
+        span: &Span,
+    ) -> Result<usize, CompileError> {
+        let count = u8::try_from(arg_count)
+            .ok()
+            .filter(|n| *n < 0x80)
+            .ok_or_else(|| CompileError {
+                message: alloc::string::String::from(
+                    "a native call may take at most 127 arguments",
+                ),
+                span: *span,
+            })?;
+        let argc = count | 0x80;
+        Ok(if is_external {
+            self.emit(Op::CallExternalNative(idx, argc))
+        } else {
+            self.emit(Op::CallVerifiedNative(idx, argc))
+        })
+    }
+
+    /// The default handling of a bare native call. The reified call left the
+    /// value or error code beneath its flag. A flag of one traps with the code,
+    /// and otherwise the value remains. The call site is recorded first, while
+    /// the call is still the last operation, and the trap carries the call's
+    /// span so a host failure maps back to the call.
+    fn emit_host_error_default_trap(&mut self, span: &Span) {
+        self.record_call_site_last_op(span);
+        let one = self.add_constant(Value::Int(1));
+        self.emit(Op::Const(one));
+        self.emit(Op::CmpEq);
+        let ok = self.emit_jump(Op::If(0));
+        let trap = self.emit(Op::Trap(crate::bytecode::TrapKind::HostError.code()));
+        if self.emit_debug {
+            self.pending_debug.push(PendingDebug::SourceSpan {
+                op_index: trap,
+                span: *span,
+            });
+        }
+        self.patch_jump(ok);
+        self.emit(Op::EndIf);
+    }
+
+    fn emit_data_fallback(&mut self, ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Prim(PrimType::Word, _) => {
+                self.emit(Op::PushImmediate(4));
+            }
+            TypeExpr::Prim(PrimType::Byte, _) => {
+                self.emit(Op::PushImmediate(4));
+                self.emit(Op::WordToByte);
+            }
+            _ => {
+                self.emit(Op::PushImmediate(0));
+            }
+        }
+    }
+
+    fn emit_data_read(&mut self, base: u32, len: u32, ty: &TypeExpr) -> usize {
+        self.emit_data_fallback(ty);
+        let start = self.emit(Op::GetDataIndexed(base, len));
+        let one = self.add_constant(Value::Int(1));
+        self.emit(Op::Const(one));
+        self.emit(Op::CmpEq);
+        let valid = self.emit_jump(Op::If(0));
+        self.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+        self.patch_jump(valid);
+        self.emit(Op::EndIf);
+        self.emit(Op::PopN(5));
+        start
     }
 
     fn emit_jump(&mut self, placeholder: Op) -> usize {
@@ -963,6 +1176,38 @@ fn array_length_of_type(t: &TypeExpr) -> Option<i64> {
     match t {
         TypeExpr::Array(_, n, _) => n.as_lit(),
         _ => None,
+    }
+}
+
+/// The element count of a type that the `[i]` postfix can index, which is a
+/// STRICTLY WIDER set than the array types [`array_length_of_type`] answers for.
+///
+/// # Why the two are separate rather than one widened function
+///
+/// A for-in source and an indexed operand are admitted by different rules. The
+/// type checker accepts only `Type::Array` as a for-in iterable, so widening
+/// the iterable's length helper to `Multiword` would answer a question that
+/// cannot be asked. The checked-index construct, by contrast, indexes anything
+/// the `[i]` postfix accepts, and [`element_type_of`] has admitted `Multiword`
+/// there since B19 -- a `Multiword<N, F>` indexes to its `Word` digits.
+///
+/// # The defect this closes
+///
+/// The checked-index bounds check folded its length through
+/// `array_length_of_type` alone, which answers `None` for a `Multiword`, and
+/// fell back to `Op::Len`. A multi-word body is FLAT, so the virtual machine
+/// refuses that opcode. Measured 2026-09-04: `m[0] { ok(v) => .., invalid_index(i)
+/// => .. }` over a `Multiword<2>` compiled, passed `verify()`, LOADED, and then
+/// trapped `InvalidBytecode` at run time -- the class `verify()` exists to
+/// exclude, reachable with no lifted refusal and no future change required.
+///
+/// It is the same shape as the for-in `Op::Len` trap recorded in
+/// `tests/len_flat_array_hazard.rs`, and worse in one respect: that one was
+/// held shut by a loop-bound refusal, and this one was held shut by nothing.
+fn indexable_length_of_type(t: &TypeExpr) -> Option<i64> {
+    match t {
+        TypeExpr::Multiword(n, _, _) => n.as_lit(),
+        other => array_length_of_type(other),
     }
 }
 
@@ -1252,7 +1497,7 @@ fn compile_multiword_shift(
         let wi = fc.declare_local("__mw_w");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(wi));
         wv.push(wi);
     }
@@ -1406,7 +1651,7 @@ fn emit_mw_guarded(
     // (a[safe_idx] band in_mask) bor (fill band bnot(in_mask)).
     fc.emit(Op::GetLocal(av));
     fc.emit(Op::GetLocal(siv));
-    fc.emit(Op::GetIndex(elem_op));
+    fc.emit_index_read(elem_op);
     fc.emit(Op::GetLocal(imv));
     fc.emit(Op::BitAnd);
     fc.emit(Op::GetLocal(fillv));
@@ -1507,7 +1752,7 @@ fn compile_multiword_variable_shift(
         let top_c = fc.add_constant(Value::Int((nn - 1) as i64));
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(top_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::Const(wbm1_c));
         fc.emit(Op::Shr);
         fc.emit(Op::SetLocal(fillv));
@@ -1638,10 +1883,10 @@ fn compile_multiword_bitwise(
         let rk = fc.declare_local("__mw_r");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(bit_op);
         fc.emit(Op::SetLocal(rk));
         rwords.push(rk);
@@ -1684,7 +1929,7 @@ fn compile_multiword_bnot(
         let rk = fc.declare_local("__mw_r");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::Const(neg1));
         fc.emit(Op::BitXor);
         fc.emit(Op::SetLocal(rk));
@@ -1837,12 +2082,12 @@ fn compile_multiword_add_sub(
         // x = a[i]
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(xi));
         // y = b[i]
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(yi));
         // s1 = x (op) y, wrapping; discard the high word and flag.
         fc.emit(Op::GetLocal(xi));
@@ -1951,7 +2196,7 @@ fn compile_multiword_compare(
         // x = a[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -1960,7 +2205,7 @@ fn compile_multiword_compare(
         // y = b[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -2124,13 +2369,13 @@ fn compile_multiword_mul(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -2379,13 +2624,13 @@ fn compile_multiword_fixed_mul(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -2589,7 +2834,7 @@ fn emit_multiword_cond_negate(
 /// exclusive-or and the remainder takes the sign of the dividend. The
 /// operands are reduced to their magnitudes, an unsigned division runs,
 /// and the sign is reapplied. A zero divisor traps as a division by
-/// zero, reusing the scalar `Op::Div` trap.
+/// zero through an explicit conditional `Trap` instruction.
 ///
 /// The fixed-point divide pre-shifts the dividend left by F, because two
 /// same-scale operands a and b represent a/2^F and b/2^F, so the raw
@@ -2677,18 +2922,18 @@ fn compile_multiword_div(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
-    // Divide-by-zero guard: 1 / (OR of divisor words) traps exactly when
-    // the divisor is all zeros, reusing the scalar zero-divisor trap.
+    // Trap explicitly when every divisor limb is zero. The arithmetic
+    // instructions themselves return outcomes rather than raising this fault.
     let b_or = fc.declare_local("__mw_bor");
     fc.emit(Op::GetLocal(bdig[0]));
     for w in bdig.iter().skip(1) {
@@ -2696,10 +2941,15 @@ fn compile_multiword_div(
         fc.emit(Op::BitOr);
     }
     fc.emit(Op::SetLocal(b_or));
-    fc.emit(Op::Const(one));
     fc.emit(Op::GetLocal(b_or));
-    fc.emit(Op::Div);
-    fc.emit(Op::PopN(1));
+    let zero_divisor = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_divisor));
+    fc.emit(Op::CmpEq);
+    let nonzero = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.record_operator_site(&right.span());
+    fc.patch_jump(nonzero);
+    fc.emit(Op::EndIf);
     // Sign masks (all ones when negative) and magnitudes.
     let sign_a = fc.declare_local("__mw_sga");
     let sign_b = fc.declare_local("__mw_sgb");
@@ -2852,6 +3102,167 @@ fn compile_multiword_div(
         count: n,
         byte_size,
     }));
+    Ok(())
+}
+
+/// Refuse every `Text<N>` the back end cannot build.
+///
+/// The value representation and the literal cast are built, so a `Text<N>` with
+/// a positive literal capacity is admitted. What remains refused is a capacity
+/// that is still symbolic after monomorphization and a capacity below one. A
+/// symbolic capacity has no size, and guessing one is how a wrong figure reaches
+/// the worst-case memory analysis, which is the number this ecosystem sells.
+///
+/// # Why this runs after monomorphization
+///
+/// A generic function may name `Text<N>` over a const parameter, and that is
+/// legal until monomorphization erases the parameter to a literal.
+/// Monomorphization removes every function that declares a const parameter,
+/// so after it every capacity this walk reaches belongs to code that will be
+/// emitted.
+///
+/// # Why a whole-program walk rather than the existing per-position checks
+///
+/// The per-position checks are spread across declaration forms and an earlier
+/// version of the refusal that relied on them missed four of five positions.
+/// One walk over every signature and annotation reaches them by construction.
+fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
+    fn walk(te: &TypeExpr) -> Result<(), CompileError> {
+        match te {
+            TypeExpr::TextN(cap, span) => match cap.as_lit() {
+                Some(n) if n > 0 => Ok(()),
+                Some(n) => Err(CompileError {
+                    message: format!(
+                        "Text<{n}> is not a legal type: a text capacity must be positive"
+                    ),
+                    span: *span,
+                }),
+                None => Err(CompileError {
+                    message: format!(
+                        "Text<{cap}> has a capacity that is unresolved after monomorphization"
+                    ),
+                    span: *span,
+                }),
+            },
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => walk(inner),
+            TypeExpr::Tuple(elems, _) => elems.iter().try_for_each(walk),
+            TypeExpr::Named(_, args, _, _) => args.iter().try_for_each(walk),
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => Ok(()),
+        }
+    }
+    // Bodies are visited too, not only signatures. A `let` annotation is a
+    // declaration position and an earlier version of this walk missed it: the
+    // parameter and return cases refused while `let s: Text<8>` compiled.
+    // Collected through the existing `Visitor` rather than a hand-rolled
+    // recursion, so a future statement form carrying a type is visited by
+    // construction rather than by remembering to add it here.
+    //
+    // **THE ANNOTATION IS WALKED RECURSIVELY, NOT PATTERN-MATCHED.** An earlier
+    // version matched `Some(TypeExpr::TextN(..))` directly, so it saw a capacity
+    // only when it was the OUTERMOST type. `let s: [Text<8>; 2]` and
+    // `let s: (Word, Text<8>)` both compiled: just as unbuilt, and invisible to a
+    // check that looked at one level. The signature positions never had this
+    // hole because they always called `walk`; the body path was the one that
+    // reimplemented the test instead of reusing it.
+    //
+    // Found by enumerating type positions BY CLASS rather than by example. The
+    // three hand-picked positions the earlier test used all passed, because they
+    // were the three that prompted the guard.
+    struct FindTextN {
+        found: Option<CompileError>,
+    }
+    impl crate::visitor::Visitor for FindTextN {
+        fn visit_stmt(&mut self, stmt: &crate::ast::Stmt) {
+            if let crate::ast::Stmt::Let(l) = stmt
+                && let Some(te) = &l.type_expr
+                && let Err(e) = walk(te)
+                && self.found.is_none()
+            {
+                self.found = Some(e);
+            }
+            crate::visitor::Visitor::walk_stmt(self, stmt);
+        }
+    }
+
+    fn walk_fn(f: &crate::ast::FunctionDef) -> Result<(), CompileError> {
+        walk(&f.return_type)?;
+        for p in &f.params {
+            if let Some(te) = &p.type_expr {
+                walk(te)?;
+            }
+        }
+        let mut finder = FindTextN { found: None };
+        crate::visitor::Visitor::visit_block(&mut finder, &f.body);
+        if let Some(e) = finder.found {
+            // The error carries the offending type's own span. The earlier
+            // version re-synthesised a `TextN` node to regenerate the message,
+            // which worked only because the message ignores the capacity.
+            return Err(e);
+        }
+        Ok(())
+    }
+    for f in &program.functions {
+        walk_fn(f)?;
+    }
+    for b in &program.impls {
+        for m in &b.methods {
+            walk_fn(m)?;
+        }
+    }
+    // A TRAIT DECLARATION IS A TYPE POSITION AND WAS NOT WALKED. A signature
+    // inside a trait has parameter and return types like any other, and
+    // `trait T { fn f(t: Text<8>) -> Word; }` COMPILED -- the walk covered
+    // functions and impl blocks, which is every position that has a body. A
+    // trait signature has none, so it fell outside a loop written around
+    // bodies.
+    //
+    // It is walked separately rather than through `walk_fn`, because a trait
+    // method is a `TraitMethodSig` and not a `FunctionDef`: it carries no body
+    // to visit. That type difference is exactly what let it be forgotten.
+    for t in &program.traits {
+        for m in &t.methods {
+            walk(&m.return_type)?;
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    walk(te)?;
+                }
+            }
+        }
+    }
+    // A NATIVE SIGNATURE IS REFUSED OUTRIGHT, not merely checked for a literal
+    // capacity. The native string ABI carries static text and host strings,
+    // and nothing marshals a flat `Text<N>` body across the host boundary yet.
+    // How a native signature can be generic over a capacity is also still
+    // undecided, and admitting a concrete capacity here would fix that answer
+    // by accident.
+    fn refuse_in_native(te: &TypeExpr) -> Result<(), CompileError> {
+        match te {
+            TypeExpr::TextN(_, span) => Err(CompileError {
+                message: String::from(
+                    "Text<N> is not admissible in a native signature: no marshalling for a \
+                     capacity-bounded text across the host boundary exists yet",
+                ),
+                span: *span,
+            }),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => refuse_in_native(inner),
+            TypeExpr::Tuple(elems, _) | TypeExpr::Named(_, elems, _, _) => {
+                elems.iter().try_for_each(refuse_in_native)
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => Ok(()),
+        }
+    }
+    for u in &program.uses {
+        if let Some(sig) = &u.signature {
+            refuse_in_native(&sig.return_type)?;
+            sig.params.iter().try_for_each(refuse_in_native)?;
+        }
+    }
     Ok(())
 }
 
@@ -3029,6 +3440,20 @@ pub fn compile_with_options(
     target: &crate::target::Target,
     options: &CompileOptions,
 ) -> Result<(Module, Vec<CompileWarning>), CompileError> {
+    compile_with_recorded_type_hook(program, target, options, |_| {})
+}
+
+// The hook receives only the recorded expression table, after all admission and
+// recording passes. Production entry points preserve it. Tests can remove or alter
+// it here to measure the emitter's structural fallback without bypassing checking.
+type RecordedExpressionTypes = BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>;
+
+fn compile_with_recorded_type_hook(
+    program: &Program,
+    target: &crate::target::Target,
+    options: &CompileOptions,
+    before_emission: impl FnOnce(&mut RecordedExpressionTypes),
+) -> Result<(Module, Vec<CompileWarning>), CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
     crate::target::validate_program_for_target(program, target)?;
@@ -3078,7 +3503,14 @@ pub fn compile_with_options(
     // unresolved `Fixed(None)` form would silently fall back to
     // `DEFAULT_FIXED_FRAC_BITS` (Q31.32) regardless of target.
     normalize_fixed_defaults(&mut owned, target.fixed_default_frac_bits());
-    crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
+    desugar_generic_pipes(&mut owned);
+    // The check also returns the type each `yield` resolved to where no
+    // `loop main` parameter declares the resume type, which monomorphization
+    // reads below. The pipeline order is unchanged.
+    let resolved_resumes = crate::typecheck::check_with_target_resolving_resumes(
+        &mut owned, *target,
+    )
+    .map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
     })?;
@@ -3089,7 +3521,8 @@ pub fn compile_with_options(
     // reference the specialized name. Generic functions for which
     // no concrete instantiation could be inferred remain unchanged
     // and rely on runtime polymorphism through the Value tag.
-    let (mut owned, generic_provenance) = crate::monomorphize::monomorphize_with_provenance(owned);
+    let (mut owned, generic_provenance) =
+        crate::monomorphize::monomorphize_with_resolved_resumes(owned, &resolved_resumes);
     // Re-typecheck the monomorphized program so specialized bodies
     // benefit from concrete-type method resolution. This pass also records
     // the authoritative per-function expression-type table into
@@ -3103,12 +3536,17 @@ pub fn compile_with_options(
             span: e.span,
         }
     })?;
+    // ONE GUARD, RUN ONCE, OVER EVERY DECLARATION POSITION, after
+    // monomorphization has erased every const parameter it can. See
+    // `refuse_unimplemented_types` for why it is a whole-program walk.
+    refuse_unimplemented_types(&owned)?;
     // V0.2.0 Consolidation Phase 4 retired the closure-hoisting
     // pass and the four closure opcodes (`Op::PushFunc`,
     // `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and
     // `Op::CallIndirect`). The type checker rejects
     // `Expr::Closure` before the program reaches this point, so
     // no closure-shaped expressions survive into compilation.
+    before_emission(&mut owned.fn_expr_types);
     let program = &owned;
 
     let mut native_names: Vec<String> = Vec::new();
@@ -3241,6 +3679,9 @@ pub fn compile_with_options(
     // Two-pass loop. Pass 0 processes shared declarations; pass 1
     // processes private declarations. The slot index counter is
     // continuous across both passes.
+    // Each slot's type token, parallel to the slots, for the typed schema hash.
+    let mut shared_tokens: Vec<String> = Vec::new();
+    let mut private_tokens: Vec<String> = Vec::new();
     for pass_visibility in [DataVisibility::Shared, DataVisibility::Private] {
         for decl in &program.data_decls {
             if decl.visibility != pass_visibility {
@@ -3277,6 +3718,14 @@ pub fn compile_with_options(
                     DataVisibility::Private => &mut private_slots,
                     DataVisibility::Const => unreachable!(),
                 };
+                let token = schema_type_token(peel_arrays(&field.type_expr), &program.types);
+                let tokens = match pass_visibility {
+                    DataVisibility::Shared => &mut shared_tokens,
+                    _ => &mut private_tokens,
+                };
+                for _ in 0..n_slots {
+                    tokens.push(token.clone());
+                }
                 if n_slots == 1 {
                     target.push(DataSlot {
                         name: format!("{}.{}", decl.name, field.name),
@@ -3335,6 +3784,8 @@ pub fn compile_with_options(
     let private_count = private_slots.len() as u32;
     let mut data_layout_slots: Vec<DataSlot> = shared_slots;
     data_layout_slots.append(&mut private_slots);
+    let mut slot_type_tokens = shared_tokens;
+    slot_type_tokens.append(&mut private_tokens);
     // `shared_layout` is filled in below, once `type_info` is available to
     // compute per-shared-slot byte offsets and kinds (B28 item 2).
     let mut data_layout = if data_layout_slots.is_empty() {
@@ -3382,6 +3833,7 @@ pub fn compile_with_options(
     let mut type_info = TypeInfo {
         word_bytes: (1usize << target.word_bits_log2) / 8,
         float_bytes: (1usize << target.float_bits_log2) / 8,
+        addr_bytes: (1usize << target.addr_bits_log2) / 8,
         ..TypeInfo::default()
     };
     for type_def in &program.types {
@@ -3410,6 +3862,7 @@ pub fn compile_with_options(
             }
             TypeDef::Newtype(n) => {
                 type_info.newtype_names.insert(n.name.clone());
+                type_info.newtype_defs.insert(n.name.clone(), n.clone());
                 if let Some(pred) = &n.refinement {
                     type_info
                         .newtype_refinements
@@ -3490,6 +3943,9 @@ pub fn compile_with_options(
             fields.insert(f.name.clone(), f.type_expr.clone());
         }
         type_info.data_field_types.insert(decl.name.clone(), fields);
+        if decl.visibility == DataVisibility::Private {
+            type_info.private_data_blocks.insert(decl.name.clone());
+        }
     }
 
     // Compute per-function return-range summaries through a
@@ -3547,12 +4003,10 @@ pub fn compile_with_options(
                     if n == 1 {
                         // A single composite field: record its pool offset in
                         // the table, resolved by slot at the `SetData` write.
-                        if let Ok(slot_u16) = u16::try_from(slot_idx) {
-                            table.push(crate::bytecode::PrivateCompositeSlot {
-                                slot: slot_u16,
-                                offset: total,
-                            });
-                        }
+                        table.push(crate::bytecode::PrivateCompositeSlot {
+                            slot: private_composite_slot_index(slot_idx, decl, field)?,
+                            offset: total,
+                        });
                         // Saturate the widening so a body larger than u32::MAX
                         // fails closed at the downstream arena check rather than
                         // truncating and under-sizing the pool (audit B13).
@@ -3563,12 +4017,14 @@ pub fn compile_with_options(
                         // carried in the table and resolved by slot at the
                         // `SetDataIndexed` write.
                         for k in 0..n {
-                            if let Ok(slot_u16) = u16::try_from(slot_idx + k) {
-                                table.push(crate::bytecode::PrivateCompositeSlot {
-                                    slot: slot_u16,
-                                    offset: total,
-                                });
-                            }
+                            table.push(crate::bytecode::PrivateCompositeSlot {
+                                slot: private_composite_slot_index(
+                                    slot_idx.saturating_add(k),
+                                    decl,
+                                    field,
+                                )?,
+                                offset: total,
+                            });
                             // Saturate the widening so a body larger than u32::MAX
                             // fails closed at the downstream arena check rather than
                             // truncating and under-sizing the pool (audit B13).
@@ -3626,6 +4082,7 @@ pub fn compile_with_options(
     if let Some(dl) = data_layout.as_mut() {
         dl.shared_layout = shared_slot_layout;
         dl.private_composite_layout = private_composite_layout;
+        fill_private_zero_initializers(program, &type_info, &mut dl.private_init)?;
     }
 
     // Compile each function group. After emission, enforce the
@@ -3771,7 +4228,10 @@ pub fn compile_with_options(
 
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
-        schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
+        schema_hash: crate::bytecode::compute_typed_schema_hash(
+            data_layout.as_ref(),
+            &slot_type_tokens,
+        ),
         enum_layouts: build_enum_layouts(&type_info),
         signatures,
         native_return_shapes,
@@ -4284,6 +4744,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
         },
         TypeExpr::Unit(_) => String::from("()"),
         TypeExpr::Multiword(_, _, _) => String::from("Multiword"),
+        TypeExpr::TextN(_, _) => String::from("Text"),
         TypeExpr::Named(name, _, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => String::from("tuple"),
         TypeExpr::Array(_, _, _) => String::from("array"),
@@ -4368,6 +4829,19 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
             Expr::ClosureRef { captures, .. } => captures.iter().any(|c| c == name),
             Expr::Checked { op_expr, arms, .. } => {
                 expr_uses(op_expr, name) || arms.iter().any(|arm| expr_uses(&arm.body, name))
+            }
+            Expr::DataIndexStore {
+                indices,
+                value,
+                arms,
+                ..
+            } => {
+                indices.iter().any(|e| expr_uses(e, name))
+                    || expr_uses(value, name)
+                    || arms.iter().any(|arm| {
+                        arm.guard.as_ref().is_some_and(|g| expr_uses(g, name))
+                            || expr_uses(&arm.body, name)
+                    })
             }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => false,
             Expr::Classify { value, .. } | Expr::Declassify { value, .. } => expr_uses(value, name),
@@ -4695,6 +5169,96 @@ fn const_value_from_literal_for_field(
     }
 }
 
+/// `t` with every outer array level removed, the type one data slot holds.
+fn peel_arrays(t: &TypeExpr) -> &TypeExpr {
+    match t {
+        TypeExpr::Array(inner, _, _) => peel_arrays(inner),
+        other => other,
+    }
+}
+
+/// The canonical type token of a data slot for [`crate::bytecode::compute_typed_schema_hash`],
+/// which documents the form. A struct is expanded from its declaration, at most sixteen levels
+/// deep, which bounds a self-referential declaration the type checker would refuse anyway.
+fn schema_type_token(t: &TypeExpr, types: &[TypeDef]) -> String {
+    fn render(t: &TypeExpr, types: &[TypeDef], depth: usize, out: &mut String) {
+        match t {
+            TypeExpr::Prim(p, _) => out.push_str(&match p {
+                PrimType::Word => String::from("Word"),
+                PrimType::Byte => String::from("Byte"),
+                PrimType::Float => String::from("Float"),
+                PrimType::Bool => String::from("bool"),
+                PrimType::Text => String::from("Text"),
+                // The fraction-bit count is left out. Every `Fixed` has the word's width, so the
+                // count does not change the layout, and parse.kel's data records do not carry it,
+                // so the self-hosted driver could not include it to match.
+                PrimType::Fixed(_) => String::from("Fixed"),
+            }),
+            TypeExpr::Array(inner, len, _) => {
+                out.push('[');
+                render(inner, types, depth, out);
+                out.push(';');
+                out.push_str(&len.as_lit().map_or_else(String::new, |n| n.to_string()));
+                out.push(']');
+            }
+            TypeExpr::Tuple(items, _) => {
+                out.push('(');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    render(item, types, depth, out);
+                }
+                out.push(')');
+            }
+            TypeExpr::Named(name, _, _, _) => {
+                out.push_str(name);
+                let def = types.iter().find_map(|td| match td {
+                    TypeDef::Struct(s) if s.name == *name => Some(s),
+                    _ => None,
+                });
+                if let Some(def) = def
+                    && depth < 16
+                {
+                    out.push('{');
+                    for (i, f) in def.fields.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push_str(&f.name);
+                        out.push(':');
+                        render(&f.type_expr, types, depth + 1, out);
+                    }
+                    out.push('}');
+                }
+            }
+            TypeExpr::Multiword(n, w, _) => {
+                let lit = |c: &ConstExpr| c.as_lit().map_or_else(String::new, |v| v.to_string());
+                out.push_str(&format!("Multiword<{},{}>", lit(n), lit(w)));
+            }
+            TypeExpr::TextN(n, _) => {
+                out.push_str(&format!(
+                    "Text<{}>",
+                    n.as_lit().map_or_else(String::new, |v| v.to_string())
+                ));
+            }
+            TypeExpr::Option(inner, _) => {
+                out.push_str("Option<");
+                render(inner, types, depth, out);
+                out.push('>');
+            }
+            TypeExpr::Unit(_) => out.push_str("()"),
+            // A label governs information flow, not layout, so it does not enter the token.
+            TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
+                render(inner, types, depth, out)
+            }
+        }
+    }
+    let mut out = String::new();
+    render(t, types, 0, &mut out);
+    out
+}
+
 fn slots_for_data_type(type_expr: &TypeExpr) -> u32 {
     match type_expr {
         TypeExpr::Array(elem, len, _) => {
@@ -4737,11 +5301,37 @@ fn scalar_array_elem_zero(mut elem: &TypeExpr) -> Option<crate::bytecode::ConstV
     }
 }
 
+/// The `u16` slot index a private composite placement record carries.
+///
+/// The data slot index space is 24 bits, and a `PrivateCompositeSlot` records
+/// its slot in 16. A composite slot above `u16::MAX` was dropped from the table
+/// with no diagnostic, so its writes found no pool offset. Widening the record
+/// changes the wire format, which needs the operator's authorization, so such a
+/// module is refused here instead. Measured on 2026-10-30, a private
+/// `[P; 70000]` produced 65,536 records for 70,000 elements.
+fn private_composite_slot_index(
+    slot: u32,
+    decl: &crate::ast::DataDecl,
+    field: &DataFieldDecl,
+) -> Result<u16, CompileError> {
+    u16::try_from(slot).map_err(|_| CompileError {
+        message: format!(
+            "private data field `{}.{}` places a composite at slot {slot}, beyond the {} \
+             composite slots a module can record",
+            decl.name,
+            field.name,
+            u32::from(u16::MAX) + 1
+        ),
+        span: field.span,
+    })
+}
+
 /// Per-slot load-time initial values for a private data field, one entry per
 /// slot the field occupies (`slots_for_data_type`). A scalar field carries its
 /// `= literal` initializer or the primitive zero; a scalar array carries the
-/// element zero in every slot; every other shape carries `Unit`, preserving
-/// write-before-read for composite private slots.
+/// element zero in every slot; every other shape carries `Unit` here, which
+/// `fill_private_zero_initializers` replaces with the type's zero once the type
+/// tables are complete.
 fn private_init_for_field(
     data_name: &str,
     field: &DataFieldDecl,
@@ -4776,6 +5366,73 @@ fn private_init_for_field(
         },
         _ => Ok(alloc::vec![ConstValue::Unit; n]),
     }
+}
+
+/// Give every private slot that `private_init_for_field` left as `Unit` the
+/// canonical zero value of its type, so that no private slot starts as the
+/// virtual machine's empty-slot marker.
+///
+/// This is option (b) of the operator's ruling of 2026-10-30 on definite
+/// initialization. A composite slot receives its type's
+/// `crate::zero_value::zero_value`, an array of composites its element's zero
+/// in every element slot, and a `Text` slot the empty static string. The type
+/// tables are complete here, which `private_init_for_field` runs too early to
+/// use, so the zeros are filled in afterwards, in the same private-slot order.
+///
+/// A slot keeps `Unit` in three cases. Its type is `()`, whose only value is
+/// `Unit`. Its zero would violate a refinement, because some refined newtype in
+/// it has no determinable lowest valid value, and a load-time initializer is
+/// observable. Or its type has no zero, as an opaque host type does not. The
+/// verifier holds every slot that keeps `Unit` to a write before any read on
+/// every path, so such a program is still checked.
+fn fill_private_zero_initializers(
+    program: &Program,
+    type_info: &TypeInfo,
+    private_init: &mut [crate::bytecode::ConstValue],
+) -> Result<(), CompileError> {
+    use crate::bytecode::ConstValue;
+    let registry = type_info.zero_registry();
+    let mut at = 0usize;
+    for decl in &program.data_decls {
+        if decl.visibility != DataVisibility::Private {
+            continue;
+        }
+        for field in &decl.fields {
+            let n = slots_for_data_type(&field.type_expr) as usize;
+            let leaf = innermost_non_array_type(&field.type_expr);
+            let slots = private_init
+                .get_mut(at..at.saturating_add(n))
+                .ok_or_else(|| CompileError {
+                    message: format!(
+                        "internal error: private data field `{}.{}` has no initializer entry",
+                        decl.name, field.name
+                    ),
+                    span: field.span,
+                })?;
+            at = at.saturating_add(n);
+            if !slots.contains(&ConstValue::Unit)
+                || !crate::zero_value::zero_respects_refinements(leaf, &registry)
+            {
+                continue;
+            }
+            let Ok(mut zero) = crate::zero_value::zero_value(leaf, &registry) else {
+                continue;
+            };
+            resolve_const_enum_discriminants(&mut zero, &type_info.enum_variant_order);
+            for slot in slots.iter_mut().filter(|v| **v == ConstValue::Unit) {
+                *slot = zero.clone();
+            }
+        }
+    }
+    if at != private_init.len() {
+        return Err(CompileError {
+            message: String::from(
+                "internal error: the private initializer table and the private fields disagree",
+            ),
+            span: Span::default(),
+        });
+    }
+    Ok(())
 }
 
 /// A resolved indexed access into a data-segment array field.
@@ -4821,21 +5478,35 @@ fn data_indexed_chain<'a>(object: &'a Expr, last_index: &'a Expr) -> Option<Data
     }
 }
 
-/// Emit per-level bounds checks and stride arithmetic for an
-/// indexed data-segment access, leaving the flat offset on the
-/// operand stack. Returns the total slot count of the field
-/// and an error if the indexing depth does not match the
-/// field's type structure or if the field is not an array.
-fn emit_indexed_offset(
-    fc: &mut FuncCompiler,
+/// One array level of an indexed data-segment access.
+struct IndexLevel {
+    /// The level's length as a `BoundsCheck` operand. `None` for a
+    /// single-level access, whose length the twenty-four-bit indexed
+    /// operand carries instead and which may therefore exceed sixteen bits.
+    bound: Option<u16>,
+    /// Flat slots per element of this level.
+    stride: u32,
+}
+
+/// The validated level structure of an indexed data-segment access.
+struct IndexedShape {
+    levels: Vec<IndexLevel>,
+    /// Total slot count of the field, the indexed opcodes' length operand.
+    total: u32,
+}
+
+/// Validate that `depth` indices descend `field_type` to a scalar and
+/// return each level's bound and stride. Every error an indexed access can
+/// raise from its type is raised here, before any index is compiled.
+fn indexed_shape(
     field_type: &TypeExpr,
-    indices: &[&Expr],
+    depth: usize,
     span: Span,
-) -> Result<u32, CompileError> {
-    let single_level = indices.len() == 1;
+) -> Result<IndexedShape, CompileError> {
+    let single_level = depth == 1;
     let mut current_type = field_type.clone();
-    let mut emitted_first = false;
-    for idx_expr in indices {
+    let mut levels = Vec::with_capacity(depth);
+    for _ in 0..depth {
         let (elem_type, len) = match current_type {
             TypeExpr::Array(elem, len, _) => {
                 let len = len.as_lit().ok_or_else(|| CompileError {
@@ -4860,48 +5531,26 @@ fn emit_indexed_offset(
             });
         }
         let stride = slots_for_data_type(&elem_type);
-
-        compile_expr(fc, idx_expr)?;
-        // Skip the explicit `BoundsCheck` when there is exactly
-        // one index. The trailing `Op::GetDataIndexed` or
-        // `Op::SetDataIndexed` will perform the same check
-        // against the field's total length (a twenty-four-bit
-        // operand), which equals this level's length for a
-        // single-level access. A multi-level access emits a
-        // per-level `BoundsCheck`, whose operand stays sixteen
-        // bits, so a per-level dimension above 64 K is rejected.
-        if !single_level {
-            let len_u16 = u16::try_from(len).map_err(|_| CompileError {
+        // A single-level access needs no explicit `BoundsCheck`.
+        // The trailing `Op::GetDataIndexed` or `Op::SetDataIndexed`
+        // performs the same check against the field's total length
+        // (a twenty-four-bit operand), which equals this level's
+        // length. A multi-level access probes each level with a
+        // `BoundsCheck`, whose operand stays sixteen bits, so a
+        // per-level dimension above 64 K is rejected.
+        let bound = if single_level {
+            None
+        } else {
+            Some(u16::try_from(len).map_err(|_| CompileError {
                 message: format!(
                     "per-level indexed dimension {} exceeds the 16-bit BoundsCheck bound; \
                      only the outermost (single-level) length uses the wider indexed operand",
                     len
                 ),
                 span,
-            })?;
-            fc.emit(Op::BoundsCheck(len_u16));
-        }
-        if stride != 1 {
-            let stride_const = fc.add_constant(Value::Int(stride as i64));
-            fc.emit(Op::Const(stride_const));
-            // Index-stride product is `Int * Int`. After
-            // Consolidation B narrowed `Op::Mul` away from
-            // `Int` operands, the compiler synthesizes the
-            // wrapping product via `CheckedMul` followed by
-            // `PopN(2)` so the overflow flag and high half are
-            // discarded. `0` fraction bits selects integer multiply.
-            fc.emit(Op::CheckedMul(0));
-            fc.emit(Op::PopN(2));
-        }
-        if emitted_first {
-            // Flat offset accumulation is `Int + Int`.
-            // Consolidation B routes the wrapping sum through
-            // `CheckedAdd; PopN(2)`.
-            fc.emit(Op::CheckedAdd);
-            fc.emit(Op::PopN(2));
-        } else {
-            emitted_first = true;
-        }
+            })?)
+        };
+        levels.push(IndexLevel { bound, stride });
         current_type = elem_type;
     }
     if matches!(current_type, TypeExpr::Array(_, _, _)) {
@@ -4923,7 +5572,63 @@ fn emit_indexed_offset(
             span,
         });
     }
-    Ok(total)
+    Ok(IndexedShape { levels, total })
+}
+
+/// Push `stride * index` for the index on top of the operand stack.
+fn emit_index_stride(fc: &mut FuncCompiler, stride: u32) {
+    if stride != 1 {
+        let stride_const = fc.add_constant(Value::Int(stride as i64));
+        fc.emit(Op::Const(stride_const));
+        // Index-stride product is `Int * Int`. After
+        // Consolidation B narrowed `Op::Mul` away from
+        // `Int` operands, the compiler synthesizes the
+        // wrapping product via `CheckedMul` followed by
+        // `PopN(2)` so the overflow flag and high half are
+        // discarded. `0` fraction bits selects integer multiply.
+        fc.emit(Op::CheckedMul(0));
+        fc.emit(Op::PopN(2));
+    }
+}
+
+/// Emit per-level bounds checks and stride arithmetic for an
+/// indexed data-segment access, leaving the flat offset on the
+/// operand stack. Returns the total slot count of the field
+/// and an error if the indexing depth does not match the
+/// field's type structure or if the field is not an array.
+fn emit_indexed_offset(
+    fc: &mut FuncCompiler,
+    field_type: &TypeExpr,
+    indices: &[&Expr],
+    span: Span,
+) -> Result<u32, CompileError> {
+    let shape = indexed_shape(field_type, indices.len(), span)?;
+    for (depth, (level, idx_expr)) in shape.levels.iter().zip(indices).enumerate() {
+        compile_expr(fc, idx_expr)?;
+        if let Some(bound) = level.bound {
+            fc.emit(Op::BoundsCheck(bound));
+            fc.record_operator_site(&idx_expr.span());
+            let invalid = fc.add_constant(Value::Int(1));
+            fc.emit(Op::Const(invalid));
+            fc.emit(Op::CmpEq);
+            let valid = fc.emit_jump(Op::If(0));
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(&idx_expr.span());
+            fc.patch_jump(valid);
+            fc.emit(Op::EndIf);
+            // Retain the original index for the following stride arithmetic.
+            fc.emit(Op::PopN(4));
+        }
+        emit_index_stride(fc, level.stride);
+        if depth > 0 {
+            // Flat offset accumulation is `Int + Int`.
+            // Consolidation B routes the wrapping sum through
+            // `CheckedAdd; PopN(2)`.
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+        }
+    }
+    Ok(shape.total)
 }
 
 /// Emit a `state.field[i][j]...` read by computing the flat
@@ -4971,10 +5676,7 @@ fn emit_data_indexed_read(
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
             let elem_ty = cur_ty.as_ref().and_then(element_type_of);
-            fc.emit(Op::GetIndex(array_elem_operand(
-                elem_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(elem_ty.as_ref(), &fc.type_info));
             cur_ty = elem_ty;
             // Each level's index can trap out-of-bounds; record the
             // operator site so the fault resolves exactly (B29 item 2).
@@ -5002,21 +5704,179 @@ fn emit_data_indexed_read(
             span,
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    fc.emit(Op::GetDataIndexed(base, total));
+    let mut element = &field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = inner;
+        }
+    }
+    fc.emit_data_read(base, total, element);
     // A dynamic data-array index can trap out-of-bounds; record the
     // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
+    fc.note_data_read(chain.data_name, base, total, element);
     Ok(())
 }
 
-/// Emit a `state.field[i][j]... = value` write. The value is
-/// already on the stack from the caller; the helper appends the
-/// offset arithmetic and `Op::SetDataIndexed`.
-fn emit_data_indexed_write(
+/// The data range and element of an indexed write, after its probe.
+struct DataWriteProbe {
+    base: u32,
+    total: u32,
+    element: TypeExpr,
+    /// The probe was `GetDataIndexed`, so the element's value lies beneath
+    /// the index on the operand stack. Otherwise it was `BoundsCheck`.
+    read_old: bool,
+}
+
+/// Evaluate the index of a `state.field[i]... = value` write and probe its
+/// bound before the value is evaluated.
+///
+/// The operator ruled on 2026-10-21 that the index is evaluated first and
+/// that an invalid index skips the value on bare and handled writes alike.
+/// The probe leaves `[old,] offset, limb0..limb3, flag` on the operand
+/// stack, the same shape `SetDataIndexed` and the handled read produce, so
+/// `Trap(8)` can take its payload directly. The probe is `BoundsCheck`
+/// when the field's slot count fits its sixteen-bit operand. A longer field
+/// has only the twenty-four-bit `GetDataIndexed`, which also reads the
+/// element; that read is the one case in which the old value is loaded
+/// although no handler binds it.
+fn emit_data_write_probe(
     fc: &mut FuncCompiler,
-    chain: DataIndexedChain<'_>,
+    chain: &DataIndexedChain<'_>,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<DataWriteProbe, CompileError> {
+    let (base, field_type) = data_write_target(fc, chain, span)?;
+    let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
+    let mut element = field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = *inner;
+        }
+    }
+    let read_old = match u16::try_from(total) {
+        Ok(bound) => {
+            fc.emit(Op::BoundsCheck(bound));
+            false
+        }
+        Err(_) => {
+            fc.emit_data_fallback(&element);
+            fc.emit(Op::GetDataIndexed(base, total));
+            true
+        }
+    };
+    fc.record_operator_site(&span);
+    Ok(DataWriteProbe {
+        base,
+        total,
+        element,
+        read_old,
+    })
+}
+
+/// Block-relative positions of a handled write's seven-slot outcome block:
+/// the probe's flag, the old element, the four bound limbs, and the new value.
+const STORE_FLAG: u16 = 0;
+const STORE_OLD: u16 = 1;
+const STORE_LIMB0: u16 = 2;
+const STORE_NEW: u16 = 6;
+
+/// Evaluate and probe each index of a handled multi-index write in turn.
+///
+/// The operator ruled on 2026-10-21 that a failure at any level of a handled
+/// write reaches `invalid_index`. Each level is probed against its own
+/// length, because the flat offset alone can lie in range while a level does
+/// not, as `m[0][5]` does in a `[[Word; 3]; 3]`. A failing level stops the
+/// evaluation, so neither the later indices nor the value are evaluated. It
+/// leaves its own index in `offset` and its own bound limbs in the outcome
+/// block, which is the payload the bare form's per-level `Trap(8)` carries,
+/// so `invalid_index(j)` binds the index that failed. On success `offset`
+/// holds the flat offset and the flag is zero.
+///
+/// Every level after the first runs under a guard on the flag. The emitted
+/// control flow is therefore at most two `If` blocks deep whatever the
+/// number of levels, and nothing is left on the operand stack. Every flag,
+/// limb and old-value access names a block slot that is not yet declared and
+/// is recorded in `pending`. The probe never reads the element, because every
+/// level's bound fits the sixteen-bit `BoundsCheck` operand.
+fn emit_data_write_levels(
+    fc: &mut FuncCompiler,
+    chain: &DataIndexedChain<'_>,
+    offset: u16,
+    level_slot: u16,
+    pending: &mut Vec<(usize, u16)>,
+    span: Span,
+) -> Result<DataWriteProbe, CompileError> {
+    let (base, field_type) = data_write_target(fc, chain, span)?;
+    let shape = indexed_shape(&field_type, chain.indices.len(), span)?;
+    let zero = fc.add_constant(Value::Int(0));
+    for (depth, (level, index)) in shape.levels.iter().zip(&chain.indices).enumerate() {
+        let bound = level.bound.ok_or_else(|| CompileError {
+            message: String::from("internal error: a multi-level write level has no bound"),
+            span,
+        })?;
+        let guard = if depth > 0 {
+            pending.push((fc.emit(Op::GetLocal(0)), STORE_FLAG));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+            Some(fc.emit_jump(Op::If(0)))
+        } else {
+            None
+        };
+        compile_expr(fc, index)?;
+        fc.emit(Op::BoundsCheck(bound));
+        fc.record_operator_site(&index.span());
+        pending.push((fc.emit(Op::SetLocal(0)), STORE_FLAG));
+        for i in (0..4).rev() {
+            pending.push((fc.emit(Op::SetLocal(0)), STORE_LIMB0 + i));
+        }
+        fc.emit(Op::SetLocal(level_slot));
+        // In range: accumulate the flat offset. Out of range: the failing
+        // index becomes the payload.
+        pending.push((fc.emit(Op::GetLocal(0)), STORE_FLAG));
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::CmpEq);
+        let in_range = fc.emit_jump(Op::If(0));
+        if depth > 0 {
+            fc.emit(Op::GetLocal(offset));
+        }
+        fc.emit(Op::GetLocal(level_slot));
+        emit_index_stride(fc, level.stride);
+        if depth > 0 {
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+        }
+        fc.emit(Op::SetLocal(offset));
+        let out_of_range = fc.emit_jump(Op::Else(0));
+        fc.patch_jump(in_range);
+        fc.emit(Op::GetLocal(level_slot));
+        fc.emit(Op::SetLocal(offset));
+        fc.patch_jump(out_of_range);
+        fc.emit(Op::EndIf);
+        if let Some(guard) = guard {
+            fc.patch_jump(guard);
+            fc.emit(Op::EndIf);
+        }
+    }
+    let mut element = field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = *inner;
+        }
+    }
+    Ok(DataWriteProbe {
+        base,
+        total: shape.total,
+        element,
+        read_old: false,
+    })
+}
+
+/// Resolve the base slot and declared type of a writable data field.
+fn data_write_target(
+    fc: &FuncCompiler,
+    chain: &DataIndexedChain<'_>,
+    span: Span,
+) -> Result<(u32, TypeExpr), CompileError> {
     if !fc.is_data_block(chain.data_name) {
         return Err(CompileError {
             message: format!("unknown data block: {}", chain.data_name),
@@ -5051,11 +5911,360 @@ fn emit_data_indexed_write(
             ),
             span,
         })?;
-    let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    fc.emit(Op::SetDataIndexed(base, total));
-    // A dynamic data-array index can trap out-of-bounds; record the
-    // operator site so the fault resolves exactly (B29 item 2).
+    Ok((base, field_type))
+}
+
+/// Push the canonical zero value of `ty`, the value a local holds when the
+/// compiler writes it before the program does.
+///
+/// `Word`, `Byte` and `Bool` use immediates, which need no constant. Any other
+/// type pushes its `crate::zero_value::zero_value` from the constant pool, so
+/// that the slot holds a value of its static type and never the empty `Unit`.
+fn emit_type_zero(fc: &mut FuncCompiler, ty: &TypeExpr, span: Span) -> Result<(), CompileError> {
+    match ty {
+        TypeExpr::Prim(PrimType::Word, _) => {
+            fc.emit(Op::PushImmediate(4));
+        }
+        TypeExpr::Prim(PrimType::Byte, _) => {
+            fc.emit(Op::PushImmediate(4));
+            fc.emit(Op::WordToByte);
+        }
+        TypeExpr::Prim(PrimType::Bool, _) => {
+            fc.emit(Op::PushImmediate(2));
+        }
+        _ => {
+            let zero =
+                crate::zero_value::zero_value(ty, &fc.type_info.zero_registry()).map_err(|e| {
+                    CompileError {
+                        message: format!(
+                            "internal error: no zero value for an element type: {e:?}"
+                        ),
+                        span,
+                    }
+                })?;
+            let idx = fc.add_const_value(zero);
+            fc.emit(Op::Const(idx));
+        }
+    }
+    Ok(())
+}
+
+/// Replace the flat composite element on top of the operand stack with a copy
+/// held in a fresh arena body, so that a later write to its data slot does not
+/// change it.
+///
+/// A private composite slot keeps its body at a fixed offset in the persistent
+/// pool, and reading the slot pushes a handle to that body rather than a copy.
+/// `SetDataIndexed` copies the new body over the old one in place, so a handle
+/// read before the write observes the written value afterwards. The handled
+/// write's `old` binding is read before and used after its write, which is why
+/// it needs a copy that the write cannot reach.
+///
+/// No opcode copies a composite, so the copy is built from existing ones. The
+/// element is packed as the only element of a one-element flat array, which
+/// copies its bytes into a fresh arena body, and the array is then indexed at
+/// zero, which yields a view of that body. The index is the constant zero
+/// against a length of one, so the read never fails, and its outcome suffix is
+/// dropped. The array's allocation is the `NewComposite` byte size that the
+/// worst-case memory analysis already sums. A scalar or a boxed element is
+/// owned by its slot value and is left unchanged.
+fn emit_detach_data_element(fc: &mut FuncCompiler, element: &TypeExpr) {
+    let FlatFieldForm::Nested(size, variant) = classify_flat_field(element, &fc.type_info) else {
+        return;
+    };
+    if type_may_intern_opaque(element, &fc.type_info) {
+        fc.may_intern_opaque = true;
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: 1,
+        byte_size: size,
+    }));
+    // `PushImmediate(4)` is the word zero.
+    fc.emit(Op::PushImmediate(4));
+    fc.emit(Op::GetIndex(ArrayElem::FlatNested { size, variant }));
+    // Drop the index, the four bound limbs and the flag, keeping the element.
+    fc.emit(Op::PopN(6));
+}
+
+/// Emit a bare `state.field[i][j]... = value;` write.
+///
+/// Index, probe, the default `Trap(8)` on an invalid index, the offset held
+/// in a local while the value is evaluated, then `SetDataIndexed`, whose
+/// outcome the probe has already decided, so its six result words are
+/// dropped. `SetDataIndexed` pops the index above the value and no opcode
+/// exchanges two operands, which is why the offset needs the local.
+fn emit_data_indexed_write(
+    fc: &mut FuncCompiler,
+    chain: DataIndexedChain<'_>,
+    value: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    let probe = emit_data_write_probe(fc, &chain, span)?;
+    let invalid = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(invalid));
+    fc.emit(Op::CmpEq);
+    let valid = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
     fc.record_operator_site(&span);
+    fc.patch_jump(valid);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(4));
+    let offset = fc.declare_local(&alloc::format!("__store_i_{}", span.start));
+    fc.emit(Op::SetLocal(offset));
+    if probe.read_old {
+        fc.emit(Op::PopN(1));
+    }
+    compile_expr(fc, value)?;
+    fc.emit(Op::GetLocal(offset));
+    fc.emit(Op::SetDataIndexed(probe.base, probe.total));
+    fc.emit(Op::PopN(6));
+    Ok(())
+}
+
+/// Emit a handled indexed write, `state.field[i] = value { ok(old, new) =>
+/// ..., invalid_index(j) => ... }`, as an expression of its arms' type.
+///
+/// The probe's outcome is held in locals, the value is evaluated and
+/// written only on success, and the arms then dispatch through the same
+/// virtual loop as the handled read, on flag zero for `ok` and one for
+/// `invalid_index`. The element is read before the write only when some
+/// `ok` arm binds `old`, unless the probe itself had to read it. A write
+/// without an unguarded catch-all `invalid_index` arm ends in the default
+/// `Trap(8)`.
+///
+/// **Slot numbering follows the source, not the emission order.** The
+/// self-hosted parser numbers locals as it streams tokens. It reserves the
+/// offset slot at `=`, after any local the index expression declares, and
+/// it can reserve the outcome block only on reaching the arm block's `{`,
+/// after any local the value declares. Slots here are therefore declared in
+/// that order: the offset after the index, then the value's own locals,
+/// then a block of seven, flag, old, the four bound limbs and new, then the
+/// arm binders. The block is declared after the value is compiled, so the
+/// instructions that address it before that point are emitted with a
+/// placeholder slot and patched. The block always has seven slots, even
+/// when `old` or `new` is unbound, because the parser reserves it before it
+/// has read the arms.
+fn compile_data_index_store(
+    fc: &mut FuncCompiler,
+    data_name: &str,
+    field: &str,
+    indices: &[Expr],
+    value: &Expr,
+    arms: &[crate::ast::CheckedArm],
+    span: Span,
+) -> Result<(), CompileError> {
+    use crate::ast::CheckedArmKind;
+    let binds_old = arms.iter().any(|arm| {
+        matches!(
+            &arm.kind,
+            CheckedArmKind::StoreOk(Pattern::Variable(_, _), _)
+        )
+    });
+    let binds_new = arms.iter().any(|arm| {
+        matches!(
+            &arm.kind,
+            CheckedArmKind::StoreOk(_, Pattern::Variable(_, _))
+        )
+    });
+    let word_ty = TypeExpr::Prim(PrimType::Word, span);
+    let chain = DataIndexedChain {
+        data_name,
+        field,
+        indices: indices.iter().collect(),
+    };
+    let suffix = span.start;
+    // (op index, block-relative slot) for every instruction that names a
+    // block slot before the block is declared.
+    let mut pending: Vec<(usize, u16)> = Vec::new();
+    let (probe, offset) = if indices.len() == 1 {
+        let probe = emit_data_write_probe(fc, &chain, span)?;
+        let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
+        pending.push((fc.emit(Op::SetLocal(0)), STORE_FLAG));
+        for i in (0..4).rev() {
+            pending.push((fc.emit(Op::SetLocal(0)), STORE_LIMB0 + i));
+        }
+        fc.emit(Op::SetLocal(offset));
+        if probe.read_old {
+            if binds_old {
+                emit_detach_data_element(fc, &probe.element);
+                pending.push((fc.emit(Op::SetLocal(0)), STORE_OLD));
+            } else {
+                fc.emit(Op::PopN(1));
+            }
+        }
+        (probe, offset)
+    } else {
+        // The self-hosted compiler does not mirror multi-index data access,
+        // so this branch's slot order is not constrained by its parser.
+        let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
+        let level = fc.declare_local(&alloc::format!("__store_level_{}", suffix));
+        let probe = emit_data_write_levels(fc, &chain, offset, level, &mut pending, span)?;
+        (probe, offset)
+    };
+    const FLAG: u16 = STORE_FLAG;
+    const OLD: u16 = STORE_OLD;
+    const LIMB0: u16 = STORE_LIMB0;
+    const NEW: u16 = STORE_NEW;
+
+    // Definite initialization. The arms read `old` and `new` under the same
+    // flag test that guards the success branch, which only a path-sensitive
+    // analysis could pair with the writes below. Each bound slot that the
+    // success branch alone would write is therefore first written with the
+    // element type's zero, so that it is written on every path before any
+    // read. The arm never observes that zero, since the success branch
+    // overwrites it and the invalid-index arm does not bind it.
+    if binds_old && !probe.read_old {
+        emit_type_zero(fc, &probe.element, span)?;
+        pending.push((fc.emit(Op::SetLocal(0)), OLD));
+    }
+    if binds_new {
+        emit_type_zero(fc, &probe.element, span)?;
+        pending.push((fc.emit(Op::SetLocal(0)), NEW));
+    }
+
+    // Success branch: read the old element when needed, then evaluate and
+    // write the value. The value is never evaluated on an invalid index.
+    pending.push((fc.emit(Op::GetLocal(0)), FLAG));
+    let zero = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::CmpEq);
+    let skip = fc.emit_jump(Op::If(0));
+    if binds_old && !probe.read_old {
+        fc.emit(Op::GetLocal(offset));
+        fc.emit_data_fallback(&probe.element);
+        fc.emit(Op::GetDataIndexed(probe.base, probe.total));
+        // Drop the flag, the four limbs and the index, keeping the element.
+        fc.emit(Op::PopN(6));
+        emit_detach_data_element(fc, &probe.element);
+        pending.push((fc.emit(Op::SetLocal(0)), OLD));
+    }
+    compile_expr(fc, value)?;
+    if binds_new {
+        fc.emit(Op::Dup);
+        pending.push((fc.emit(Op::SetLocal(0)), NEW));
+    }
+    fc.emit(Op::GetLocal(offset));
+    fc.emit(Op::SetDataIndexed(probe.base, probe.total));
+    fc.emit(Op::PopN(6));
+    fc.patch_jump(skip);
+    fc.emit(Op::EndIf);
+
+    // The value's own locals are now numbered, so the block can be.
+    let block = fc.declare_local(&alloc::format!("__store_flag_{}", suffix));
+    fc.declare_local(&alloc::format!("__store_old_{}", suffix));
+    for i in 0..4 {
+        fc.declare_local(&alloc::format!("__store_bound_{}_{}", suffix, i));
+    }
+    fc.declare_local(&alloc::format!("__store_new_{}", suffix));
+    for (at, rel) in pending {
+        match &mut fc.chunk.ops[at] {
+            Op::SetLocal(slot) | Op::GetLocal(slot) => *slot = block + rel,
+            _ => unreachable!("only local accesses are deferred"),
+        }
+    }
+    let flag = block + FLAG;
+    let limbs: [u16; 4] = core::array::from_fn(|i| block + LIMB0 + i as u16);
+    let old_slot = binds_old.then_some(block + OLD);
+    let new_slot = binds_new.then_some(block + NEW);
+
+    // Dispatch arms in a virtual loop, mirroring the handled read.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+        let class_flag: i64 = match &arm.kind {
+            CheckedArmKind::StoreOk(_, _) => 0,
+            CheckedArmKind::InvalidIndex(_) => 1,
+            _ => {
+                return Err(CompileError {
+                    message: String::from(
+                        "internal error: non-write arm in a handled indexed write",
+                    ),
+                    span,
+                });
+            }
+        };
+        fc.emit(Op::GetLocal(flag));
+        let cidx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(cidx));
+        fc.emit(Op::CmpEq);
+        fail_addrs.push(fc.emit_jump(Op::If(0)));
+        match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                for (pat, slot) in [(old, old_slot), (new, new_slot)] {
+                    if let (Pattern::Variable(name, _), Some(slot)) = (pat, slot) {
+                        let v_slot = fc.declare_local_typed(name, Some(probe.element.clone()));
+                        fc.emit(Op::GetLocal(slot));
+                        fc.emit(Op::SetLocal(v_slot));
+                    }
+                }
+            }
+            CheckedArmKind::InvalidIndex(pat) => {
+                if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+                    fc.emit(Op::GetLocal(offset));
+                    let lit = fc.add_constant(Value::Int(*v));
+                    fc.emit(Op::Const(lit));
+                    fc.emit(Op::CmpEq);
+                    fail_addrs.push(fc.emit_jump(Op::If(0)));
+                }
+                if let Pattern::Variable(name, _) = pat {
+                    let v_slot = fc.declare_local_typed(name, Some(word_ty.clone()));
+                    fc.emit(Op::GetLocal(offset));
+                    fc.emit(Op::SetLocal(v_slot));
+                }
+            }
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
+        }
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.end_scope();
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+    let covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::InvalidIndex(Pattern::Variable(_, _) | Pattern::Wildcard(_))
+            )
+    });
+    if !covered {
+        fc.emit(Op::GetLocal(offset));
+        for slot in limbs {
+            fc.emit(Op::GetLocal(slot));
+        }
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+        fc.record_operator_site(&span);
+    }
+    // Structurally bounded, deterministic trailer, as in the handled read.
+    // Complete coverage makes it unreachable, and partial coverage ends at
+    // the explicit trap.
+    fc.emit(Op::GetLocal(flag));
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
     Ok(())
 }
 
@@ -5067,6 +6276,23 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Multiword(_, _, _) => Ok(()),
+        // A `private` field holds a flat `Text<N>` body in the persistent
+        // composite pool like any other flat composite, and only script code
+        // writes it, so its length never exceeds `N`. A `shared` field is
+        // refused. The host writes the shared buffer directly, nothing checks
+        // that a host-written length is at most `N`, and no host-side type
+        // marshals the body. Admitting it would let a host produce a `Text<N>`
+        // whose length exceeds its capacity, which the type exists to rule out.
+        TypeExpr::TextN(_, span) => match visibility {
+            DataVisibility::Private | DataVisibility::Const => Ok(()),
+            DataVisibility::Shared => Err(CompileError {
+                message: String::from(
+                    "data field type Text<N> is not admissible in a `shared` data segment: a \
+                     host-written length is not checked against the capacity",
+                ),
+                span: *span,
+            }),
+        },
         TypeExpr::Prim(prim, span) => match prim {
             PrimType::Byte
             | PrimType::Word
@@ -5228,6 +6454,14 @@ fn pattern_shape_eq(a: &Pattern, b: &Pattern) -> bool {
 }
 
 /// Compile a group of function definitions with the same name into one chunk.
+///
+/// The group is compiled once without copying any private composite read,
+/// and [`alias_copy::plan`] then decides from those ops which reads a write
+/// can reach while their value is live. When any can, the group is compiled
+/// a second time with exactly those reads copied. Compilation is a pure
+/// function of its inputs, so the second compile emits the first one's ops
+/// with the copies inserted after the chosen reads, and the read ordinals of
+/// the two compiles agree.
 #[allow(clippy::too_many_arguments)]
 fn compile_function_group(
     name: &str,
@@ -5242,6 +6476,68 @@ fn compile_function_group(
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
 ) -> Result<(Chunk, bool, crate::bytecode::ChunkSignature), CompileError> {
+    let pass = |copies: alloc::collections::BTreeSet<usize>| {
+        compile_function_group_pass(
+            name,
+            defs,
+            function_map,
+            native_map,
+            native_externals,
+            data_fields,
+            const_fields,
+            type_info,
+            fn_expr_types,
+            emit_debug,
+            generic_origin,
+            copies,
+        )
+    };
+    let (chunk, may_intern_opaque, signature, reads) = pass(alloc::collections::BTreeSet::new())?;
+    let copies = alias_copy::plan(&chunk.ops, &reads);
+    if copies.is_empty() {
+        return Ok((chunk, may_intern_opaque, signature));
+    }
+    let (copied, may_intern_opaque, signature, again) = pass(copies)?;
+    // The second compile must reach the same reads in the same order, or the
+    // ordinals it copied are not the ones the plan chose.
+    if again.len() != reads.len() {
+        return Err(CompileError {
+            message: alloc::format!(
+                "internal error: `{name}` reached {} private composite reads on its second compile and {} on its first",
+                again.len(),
+                reads.len()
+            ),
+            span: defs[0].span,
+        });
+    }
+    Ok((copied, may_intern_opaque, signature))
+}
+
+/// One compile of a function group, copying the private composite reads
+/// whose ordinals are in `alias_copies`. Returns the reads it recorded.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn compile_function_group_pass(
+    name: &str,
+    defs: &[&FunctionDef],
+    function_map: &BTreeMap<String, u16>,
+    native_map: &BTreeMap<String, u16>,
+    native_externals: &BTreeMap<String, bool>,
+    data_fields: &BTreeMap<String, Vec<(String, u32)>>,
+    const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
+    type_info: &TypeInfo,
+    fn_expr_types: &BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
+    emit_debug: bool,
+    generic_origin: Option<(&str, &str)>,
+    alias_copies: alloc::collections::BTreeSet<usize>,
+) -> Result<
+    (
+        Chunk,
+        bool,
+        crate::bytecode::ChunkSignature,
+        Vec<alias_copy::Read>,
+    ),
+    CompileError,
+> {
     // Within a group, every head after the first must dispatch on
     // a pattern shape distinct from every earlier head; otherwise
     // the later head is unreachable. Single-head groups skip this
@@ -5301,6 +6597,7 @@ fn compile_function_group(
         fn_expr_types.get(name).cloned().unwrap_or_default(),
         emit_debug,
     );
+    fc.alias_copies = alias_copies;
     fc.chunk.param_count = param_count;
     fc.chunk.param_types = first.params.iter().map(type_tag_for_param).collect();
     if let Some((origin, type_args)) = generic_origin {
@@ -5466,7 +6763,8 @@ fn compile_function_group(
     fc.record_function_entry(&first.span);
 
     let may_intern_opaque = fc.may_intern_opaque;
-    Ok((fc.finish(), may_intern_opaque, signature))
+    let reads = core::mem::take(&mut fc.alias_reads);
+    Ok((fc.finish(), may_intern_opaque, signature, reads))
 }
 
 /// Check if any parameter has a non-trivial pattern (not a simple variable).
@@ -5541,6 +6839,24 @@ fn compile_data_field_assign(
             message: format!("unknown data field: {}.{}", data_name, field),
             span,
         })?;
+    // An array field occupies one data slot per element, so a single `SetData` would put the
+    // whole array value in the first slot and leave the others unwritten. A whole-array read is
+    // refused for the same layout, and the write is refused to match, until an element-wise
+    // lowering exists.
+    let field_type = fc
+        .type_info
+        .data_field_types
+        .get(data_name)
+        .and_then(|fields| fields.get(field));
+    if let Some(TypeExpr::Array(_, _, _)) = field_type {
+        return Err(CompileError {
+            message: format!(
+                "data field `{}.{}` is an array; assign its elements through `{}.{}[i] = ...`",
+                data_name, field, data_name, field
+            ),
+            span,
+        });
+    }
     compile_expr(fc, value)?;
     // `SetData` handles both a scalar slot and a private composite slot. The VM
     // dispatches on the value at run time: a flat composite is copied into the
@@ -5635,11 +6951,6 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
             value,
             span,
         } => {
-            // Evaluate the value first so it lands beneath the
-            // computed offset on the operand stack. The trailing
-            // `Op::SetDataIndexed` then pops the offset and pops
-            // the value.
-            compile_expr(fc, value)?;
             let index_refs: Vec<&Expr> = indices.iter().collect();
             emit_data_indexed_write(
                 fc,
@@ -5648,6 +6959,7 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
                     field: field.as_str(),
                     indices: index_refs,
                 },
+                value,
                 *span,
             )?;
         }
@@ -5797,6 +7109,13 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             }
         }
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
+        #[cfg(feature = "text")]
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => text_intrinsics::result_type(fc, receiver, method, args),
         Expr::Ident { name, .. } => fc.local_type(name).cloned(),
         Expr::FieldAccess { object, field, .. } => {
             let owner = fc.struct_name_of(object)?;
@@ -5921,6 +7240,45 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 infer_arm_body_type(fc, &first.body, &bound, &operand_ty)
             }
         },
+        // A handled indexed write's type is its arms' common body type,
+        // inferred from the first arm with its binders typed: the element
+        // type for `ok(old, new)` and `Word` for `invalid_index(j)`.
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            arms,
+            span,
+            ..
+        } => {
+            let first = arms.first()?;
+            let mut bound: Vec<String> = Vec::new();
+            let push = |p: &Pattern, out: &mut Vec<String>| {
+                if let Pattern::Variable(name, _) = p {
+                    out.push(name.clone());
+                }
+            };
+            let bind_ty = match &first.kind {
+                crate::ast::CheckedArmKind::StoreOk(old, new) => {
+                    push(old, &mut bound);
+                    push(new, &mut bound);
+                    let field_ty = fc
+                        .type_info
+                        .data_field_types
+                        .get(data_name)
+                        .and_then(|fields| fields.get(field))?;
+                    match field_ty {
+                        TypeExpr::Array(elem, _, _) => (**elem).clone(),
+                        _ => return None,
+                    }
+                }
+                crate::ast::CheckedArmKind::InvalidIndex(p) => {
+                    push(p, &mut bound);
+                    TypeExpr::Prim(PrimType::Word, *span)
+                }
+                _ => return None,
+            };
+            infer_arm_body_type(fc, &first.body, &bound, &bind_ty)
+        }
         _ => None,
     }
 }
@@ -5943,6 +7301,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
         ),
         TypeExpr::Unit(_) => Some("()".to_string()),
         TypeExpr::Multiword(_, _, _) => Some("Multiword".to_string()),
+        TypeExpr::TextN(_, _) => Some("Text".to_string()),
         TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
@@ -5971,10 +7330,11 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
     if ti.word_bytes == 0 {
         return None;
     }
-    ti.layout_context()
-        .layout_for(ty)
-        .ok()?
-        .flat_byte_size(ti.word_bytes, ti.float_bytes)
+    ti.layout_context().layout_for(ty).ok()?.flat_byte_size(
+        ti.word_bytes,
+        ti.float_bytes,
+        ti.addr_bytes,
+    )
 }
 
 /// Build the per-enum-type layout descriptors the runtime uses to make an
@@ -6074,7 +7434,7 @@ fn wire_shape_of_type(ty: &TypeExpr, ti: &TypeInfo) -> crate::bytecode::WireShap
         LayoutDescriptor::Struct { .. } => CompositeKind::Struct,
         LayoutDescriptor::Enum { .. } => CompositeKind::Enum,
     };
-    match u32::try_from(desc.size_in_bytes(ti.word_bytes, ti.float_bytes)) {
+    match u32::try_from(desc.size_in_bytes(ti.word_bytes, ti.float_bytes, ti.addr_bytes)) {
         Ok(size) => WireShape::Flat {
             kind: composite_kind.to_tag(),
             size,
@@ -6117,7 +7477,7 @@ fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
         _ => match ti.layout_context().layout_for(ty) {
             Ok(crate::value_layout::LayoutDescriptor::Scalar(_)) => 0,
             Ok(layout) => layout
-                .flat_byte_size(ti.word_bytes, ti.float_bytes)
+                .flat_byte_size(ti.word_bytes, ti.float_bytes, ti.addr_bytes)
                 .unwrap_or(0),
             Err(_) => 0,
         },
@@ -6180,8 +7540,9 @@ fn push_shared_layout_desc(
                     span,
                 });
             }
-            let size = u32::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes))
-                .map_err(|_| overflow())?;
+            let size =
+                u32::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes, ti.addr_bytes))
+                    .map_err(|_| overflow())?;
             out.push(crate::bytecode::SharedSlotLayout {
                 offset: base_offset,
                 kind: kind.to_tag(),
@@ -6216,7 +7577,7 @@ fn push_shared_layout_desc(
                 _ => unreachable!("matched Tuple/Struct/Enum above"),
             };
             let len = layout
-                .flat_byte_size(ti.word_bytes, ti.float_bytes)
+                .flat_byte_size(ti.word_bytes, ti.float_bytes, ti.addr_bytes)
                 .ok_or_else(|| CompileError {
                     message: String::from(
                         "shared data composite field is not flat (it carries a reference); not \
@@ -6301,7 +7662,7 @@ fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
         return FlatFieldForm::Scalar(kind);
     }
     if let (Some(size), Some(variant)) = (
-        descriptor.flat_byte_size(ti.word_bytes, ti.float_bytes),
+        descriptor.flat_byte_size(ti.word_bytes, ti.float_bytes, ti.addr_bytes),
         descriptor.flat_composite_kind(),
     ) && size <= u16::MAX as usize
     {
@@ -6575,7 +7936,7 @@ fn emit_field_extract(fc: &mut FuncCompiler, slot: u16, access: &FieldAccessOp) 
             // `GetIndex` pops the index then the container, so push the
             // container (via `GetLocal` above) then the index constant.
             fc.emit(Op::Const(*index_const));
-            fc.emit(Op::GetIndex(*elem));
+            fc.emit_index_read(*elem);
         }
     }
 }
@@ -7113,13 +8474,76 @@ fn compile_let_pattern_typed(
                 compile_let_pattern_typed(fc, pat, sub_ty)?;
             }
         }
-        _ => {
-            // For other patterns in let, just bind as a single variable.
-            let slot = fc.declare_local("_");
-            fc.emit(Op::SetLocal(slot));
+        Pattern::Struct(struct_name, field_pats, _) => {
+            // The value is stored in a fresh local and each field is read from it
+            // in pattern order, exactly as `let t = v; let x = t.x;` lowers, so the
+            // self-hosted compiler can reach the same bytes by that rewrite. The
+            // field access is resolved through the value's type as a field access
+            // resolves it, and through the pattern's struct name when the value's
+            // type is not inferred, since the type checker has matched the two.
+            let type_name = String::from(named_type_name(ty.as_ref()).unwrap_or(struct_name));
+            let field_types: BTreeMap<String, TypeExpr> = fc
+                .type_info
+                .structs
+                .get(&type_name)
+                .cloned()
+                .unwrap_or_default();
+            let temp = fc.declare_local("__let_tmp");
+            fc.emit(Op::SetLocal(temp));
+            for field_pat in field_pats {
+                fc.emit(Op::GetLocal(temp));
+                let field_op = struct_field_access(fc, &type_name, &field_pat.name);
+                fc.emit(Op::GetField(field_op));
+                let field_ty = field_types.get(&field_pat.name).cloned();
+                match &field_pat.pattern {
+                    Some(pat) => compile_let_pattern_typed(fc, pat, field_ty)?,
+                    None => {
+                        let slot = fc.declare_local_typed(&field_pat.name, field_ty);
+                        fc.emit(Op::SetLocal(slot));
+                    }
+                }
+            }
+        }
+        Pattern::Enum(enum_name, variant, sub_pats, span) => {
+            // Only a variant of a single-variant enum is irrefutable, and the type
+            // checker refuses every other variant pattern in a `let`. The check is
+            // repeated here for a program that reaches the compiler by another
+            // route, so a refutable pattern is never bound as if it had matched.
+            let payload_types: Option<Vec<TypeExpr>> = fc
+                .type_info
+                .enums
+                .get(enum_name)
+                .filter(|variants| variants.len() == 1)
+                .and_then(|variants| variants.get(variant))
+                .cloned();
+            let Some(payload_types) = payload_types else {
+                return Err(refutable_let_error(*span));
+            };
+            let temp = fc.declare_local("__let_tmp");
+            fc.emit(Op::SetLocal(temp));
+            for (i, sub_pat) in sub_pats.iter().enumerate() {
+                fc.emit(Op::GetLocal(temp));
+                let efield = enum_field_access(fc, enum_name, variant, i);
+                fc.emit(Op::GetEnumField(efield));
+                compile_let_pattern_typed(fc, sub_pat, payload_types.get(i).cloned())?;
+            }
+        }
+        Pattern::Literal(_, span) => {
+            return Err(refutable_let_error(*span));
         }
     }
     Ok(())
+}
+
+/// The refusal of a refutable `let` pattern that reached the compiler, the
+/// type checker's refusal restated for a program that bypassed it.
+fn refutable_let_error(span: Span) -> CompileError {
+    CompileError {
+        message: String::from(
+            "refutable pattern in `let`, since the pattern does not match every value of its type. Use `match` to handle the values it does not cover",
+        ),
+        span,
+    }
 }
 
 /// Compile a for loop.
@@ -7193,7 +8617,8 @@ fn compile_for_in_data_array(
 
     // Bind the iteration variable to the indexed element.
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetDataIndexed(base, total_slots));
+    fc.emit_data_read(base, total_slots, elem_type);
+    fc.note_data_read(data_name, base, total_slots, elem_type);
     let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
     fc.emit(Op::SetLocal(var_slot));
 
@@ -7305,13 +8730,18 @@ fn compile_for_limit(
     end: &Expr,
     cap: i64,
 ) -> Result<(), CompileError> {
+    let loop_scope_base = fc.locals.len();
     // i = min (the loop variable).
     compile_expr(fc, start)?;
     let var_slot = fc.declare_local(&for_stmt.var);
     fc.emit(Op::SetLocal(var_slot));
 
-    // mx = max (the runtime range end).
-    compile_expr(fc, end)?;
+    // Both bounds resolve before the induction variable enters lexical scope.
+    // Reserve its slot in the established order, but hide the name for the end expression.
+    let variable = fc.locals.pop().expect("just declared induction variable");
+    let end_result = compile_expr(fc, end);
+    fc.locals.push(variable);
+    end_result?;
     let end_slot = fc.declare_local("__for_end");
     fc.emit(Op::SetLocal(end_slot));
 
@@ -7411,6 +8841,9 @@ fn compile_for_limit(
     fc.patch_jump(outer);
     fc.emit(Op::EndIf);
 
+    // Type checking ends the loop's lexical scope before the outcome arms.
+    // Frame slots remain allocated for dispatch and explicit outcome bindings.
+    fc.locals.truncate(loop_scope_base);
     compile_loop_outcome_dispatch(fc, for_stmt, var_slot, ctr_slot, oc_slot)
 }
 
@@ -7531,6 +8964,15 @@ fn compile_loop_outcome_dispatch(
 }
 
 fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
+    // The induction variable and generated temporaries belong to the loop, just
+    // as in type checking. Keep allocated frame slots monotonic across this scope.
+    fc.begin_scope();
+    let result = compile_for_scoped(fc, for_stmt);
+    fc.end_scope();
+    result
+}
+
+fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
     if let Some(limit) = &for_stmt.limit {
         let Iterable::Range(start, end) = &for_stmt.iterable else {
             return Err(CompileError {
@@ -7548,7 +8990,10 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             let var_slot = fc.declare_local(&for_stmt.var);
             fc.emit(Op::SetLocal(var_slot));
 
-            compile_expr(fc, end)?;
+            let variable = fc.locals.pop().expect("just declared induction variable");
+            let end_result = compile_expr(fc, end);
+            fc.locals.push(variable);
+            end_result?;
             let end_slot = fc.declare_local("__for_end");
             fc.emit(Op::SetLocal(end_slot));
 
@@ -7618,12 +9063,25 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
                     return compile_for_in_data_array(fc, for_stmt, name, field, &elem, len);
                 }
             }
-            // Determine the static array length if the source's type is
-            // statically known. Used to emit a `Const(N)` end bound that
-            // the strict-mode WCMU verifier accepts. Falls back to
-            // `Op::Len` for sources whose length is not statically
-            // known. The fall-back is admissible at the bytecode level
-            // but may be rejected by the verifier in strict mode.
+            // Determine the static array length. Used to emit a `Const(N)`
+            // end bound that the strict-mode WCMU verifier accepts.
+            //
+            // **There is no `Op::Len` fall-back here, deliberately.** The type
+            // checker admits a for-in iterable only when its type is an array,
+            // and an array type's dimension is a literal after
+            // monomorphization, so a well-typed program always has a static
+            // length. Emitting `Op::Len` instead produced a module that
+            // `verify()` accepted and the virtual machine refused at run time
+            // with `InvalidBytecode` -- the class `verify()` exists to
+            // exclude. What held that trap shut was the resource-bound
+            // extractor refusing a loop with no extractable bound, a refusal
+            // this project's taxonomy calls liftable, so lifting it would have
+            // turned a rejected program into a loading, trapping one.
+            //
+            // Refusing at the emission site is the honest outcome: a failure
+            // to fold is a limitation of `static_for_in_length` and reporting
+            // it as a compile error names the defect rather than deferring it
+            // to a runtime the artefact was never valid for.
             let static_length = fc.static_for_in_length(expr);
             // Determine the iteration variable's type from the source
             // type's element type. Recorded on the iteration variable's
@@ -7638,15 +9096,22 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
 
             // Compute the end bound.
             let end_slot = fc.declare_local("__for_end");
-            if let Some(n) = static_length {
-                let n_const = fc.add_constant(Value::Int(n));
-                fc.emit(Op::Const(n_const));
-                fc.emit(Op::SetLocal(end_slot));
-            } else {
-                fc.emit(Op::GetLocal(arr_slot));
-                fc.emit(Op::Len);
-                fc.emit(Op::SetLocal(end_slot));
-            }
+            let Some(n) = static_length else {
+                return Err(CompileError {
+                    message: String::from(
+                        "the length of this for-in source could not be folded to a \
+                         constant. Its type is an array, so the length is statically \
+                         known and this is a limitation of the compiler rather than of \
+                         the program; please report it. The alternative would be to \
+                         emit a length opcode the virtual machine refuses on a flat \
+                         array body, producing a module that loads and then traps.",
+                    ),
+                    span: expr.span(),
+                });
+            };
+            let n_const = fc.add_constant(Value::Int(n));
+            fc.emit(Op::Const(n_const));
+            fc.emit(Op::SetLocal(end_slot));
 
             // Initialize index to 0.
             let zero_const = fc.add_constant(Value::Int(0));
@@ -7666,10 +9131,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Extract element at current index.
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
-            fc.emit(Op::GetIndex(array_elem_operand(
-                element_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(element_ty.as_ref(), &fc.type_info));
             let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
@@ -7730,6 +9192,92 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
 /// binding annotations, and cast targets. Composite type
 /// expressions (`Tuple`, `Array`, `Option`, `Named<T, U, …>`)
 /// recurse into their components.
+/// Rewrite each pipe whose target is a generic function into the call it
+/// stands for, `x |> f(a)` into `f(x, a)` and `x |> f(a, _)` into `f(a, x)`.
+///
+/// Monomorphization specializes only `Expr::Call` sites, and the type checker
+/// types a pipe against the generic's own parameter variables rather than a
+/// fresh instance, so a piped generic call kept the generic chunk with `Opaque`
+/// parameter and return kinds. The operator ruled on 2026-10-31 that a pipe is
+/// to monomorphize exactly as the plain call does, and this rewrite, run before
+/// the type checker, gives both forms one path. A pipe into a non-generic
+/// function or a native keeps its own lowering, so its bytecode is unchanged.
+/// A pipe with more than one placeholder is left for the type checker to
+/// refuse.
+///
+/// The rewrite is not scope-aware and needs not be. Where a local of the same
+/// name shadows the generic function, the type checker refuses the resulting
+/// call as it refuses the pipe and the plain call, since no local is callable,
+/// so a shadowed name resolves identically in all three forms.
+fn desugar_generic_pipes(program: &mut Program) {
+    use crate::visitor::MutVisitor;
+    struct Desugar {
+        generics: BTreeSet<String>,
+    }
+    impl MutVisitor for Desugar {
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            self.walk_expr(expr);
+            let Expr::Pipeline {
+                left,
+                func,
+                args,
+                span,
+            } = expr
+            else {
+                return;
+            };
+            if !self.generics.contains(func.as_str()) {
+                return;
+            }
+            let placeholders = args
+                .iter()
+                .filter(|a| matches!(a, Expr::Placeholder { .. }))
+                .count();
+            if placeholders > 1 {
+                return;
+            }
+            let piped = core::mem::replace(
+                left.as_mut(),
+                Expr::Placeholder {
+                    span: Span::default(),
+                },
+            );
+            let mut call_args = core::mem::take(args);
+            match call_args
+                .iter()
+                .position(|a| matches!(a, Expr::Placeholder { .. }))
+            {
+                Some(at) => call_args[at] = piped,
+                None => call_args.insert(0, piped),
+            }
+            *expr = Expr::Call {
+                name: core::mem::take(func),
+                args: call_args,
+                const_args: Vec::new(),
+                span: *span,
+            };
+        }
+    }
+    let generics: BTreeSet<String> = program
+        .functions
+        .iter()
+        .filter(|f| !f.type_params.is_empty() || !f.const_params.is_empty())
+        .map(|f| f.name.clone())
+        .collect();
+    if generics.is_empty() {
+        return;
+    }
+    let mut pass = Desugar { generics };
+    for func in &mut program.functions {
+        pass.visit_block(&mut func.body);
+    }
+    for block in &mut program.impls {
+        for method in &mut block.methods {
+            pass.visit_block(&mut method.body);
+        }
+    }
+}
+
 fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
     use crate::ast::*;
     fn fix_type(t: &mut TypeExpr, frac_bits: u8) {
@@ -7739,7 +9287,10 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     *slot = Some(frac_bits);
                 }
             }
-            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => {}
+            TypeExpr::Prim(_, _)
+            | TypeExpr::Unit(_)
+            | TypeExpr::Multiword(_, _, _)
+            | TypeExpr::TextN(_, _) => {}
             TypeExpr::Tuple(parts, _) => {
                 for p in parts.iter_mut() {
                     fix_type(p, frac_bits);
@@ -7902,6 +9453,23 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     fix_expr(&mut arm.body, frac_bits);
                 }
             }
+            Expr::DataIndexStore {
+                indices,
+                value,
+                arms,
+                ..
+            } => {
+                for idx in indices.iter_mut() {
+                    fix_expr(idx, frac_bits);
+                }
+                fix_expr(value, frac_bits);
+                for arm in arms.iter_mut() {
+                    if let Some(guard) = arm.guard.as_mut() {
+                        fix_expr(guard, frac_bits);
+                    }
+                    fix_expr(&mut arm.body, frac_bits);
+                }
+            }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
             Expr::Classify { value, .. } | Expr::Declassify { value, .. } => {
                 fix_expr(value, frac_bits);
@@ -7950,6 +9518,25 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
             fix_type(&mut method.return_type, frac_bits);
             fix_block(&mut method.body, frac_bits);
         }
+    }
+}
+
+/// Whether `source as target` casts a primitive to its own type.
+///
+/// Such a cast is identity and must emit nothing, since each
+/// conversion opcode traps on a value already of its result type.
+/// `Fixed` compares by resolved fraction bits, so `Fixed` and
+/// `Fixed<DEFAULT_FIXED_FRAC_BITS>` are the same type. An unknown
+/// source is not identity, and keeps the conversion the type
+/// checker validated.
+fn is_identity_prim_cast(source: Option<&TypeExpr>, target: &TypeExpr) -> bool {
+    let frac = |n: &Option<u8>| n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS);
+    match (source, target) {
+        (Some(TypeExpr::Prim(PrimType::Fixed(a), _)), TypeExpr::Prim(PrimType::Fixed(b), _)) => {
+            frac(a) == frac(b)
+        }
+        (Some(TypeExpr::Prim(s, _)), TypeExpr::Prim(t, _)) => s == t,
+        _ => false,
     }
 }
 
@@ -8665,6 +10252,104 @@ fn infer_arg_range_with(
     }
 }
 
+/// Compile `"..." as Text<N>` to one pooled constant load.
+///
+/// The value is the flat body `Tuple(Int length, Array[Byte; N])` that
+/// `layout_pass` and `zero_value` describe, with the literal's UTF-8 bytes
+/// followed by zero bytes up to the capacity. **The padding is part of the
+/// value, not slack.** A later equality operation compares whole bodies, so two
+/// texts with the same content must agree in the bytes past their length too.
+///
+/// # Why a pooled constant rather than a `NewComposite` sequence
+///
+/// The compiler already lowers a compile-time composite constant, a const data
+/// field, to `Op::Const` over a `ConstValue` tuple or array, and the virtual
+/// machine packs every transitively scalar constant into its const pool once at
+/// construction. The literal cast is the same kind of value, so it takes the
+/// same path. One instruction replaces the `N + 3` a byte-by-byte construction
+/// would emit, so the execution cost does not grow with the capacity, and the
+/// load allocates nothing in the arena. Arena memory is spent where it always
+/// is, when an enclosing composite packs the body, and that allocation is sized
+/// from the layout as `word_bytes + N`.
+///
+/// # Failure modes
+///
+/// The type checker admits only a string literal operand and refuses one longer
+/// than the capacity. Both conditions are checked again here, because emitting
+/// a body longer than `N` would put a wrong figure into the worst-case memory
+/// bound rather than fail visibly. A capacity that is still symbolic, or not
+/// positive, is refused for the same reason.
+fn compile_text_literal_cast(
+    fc: &mut FuncCompiler,
+    operand: &Expr,
+    cap: &ConstExpr,
+    span: Span,
+) -> Result<(), CompileError> {
+    use crate::bytecode::ConstValue;
+    let n = match cap.as_lit() {
+        Some(n) if n > 0 => n,
+        Some(n) => {
+            return Err(CompileError {
+                message: format!("Text<{n}> is not a legal type: a text capacity must be positive"),
+                span,
+            });
+        }
+        None => {
+            return Err(CompileError {
+                message: format!(
+                    "Text<{cap}> has a capacity that is unresolved after monomorphization"
+                ),
+                span,
+            });
+        }
+    };
+    let Expr::Literal {
+        value: Literal::String(text),
+        ..
+    } = operand
+    else {
+        return Err(CompileError {
+            message: String::from(
+                "only a string literal may be cast to a capacity-bounded text, because its \
+                 length must be known at compile time",
+            ),
+            span,
+        });
+    };
+    let bytes = text.as_bytes();
+    let capacity = usize::try_from(n).map_err(|_| CompileError {
+        message: format!("Text<{n}> exceeds the addressable capacity of the compiling host"),
+        span,
+    })?;
+    if bytes.len() > capacity {
+        return Err(CompileError {
+            message: format!(
+                "string literal of {} bytes does not fit in Text<{n}>: a literal longer than \
+                 the capacity is refused rather than truncated",
+                bytes.len()
+            ),
+            span,
+        });
+    }
+    // The length is stored as a word. A literal no longer than a capacity that
+    // fits `i64` fits `i64` too, so the conversion cannot fail after the check
+    // above, and it is made fallible anyway rather than cast.
+    let length = i64::try_from(bytes.len()).map_err(|_| CompileError {
+        message: String::from("string literal length does not fit in a word"),
+        span,
+    })?;
+    let mut content: Vec<ConstValue> = Vec::with_capacity(capacity);
+    content.extend(bytes.iter().map(|b| ConstValue::Byte(*b)));
+    content.resize(capacity, ConstValue::Byte(0));
+    let value = ConstValue::Tuple(alloc::vec![
+        ConstValue::Int(length),
+        ConstValue::Array(content)
+    ]);
+    let idx = fc.add_const_value(value);
+    fc.emit(Op::Const(idx));
+    Ok(())
+}
+
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
@@ -8952,18 +10637,35 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 BinOp::Div => {
                     if let Some(n) = left_fixed_n {
                         fc.emit(Op::FixedDiv(n));
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
+                    } else if left_is_int
+                        || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+                    {
+                        fc.emit(Op::CheckedDiv(0));
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
                     } else {
                         fc.emit(Op::Div);
+                        fc.record_operator_site(span);
+                        fc.emit(Op::PopN(2));
                     }
-                    // Division can trap on a zero divisor; record the
-                    // operator site so the fault resolves exactly here
-                    // (B29 items 2 and 3).
-                    fc.record_operator_site(span);
                 }
                 BinOp::Mod => {
-                    fc.emit(Op::Mod);
-                    // Modulo by zero traps; record the operator site.
-                    fc.record_operator_site(span);
+                    if left_is_int || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+                    {
+                        fc.emit(Op::CheckedMod);
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
+                    } else {
+                        fc.emit(Op::Mod);
+                        fc.record_operator_site(span);
+                        if left_fixed_n.is_some() {
+                            emit_bare_zero_divisor_guard(fc, span);
+                        } else {
+                            fc.emit(Op::PopN(2));
+                        }
+                    }
                 }
                 BinOp::Eq | BinOp::NotEq => {
                     // A float-bearing composite must compare field-wise so the
@@ -9113,7 +10815,39 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // mangled name `Trait::Head::method` in the function map.
             // The receiver is passed as the first argument to the
             // resolved chunk.
-            let head = match infer_expr_type(fc, receiver).and_then(|t| type_expr_head(&t)) {
+            //
+            // A bundled text operation is decided first, by the receiver type,
+            // as the type checker decides it. The type checker has already
+            // refused it in a build without the `text` feature, and the refusal
+            // is repeated here so that a program reaching the compiler by
+            // another route is refused too.
+            let receiver_type = infer_expr_type(fc, receiver);
+            if let Some(TypeExpr::TextN(..)) = receiver_type.as_ref().map(strip_type_labels) {
+                match crate::text_intrinsic::resolve_method(method) {
+                    Err(message) => {
+                        return Err(CompileError {
+                            message,
+                            span: *span,
+                        });
+                    }
+                    #[cfg(feature = "text")]
+                    Ok(Some(op)) => {
+                        return text_intrinsics::compile(fc, op, receiver, args, *span);
+                    }
+                    #[cfg(not(feature = "text"))]
+                    Ok(Some(op)) => {
+                        return Err(CompileError {
+                            message: format!(
+                                "method `{}` on `Text<N>` requires the `text` cargo feature",
+                                op.name()
+                            ),
+                            span: *span,
+                        });
+                    }
+                    Ok(None) => {}
+                }
+            }
+            let head = match receiver_type.and_then(|t| type_expr_head(&t)) {
                 Some(h) => h,
                 None => {
                     return Err(CompileError {
@@ -9195,11 +10929,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     .get(func.as_str())
                     .copied()
                     .unwrap_or(false);
-                if is_external {
-                    fc.emit(Op::CallExternalNative(idx, arg_count));
-                } else {
-                    fc.emit(Op::CallVerifiedNative(idx, arg_count));
-                }
+                fc.emit_native_call(idx, call_args.len(), is_external, span)?;
+                fc.emit_host_error_default_trap(span);
             } else {
                 return Err(CompileError {
                     message: format!("undefined function: {}", func),
@@ -9376,8 +11107,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     .type_info
                     .data_field_types
                     .get(name)
-                    .and_then(|fields| fields.get(field));
-                if let Some(t) = field_type
+                    .and_then(|fields| fields.get(field))
+                    .cloned();
+                if let Some(t) = &field_type
                     && matches!(t, TypeExpr::Array(_, _, _))
                 {
                     return Err(CompileError {
@@ -9389,6 +11121,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     });
                 }
                 fc.emit(Op::GetData(slot));
+                if let Some(t) = &field_type {
+                    fc.note_data_read(name, slot, 1, t);
+                }
                 return Ok(());
             }
             // Bake the flat field access when the object's struct type is
@@ -9443,10 +11178,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let elem_ty = infer_expr_type(fc, object).and_then(|t| element_type_of(&t));
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
-            fc.emit(Op::GetIndex(array_elem_operand(
-                elem_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(elem_ty.as_ref(), &fc.type_info));
             // Indexing can trap on an out-of-bounds index; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(span);
@@ -9662,6 +11394,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             target,
             span,
         } => {
+            if let TypeExpr::TextN(cap, _) = &strip_type_labels(target) {
+                return compile_text_literal_cast(fc, inner, cap, *span);
+            }
             // A Multiword cast target whose dimensions do not resolve to a
             // concrete `u16` after monomorphization is an unresolved or
             // overflowed dimension, not a valid construction (audit F2). Reject
@@ -9758,9 +11493,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 TypeExpr::Named(name, _, _, _) => fc.type_info.newtype_names.contains(name),
                 _ => false,
             };
-            if source_is_newtype || target_is_newtype {
+            if source_is_newtype
+                || target_is_newtype
+                || is_identity_prim_cast(source.as_ref(), target)
+            {
                 // No opcode emitted; the value flows through
-                // unchanged.
+                // unchanged. A cast to the source's own primitive type
+                // is identity, and every conversion opcode traps on a
+                // value already of its result type.
             } else {
                 match (source.as_ref(), target) {
                     (_, TypeExpr::Prim(PrimType::Float, _)) => {
@@ -9830,6 +11570,16 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         } => {
             compile_checked(fc, op_expr, arms, span)?;
         }
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => {
+            compile_data_index_store(fc, data_name, field, indices, value, arms, *span)?;
+        }
         Expr::SaturateMax { .. } => {
             // Word::MAX. Future iterations refine the value based
             // on the construct's expected type (Byte::MAX,
@@ -9859,6 +11609,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
     Ok(())
 }
 
+// Checked division leaves low, high and flag. Only a zero divisor traps;
+// overflow continues with the same wrapping low result as the bare operator.
+fn emit_bare_zero_divisor_guard(fc: &mut FuncCompiler, span: &Span) {
+    let zero_flag = fc.add_constant(Value::Int(3));
+    fc.emit(Op::Const(zero_flag));
+    fc.emit(Op::CmpEq);
+    let skip_trap = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.record_operator_site(span);
+    fc.patch_jump(skip_trap);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(1));
+}
+
 /// Compile an overflow-checked construct.
 ///
 /// Surface form: `op_expr { ok(p) => body, overflow(ph, pl) =>
@@ -9868,8 +11632,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 ///
 /// Lowering shape:
 /// 1. Emit the operands and the checked opcode (`CheckedAdd`,
-///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, or `Div`/`Mod`
-///    with stamped overflow contract). The stack carries
+///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, `CheckedDiv`, or
+///    `CheckedMod`). The stack carries
 ///    `[low, high, flag]` after the opcode, bottom to top. Note
 ///    that this is the reverse of the arm binding order: the
 ///    surface form `overflow(h, l)` binds high first.
@@ -9881,9 +11645,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 ///    `underflow`), then literal-pattern equality checks against
 ///    `high_slot` / `low_slot`, then optional guard evaluation,
 ///    then bind variable patterns and compile the body.
-/// 5. After the last arm, emit a `Trap` for the unreachable case
-///    where no catch-all matched (defense-in-depth; the type
-///    checker rejects non-exhaustive constructs).
+/// 5. After the last arm, trap only for an uncovered zero-divisor
+///    outcome. Other unhandled outcomes use the wrapping low result.
 fn compile_checked(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
@@ -10080,12 +11843,57 @@ fn compile_checked(
     fc.emit(Op::SetLocal(high_slot));
     fc.emit(Op::SetLocal(low_slot));
 
+    // When unguarded catch-all arms cover every outcome that can arise and no
+    // zero-divisor trap is pending, the wrapping default cannot run, and the
+    // type checker did not require the construct to have the operand's type.
+    // Its unreachable-arm rule then makes the last arm an unguarded catch-all,
+    // and every path that reaches that arm is in its class, so the arm omits
+    // its class test and breaks unconditionally. No default follows, so the
+    // join after the virtual loop holds only the arms' values, and no trap is
+    // added, so a fully handled construct stays trap-free. An operand whose
+    // family cannot be inferred keeps every test and the default, which is the
+    // conservative direction.
+    let operand_class = match operand.and_then(|e| infer_expr_type(fc, e)) {
+        Some(TypeExpr::Prim(PrimType::Byte, _)) => Some(crate::typecheck::CheckedOperand::Byte),
+        Some(TypeExpr::Prim(PrimType::Float, _)) => Some(crate::typecheck::CheckedOperand::Float),
+        Some(TypeExpr::Prim(PrimType::Fixed(_), _)) => {
+            Some(crate::typecheck::CheckedOperand::Fixed)
+        }
+        Some(TypeExpr::Prim(PrimType::Word, _)) => Some(crate::typecheck::CheckedOperand::Word),
+        _ => None,
+    };
+    let default_unreachable = match (crate::typecheck::CheckedOp::of(op_expr), operand_class) {
+        (Some(op), Some(class)) => {
+            !crate::typecheck::checked_wrap_default_reachable(op, class, arms)
+        }
+        _ => false,
+    };
+    let may_divide_by_zero = matches!(
+        op_expr,
+        Expr::BinOp {
+            op: BinOp::Div | BinOp::Mod,
+            ..
+        }
+    );
+    let zero_divisor_covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::ZeroDivisor(Pattern::Variable(..) | Pattern::Wildcard(_))
+            )
+    });
+    let unconditional_last = default_unreachable
+        && (!may_divide_by_zero || zero_divisor_covered)
+        && arms.last().is_some_and(|a| {
+            a.guard.is_none() && crate::typecheck::checked_arm_is_catchall(&a.kind)
+        });
+
     // Wrap the arm dispatch in a virtual loop so the first
     // matching arm can break out with its body's result.
     let loop_addr = fc.emit(Op::Loop(0));
     fc.enter_loop();
 
-    for arm in arms {
+    for (arm_index, arm) in arms.iter().enumerate() {
         fc.begin_scope();
         let mut fail_addrs: Vec<usize> = Vec::new();
 
@@ -10115,7 +11923,8 @@ fn compile_checked(
             | CheckedArmKind::InvalidNewtype(_)
             | CheckedArmKind::PayloadDiscriminant(_)
             | CheckedArmKind::InvalidDiscriminant(_)
-            | CheckedArmKind::Error(_) => {
+            | CheckedArmKind::Error(_)
+            | CheckedArmKind::StoreOk(_, _) => {
                 return Err(CompileError {
                     message: alloc::string::String::from(
                         "internal error: non-arithmetic outcome arm on an arithmetic checked construct",
@@ -10124,12 +11933,14 @@ fn compile_checked(
                 });
             }
         };
-        fc.emit(Op::GetLocal(flag_slot));
-        let class_idx = fc.add_constant(Value::Int(class_flag));
-        fc.emit(Op::Const(class_idx));
-        fc.emit(Op::CmpEq);
-        let class_fail = fc.emit_jump(Op::If(0));
-        fail_addrs.push(class_fail);
+        if !(unconditional_last && arm_index + 1 == arms.len()) {
+            fc.emit(Op::GetLocal(flag_slot));
+            let class_idx = fc.add_constant(Value::Int(class_flag));
+            fc.emit(Op::Const(class_idx));
+            fc.emit(Op::CmpEq);
+            let class_fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(class_fail);
+        }
 
         // Literal pattern tests against the high/low slots.
         let test_literal =
@@ -10210,19 +12021,29 @@ fn compile_checked(
     // result for `overflow` and `underflow`, so pushing it is the
     // wrapping default for the optional `overflow` and `underflow`
     // classes.
-    fc.emit(Op::GetLocal(flag_slot));
-    let three_idx = fc.add_constant(Value::Int(3));
-    fc.emit(Op::Const(three_idx));
-    fc.emit(Op::CmpEq);
-    let not_zero_divisor = fc.emit_jump(Op::If(0));
-    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
-    fc.patch_jump(not_zero_divisor);
-    fc.emit(Op::EndIf);
+    // Only division and modulo can produce flag 3. An unguarded
+    // variable or wildcard covers that class for every numerator.
+    // Guards and literal patterns leave the zero-divisor fallback live.
+    if may_divide_by_zero && !zero_divisor_covered {
+        fc.emit(Op::GetLocal(flag_slot));
+        let three_idx = fc.add_constant(Value::Int(3));
+        fc.emit(Op::Const(three_idx));
+        fc.emit(Op::CmpEq);
+        let not_zero_divisor = fc.emit_jump(Op::If(0));
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+        fc.record_operator_site(span);
+        fc.patch_jump(not_zero_divisor);
+        fc.emit(Op::EndIf);
+    }
 
-    fc.emit(Op::GetLocal(low_slot));
-    let default_break = fc.emit(Op::Break(0));
-    if let Some(breaks) = fc.loop_breaks.last_mut() {
-        breaks.push(default_break);
+    // An unconditional last arm ends every path through the virtual loop, so the
+    // wrapping default after it would be dead and is not emitted.
+    if !unconditional_last {
+        fc.emit(Op::GetLocal(low_slot));
+        let default_break = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(default_break);
+        }
     }
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
@@ -10239,15 +12060,9 @@ fn compile_checked(
     Ok(())
 }
 
-/// Compile the indexing construct `array[index] { ok(v) => ...,
-/// invalid_index(i) => ... }` (B35 P4). The lowering needs no new
-/// opcode: it synthesizes the bounds check from `Op::Len`, integer
-/// comparisons, and `Op::If`, computing an outcome flag (`0` ok, `1`
-/// invalid index) and stashing the element (in-bounds) or leaving the
-/// index for the `invalid_index` binding. The arm dispatch mirrors
-/// `compile_checked`. An unhandled out-of-bounds index re-issues the
-/// plain `Op::GetIndex`, which traps with the precise
-/// `VmError::IndexOutOfBounds(index, len)`.
+/// Compile indexed outcome handlers. First-pass Word and Byte reads consume
+/// the total opcode result and retain its diagnostic payload. Other element
+/// forms keep the legacy guarded-read lowering and remain outside that proof.
 fn compile_checked_index(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
@@ -10265,61 +12080,152 @@ fn compile_checked_index(
     let word_ty = TypeExpr::Prim(PrimType::Word, *span);
 
     let suffix = span.start;
-    let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
-    let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
-    let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
-    let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
-    let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+    let element = array_elem_operand(Some(&elem_ty), &fc.type_info);
+    let total = element.has_bounds_outcome();
+    let (idx_slot, flag_slot, elem_slot, arr_slot, limbs) = if total {
+        // A single data dimension already has a total primitive and does not
+        // need materializing as an array value merely to dispatch its outcome.
+        let data_range = if let Some(chain) = data_indexed_chain(object, index)
+            && chain.indices.len() == 1
+            && fc.is_data_block(chain.data_name)
+            && !fc.is_const_data_block(chain.data_name)
+        {
+            let field_type = fc
+                .type_info
+                .data_field_types
+                .get(chain.data_name)
+                .and_then(|fields| fields.get(chain.field))
+                .cloned()
+                .ok_or_else(|| CompileError {
+                    message: String::from("checked data field has no type descriptor"),
+                    span: *span,
+                })?;
+            let base = fc
+                .resolve_data_field(chain.data_name, chain.field)
+                .ok_or_else(|| CompileError {
+                    message: String::from("checked data field has no storage range"),
+                    span: *span,
+                })?;
+            let count = emit_indexed_offset(fc, &field_type, &chain.indices, *span)?;
+            Some((base, count, chain.data_name))
+        } else {
+            compile_expr(fc, object)?;
+            compile_expr(fc, index)?;
+            None
+        };
+        let flag = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+        let value = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+        let index = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+        let limbs = core::array::from_fn::<_, 4, _>(|i| {
+            fc.declare_local(&alloc::format!("__idx_bound_{}_{}", suffix, i))
+        });
+        // Deliberately bypass the bare-read wrapper so handlers own the outcome.
+        if let Some((base, count, _)) = data_range {
+            fc.emit_data_fallback(&elem_ty);
+            fc.emit(Op::GetDataIndexed(base, count));
+        } else {
+            fc.emit(Op::GetIndex(element));
+        }
+        fc.record_operator_site(span);
+        fc.emit(Op::SetLocal(flag));
+        for &slot in limbs.iter().rev() {
+            fc.emit(Op::SetLocal(slot));
+        }
+        fc.emit(Op::SetLocal(index));
+        fc.emit(Op::SetLocal(value));
+        // A private composite element is a handle into its pool body, and
+        // every `ok` arm binds it into another local, which the alias
+        // analysis treats as an escape. It is therefore copied without
+        // analysis, on the in-range path only. An invalid index leaves the
+        // scalar fallback in the slot, which holds no body to copy.
+        if let Some((_, _, data_name)) = data_range
+            && fc.type_info.private_data_blocks.contains(data_name)
+            && matches!(
+                classify_flat_field(&elem_ty, &fc.type_info),
+                FlatFieldForm::Nested(_, _)
+            )
+        {
+            fc.emit(Op::GetLocal(flag));
+            let zero = fc.add_constant(Value::Int(0));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+            let skip = fc.emit_jump(Op::If(0));
+            fc.emit(Op::GetLocal(value));
+            emit_detach_data_element(fc, &elem_ty);
+            fc.emit(Op::SetLocal(value));
+            fc.patch_jump(skip);
+            fc.emit(Op::EndIf);
+        }
+        (index, flag, value, None, limbs)
+    } else {
+        let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
+        let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+        let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
+        let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+        let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
 
-    // arr_slot = object; idx_slot = index.
-    compile_expr(fc, object)?;
-    fc.emit(Op::SetLocal(arr_slot));
-    compile_expr(fc, index)?;
-    fc.emit(Op::SetLocal(idx_slot));
-    // len_slot = the array length. Array length is a fixed-size,
-    // compile-time constant, so fold it to a literal rather than emit
-    // `Op::Len`, which a flat array body cannot answer (B28 P2). Fall back
-    // to `Op::Len` only for a boxed array whose length the compiler could
-    // not recover statically.
-    let arr_len = infer_expr_type(fc, object)
-        .as_ref()
-        .and_then(array_length_of_type);
-    if let Some(n) = arr_len {
+        // arr_slot = object; idx_slot = index.
+        compile_expr(fc, object)?;
+        fc.emit(Op::SetLocal(arr_slot));
+        compile_expr(fc, index)?;
+        fc.emit(Op::SetLocal(idx_slot));
+        // len_slot = the array length. Array length is a fixed-size,
+        // compile-time constant, so fold it to a literal rather than emit
+        // `Op::Len`, which a flat array body cannot answer (B28 P2).
+        //
+        // **The `Op::Len` fall-back that used to sit here is gone**, for the
+        // reason given at the for-in emission site: the opcode is refused on a
+        // flat body, so emitting it yields a module that passes `verify()` and
+        // traps at run time. The comment it carried described the fall-back as
+        // serving "a boxed array whose length the compiler could not recover
+        // statically", and no such case was found -- the indexed operand's type
+        // is what decides the fold, and a boxed array's type is an array like any
+        // other.
+        let arr_len = infer_expr_type(fc, object)
+            .as_ref()
+            .and_then(indexable_length_of_type);
+        let Some(n) = arr_len else {
+            return Err(CompileError {
+                message: String::from(
+                    "the length of this indexed value could not be folded to a constant, \
+                     so its bounds check cannot be built. A fixed-size array's length is \
+                     statically known, so this is a limitation of the compiler rather than \
+                     of the program; please report it.",
+                ),
+                span: *span,
+            });
+        };
         let n_const = fc.add_constant(Value::Int(n));
         fc.emit(Op::Const(n_const));
-    } else {
+        fc.emit(Op::SetLocal(len_slot));
+        // flag defaults to 1 (invalid_index); flipped to 0 when in range.
+        let one_idx = fc.add_constant(Value::Int(1));
+        fc.emit(Op::Const(one_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
+        fc.emit(Op::GetLocal(idx_slot));
+        let zero_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_idx));
+        fc.emit(Op::CmpGe);
+        let ge_skip = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit(Op::GetLocal(len_slot));
+        fc.emit(Op::CmpLt);
+        let lt_skip = fc.emit_jump(Op::If(0));
         fc.emit(Op::GetLocal(arr_slot));
-        fc.emit(Op::Len);
-    }
-    fc.emit(Op::SetLocal(len_slot));
-    // flag defaults to 1 (invalid_index); flipped to 0 when in range.
-    let one_idx = fc.add_constant(Value::Int(1));
-    fc.emit(Op::Const(one_idx));
-    fc.emit(Op::SetLocal(flag_slot));
-    // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
-    fc.emit(Op::GetLocal(idx_slot));
-    let zero_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_idx));
-    fc.emit(Op::CmpGe);
-    let ge_skip = fc.emit_jump(Op::If(0));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetLocal(len_slot));
-    fc.emit(Op::CmpLt);
-    let lt_skip = fc.emit_jump(Op::If(0));
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(
-        Some(&elem_ty),
-        &fc.type_info,
-    )));
-    fc.emit(Op::SetLocal(elem_slot));
-    let zero_flag_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_flag_idx));
-    fc.emit(Op::SetLocal(flag_slot));
-    fc.patch_jump(lt_skip);
-    fc.emit(Op::EndIf);
-    fc.patch_jump(ge_skip);
-    fc.emit(Op::EndIf);
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit_index_read(array_elem_operand(Some(&elem_ty), &fc.type_info));
+        fc.emit(Op::SetLocal(elem_slot));
+        let zero_flag_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_flag_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        fc.patch_jump(lt_skip);
+        fc.emit(Op::EndIf);
+        fc.patch_jump(ge_skip);
+        fc.emit(Op::EndIf);
+
+        (idx_slot, flag_slot, elem_slot, Some(arr_slot), [0; 4])
+    };
 
     // Dispatch arms in a virtual loop, mirroring compile_checked.
     let loop_addr = fc.emit(Op::Loop(0));
@@ -10381,16 +12287,30 @@ fn compile_checked_index(
         }
     }
 
-    // No arm matched. Reaching here implies the index was out of
-    // bounds (flag 1) and no `invalid_index` arm covered it, since the
-    // `ok` class is a mandatory catch-all. Re-issue the plain index so
-    // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(
-        Some(&elem_ty),
-        &fc.type_info,
-    )));
+    if total {
+        let covered = arms.iter().any(|arm| {
+            arm.guard.is_none()
+                && matches!(
+                    &arm.kind,
+                    CheckedArmKind::InvalidIndex(Pattern::Variable(_, _) | Pattern::Wildcard(_))
+                )
+        });
+        if !covered {
+            fc.emit(Op::GetLocal(idx_slot));
+            for slot in limbs {
+                fc.emit(Op::GetLocal(slot));
+            }
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(span);
+        }
+        // Structurally bounded, deterministic trailer. Complete coverage makes
+        // it unreachable, while partial coverage terminates at the explicit trap.
+        fc.emit(Op::GetLocal(elem_slot));
+    } else {
+        fc.emit(Op::GetLocal(arr_slot.expect("legacy array slot")));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit_index_read(element);
+    }
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);
@@ -10870,28 +12790,19 @@ fn compile_checked_native(
 
     let ok_ty = infer_expr_type(fc, op_expr).unwrap_or(TypeExpr::Prim(PrimType::Word, *span));
     let word_ty = TypeExpr::Prim(PrimType::Word, *span);
-    let has_error_arm = arms
-        .iter()
-        .any(|a| matches!(a.kind, CheckedArmKind::Error(_)));
+    // An unguarded variable or wildcard `host_error` arm handles every
+    // failure, so no default trap follows the arms.
+    let error_covered = arms.iter().any(|a| {
+        matches!(
+            &a.kind,
+            CheckedArmKind::Error(Pattern::Variable(..) | Pattern::Wildcard(..))
+        ) && a.guard.is_none()
+    });
 
-    if args.len() >= 0x80 {
-        return Err(CompileError {
-            message: alloc::string::String::from(
-                "a native call in an error-handling construct may take at most 127 arguments",
-            ),
-            span: *span,
-        });
-    }
-
-    // Emit the arguments and the native call. The reify flag is set in
-    // the high bit of the argument count only when an `error` arm is
-    // present.
+    // Emit the arguments and the reified native call. Every native call is
+    // reified, so the construct always receives a value and a flag.
     for arg in args {
         compile_expr(fc, arg)?;
-    }
-    let mut argc = args.len() as u8;
-    if has_error_arm {
-        argc |= 0x80;
     }
     let idx = *fc.native_map.get(native_name).ok_or_else(|| CompileError {
         message: alloc::format!("unregistered native: {}", native_name),
@@ -10902,26 +12813,14 @@ fn compile_checked_native(
         .get(native_name)
         .copied()
         .unwrap_or(false);
-    if is_external {
-        fc.emit(Op::CallExternalNative(idx, argc));
-    } else {
-        fc.emit(Op::CallVerifiedNative(idx, argc));
-    }
+    fc.emit_native_call(idx, args.len(), is_external, span)?;
 
     let suffix = span.start;
     let value_slot = fc.declare_local(&alloc::format!("__nat_val_{}", suffix));
     let flag_slot = fc.declare_local(&alloc::format!("__nat_flag_{}", suffix));
-    if has_error_arm {
-        // Reified call left (value, flag) on the stack; flag is on top.
-        fc.emit(Op::SetLocal(flag_slot));
-        fc.emit(Op::SetLocal(value_slot));
-    } else {
-        // Plain call left the single result; the flag is always ok.
-        fc.emit(Op::SetLocal(value_slot));
-        let zero_idx = fc.add_constant(Value::Int(0));
-        fc.emit(Op::Const(zero_idx));
-        fc.emit(Op::SetLocal(flag_slot));
-    }
+    // The reified call left (value, flag) on the stack; flag is on top.
+    fc.emit(Op::SetLocal(flag_slot));
+    fc.emit(Op::SetLocal(value_slot));
 
     let loop_addr = fc.emit(Op::Loop(0));
     fc.enter_loop();
@@ -10977,18 +12876,29 @@ fn compile_checked_native(
     }
 
     // No arm matched. The `ok` class is a mandatory catch-all, so this
-    // is reached only when an `error` arm with a guard or literal
-    // failed to match a reified error. Trap with the generic
-    // no-matching-arm fault. The trailing default break keeps the loop
-    // structurally closed.
-    fc.emit(Op::GetLocal(flag_slot));
-    let one_idx = fc.add_constant(Value::Int(1));
-    fc.emit(Op::Const(one_idx));
-    fc.emit(Op::CmpEq);
-    let not_error = fc.emit_jump(Op::If(0));
-    fc.emit(Op::Trap(crate::bytecode::TrapKind::NoMatchingArm.code()));
-    fc.patch_jump(not_error);
-    fc.emit(Op::EndIf);
+    // is reached only by a host failure that no `host_error` arm took,
+    // either because none was written or because each has a guard or a
+    // literal. That failure reaches the compiler-default host-error trap
+    // with its code. A covering arm makes the trap unreachable, so it is
+    // omitted, as for the other outcome constructs. The trailing default
+    // break keeps the loop structurally closed.
+    if !error_covered {
+        fc.emit(Op::GetLocal(flag_slot));
+        let one_idx = fc.add_constant(Value::Int(1));
+        fc.emit(Op::Const(one_idx));
+        fc.emit(Op::CmpEq);
+        let not_error = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(value_slot));
+        let trap = fc.emit(Op::Trap(crate::bytecode::TrapKind::HostError.code()));
+        if fc.emit_debug {
+            fc.pending_debug.push(PendingDebug::SourceSpan {
+                op_index: trap,
+                span: *span,
+            });
+        }
+        fc.patch_jump(not_error);
+        fc.emit(Op::EndIf);
+    }
     fc.emit(Op::GetLocal(value_slot));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
@@ -11161,11 +13071,8 @@ fn compile_call(
         fc.emit(Op::Call(idx, arg_count));
     } else if let Some(&idx) = fc.native_map.get(name) {
         let is_external = fc.native_externals.get(name).copied().unwrap_or(false);
-        if is_external {
-            fc.emit(Op::CallExternalNative(idx, arg_count));
-        } else {
-            fc.emit(Op::CallVerifiedNative(idx, arg_count));
-        }
+        fc.emit_native_call(idx, args.len(), is_external, span)?;
+        fc.emit_host_error_default_trap(span);
     } else {
         return Err(CompileError {
             message: format!("undefined function: {}", name),
@@ -11373,26 +13280,40 @@ fn compile_pattern_test(
             // For an UNANNOTATED parameter the pattern's own type is the only
             // type there is, so the test is irrefutable and folding it is sound.
             //
-            // **THIS COMMENT PREVIOUSLY JUSTIFIED THE FOLD BY CLAIMING THE TYPE
-            // CHECKER REFUSES EVERY MISMATCH. THAT IS FALSE, AND THE `v0.3.0`
-            // LINE DISPROVED IT WITHIN THE HOUR.** `fn g(P { a, b }: Q)` compiles
-            // with two DISTINCT structs, and so does a struct pattern against a
-            // tuple- or array-typed annotation. The "known and different" state
-            // this condition treats as needing a runtime test is one the type
-            // checker admits today.
+            // **AN EARLIER REVISION OF THIS COMMENT SAID THE TYPE CHECKER
+            // ADMITS A MISMATCHED ANNOTATION AND THAT TWO ROUTES STILL VERIFY,
+            // LOAD, AND THEN TRAP `InvalidBytecode`. NEITHER IS TRUE ANY
+            // LONGER, AND THE COMMENT OUTLIVED THE STATE IT DESCRIBED.** It
+            // was written when both were true; it then asserted a live breach
+            // of the load-time guarantee while the tests beside it proved the
+            // opposite, which is worse than no comment at all, because an
+            // auditor reading it concludes the guarantee is broken.
             //
-            // So the fold NARROWS the fallback; it does not eliminate it, and
-            // `Op::IsStruct` still has producers. Four are pinned in
-            // `tests/opcode_reachability.rs`, TWO OF WHICH STILL REACH THE
-            // LOAD-TIME HOLE: a generic struct destructured in a parameter, and a
-            // pattern annotated with a different struct. Both verify, receive a
-            // memory bound, load, and then trap `InvalidBytecode`.
+            // Re-measured, with a control that compiles, on 2026-08-24:
             //
-            // The remaining holes are RECORDED rather than repaired here because
-            // they look like TYPE-CHECKER admissions rather than lowering
-            // defects: a struct pattern matched against an unrelated struct, a
-            // tuple, or an array is arguably ill-typed at the source, and closing
-            // it there would remove the emission rather than fold it.
+            // - `fn g(P { a, b }: Q)` with two distinct structs, and a struct
+            //   pattern annotated with a tuple or an array type, are all
+            //   **refused by the type checker** -- "struct pattern `P` does not
+            //   match scrutinee type ...". They never reach lowering.
+            //   Pinned by `a_struct_pattern_against_a_foreign_type_is_refused_
+            //   by_the_type_checker`, which also asserts the CAUSE, so a
+            //   refusal for an unrelated reason is a failure.
+            // - A generic struct destructured in a parameter emits no
+            //   `Op::IsStruct`, verifies, takes a bound, loads, and **runs**,
+            //   returning the right value. Pinned by
+            //   `no_shape_tried_reaches_the_is_struct_trap`, which asserts the
+            //   value rather than just the absence of a trap, because a repair
+            //   that changed the program's meaning would be worse.
+            //
+            // **`Op::IsStruct` HAS NO PRODUCER FOUND BY A BOUNDED SEARCH, AND
+            // THAT IS NOT THE SAME AS UNREACHABLE.** It is specified in
+            // `INSTRUCTION_SET.md` and `STRUCTURAL_ISA.md` with peek-not-pop
+            // semantics, the fallback below and the virtual machine's refusal
+            // both remain, and `Vm::new_unchecked` exists precisely so bytecode
+            // can reach the machine without this compiler. The first
+            // producerless claim made here was falsified by another line within
+            // the hour; the standard since is to record the search, not the
+            // conclusion.
             if ty.is_some() && named_type_name(ty) != Some(type_name.as_str()) {
                 fc.emit(Op::GetLocal(value_slot));
                 let t_const = fc.add_string_constant(type_name);
@@ -11564,6 +13485,14 @@ fn compile_pattern_bind_typed(
     }
     Ok(())
 }
+
+mod alias_copy;
+
+#[cfg(all(test, feature = "verify"))]
+mod inference_independence;
+
+#[cfg(feature = "text")]
+mod text_intrinsics;
 
 #[cfg(test)]
 mod tests {
@@ -12074,28 +14003,33 @@ mod tests {
 
     #[test]
     fn debug_emission_records_operator_site_at_division() {
-        // A division emits a SourceSpan and a BreakpointCandidate at the
-        // Div op (B29 items 2/3), so a zero-divisor fault resolves
-        // exactly and a debugger can break before the division.
-        use crate::bytecode::Op;
+        // Preserve a breakpoint before arithmetic and an exact fault span
+        // at the separately emitted zero-divisor Trap.
+        use crate::bytecode::{Op, TrapKind};
         use crate::debug_meta::DebugRecordKind;
-        let module = compile_str_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
-        let chunk = &module.chunks[0];
-        let div_op = chunk
-            .ops
-            .iter()
-            .position(|op| matches!(op, Op::Div))
-            .expect("a Div op") as u32;
-        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
-        let kinds: alloc::vec::Vec<_> = pool.records_at(div_op).map(|r| r.kind).collect();
-        assert!(
-            kinds.contains(&DebugRecordKind::SourceSpan),
-            "the Div op has an exact SourceSpan, found {kinds:?}"
-        );
-        assert!(
-            kinds.contains(&DebugRecordKind::BreakpointCandidate),
-            "the Div op is an operator-level breakpoint candidate"
-        );
+        for operator in ["/", "%"] {
+            let module = compile_str_debug(&alloc::format!(
+                "fn main(d: Word) -> Word {{ let x = 1 {operator} d; x }}"
+            ));
+            let chunk = &module.chunks[0];
+            let arithmetic = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::CheckedDiv(0) | Op::CheckedMod))
+                .expect("checked arithmetic");
+            let trap = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::Trap(k) if *k == TrapKind::ZeroDivisor.code()))
+                .expect("explicit zero-divisor trap");
+            let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+            for position in [arithmetic, trap] {
+                let kinds: alloc::vec::Vec<_> =
+                    pool.records_at(position as u32).map(|r| r.kind).collect();
+                assert!(kinds.contains(&DebugRecordKind::SourceSpan));
+                assert!(kinds.contains(&DebugRecordKind::BreakpointCandidate));
+            }
+        }
     }
 
     #[test]

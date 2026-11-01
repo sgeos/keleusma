@@ -1,0 +1,61 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. THE DEBT REGISTER IS SMALLER, AND SMALLER BECAUSE CITATIONS WERE
+   REPAIRED.
+   Fewer entries are excused than before, and each removed entry
+   corresponds to a comment that now names something a reader can find,
+   or to a sentence rewritten so no name is needed. No entry is removed
+   by narrowing what the scan looks at.
+
+2. NO CITATION NAMES A CLAIM THE TREE CONTRADICTS.
+   Where a comment cited a test asserting a behaviour the tree no longer
+   has, the surrounding sentence states the current behaviour. Repointing
+   the name while leaving the prose asserting the old behaviour does not
+   satisfy this: a pointer that resolves into a contradiction is worse
+   than one that resolves to nothing.
+
+3. EVERY REPAIR IS VERIFIED AGAINST THE THING IT NAMES.
+   For each citation repaired, the named item exists and supports the
+   claim the citing sentence makes. A rename justified only by
+   similarity of spelling does not satisfy this.
+
+4. WHAT WAS NOT TRIAGED IS SAID SO, WITH ITS REASON.
+   Entries still excused are still excused deliberately. The count of
+   remaining entries is accurate, and it is not presented as a completed
+   triage.
+
+5. THE GUARD STILL FAILS ON A NEW DANGLING CITATION, AND ON A STALE
+   EXCUSE.
+   Both directions still hold: a comment naming something that does not
+   exist fails, and an excused entry whose citation was removed or whose
+   name now resolves fails. Evidence exists that each still fires, by a
+   change that compiles.
+
+6. NOTHING PREVIOUSLY ACCEPTED IS NOW REJECTED.
+   No behaviour changes. No test that passed now fails for a reason
+   unrelated to this work. No opcode. No BYTECODE_VERSION change.
+
+7. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The test suite passes with zero failures under default features and
+   under the self-host feature, formatting is clean, clippy is clean at
+   deny-warnings, and the workspace documentation builds without
+   warnings. The suite's own exit status is read, not a pipeline's, and
+   the run does not stop at the first failing binary. Any step skipped
+   or goal abandoned is stated plainly with its reason.
+
+8. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+   If an entry could not be resolved without an operator decision or
+   without archaeology beyond this increment, the tree names it and says
+   what is missing, and the remaining items still satisfy their
+   conditions.
+
+A NOTE ON WHAT SUCCESS LOOKS LIKE. Resolving every entry is not
+required and may not be possible: some name things that were never
+written, and establishing that is itself the finding. A register that
+falls by a stated amount, with each removal verified and each remainder
+explained, satisfies this. A register that falls to zero with unverified
+renames does not.

@@ -23,6 +23,7 @@ Anyone who has seen a little programming reaches, sooner or later, for a
 function that calls itself. It is a natural way to express "do this
 again." Here is one that counts down from a number:
 
+<!-- verify: reject: recursive call detected during WCMU topological sort -->
 ```
 fn count_down(n: Word) -> Word {
     if n <= 0 { 0 } else { count_down(n - 1) }
@@ -56,6 +57,7 @@ The instinct behind the recursive `count_down` was "repeat five times."
 Keleusma expresses a fixed number of repetitions with a `for` loop whose
 count is written as a plain constant:
 
+<!-- verify: accept -->
 ```
 fn repeat_five() -> Word {
     for _i in 0..5 {

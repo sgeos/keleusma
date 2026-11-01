@@ -32,7 +32,7 @@
 // Lt 28, Gt 29, LtEq 30, GtEq 31, not 32, band 33, bor 34, bxor 35, andalso 36,
 // orelse 37, let 38, Semicolon 39, Dot 40, LBracket 41, RBracket 42, if 43,
 // else 44, for 45, in 46, DotDot 47, match 48, FatArrow 49, Underscore 50,
-// ColCol 51, as 52, enum 53; the catch-all 4 absorbs the `->` arrow and any
+// ColCol 51, as 52, enum 53, when 64; the catch-all 4 absorbs the `->` arrow and any
 // unrecognized punctuation, which the parser skips.
 //
 // This wire is reached incrementally: increment 2 added maximal munch over the
@@ -59,16 +59,18 @@ require word >= 32;
 // name's bytes in `bytes`, so the host recovers the id-to-spelling map the parser
 // stage's `limit`/`require`/chunk-name inputs are expressed in without re-lexing.
 // The table lives in shared data (not private) precisely so the host can read it.
-// Sized to hold the parse.kel stage source (the largest stage, ~100KB, ~870 distinct
-// identifiers). The wire-format V2 twenty-four-bit data operands raised the shared
+// Sized to hold parse.kel, measured above 400 KB after checked-outcome parsing.
+// The source buffer is bounded independently of the intern table. The wire-format V2 twenty-four-bit data operands raised the shared
 // segment ceiling from 64KB to 16MB, so `bytes` may exceed 64KB and the intern
 // arrays sit past a 64KB byte offset; the whole `src` block stays far under 16MB.
 shared data src {
     len: Word,
-    bytes: [Byte; 393216],
+    bytes: [Byte; 524288],
     istart: [Word; 1280],
     ilen: [Word; 1280],
     icount: Word,
+    // Token 65 indexes a full-width integer under its interned source spelling.
+    values: [Word; 1280],
 }
 
 // The scanner's cross-iteration state. `kind` is the token being built: 0 none,
@@ -79,6 +81,9 @@ private data st {
     kind: Word,
     start: Word,
     val: Word,
+    // Digits consumed since a radix prefix. `0x` with no digit following is an error in
+    // the reference, and without a count it is indistinguishable from the literal zero.
+    ndig: Word,
 }
 
 // Scratch accumulators for the interning content comparison (increment 4), which
@@ -94,6 +99,23 @@ private data intern {
 // Byte-class predicates. Atomic total `fn`, so bounded by construction.
 fn is_digit(b: Word) -> Word {
     if b >= 48 { if b <= 57 { 1 } else { 0 } } else { 0 }
+}
+
+// The value of a hexadecimal digit byte, or -1 for a byte that is not one. Both letter
+// cases are accepted, matching the reference. Returning the VALUE rather than a boolean
+// keeps the accumulation branch-free at the call site.
+fn hex_val(b: Word) -> Word {
+    if b >= 48 andalso b <= 57 {
+        b - 48
+    } else {
+    if b >= 97 andalso b <= 102 {
+        b - 87
+    } else {
+    if b >= 65 andalso b <= 70 {
+        b - 55
+    } else {
+        0 - 1
+    } } }
 }
 
 fn is_alpha(b: Word) -> Word {
@@ -131,7 +153,7 @@ fn peek_at(pos: Word) -> Word {
 // two-byte operator"; the caller subtracts one to recover the code. Factored out
 // of the loop so the per-iteration body stays shallow (the parser stage learned
 // that deep loop nesting overflows the host compiler's recursion-depth limit).
-// Codes: 0 `==`, 1 `!=`, 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`, 7 `->`.
+// Codes: 0 `==`, 1 `!=`, 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`, 7 `->`, 8 `|>`.
 fn compound_code(b: Word, next: Word) -> Word {
     if b == 61 {
         // `=` begins `==` (code 0) or `=>` (code 6); otherwise a lone `=`.
@@ -143,7 +165,8 @@ fn compound_code(b: Word, next: Word) -> Word {
     if b == 58 { if next == 58 { 5 } else { 0 } } else {   // `::`
     if b == 46 { if next == 46 { 6 } else { 0 } } else {   // `..`
     if b == 45 { if next == 62 { 8 } else { 0 } } else {   // `->`
-    0 } } } } } } }
+    if b == 124 { if next == 62 { 9 } else { 0 } } else {  // `|>`
+    0 } } } } } } } }
 }
 
 // Keyword recognition (increment 3). An identifier run whose bytes spell one of
@@ -194,10 +217,11 @@ fn kw4(start: Word) -> Word {
     if a == 101 andalso b == 110 andalso c == 117 andalso d == 109 { 53 } else {  // enum
     if a == 98 andalso b == 97 andalso c == 110 andalso d == 100 { 33 } else {    // band
     if a == 98 andalso b == 120 andalso c == 111 andalso d == 114 { 35 } else {   // bxor
-    if a == 119 andalso b == 104 andalso c == 101 andalso d == 110 { 4 } else {   // when
+    if a == 119 andalso b == 104 andalso c == 101 andalso d == 110 { 64 } else {  // when
     if a == 105 andalso b == 109 andalso c == 112 andalso d == 108 { 56 } else {  // impl
     if a == 98 andalso b == 110 andalso c == 111 andalso d == 116 { 11 } else {   // bnot
-    0 - 1 } } } } } } } } }
+    if a == 112 andalso b == 117 andalso c == 114 andalso d == 101 { 70 } else {  // pure
+    0 - 1 } } } } } } } } } }
 }
 
 fn kw5(start: Word) -> Word {
@@ -224,7 +248,8 @@ fn kw6(start: Word) -> Word {
     if a == 115 andalso b == 104 andalso c == 97 andalso d == 114 andalso e == 101 andalso f == 100 { 14 } else {   // shared
     if a == 111 andalso b == 114 andalso c == 101 andalso d == 108 andalso e == 115 andalso f == 101 { 37 } else {  // orelse
     if a == 115 andalso b == 116 andalso c == 114 andalso d == 117 andalso e == 99 andalso f == 116 { 54 } else {   // struct
-    0 - 1 } } }
+    if a == 115 andalso b == 105 andalso c == 103 andalso d == 110 andalso e == 101 andalso f == 100 { 69 } else {  // signed
+    0 - 1 } } } }
 }
 
 fn kw7(start: Word) -> Word {
@@ -248,7 +273,27 @@ fn keyword_code(start: Word, len: Word) -> Word {
     if len == 5 { kw5(start) } else {
     if len == 6 { kw6(start) } else {
     if len == 7 { kw7(start) } else {
-    0 - 1 } } } } } }
+    if len == 8 { kw8(start) } else {
+    if len == 9 { kw9(start) } else {
+    0 - 1 } } } } } } } }
+}
+
+// `external`, the one eight-letter keyword, Tok 72.
+fn kw8(start: Word) -> Word {
+    if peek_at(start) == 101 andalso peek_at(start + 1) == 120 andalso peek_at(start + 2) == 116
+        andalso peek_at(start + 3) == 101 andalso peek_at(start + 4) == 114 andalso peek_at(start + 5) == 110
+        andalso peek_at(start + 6) == 97 andalso peek_at(start + 7) == 108 {
+        72
+    } else { 0 - 1 }
+}
+
+// `ephemeral`, the one nine-letter keyword, Tok 71.
+fn kw9(start: Word) -> Word {
+    if peek_at(start) == 101 andalso peek_at(start + 1) == 112 andalso peek_at(start + 2) == 104
+        andalso peek_at(start + 3) == 101 andalso peek_at(start + 4) == 109 andalso peek_at(start + 5) == 101
+        andalso peek_at(start + 6) == 114 andalso peek_at(start + 7) == 97 andalso peek_at(start + 8) == 108 {
+        71
+    } else { 0 - 1 }
 }
 
 // Intern a non-keyword identifier run at source offset `start` of `len` bytes and
@@ -297,12 +342,16 @@ fn op2_tok(code: Word) -> Word {
     if code == 4 { 51 } else {   // ::  ColCol
     if code == 5 { 47 } else {   // ..  DotDot
     if code == 6 { 49 } else {   // =>  FatArrow
-    4 } } } } } } }              // ->  Arrow (catch-all)
+    if code == 8 { 68 } else {   // |>  Pipe, Tok 68
+    4 } } } } } } } }            // ->  Arrow (catch-all)
 }
 
 // Map a single punctuation byte to its parser `Tok` code, split into a delimiter
 // group and an operator group so each helper stays a shallow if-else chain. An
-// unrecognized byte becomes the catch-all Tok 4, matching the reference adapter.
+// unrecognized byte becomes Tok 67, which the parser refuses as unsupported syntax.
+// It used to become the arrow's catch-all Tok 4, which the body walk skips, so
+// `6 |> double()` read as `6 > double()` and was rejected as a type error, and an
+// unknown byte between two operands could vanish from the program altogether.
 fn punct_tok(b: Word) -> Word {
     let t = punct_delim(b);
     if t >= 0 { t } else { punct_op(b) }
@@ -331,7 +380,14 @@ fn punct_op(b: Word) -> Word {
     if b == 60 { 28 } else {    // <  Lt
     if b == 62 { 29 } else {    // >  Gt
     if b == 46 { 40 } else {    // .  Dot
-    4 } } } } } } } } }
+    punct_label(b) } } } } } } } } }
+}
+
+// The information-flow label punctuation, Order 6. `@` introduces a label, Tok 74, and a
+// lone `!` negates one, Tok 75, since `!=` is matched as a compound before this. Any other
+// byte stays Tok 67, which the parser refuses.
+fn punct_label(b: Word) -> Word {
+    if b == 64 { 74 } else { if b == 33 { 75 } else { 67 } }
 }
 
 // The token word for a completed identifier run at `start` of `len` bytes, in the
@@ -347,26 +403,59 @@ fn ident_token(start: Word, len: Word) -> Word {
     }
 }
 
-loop main(resume: Word) -> Word {
+// Validate before multiplying so malformed literals never wrap into valid values.
+fn integer_digit(digit: Word, radix: Word) -> Word {
+    let maximum = bnot 0 lsr 1;
+    if st.val > (maximum - digit) / radix { st.kind = 8; } else {
+        st.val = st.val * radix + digit;
+    }
+    0
+}
+// A float literal, `digits.digits`, Tok 73 carrying the interned text of the literal. The
+// host converts that text to an `f64` with the parser the reference lexer uses, since a
+// correctly rounded decimal conversion is not something to reimplement here. A suffix,
+// `Float` or `Fixed<N>`, is refused as Tok 67 for now.
+fn float_token() -> Word {
+    st.kind = 0;
+    if is_alpha(peek_at(st.cursor)) == 1 { 67 } else {
+        73 + intern_id(st.start, st.cursor - st.start) * 256
+    }
+}
+
+fn integer_token() -> Word {
+    let valid = st.kind == 3 orelse st.ndig > 0;
+    st.kind = 0;
+    if not valid { 66 + st.cursor * 256 } else {
+        if st.val <= (bnot 0 lsr 1) / 256 { 12 + st.val * 256 } else {
+            let id = intern_id(st.start, st.cursor - st.start);
+            src.values[id] = st.val;
+            65 + id * 256
+        }
+    }
+}
+
+// One raw token, or 63 while a token is still being built, or 62 at the end of input.
+// This was the body of `loop main` until Order 6 slice 3, which put the destructuring
+// filter between it and the parser. Every former `yield` was in tail position.
+fn lex_raw() -> Word {
+    if st.kind == 8 { 66 + st.cursor * 256 } else {
     if st.cursor >= src.len {
         // End of source: flush a token still being built, then report EOF (62).
         if st.kind == 0 {
-            yield 62
+            62
         } else {
         if st.kind == 2 {
             // A keyword or identifier ending exactly at end of input.
             st.kind = 0;
-            yield ident_token(st.start, st.val)
+            ident_token(st.start, st.val)
         } else {
-        if st.kind == 3 {
-            // An integer ending at end of input: IntLit (Tok 12), value the payload.
-            let v = st.val;
-            st.kind = 0;
-            yield 12 + v * 256
+        if st.kind == 10 { float_token() } else {
+        if st.kind == 3 orelse st.kind == 6 orelse st.kind == 7 {
+            integer_token()
         } else {
             // A `//` comment ran to end of source with no trailing newline: no token.
-            yield 62
-        } } }
+            62
+        } } } }
     } else {
         let b = src.bytes[st.cursor] as Word;
         if st.kind == 2 {
@@ -375,24 +464,53 @@ loop main(resume: Word) -> Word {
             if is_ident_cont(b) == 1 {
                 st.cursor = st.cursor + 1;
                 st.val = st.val + 1;
-                yield 63
+                63
             } else {
                 // The run ended: classify it as a keyword or emit it as an IDENT.
                 st.kind = 0;
-                yield ident_token(st.start, st.val)
+                ident_token(st.start, st.val)
             }
         } else {
-        if st.kind == 3 {
-            // Extending an integer, or ending it at a non-digit byte.
+        if st.kind == 3 orelse st.kind == 10 {
+            // Extending an integer, or ending it at a non-digit byte. A `.` followed by a
+            // digit continues it as a float literal (kind 10), as the reference lexes one.
             if is_digit(b) == 1 {
                 st.cursor = st.cursor + 1;
-                st.val = st.val * 10 + (b - 48);
-                yield 63
+                if st.kind == 3 { integer_digit(b - 48, 10); }
+                63
             } else {
+            if st.kind == 3 andalso b == 46 andalso is_digit(peek_at(st.cursor + 1)) == 1 {
+                st.kind = 10;
+                st.cursor = st.cursor + 1;
+                63
+            } else {
+            if st.kind == 10 { float_token() } else {
                 // IntLit (Tok 12), the parsed value as the payload.
-                let v = st.val;
-                st.kind = 0;
-                yield 12 + v * 256
+                integer_token()
+            } } }
+        } else {
+        if st.kind == 6 {
+            // Extending a hexadecimal integer, or ending it at a non-hex-digit byte.
+            let d = hex_val(b);
+            if d >= 0 {
+                st.cursor = st.cursor + 1;
+                integer_digit(d, 16);
+                st.ndig = st.ndig + 1;
+                63
+            } else {
+                // The token helper refuses a prefix without digits.
+                integer_token()
+            }
+        } else {
+        if st.kind == 7 {
+            // Extending a binary integer, or ending it at a non-binary-digit byte.
+            if b == 48 orelse b == 49 {
+                st.cursor = st.cursor + 1;
+                integer_digit(b - 48, 2);
+                st.ndig = st.ndig + 1;
+                63
+            } else {
+                integer_token()
             }
         } else {
         if st.kind == 5 {
@@ -402,7 +520,7 @@ loop main(resume: Word) -> Word {
                 st.kind = 0;
             }
             st.cursor = st.cursor + 1;
-            yield 63
+            63
         } else {
         if st.kind == 4 {
             // Inside a string literal: extend until the closing `"` (byte 34), then intern the
@@ -413,17 +531,17 @@ loop main(resume: Word) -> Word {
             if b == 92 {
                 st.cursor = st.cursor + 2;
                 st.val = st.val + 2;
-                yield 63
+                63
             } else {
             if b == 34 {
                 let id = intern_id(st.start, st.val);
                 st.kind = 0;
                 st.cursor = st.cursor + 1;
-                yield 58 + id * 256
+                58 + id * 256
             } else {
                 st.cursor = st.cursor + 1;
                 st.val = st.val + 1;
-                yield 63
+                63
             } }
         } else {
             // No token in progress: start one, skip whitespace, or emit punctuation.
@@ -433,43 +551,383 @@ loop main(resume: Word) -> Word {
                 st.start = st.cursor + 1;
                 st.val = 0;
                 st.cursor = st.cursor + 1;
-                yield 63
+                63
             } else {
             if is_space(b) == 1 {
                 st.cursor = st.cursor + 1;
-                yield 63
+                63
             } else {
             if is_alpha(b) == 1 {
                 st.kind = 2;
                 st.start = st.cursor;
                 st.val = 1;
                 st.cursor = st.cursor + 1;
-                yield 63
+                63
             } else {
             if is_digit(b) == 1 {
+                // A RADIX PREFIX, and the third arm is the one a reasonable guess gets
+                // wrong. `0x`/`0X` is always hexadecimal and `0b` is always binary, but
+                // `0B` is binary ONLY when a binary digit follows: otherwise the `B`
+                // begins the `Byte` numeric suffix, so `0Byte` is the byte literal zero
+                // rather than a malformed binary literal. Taken from the reference lexer,
+                // not inferred from the corpus, which uses `0x` exclusively.
+                let p1 = peek_at(st.cursor + 1);
+                let p2 = peek_at(st.cursor + 2);
+                if b == 48 andalso (p1 == 120 orelse p1 == 88) {
+                    st.kind = 6;
+                    st.start = st.cursor;
+                    st.val = 0;
+                    st.ndig = 0;
+                    st.cursor = st.cursor + 2;
+                    63
+                } else {
+                if b == 48 andalso (p1 == 98 orelse (p1 == 66 andalso (p2 == 48 orelse p2 == 49))) {
+                    st.kind = 7;
+                    st.start = st.cursor;
+                    st.val = 0;
+                    st.ndig = 0;
+                    st.cursor = st.cursor + 2;
+                    63
+                } else {
                 st.kind = 3;
                 st.start = st.cursor;
                 st.val = b - 48;
                 st.cursor = st.cursor + 1;
-                yield 63
+                63
+                } }
             } else {
             if b == 47 andalso peek_at(st.cursor + 1) == 47 {
                 // A `//` line comment: skip both slashes and read the rest in kind 5.
                 st.kind = 5;
                 st.cursor = st.cursor + 2;
-                yield 63
+                63
             } else {
                 // Punctuation: a two-byte operator by maximal munch, else one byte,
                 // each mapped to its parser Tok code (payload 0).
                 let cc = compound_code(b, peek_at(st.cursor + 1));
                 if cc > 0 {
                     st.cursor = st.cursor + 2;
-                    yield op2_tok(cc - 1)
+                    op2_tok(cc - 1)
                 } else {
                     st.cursor = st.cursor + 1;
-                    yield punct_tok(b)
+                    punct_tok(b)
                 }
             } } } } }
-        } } } }
+        } } } } } }
     }
+}
+}
+
+// THE DESTRUCTURING FILTER, Order 6 slice 3.
+//
+// `let (a, _, b) = e;` reaches the parser as the plain lets the reference lowers it to:
+// `let T = e; let a = T.0; T.1; let b = T.2;`. The reference stores the value in a fresh
+// local, then reads each element with `GetTupleField` and binds it or pops it, and those
+// statements produce exactly those operations, slot for slot. Rewriting the tokens keeps
+// the parser's single-token pushback intact, which a queue inside the parser would not.
+//
+// The hidden binding `T` is interned from the bytes of the `let` keyword itself. Its
+// string is therefore `let`, which no identifier can be, so it shadows nothing, and the
+// host recovers it from source bytes like any other name.
+//
+// A struct pattern takes the same path, Order 6 follow-up of 2026-10-31. `let P { x, y: b,
+// z: _ } = e;` reaches the parser as `let T = e; let x = T.x; let b = T.y; T.z;`, which is
+// the reference's lowering of a struct `let` statement for statement. The struct name is
+// dropped, because the reference type checker has matched it against the value's type
+// before any self-hosted output is accepted.
+//
+// A NESTED pattern and a variant pattern of a single-variant enum take it too, the
+// operator's ruling of 2026-10-31. The reference stores each nested value in a fresh local
+// of its own before reading its elements, depth first in source order, so `let (a, (b, c))
+// = e;` becomes `let T = e; let a = T.0; let U = T.1; let b = U.0; let c = U.1;`. The
+// binding at depth d is interned from the `let` keyword's bytes and the d bytes after it.
+// The byte after `let` cannot continue an identifier, so no such string is an identifier,
+// and the lengths differ, so the bindings of different depths are distinct. A binding of
+// one depth is shadowed only by a later sibling at that depth, after the earlier sibling's
+// reads are done, which is the reference's fresh local for each nested pattern. `let
+// W::A(x, y) = e;` becomes `let T = e; let x = T.0; let y = T.1;`, and the parser reads
+// `T.N` of a value of a single-variant enum as that variant's payload field N, which is the
+// reference's `GetEnumField`. A grouping parenthesis, `(p)`, is transparent as in the
+// reference, so `p` takes its place.
+//
+// Anything else becomes Tok 67, which the parser refuses as unsupported syntax: a literal or
+// typed pattern, `()` and `(p,)`, more than twenty-four pattern items or six open patterns, a
+// `let` inside the destructured value, and input that ends inside the statement.
+//
+// States: 0 passing, 1 a `let` held, 2 awaiting a pattern element, 3 awaiting `=`, 4 inside
+// the value, where `depth` counts open brackets so the statement's own `;` can be found, 5
+// after `let _`, awaiting the `=` that is dropped with it, 6 after `let Name`, holding the
+// name, 7 awaiting a struct field or `}`, 8 after a field name, 9 after a name inside the
+// pattern, 10 after a complete element, 11 after `Name::`, and 12 after the variant name.
+private data dq {
+    q: [Word; 192],
+    pos: Word,
+    len: Word,
+    state: Word,
+    depth: Word,
+    let_at: Word,
+    held: Word,
+    // The pattern items in source order. Kind 0 binds the name `it_val`, 1 is a wildcard,
+    // 2 opens a nested pattern, 3 closes one, and 4 is a grouping parenthesis that reads
+    // nothing. `it_acc` is the token naming the element in its enclosing pattern.
+    ni: Word,
+    it_kind: [Word; 24],
+    it_val: [Word; 24],
+    it_acc: [Word; 24],
+    // The open patterns, innermost last. Kind 0 is a tuple, 1 a struct and 2 a variant.
+    sp: Word,
+    fr_kind: [Word; 6],
+    fr_count: [Word; 6],
+    fr_comma: [Word; 6],
+    fr_open: [Word; 6],
+    // The pending struct field, the first item read, and the walk's depth and cursor.
+    acc: Word,
+    first: Word,
+    d: Word,
+    c: Word,
+}
+
+fn dq_push(t: Word) -> Word {
+    if dq.len < 192 { dq.q[dq.len] = t; dq.len = dq.len + 1; }
+    0
+}
+
+fn dq_take() -> Word {
+    let t = dq.q[dq.pos];
+    dq.pos = dq.pos + 1;
+    if dq.pos >= dq.len { dq.pos = 0; dq.len = 0; }
+    t
+}
+
+fn dq_refuse() -> Word {
+    dq.state = 0;
+    67
+}
+
+// The hidden binding of depth `d` as an identifier token.
+fn dq_temp(d: Word) -> Word {
+    1 + intern_id(dq.let_at, 3 + d) * 256
+}
+
+// Queue the element statements once the value's `;` has passed. A name reads its element
+// into a binding, a wildcard reads it as an expression statement, and a nested pattern reads
+// it into the hidden binding one depth down.
+fn dq_elements() -> Word {
+    dq.d = 0;
+    for i in 0..dq.ni limit 24 {
+        let kind = dq.it_kind[i];
+        if i >= dq.first andalso kind == 3 { dq.d = dq.d - 1; }
+        if i >= dq.first andalso kind != 3 andalso kind != 4 {
+            let from = dq_temp(dq.d);
+            if kind == 0 { dq_push(38); dq_push(1 + dq.it_val[i] * 256); dq_push(17); }
+            if kind == 2 { dq_push(38); dq_push(dq_temp(dq.d + 1)); dq_push(17); dq.d = dq.d + 1; }
+            dq_push(from); dq_push(40); dq_push(dq.it_acc[i]); dq_push(39);
+        }
+    }
+    0
+}
+
+// The first item after `o` that is not a grouping parenthesis.
+fn dq_first_after(o: Word) -> Word {
+    dq.c = 0 - 1;
+    for j in 0..dq.ni limit 24 {
+        if j > o andalso dq.c < 0 andalso dq.it_kind[j] != 4 { dq.c = j; }
+    }
+    dq.c
+}
+
+// Record an element of the innermost open pattern, with the token that names it there.
+fn dq_item(kind: Word, val: Word) -> Word {
+    if dq.ni >= 24 { dq_refuse() } else {
+        let s = dq.sp - 1;
+        dq.it_kind[dq.ni] = kind;
+        dq.it_val[dq.ni] = val;
+        dq.it_acc[dq.ni] = 0;
+        if s >= 0 {
+            dq.it_acc[dq.ni] = if dq.fr_kind[s] == 1 { dq.acc } else { 12 + dq.fr_count[s] * 256 };
+            dq.fr_count[s] = dq.fr_count[s] + 1;
+        }
+        dq.ni = dq.ni + 1;
+        63
+    }
+}
+
+// Open a tuple, struct or variant pattern as an element of the enclosing one.
+fn dq_open(kind: Word) -> Word {
+    let at = dq.ni;
+    if dq.sp >= 6 { dq_refuse() } else {
+    if dq_item(2, 0) == 67 { 67 } else {
+        dq.fr_kind[dq.sp] = kind;
+        dq.fr_count[dq.sp] = 0;
+        dq.fr_comma[dq.sp] = 0;
+        dq.fr_open[dq.sp] = at;
+        dq.sp = dq.sp + 1;
+        dq.state = if kind == 1 { 7 } else { 2 };
+        63
+    } }
+}
+
+// Close the innermost open pattern. A tuple of one element without a comma is a grouping
+// parenthesis, so its element takes its place. `()` and `(p,)` are refused.
+fn dq_close() -> Word {
+    let s = dq.sp - 1;
+    let tuple = dq.fr_kind[s] == 0;
+    if tuple andalso dq.fr_count[s] == 1 andalso dq.fr_comma[s] == 0 {
+        let o = dq.fr_open[s];
+        dq.it_kind[o] = 4;
+        dq.it_acc[dq_first_after(o)] = dq.it_acc[o];
+        dq.sp = s;
+        dq.state = if s == 0 { 3 } else { 10 };
+        63
+    } else {
+    if tuple andalso dq.fr_count[s] < 2 { dq_refuse() } else {
+    if dq.ni >= 24 { dq_refuse() } else {
+        dq.it_kind[dq.ni] = 3;
+        dq.ni = dq.ni + 1;
+        dq.sp = s;
+        dq.state = if s == 0 { 3 } else { 10 };
+        63
+    } } }
+}
+
+// Begin a pattern after `let`, with no item and no open pattern.
+fn dq_begin(kind: Word) -> Word {
+    dq.ni = 0;
+    dq.sp = 0;
+    dq_open(kind)
+}
+
+fn dq_filter(t: Word) -> Word {
+    let k = t % 256;
+    if t == 62 {
+        // End of input. A held `let` is released, and anything deeper is refused.
+        if dq.state == 1 { dq.state = 0; dq_push(62); 38 } else {
+        if dq.state > 1 { dq_refuse() } else { 62 } }
+    } else {
+    if t == 63 { 63 } else {
+    if dq.state >= 6 { dq_pattern(t, k) } else {
+    if dq.state == 2 { dq_elem(t, k) } else {
+    if dq.state == 0 {
+        if k == 38 { dq.state = 1; dq.let_at = st.start; 63 } else { t }
+    } else {
+    if dq.state == 1 {
+        if k == 7 { dq_begin(0) } else {
+        if k == 50 { dq.state = 5; 63 } else {
+        if k == 1 { dq.state = 6; dq.held = t; 63 } else { dq.state = 0; dq_push(t); 38 } } }
+    } else {
+    if dq.state == 5 {
+        // `let _ = e;` is the expression statement `e;` to the reference, operation for
+        // operation, so the three tokens are dropped. An annotated wildcard is refused.
+        dq.state = 0;
+        if k == 17 { 63 } else { 67 }
+    } else {
+    if dq.state == 3 { dq_assign(k) } else {
+        if k == 38 { dq_refuse() } else {
+        if k == 7 orelse k == 41 orelse k == 2 { dq.depth = dq.depth + 1; t } else {
+        if k == 8 orelse k == 42 orelse k == 3 {
+            if dq.depth == 0 { dq_refuse() } else { dq.depth = dq.depth - 1; t }
+        } else {
+        if k == 39 andalso dq.depth == 0 { dq.state = 0; dq_elements(); t } else { t } } } }
+    } } } } } } } }
+}
+
+// The `=` after a complete pattern. A pattern that is a name in grouping parentheses is
+// the plain `let` of that name, a grouped wildcard drops the `let` as `let _` does, and
+// any other stores the value in the hidden binding of depth zero.
+fn dq_assign(k: Word) -> Word {
+    if k == 17 {
+        dq.state = 4;
+        dq.depth = 0;
+        let top = dq_first_after(0 - 1);
+        dq.first = top + 1;
+        if dq.it_kind[top] == 0 {
+            dq.first = dq.ni;
+            dq_push(1 + dq.it_val[top] * 256);
+            dq_push(17);
+            38
+        } else {
+        if dq.it_kind[top] == 1 { dq.first = dq.ni; 63 } else {
+            dq_push(dq_temp(0));
+            dq_push(17);
+            38
+        } }
+    } else { dq_refuse() }
+}
+
+// State 2, awaiting an element of a tuple or variant pattern, or the pattern of a field.
+// A `)` closes a tuple or variant after a trailing comma or a variant with no payload.
+fn dq_elem(t: Word, k: Word) -> Word {
+    if k == 1 { dq.held = t; dq.state = 9; 63 } else {
+    if k == 50 { dq.state = 10; dq_item(1, 0) } else {
+    if k == 7 { dq_open(0) } else {
+    if k == 8 andalso dq.sp > 0 andalso dq.fr_kind[dq.sp - 1] != 1 { dq_close() } else { dq_refuse() } } } }
+}
+
+// State 10, after a complete element: a comma awaits the next element and the closing
+// bracket of the innermost pattern closes it.
+fn dq_after(k: Word) -> Word {
+    let s = dq.sp - 1;
+    let fs = dq.fr_kind[s] == 1;
+    if k == 10 {
+        dq.fr_comma[s] = 1;
+        dq.state = if fs { 7 } else { 2 };
+        63
+    } else {
+    if (k == 8 andalso not fs) orelse (k == 3 andalso fs) { dq_close() } else { dq_refuse() } }
+}
+
+// A name inside the pattern is a binding unless `{` makes it a struct's or `::` an enum's.
+fn dq_name(k: Word) -> Word {
+    if k == 2 { dq_open(1) } else {
+    if k == 51 { dq.state = 11; 63 } else {
+    if dq_item(0, dq.held / 256) == 67 { 67 } else { dq_after(k) } } }
+}
+
+// After the variant name. A `(` opens its payload pattern, and a bare variant is a variant
+// pattern with no payload, whose following token is read again in the state it leaves.
+fn dq_variant(k: Word) -> Word {
+    if k == 7 { dq_open(2) } else {
+    if dq_open(2) == 67 { 67 } else {
+    if dq_close() == 67 { 67 } else {
+    if dq.sp == 0 { dq_assign(k) } else { dq_after(k) } } } }
+}
+
+// The pattern states from 6. After `let Name`, a `{` opens a struct pattern, a `::` a
+// variant pattern, and anything else releases the held `let` and name as an ordinary
+// binding. A field binds its own name unless a `:` gives it a pattern.
+fn dq_pattern(t: Word, k: Word) -> Word {
+    if dq.state == 6 {
+        if k == 2 { dq_begin(1) } else {
+        if k == 51 { dq.ni = 0; dq.sp = 0; dq.state = 11; 63 } else { dq.state = 0; dq_push(dq.held); dq_push(t); 38 } }
+    } else {
+    if dq.state == 7 {
+        if k == 1 { dq.acc = t; dq.held = t; dq.state = 8; 63 } else {
+        if k == 3 { dq_close() } else { dq_refuse() } }
+    } else {
+    if dq.state == 8 {
+        if k == 9 { dq.state = 2; 63 } else {
+        if k == 10 orelse k == 3 {
+            if dq_item(0, dq.held / 256) == 67 { 67 } else { dq_after(k) }
+        } else { dq_refuse() } }
+    } else {
+    if dq.state == 9 { dq_name(k) } else {
+    if dq.state == 10 { dq_after(k) } else {
+    if dq.state == 11 {
+        if k == 1 { dq.state = 12; 63 } else { dq_refuse() }
+    } else { dq_variant(k) } } } } } }
+}
+
+fn next_token() -> Word {
+    if dq.len > 0 { dq_take() } else {
+    // A shebang line at the very start of the source is skipped, as the reference lexer
+    // skips it, by entering the line-comment state past the `#!`.
+    if st.cursor == 0 andalso st.kind == 0 andalso peek_at(0) == 35 andalso peek_at(1) == 33 {
+        st.kind = 5;
+        st.cursor = 2;
+        63
+    } else { dq_filter(lex_raw()) } }
+}
+
+loop main(resume: Word) -> Word {
+    yield next_token()
 }

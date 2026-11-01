@@ -66,10 +66,19 @@ fn a_block_form_statement_program_compiles() {
 /// the reading that the documented form is rejected. It is not. The example in
 /// the grammar's "Break Statement" section parses verbatim, and so does every
 /// neighbouring shape. The rejection that prompted the report had another
-/// cause, pinned by
-/// `a_trailing_semicolon_after_for_is_rejected_where_after_if_it_is_accepted`
-/// below.
+/// cause — a stray semicolon after the `for` block — and that form is
+/// **accepted**, which `a_trailing_semicolon_after_for_is_accepted_as_it_is_after_if`
+/// below pins.
+///
+/// **The citation here previously named a test asserting the REJECTION**, which
+/// is the opposite of what the tree does. A pointer that resolves into a
+/// contradiction is worse than one that resolves to nothing, because it looks
+/// like a reference.
 #[test]
+// The grammar's example uses `Float` and float literals, which the LEXER refuses
+// without the `floats` feature. Gated rather than rewritten, because the point of the
+// test is that the grammar's own example parses VERBATIM.
+#[cfg(feature = "floats")]
 fn the_break_statement_documented_in_the_grammar_parses() {
     // The grammar's own example, transcribed with only a function wrapper added.
     assert!(parses(

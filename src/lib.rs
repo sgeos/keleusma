@@ -94,6 +94,16 @@ extern crate std;
 #[cfg(feature = "self-host")]
 pub mod selfhost;
 
+/// The hosted runtime, a bytecode interpreter written in Keleusma, and its driver (Order 4).
+/// Off by default with the self-hosted toolchain; requires `std`.
+#[cfg(feature = "self-host")]
+pub mod hosted;
+
+/// The cryptographic framing of the wire format written in Keleusma, with the signing and
+/// encryption primitives as host natives (Order 5).
+#[cfg(all(feature = "signatures", feature = "compile", feature = "verify"))]
+pub mod crypto_frame;
+
 /// Address-type abstraction used by the parametric [`vm::GenericVm`]
 /// to model the runtime's address width.
 pub mod address;
@@ -211,6 +221,12 @@ pub mod parser;
 /// portability.
 #[cfg(feature = "compile")]
 pub mod target;
+/// The bundled text operations over `Text<N>`, recognised as methods by the
+/// receiver type and lowered by the compiler as intrinsics. Present in every
+/// compiling build so that a build without the `text` feature refuses the
+/// operations by name.
+#[cfg(feature = "compile")]
+mod text_intrinsic;
 /// Token definitions and keyword recognition.
 #[cfg(feature = "compile")]
 pub mod token;
@@ -243,16 +259,40 @@ pub mod text_size;
 /// Structural verifier plus WCET and WCMU resource-bounds pass.
 #[cfg(feature = "verify")]
 pub mod verify;
+#[cfg(feature = "verify")]
+mod verify_execution;
+/// Definite initialization, narrowed: the verifier rule that no read observes
+/// a local that no path writes.
+#[cfg(feature = "verify")]
+pub mod verify_init;
+
+/// First-pass language-trap classification with explicit availability boundaries.
+#[cfg(feature = "verify")]
+pub mod trap_analysis;
+
+/// Per-site composite confinement: does the region a construction site builds
+/// become unreachable once its enclosing iteration ends? Sound but deliberately
+/// incomplete, with a third verdict distinguishing "no" from "cannot
+/// establish" so the completeness gradient is measurable.
+#[cfg(feature = "verify")]
+pub mod confine;
+/// The arena bytes a native compilation needs beyond the virtual machine,
+/// folded into [`vm::auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub mod native_region;
 /// Phase 0 spike for the A.2.1 typed operand-stack verifier pass. Not yet
 /// wired into [`verify`]; a standalone proof of concept for the abstract
 /// operand-stack domain and baked-offset validation.
 #[cfg(feature = "verify")]
 pub mod verify_typed;
 
-/// Shared host-side driver for the self-hosted `.kel` stages, so the parse-record
-/// transport lives in one place instead of being copied into every consumer.
 #[cfg(all(feature = "compile", feature = "verify"))]
 pub mod selfhost_host;
+/// Shared host-side driver for the self-hosted `.kel` stages, so the parse-record
+/// transport lives in one place instead of being copied into every consumer.
+/// The operations a host performs on a running stage program, with the virtual machine as the
+/// reference implementation.
+pub mod stage_executor;
 
 pub use keleusma_arena::{
     Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, Stale, TopHandle,
@@ -270,5 +310,8 @@ pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType, RefContext}
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};
-pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
+pub use vm::{
+    ExecutionChecks, NativeCtx, OverflowPolicy, TrapPolicy, VerifyWarning, VmError, VmOptions,
+    WarningKind,
+};
 pub use word::Word;

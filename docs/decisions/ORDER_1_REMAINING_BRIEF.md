@@ -207,7 +207,7 @@ already documented as such in `binding_rows`.
 **Node kinds established**: leaf — Literal 1, Local 2, DataRead 11, Unit 20, 38.
 Binary — BinOp 3, LetIn 5, Andalso 8, Orelse 9, DataAssignIn 12, IndexAssignIn 14,
 ExprStmt 21, plus 31, 43, 44, 45, 60. Unary — Not 6, Neg 10, IndexRead 13, YieldExpr
-24, Cast 26, FieldAccess 28, plus 29, 30, 37. Call packs `chunk + count*256` in `arg`.
+24, Cast 26, FieldAccess 28, plus 29, 30, 37. Call packs `chunk + count*CALL_CHUNK_RADIX` in `arg` (the radix was 256 until 2026-08-26; see `CALL_CHUNK_RADIX_BRIEF.md`).
 
 **THE OPEN QUESTION FOR THE NEXT SESSION**: how a `Literal` node's arg encodes its
 TYPE, since the row needs `Word`/`Bool`/`Byte` and not just the value. Determine that

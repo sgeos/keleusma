@@ -109,7 +109,30 @@ fn dispatched_commands() -> Vec<u32> {
 /// reaching these commands has lost a region rather than gained simplicity.
 #[test]
 fn the_driver_reaches_the_constant_streaming_commands() {
-    const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
+    // **THE DECLARATION SEARCHES BELOW READ CODE, NOT PROSE.** They used to search the raw
+    // driver, so a comment carrying the declaration text satisfied them while the code did not.
+    // Measured: changing `CMD_STEP` to a different value and leaving `// was: CMD_STEP: i64 = 175;`
+    // beside it left this test reporting 2 passed, 0 failed.
+    //
+    // These are PRESENCE assertions, so that is a **silent false pass** -- the direction that does
+    // not get investigated. `driver_command_numbers` in this same file already strips comments, and
+    // its doc cites the four recorded instances of a guard firing on the prose that explains it.
+    // The guard was applied to one of the two readers and not the other, which is the shape this
+    // repository keeps meeting.
+    //
+    // Truncating at the first `//` is correct here rather than tracking string literals: for a
+    // presence assertion an early truncation can only hide a real occurrence and **fail loudly**,
+    // where `tests/call_chunk_index_limit.rs` needs a string-aware strip because its assertion is
+    // an ABSENCE one and the same truncation would let a real offender pass silently.
+    let driver_code: String = include_str!("../src/selfhost/mod.rs")
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let driver = driver_code.as_str();
 
     let commands = dispatched_commands();
     // MUST-FIRE on the derivation working at all. A parse that found nothing would
@@ -133,7 +156,7 @@ fn the_driver_reaches_the_constant_streaming_commands() {
     // written and never will.
     for decl in ["CMD_BEGIN: i64 = 176", "CMD_STEP: i64 = 177"] {
         assert!(
-            DRIVER.contains(decl),
+            driver.contains(decl),
             "the driver no longer declares `{decl}`. If the constant-streaming route \
              was removed, say what emits `CONSTS` instead; if it was merely renamed, \
              this test needs the new name rather than deletion"
@@ -144,7 +167,7 @@ fn the_driver_reaches_the_constant_streaming_commands() {
     // stopped naming any command at all would fail here rather than look like a
     // discovery about constants specifically.
     assert!(
-        DRIVER.contains("CMD_STEP: i64 = 175"),
+        driver.contains("CMD_STEP: i64 = 175"),
         "the chunk-streaming command is no longer named in the driver, so the \
          presence of 176/177 above says nothing about them specifically"
     );
@@ -169,6 +192,35 @@ fn the_driver_reaches_the_constant_streaming_commands() {
 /// would otherwise count as driving them. That is the too-loose direction of the
 /// same error, and this line has four recorded instances of a guard firing on the
 /// prose that explains it.
+/// Every integer literal appearing in the driver's non-comment code.
+///
+/// # THIS IS A PROXY, IT IS FIT FOR LARGE DISTINCTIVE NUMBERS ONLY, AND A POPULATION CENSUS OF
+/// THE DISPATCHED COMMANDS IS NOT SUPPORTABLE BY IT
+///
+/// The tests here use this for commands 178 to 181. Those numbers are large and appear nowhere
+/// else in the driver, so "the number is present" is a sound reading of "the driver issues the
+/// command".
+///
+/// **It does not generalise, and the attempt was made and abandoned on 2026-08-30.** `wire.kel`
+/// dispatches 182 commands, and the file above records the transferable lesson — presence and
+/// dispatch are not evidence that code runs — which makes "how many of the 182 does the driver
+/// actually reach?" the obvious next question. It is the same shape as a gap this repository
+/// closed by measuring a population it had only described.
+///
+/// **Run against all 182, this reader reports near-total coverage and is wrong.** Commands 1, 2
+/// and 3 are dispatched, and those integers appear throughout the driver as array indices, field
+/// counts and widths. The census would be confidently wrong in the flattering direction, which is
+/// the worst one.
+///
+/// **A better instrument would need a precise call form to match, and there is none.** The driver
+/// addresses the stage by writing a command number into a shared slot, and it does so through
+/// several differently shaped helpers rather than one. Matching the write sites is possible but is
+/// real work, not a grep.
+///
+/// **So the census is UNMEASURED, and the reason is recorded rather than the number.** Anyone
+/// costing work on the strength of "most commands are driven" or "most are dead" should know that
+/// neither statement has been established, and that the cheap-looking way to establish it produces
+/// a wrong answer rather than no answer.
 fn driver_command_numbers() -> Vec<u32> {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
     let mut out: Vec<u32> = Vec::new();

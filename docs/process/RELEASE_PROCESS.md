@@ -53,17 +53,43 @@ Five rules govern every release. They bind the human maintainer and any AI agent
 
 ## The crates
 
-Five crates publish to crates.io, in this dependency order:
+**SEVEN** crates publish to crates.io, in this dependency order:
 
 1. `keleusma-macros` — proc-macro, no internal deps.
 2. `keleusma-arena` — standalone allocator, no internal deps. **Versioned independently** (0.3.x line).
-3. `keleusma` — the runtime; depends on `keleusma-macros` and `keleusma-arena`.
-4. `keleusma-bench` — depends on `keleusma` and `keleusma-arena`.
-5. `keleusma-cli` — the `keleusma` binary; depends on `keleusma` and `keleusma-arena`.
+3. `keleusma-wire-derive` — derive macro for `keleusma-wire` records, no internal deps. **Versioned
+   independently** (0.1.x line). An implementation detail of `keleusma-wire`; consumers depend on
+   that crate with its `derive` feature rather than on this one.
+4. `keleusma-wire` — the standalone wire-format container; depends on `keleusma-wire-derive` through
+   its `derive` feature. **Versioned independently** (0.1.x line).
+5. `keleusma` — the runtime; depends on `keleusma-macros`, `keleusma-arena`, and `keleusma-wire`
+   with its `derive` feature.
+6. `keleusma-bench` — depends on `keleusma` and `keleusma-arena`.
+7. `keleusma-cli` — the `keleusma` binary; depends on `keleusma` and `keleusma-arena`.
 
 `keleusma`, `keleusma-cli`, `keleusma-bench`, and `keleusma-macros` track the
-major-minor of `keleusma`. `keleusma-arena` has its own version and bumps only when
-its public API changes.
+major-minor of `keleusma`. `keleusma-arena`, `keleusma-wire`, and `keleusma-wire-derive`
+have their own versions and bump only when their public API changes.
+
+> ### The wire crates were missing from this list, and that was a publish-blocking defect
+>
+> This section said FIVE and named neither wire crate, while `keleusma` carries a path
+> dependency on `keleusma-wire`. Following the list as written publishes `keleusma-macros`
+> and `keleusma-arena` — **both irreversible** — and then fails on `keleusma`, because the
+> registry has no `keleusma-wire` to resolve. The failure lands after the point where the
+> abort criteria still help.
+>
+> **Nothing was inconsistent; something was absent.** Both crates are marked
+> `publish = ["crates-io"]`, carry a description, licence and repository, have their own
+> continuous-integration job, and are covered by the release gate. Every artifact the
+> tooling can inspect said they were ready. The one document the tooling cannot inspect
+> had never heard of them.
+>
+> Found by censusing the workspace against this file rather than by reading it. A missing
+> entry has no line number, which is why neither instrument caught it.
+>
+> **When a crate is added to the workspace with `publish` set, it belongs here in the same
+> commit.** There is no automated guard for this list.
 
 ## Preflight checklist
 
@@ -119,15 +145,55 @@ publish is not, and it waits for the maintainer's word.
 
 - Bump `keleusma`, `keleusma-cli`, `keleusma-bench`, and `keleusma-macros` to the new
   `X.Y.Z`.
+- Bump `keleusma-wire` and `keleusma-wire-derive` **only if their public API changed**
+  since their last *published* version, on the same rule as the arena below. On a FIRST
+  publication neither has a published version to compare against, so both ship as they
+  stand.
 - Bump `keleusma-arena` **only if its public API changed** since its last *published*
   version. If it did, also bump the arena version requirement in every dependent
   (`keleusma`, `keleusma-cli`, `keleusma-bench`) to `">= new"` so a downstream
   resolution cannot select the older, incompatible arena. (This is the V0.2.1 arena
   0.3.0 → 0.3.1 lesson; see step 3.)
+- Assemble the changelog fragments with `python3 scripts/changelog_fragments.py assemble`,
+  which moves every file in `changelog.d/` into the `[Unreleased]` section of the root
+  `CHANGELOG.md` and deletes it. Review the result, because the fragments were written
+  separately and may repeat or contradict one another.
 - Stamp each crate's `CHANGELOG.md`: rename the `[Unreleased]` section to
   `[X.Y.Z] - <YYYY-MM-DD>` and open a fresh empty `[Unreleased]` above it. The
   published tarball should carry a dated, stamped changelog, not `[Unreleased]`.
 - Update the `**Status**` line in `CLAUDE.md`.
+
+## 1b. Roll the format fingerprint — every release, without exception
+
+```bash
+scripts/fingerprint.sh          # what this tree currently uses
+scripts/fingerprint.sh --new    # roll it
+```
+
+Then update the pinned value wherever a test asserts it, and the golden wire bytes.
+**Both are supposed to move.** A gate failure here is the mechanism reporting the
+change, not a regression.
+
+**Why this step exists.** `BYTECODE_VERSION` is frozen at 2 and does not move between
+releases, by operator policy set on 2026-09-01: it stays at 2 until a hardware compiler
+exists or the language sees notable adoption. The accepted consequence is that early
+releases are **not compatible with one another**, and the version check cannot tell them
+apart, because it is exact equality against a number every release declares.
+
+The fingerprint is what tells them apart. Skipping this step does not produce a warning
+or a test failure. It produces two releases that silently accept each other's bytecode
+and read it under the wrong meaning, which is the failure the version number would
+otherwise have caught. **There is no automated guard for skipping it**, which is why it
+is a numbered step here rather than a note.
+
+To read what any past release used, pass a commit or tag:
+
+```bash
+scripts/fingerprint.sh v0.2.2
+```
+
+This occupies space the wire format reserves. If that space is ever assigned a real
+meaning, this step is deleted rather than moved.
 
 ## 1a. Sync grammar-derived tooling
 
@@ -196,9 +262,10 @@ lived in that blind spot:
 - **Feature-combination builds** — e.g. `verify` without `floats`, which referenced
   `floats`-gated variants and failed to compile. The local gate does not enumerate
   every feature combination CI does.
-- **The latest stable toolchain** — CI uses `dtolnay/rust-toolchain@stable` (the
-  newest release), which can add lints (`unstable_name_collisions`, `question_mark`,
-  redundant-`format!`-borrow) your local, possibly older, toolchain does not have.
+- **The latest stable toolchain** — CI uses `dtolnay/rust-toolchain` from its `stable`
+  branch, pinned by commit hash. It still installs the newest stable release, which can
+  add lints (`unstable_name_collisions`, `question_mark`, redundant-`format!`-borrow)
+  your local, possibly older, toolchain does not have.
 
 Because of this, a green local gate is necessary but **not sufficient**; the
 authoritative gate is CI on the pushed release commit (step 6).
@@ -217,8 +284,12 @@ the local test gate both pass, yet `cargo publish` fails at the registry-resolve
 verify build. Check this before publishing, in dependency order:
 
 ```sh
-cargo publish -p keleusma-macros --dry-run
-cargo publish -p keleusma-arena  --dry-run
+cargo publish -p keleusma-macros      --dry-run
+cargo publish -p keleusma-arena       --dry-run
+cargo publish -p keleusma-wire-derive --dry-run
+# keleusma-wire's dry-run resolves keleusma-wire-derive from the registry, so it only
+# succeeds after that crate is actually published. Same trap as keleusma's, one level down.
+cargo publish -p keleusma-wire        --dry-run
 # keleusma's dry-run resolves its deps from the registry, so it only succeeds after
 # macros and arena are actually published. The definitive check for keleusma and the
 # downstream crates is therefore the real publish in step 9, one at a time.
@@ -341,8 +412,10 @@ bump does not require a re-publish, but a dependent may then keep the older depe
 version — see step 1).
 
 ```sh
-cargo publish -p keleusma-macros    # skip if unchanged at this version
-cargo publish -p keleusma-arena     # only if bumped; skip if unchanged and already published
+cargo publish -p keleusma-macros       # skip if unchanged at this version
+cargo publish -p keleusma-arena        # only if bumped; skip if unchanged and already published
+cargo publish -p keleusma-wire-derive  # only if bumped; skip if unchanged and already published
+cargo publish -p keleusma-wire         # only if bumped; skip if unchanged and already published
 cargo publish -p keleusma
 cargo publish -p keleusma-bench
 cargo publish -p keleusma-cli
@@ -385,7 +458,10 @@ field; `n/a` is a valid value, blank is not.
 Release:        Keleusma vX.Y.Z
 Commit SHA:     <full 40-char SHA of the tagged release commit>
 Crates:         keleusma X.Y.Z, keleusma-cli X.Y.Z, keleusma-bench X.Y.Z,
-                keleusma-macros X.Y.Z, keleusma-arena A.B.C
+                keleusma-macros X.Y.Z, keleusma-arena A.B.C,
+                keleusma-wire W.X.Y, keleusma-wire-derive W.X.Y
+                (record every crate actually published, including any that
+                were skipped as unchanged, and say which were skipped)
 CI run (green): <URL of the green CI run on the release commit>
 Local gate:     scripts/release-gate.sh [--miri] — PASS on <toolchain> <YYYY-MM-DD>
 Audit:          <report path / commit / "delta-scoped, maintainer discretion">
@@ -396,6 +472,30 @@ Notes:          <anything the next releaser must know>
 ```
 
 ## Abort criteria — any one is NO-GO
+
+> **A GATE STEP THAT SKIPPED IS NOT A GATE STEP THAT PASSED.**
+>
+> "No gate may be skipped" is stated elsewhere in this document and is silent on
+> the case that matters most, because it reads as being about an operator's
+> choice. **A step conditional on the ENVIRONMENT skips without anyone choosing
+> it.** The operator who omits a flag knows they omitted it; the operator on a
+> machine that happens to lack a toolchain knows only that the gate went green.
+>
+> The concrete case: the detached `native_codegen/` step is conditional on an
+> LLVM development install. On a machine without it the gate reports green
+> having never built the native backend.
+>
+> **Publishing a release that ships the native backend on a gate whose native
+> step skipped is NO-GO.** Green-with-a-skip is fine for routine development and
+> is not fine for a publication.
+>
+> `scripts/gate-summary.sh` renders a step with no test results as
+> `-- no test results --` rather than as a count, and says in its own footer
+> that it cannot distinguish "ran without tests" from "did not run". **That
+> ambiguity is the operator's to resolve before publishing, not the tool's.**
+> Read the gate log for the step's own label, which says which case it was.
+
+
 
 Conditions that mandate a halt, to be checked continuously through the preflight. Any one
 present before the point of no return means **do not proceed**:

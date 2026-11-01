@@ -353,6 +353,8 @@ match classify(value) {
 
 A function call and a `match` block are the valid pipeline targets. The pipeline operator is left-associative with lower precedence than all other operators.
 
+A pipeline target name resolves exactly as the name of the call it stands for. A local binding of the same name, whether a `let`, a parameter, a `match` binding or a loop variable, shadows the function or native, and since no local is callable, both the pipe and the call are rejected while it is in scope. The category-call discipline and the yield contract apply to a pipe as to a call.
+
 ### Yield Expressions
 
 The `yield` expression suspends the coroutine, sends a value to the host, and evaluates to the next input received from the host when the coroutine is resumed.
@@ -468,7 +470,7 @@ for i in 0..8 {
 }
 ````
 
-The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints.
+The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints. A range over **runtime** endpoints is admitted by supplying the bound explicitly with a `limit` clause; see [Bounded Repetition with a Limit](#bounded-repetition-with-a-limit) immediately below, which also covers the optional `on` block capturing how the loop ended.
 
 A `for` loop is a statement and needs no trailing semicolon, but one is accepted, as it is after the block-form `if`, `match`, and `loop` statements. A semicolon at statement position with nothing to terminate is an empty statement and is discarded. Earlier revisions rejected the form after `for` alone, with `unexpected token Semicolon in expression`, because `for` is a statement and consumes no terminator while the other three are expressions whose expression-statement path already consumed one. That diagnostic named the semicolon rather than the `for` and misdirected two defect reports toward `break`, neither of which was about `break`. The current behaviour is pinned by `tests/block_form_statements.rs`, and the agreement of the reference and self-hosted parsers on the form by `tests/selfhost_codegen.rs`.
 
@@ -600,6 +602,8 @@ Only one `loop` function may exist per script, and it serves as the coroutine en
 ### 6.4 Yield Contract
 
 The yield contract of a `loop` or `yield` function is defined by its parameter type (input from host) and return type (output to host). When a `yield` function is called from a `loop` or another `yield` function, the contracts must match. This allows yield expressions in the callee to transparently propagate to the host.
+
+The type checker enforces the contract against the entry `main` at every call or pipe into a `yield` or `loop` function. The callee's return type, instantiated at the call, must be the entry's return type, since the host receives each value the callee yields as the entry's output. A `loop` callee that declares a first parameter declares a resume type, and that type must be the entry's first parameter type. Every `yield` expression in a delegated callee already has the entry's resume type, so a `yield` callee's parameters are ordinary arguments. A delegation that breaks the contract is refused at compile time.
 
 ````
 // Both share the yield contract: AudioCommand -> AudioAction
@@ -816,6 +820,39 @@ let safe = table[i] {
 };
 ````
 
+### Indexed Write Construct
+
+````
+store_construct = data_index_target '=' expr '{' store_arm { ',' store_arm } [ ',' ] '}'
+store_arm      = store_kind [ 'when' expr ] '=>' expr
+store_kind     = 'ok' '(' store_pattern ',' store_pattern ')'
+               | 'invalid_index' '(' arm_pattern ')'
+store_pattern  = '_' | lower_ident
+````
+
+Guards a write into a data-block array field against an out-of-bounds index. The target is a data-block field indexed down to a scalar element, `d.f[i]` or `d.f[i][j]`. Each index is checked against its own level's length in source order. The first level out of range stops the write, so neither a later index nor the value is evaluated, and `invalid_index` binds that level's index. The flat offset alone is not the test, so `d.m[0][5]` on a `[[Word; 3]; 2]` field reaches `invalid_index(5)` although the flat offset five lies within the field. The self-hosted compiler refuses a handled write with more than one index, as it refuses every multi-index data access. The `ok` arm binds the element's value before the write and the value written, and either may be `_`. The element is read only when some `ok` arm binds the old value. The `invalid_index` arm binds the offending index `Word`, with the patterns and guards of the indexing construct. The `ok` class must end with an unguarded arm, and a literal pattern is inadmissible in either `ok` position. The `invalid_index` class is optional, and an unhandled out-of-bounds index traps as `IndexOutOfBounds`. The construct is an expression whose type is the common type of its arms. It may stand as a statement ending in `;`, whose value is discarded, or as the tail expression of a block. Other expression positions, such as a `let` initializer, are not yet supported.
+
+**The arm block belongs to the write.** An arm block after the right-hand side of an indexed assignment handles the write, so `d.f[i] = a[j] { ok(v) => v }` is a malformed write handler rather than a handled read of `a[j]`. A right-hand side that needs its own handler is parenthesized, `d.f[i] = (a[j] { ok(v) => v, invalid_index(_) => 0 });`, or bound with `let` first. This meaning took effect on 2026-10-21. The assignment of a whole scalar field, `d.f = e`, cannot fail, and an arm block after its right-hand side still belongs to the right-hand side.
+
+**Evaluation order.** Every indexed write, handled or not, evaluates its index first and checks it against the bound before evaluating the value. An out-of-bounds index therefore never evaluates the value, and a valid write evaluates the index before the value. A program that must evaluate the value regardless binds it with `let` before the write. Before 2026-10-21 a bare write evaluated the value first.
+
+Example:
+
+````
+// Store a sample and return the value it replaced, or the negated index.
+fn store(i: Word, s: Word) -> Word {
+    d.samples[i] = s {
+        ok(old, _) => old,
+        invalid_index(j) => 0 - j,
+    }
+}
+
+// Discard the outcome; an invalid index is ignored rather than trapping.
+d.samples[i] = s { ok(_, _) => (), invalid_index(_) => () };
+````
+
+The self-hosted compiler implements the construct and the index-first order byte for byte, for Word and Byte elements. It refuses a handled write on any other element type, as it refuses the handled read on one, so `--compiler self-hosted` fails loudly on such a program rather than emitting a module. The shapes it is checked against are listed in `tests/indexed_write_handlers.rs`.
+
 ### Newtype Construction Construct
 
 ````
@@ -875,11 +912,12 @@ let s = code as Status {
 native_construct = native_call '{' native_arm { ',' native_arm } [ ',' ] '}'
 native_arm     = native_kind [ 'when' expr ] '=>' expr
 native_kind    = 'ok' '(' arm_pattern ')'
+               | 'host_error' [ '(' arm_pattern ')' ]
                | 'error' '(' arm_pattern ')'
 arm_pattern    = '_' | lower_ident | signed_int_lit
 ````
 
-Guards a native function call against a host failure. The construct shares the arm-block syntax of the other construct-family members, attached to a native call. The `ok` arm binds the success value, and the `error` arm binds the `Word` error code the native reported on failure. The `ok` class must have an unguarded catch-all arm. The `error` class is optional, and an unhandled native error propagates the host failure exactly as it would without the construct. The `error` arm is admissible on any native call, because fallibility is not tracked at compile time; on a native that never fails, the `error` arm is simply never taken. The arithmetic, indexing, newtype, and discriminant arms are inadmissible.
+Guards a native function call against a host failure. The construct shares the arm-block syntax of the other construct-family members, attached to a native call. The `ok` arm binds the success value, and the `host_error` arm binds the `Word` error code the native reported on failure. `error` is accepted as an alias of `host_error`, and `host_error` written without a pattern handles every failure without binding the code. The `ok` class must have an unguarded catch-all arm. The `host_error` class is optional. A failure that no `host_error` arm handles reaches the compiler-default host-error trap, which surfaces the host's own error to the embedding host. A bare native call outside the construct behaves the same way, because every native call reports a host failure as an outcome. An unguarded `host_error` arm whose pattern is a binder or a wildcard handles every failure, and the compiler then emits no default trap. The `host_error` arm is admissible on any native call, because fallibility is not tracked at compile time; on a native that never fails, the arm is simply never taken. The arithmetic, indexing, newtype, and discriminant arms are inadmissible. A native call takes at most 127 arguments.
 
 The host reports the `Word` code by returning an error that converts to it. The `keleusma-macros` `KeleusmaError` derive generates `From<E> for VmError` for a fieldless enum, mapping each variant to its discriminant as the code, so the native may `return Err(MyError::Variant.into())`. Pairing the host enum's discriminants with a script-side `enum` lets the error code be recovered structurally with the discriminant-to-enum construct.
 
@@ -964,6 +1002,8 @@ A device loading this bytecode rejects the module unless the attached signature 
 ## 8. Pattern Matching
 
 Patterns appear in function heads, `match` arms, and `let` bindings.
+
+A `let` pattern must be irrefutable for the type of its value, since a `let` has no other arm to take. A variable, a wildcard, a tuple or struct pattern whose parts are all irrefutable, and a variant pattern of an enum that declares a single variant are irrefutable. A literal pattern, a variant pattern of an enum with more than one variant, including `Option::Some` and `Option::None`, and any pattern holding one of these are refutable, and the compiler refuses them in a `let` with a message that points to `match`.
 
 ### Pattern Forms
 

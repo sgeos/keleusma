@@ -60,6 +60,10 @@ const STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_yield.kel"),
     ),
     (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
+    ),
+    (
         "verify_depth",
         include_str!("../src/selfhost/kel/verify_depth.kel"),
     ),
@@ -72,6 +76,14 @@ const STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_types.kel"),
     ),
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 fn compile_stage(src: &str) -> Module {

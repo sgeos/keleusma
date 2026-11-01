@@ -25,7 +25,7 @@
 //!
 //! First, the corpus guard it complements
 //! (`selfhost_codegen::the_shipping_compiler_matches_the_boundary_it_is_recorded_against`) is
-//! only as good as the 95 cases in its table; a divergence no case exercises is invisible to it.
+//! only as good as the cases in its table; a divergence no case exercises is invisible to it.
 //! This one does not depend on corpus coverage at all.
 //!
 //! Second, **every set it derives is asserted non-vacuous**. A regex that stops matching produces
@@ -109,7 +109,8 @@ fn match_body(src: &str, header: &str, must_contain: &str) -> String {
 }
 
 /// Match-arm patterns at the TOP LEVEL of `body`: `<digits> =>`, `<digits> if <guard> =>`,
-/// `a..=b =>`.
+/// `a..=b =>`, including numeric alternatives in `|` patterns. Named constants remain
+/// outside this textual check.
 ///
 /// # Depth matters, and ignoring it produced a false positive on this test's first run
 ///
@@ -144,20 +145,40 @@ fn arm_patterns(body: &str) -> BTreeSet<String> {
             Some(k) => (&pat[..k], true),
             None => (pat, false),
         };
-        let disc = disc.trim();
-        let numericish = disc
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.' || c == '=')
-            && disc.chars().any(|c| c.is_ascii_digit());
-        if numericish {
-            out.insert(if guarded {
-                format!("{disc}(guarded)")
-            } else {
-                disc.to_string()
-            });
+        for disc in disc.split('|').map(str::trim) {
+            let numericish = disc
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == '=')
+                && disc.chars().any(|c| c.is_ascii_digit());
+            if numericish {
+                out.insert(if guarded {
+                    format!("{disc}(guarded)")
+                } else {
+                    disc.to_string()
+                });
+            }
         }
     }
     out
+}
+
+#[test]
+fn numeric_alternatives_keep_their_ranges_and_guards() {
+    let body = "{\n94..=96 | crate::metadata::GROUP if ready => {},\n105 => {},\n_ => {},\n}";
+    let actual = covered_codes(&arm_patterns(body));
+    let expected = ["94(guarded)", "95(guarded)", "96(guarded)", "105"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(actual, expected);
+    assert_ne!(
+        actual,
+        covered_codes(&arm_patterns(&body.replace("94..=96 | ", "")))
+    );
+    assert_ne!(
+        actual,
+        covered_codes(&arm_patterns(&body.replace(" if ready", "")))
+    );
 }
 
 /// **THE OP-WORD DECODERS MUST RECOGNISE THE SAME TAGS, WITH THE SAME GUARDS.**
@@ -232,7 +253,12 @@ fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
     /// had guarded the too-loose direction in that very file and never considered the other one.**
     ///
     /// Paren-matching the argument list has no window to outgrow.
-    fn seed_counts(s: &str) -> std::collections::BTreeMap<String, usize> {
+    fn seed_counts(raw: &str) -> std::collections::BTreeMap<String, usize> {
+        // **COUNT CODE, NOT PROSE.** This guard is calibrated against a COUNT, so a comment
+        // mentioning a seeding call adds a phantom and makes a matched pair look mismatched.
+        // Paren-matching removed the window hazard; it does not remove this one.
+        let owned = code_only(raw);
+        let s = owned.as_str();
         let mut out = std::collections::BTreeMap::new();
         let bytes = s.as_bytes();
         let mut from = 0;
@@ -310,6 +336,48 @@ fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
     );
 }
 
+/// Expand each arm pattern to the record CODES it covers, so `18..=20` and a split
+/// `18` plus `19..=20` compare equal.
+///
+/// # This test used to compare SPELLINGS while claiming to compare coverage
+///
+/// It asserted the two arm-pattern SETS were equal, which made `18..=20` on one side and an
+/// equivalent split on the other a failure. That is not the property the test is named for and
+/// not the one its message describes: a code reaching the function dispatch with no declaration
+/// open is about which codes are HANDLED, not about how the arms are written.
+///
+/// Surfaced on 2026-08-28 by splitting `18..=20` in the shipping driver so struct declarations
+/// could be collected while trait and impl stayed skipped. **The guard was right to fire and
+/// wrong about why**, which is the same shape as a too-tight check this line has recorded twice
+/// before.
+///
+/// A guard marker stays attached to the code it guards, because losing one is a real defect here.
+fn covered_codes(patterns: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for p in patterns {
+        let (disc, suffix) = match p.strip_suffix("(guarded)") {
+            Some(d) => (d, "(guarded)"),
+            None => (p.as_str(), ""),
+        };
+        match disc.split_once("..=") {
+            Some((a, b)) => match (a.trim().parse::<i64>(), b.trim().parse::<i64>()) {
+                (Ok(a), Ok(b)) if a <= b => {
+                    for c in a..=b {
+                        out.insert(format!("{c}{suffix}"));
+                    }
+                }
+                _ => {
+                    out.insert(p.clone());
+                }
+            },
+            None => {
+                out.insert(p.clone());
+            }
+        }
+    }
+    out
+}
+
 /// **BOTH DRIVERS MUST HANDLE THE SAME TOP-LEVEL DECLARATION RECORD CODES.**
 ///
 /// A record code with no arm falls through to the function dispatch, where it arrives with no
@@ -320,9 +388,26 @@ fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
 /// function name, because `tests/selfhost_codegen.rs` holds a SECOND record dispatch, in
 /// `parse_function_records`, whose arm set legitimately differs (it handles codes 2 and 3 and not
 /// 6 and 7). Matching the wrong one would report a divergence that is not one.
+///
+/// # A DELIBERATE behavioural divergence, recorded rather than left to be discovered
+///
+/// Since 2026-08-28 the shipping driver COLLECTS struct declarations, where the copy still skips
+/// them. Both still handle all three codes, which is what this test checks and what protects the
+/// function dispatch. The difference does not reach the oracle, because struct records feed the
+/// type channel and not code generation. **It is nonetheless a real divergence in a pair whose
+/// drift has produced five defects from one cause**, so it is written down here rather than
+/// inferred from a diff later.
 #[test]
 fn both_drivers_handle_the_same_declaration_records() {
-    let lib = arm_patterns(&match_body(&read(LIBRARY), "match code {", "18..=20"));
+    // Anchored on the `use`-declaration arm rather than on a struct arm: the struct arm's
+    // SPELLING is exactly what changed, so anchoring there made this test's own extraction
+    // depend on the thing under test. The arm became a block in Order 6 slice 2, when it
+    // began to open a native import row, so the anchor is its first statement.
+    let lib = arm_patterns(&match_body(
+        &read(LIBRARY),
+        "match code {",
+        "in_use = true;",
+    ));
     let cop_src = read(COPY);
     // The comparator is the dispatch that handles the parameter-TYPE and return-TYPE records
     // (6 and 7), which is `parse_functions`; the other dispatch has no such arm.
@@ -334,8 +419,16 @@ fn both_drivers_handle_the_same_declaration_records() {
         lib.len(),
         cop.len()
     );
+    let lib_codes = covered_codes(&lib);
+    let cop_codes = covered_codes(&cop);
+    assert!(
+        lib_codes.len() >= 12 && cop_codes.len() >= 12,
+        "code expansion produced {} and {} codes; it has broken",
+        lib_codes.len(),
+        cop_codes.len()
+    );
     assert_eq!(
-        lib, cop,
+        lib_codes, cop_codes,
         "the two drivers no longer handle the same declaration record codes. A code the copy \
          handles and the library does not will reach the library's function dispatch with no \
          declaration open and fault there"
@@ -358,4 +451,26 @@ fn the_duplicate_this_test_exists_for_is_still_present() {
          DELETE this file: its comparisons are vacuous without a second implementation to \
          compare against"
     );
+}
+
+/// Source with `//` line comments removed, so a search matches CODE rather than prose.
+///
+/// **Measured**: a historical note in `parse.kel` naming the removed refusal made the absence
+/// assertion below report that the stage *"still defines or raises"* it — a confidently wrong
+/// failure sending its reader to hunt something that is not there.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for these searches:
+/// an early truncation can only hide an occurrence, which makes an absence assertion pass where it
+/// should fail — but here the strings sought are Keleusma identifiers that never appear inside a
+/// string literal in this stage, and the window search below fails loudly instead.
+/// `tests/call_chunk_index_limit.rs` needs the string-aware form because its patterns are
+/// arithmetic that can legitimately sit beside a URL.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -37,8 +37,8 @@
 set -uo pipefail
 here="$(dirname "$0")"
 
-ci=$("$here/ci-status.sh" 2>/dev/null | head -1)
-gate=$("$here/gate-status.sh" --oneline 2>/dev/null | head -1)
+ci=$("$here/ci-status.sh" 2>/dev/null | sed -n 1p)
+gate=$("$here/gate-status.sh" --oneline 2>/dev/null | sed -n 1p)
 
 # A part that has nothing to say contributes nothing, rather than an empty
 # separator that reads as a missing value.
