@@ -114,9 +114,8 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
    shard evidence current until D1 is ruled.
-2. `worktree.sh list` now reports agent trees' unlinked output. If D5 is (a), write
-   and test the `WorktreeCreate` and `WorktreeRemove` hook scripts for the operator to
-   apply.
+2. D5 waits on the operator's choice between (c) and (a). Under (a), write and test
+   the hook scripts. Under (c), confirm that the operator's file takes effect.
 3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
    about two weeks later and compare with the trial report.
 4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
@@ -127,11 +126,15 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record the
-operator's ruling of that day. D1 keeps the pinned lists. D2 waits on the operator
-adding `"idleCompaction": false` to the global settings. D3 closed K13. D4 (a) broke
-the language client and was abandoned, so Dependabot alert 6 stays open. D5, a
-worktree hook, is new. The K-series checks K6, K9, K10 and K11 remain, and K14 is held.
+[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record two
+rulings of that day. D2 waits on the operator setting `idleCompaction` to false. D4
+stays open until upstream ships a `vscode-languageclient` that takes `minimatch` 11.
+D5 was ruled (a) and is paused on a finding, with (c), a Cargo `build-dir` file,
+recommended instead. Release signing is proposed in
+[the signing proposal](../kaizen/2026-11-01-release-signing-proposal.md). The
+K-series checks K6, K9, K10 and K11 remain, and K14 is held. V0.2.X asked in sequence
+233 that merges into `v0.2.3` hold until its PR 707 merges into `main`, and this line
+agreed in sequence 234.
 
 ## Concerns
 
