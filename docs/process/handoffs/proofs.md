@@ -160,6 +160,10 @@ by hand.
 - **Work in a worktree.** This line operates in `../keleusma-worktrees/proofs`, with each new
   proof in a sibling worktree on a `proof/*` branch. The main checkout belongs to the V0.2.X
   session. A shared checkout silently changes what a long-running command measures.
+- **A merged pull request from `proofs` deletes `origin/proofs`.** The repository sets
+  `delete_branch_on_merge`, so pull request 708 deleted the branch on 2026-11-01, and the next
+  push recreated it at `d348846a`. After a landing, expect the remote branch to be gone. An
+  ancestry check against `origin/proofs` then fails for that reason, not because of a reset.
 - **Build output lives on the scratch volume.** The worktree's `target` is a link to
   `/Volumes/Scratch/keleusma/proofs/target`. A `cargo clean` deletes the link, so run
   `scratch.sh link target` again before building. Inside the agent sandbox the global
