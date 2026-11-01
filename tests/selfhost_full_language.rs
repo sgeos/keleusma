@@ -1600,6 +1600,43 @@ fn pipes_into_generic_functions_compile_byte_identically() {
             format!("{ID}loop main() -> Word {{ let r = yield 1; let s = id(r); yield 0 }}"),
             RefRejects,
         ),
+        // A resume value with no `loop main` parameter whose type a later use fixes,
+        // the ruling of 2026-10-31 option B. The self-hosted compiler specialized it
+        // to `id__Word` while the reference kept the generic `id`, a chunk-order
+        // divergence. The reference now reads the type checker's resolved type.
+        (
+            format!(
+                "{ID}loop main() -> Word {{ let r = yield 1; let s = id(r); let u: Word = r; yield 0 }}"
+            ),
+            Identical,
+        ),
+        // A residual of the self-hosted compiler. It specializes this call as
+        // `id__Word` where the later use fixes `Byte`, so it does not infer the type
+        // from the later use but takes `Word`. The reference's `id__Byte` is the
+        // annotated form's module. The shipping cross-check refuses the divergence,
+        // so no wrong module is returned.
+        (
+            format!(
+                "{ID}loop main() -> Word {{ let r = yield 1; let s = r |> id(); let u: Byte = r; yield 0 }}"
+            ),
+            Unsupported,
+        ),
+        (
+            format!(
+                "{ID}fn w(x: Word) -> Word {{ x }}\nloop main() -> Word {{ let r = yield 1; let s = id(r); yield w(r) }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}yield g() -> Word {{ let r = yield 1; let s = id(r); r }}\nloop main() -> Word {{ let a = g(); yield a }}"
+            ),
+            Identical,
+        ),
+        (
+            format!("{ID}loop main() -> Word {{ let s = id(yield 1); let u: Word = s; yield 0 }}"),
+            Identical,
+        ),
     ];
     let mut mismatches = Vec::new();
     for (src, expected) in &cases {
@@ -1623,6 +1660,94 @@ fn pipes_into_generic_functions_compile_byte_identically() {
             reference.to_bytes().unwrap(),
             "{src}"
         );
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The delegation and name-resolution rulings of 2026-10-31, through the shipping entry.
+///
+/// A delegated callee whose yield or resume type differs from the entry's is refused by the
+/// reference type checker. The self-hosted stages compile such a program, and the
+/// shipping cross-check reports the reference's refusal, so the pipeline refuses it as
+/// `RefRejects`. A pipe or a call naming a local of the target's name is refused by both,
+/// the self-hosted type stage first, as `PipelineRejects`. Where no local shadows the
+/// name, the pipe and the call compile byte-identically to the reference.
+#[test]
+fn delegation_types_and_shadowed_pipe_targets_have_their_pinned_outcomes() {
+    const ID: &str = "fn id<T>(x: T) -> T { x }\n";
+    const INC: &str = "fn inc(x: Word) -> Word { x + 1 }\n";
+    let cases: Vec<(String, Class)> = vec![
+        (
+            String::from(
+                "loop child() -> bool { yield true }\nloop main(t: Word) -> Byte { child(); yield (t as Byte) }",
+            ),
+            RefRejects,
+        ),
+        (
+            String::from(
+                "yield emit() -> Float { yield 0.5; 0.5 }\nloop main(t: Word) -> Word { emit(); yield t }",
+            ),
+            RefRejects,
+        ),
+        (
+            String::from(
+                "yield emit() -> Word { yield 5; 6 }\nloop main(t: Word) -> Word { let x = emit(); yield x }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{ID}fn main() -> Word {{ let id = 5; 3 |> id() }}"),
+            PipelineRejects,
+        ),
+        (
+            format!("{ID}fn main() -> Word {{ let id = 5; id(3) }}"),
+            PipelineRejects,
+        ),
+        (
+            format!("{INC}fn main() -> Word {{ let inc = 5; 3 |> inc() }}"),
+            PipelineRejects,
+        ),
+        (
+            format!("{INC}fn main() -> Word {{ let inc = 5; inc(3) }}"),
+            PipelineRejects,
+        ),
+        (
+            format!("{ID}fn main(id: Word) -> Word {{ 3 |> id() }}"),
+            PipelineRejects,
+        ),
+        (
+            format!("{ID}fn main(id: Word) -> Word {{ id(3) }}"),
+            PipelineRejects,
+        ),
+        (
+            format!("{ID}fn other(id: Word) -> Word {{ id }}\nfn main() -> Word {{ 3 |> id() }}"),
+            Identical,
+        ),
+        (
+            format!("{ID}fn other(id: Word) -> Word {{ id }}\nfn main() -> Word {{ id(3) }}"),
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in &cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+            continue;
+        }
+        // A refusal by the self-hosted type stage is a false rejection only where the
+        // reference accepts, so each one is checked against the reference here.
+        if *expected == PipelineRejects {
+            let tokens = keleusma::lexer::tokenize(src).expect("lex");
+            let program = keleusma::parser::parse(&tokens).expect("parse");
+            if keleusma::compiler::compile(&program).is_ok() {
+                mismatches.push(format!(
+                    "{src}\n  the reference accepts what the stage refuses"
+                ));
+            }
+        }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

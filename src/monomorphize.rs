@@ -47,6 +47,24 @@ pub fn monomorphize(program: Program) -> Program {
 pub fn monomorphize_with_provenance(
     program: Program,
 ) -> (Program, BTreeMap<String, (String, String)>) {
+    monomorphize_with_resolved_resumes(program, &BTreeMap::new())
+}
+
+/// As [`monomorphize_with_provenance`], with the type the type checker
+/// resolved for each `yield` that no `loop main` parameter types.
+///
+/// `resolved` is the table [`crate::typecheck::check_with_target_resolving_resumes`]
+/// returns, keyed by function name and then by the `yield`'s span. A `yield`
+/// in a non-generic function is typed by `loop main`'s first parameter when
+/// there is one, and otherwise by its entry here, so a generic call on a
+/// resume value whose type a later use fixes specializes as the annotated
+/// form does. The operator ruled on 2026-10-31, option B, that
+/// monomorphization is fed the type checker's types. The table is consulted
+/// only for a `yield`, so every other specialization decision is unchanged.
+pub(crate) fn monomorphize_with_resolved_resumes(
+    program: Program,
+    resolved: &crate::typecheck::ResolvedResumes,
+) -> (Program, BTreeMap<String, (String, String)>) {
     let mut program = program;
 
     // Build a map from function name to FunctionDef for lookup.
@@ -146,6 +164,7 @@ pub fn monomorphize_with_provenance(
                     fn_returns: &fn_returns,
                     struct_table: &struct_table,
                     resume: resume_for(func.category),
+                    resolved_resumes: resolved.get(&func.name),
                 };
                 visitor.visit_block(&mut func.body);
             }
@@ -217,6 +236,7 @@ pub fn monomorphize_with_provenance(
                 fn_returns: &fn_returns,
                 struct_table: &struct_table,
                 resume,
+                resolved_resumes: None,
             };
             visitor.visit_block(&mut body_clone);
         }
@@ -2547,14 +2567,23 @@ struct CallSpecializer<'a> {
     /// The type a `yield` in the function being rewritten resumes with, when
     /// `loop main` declares it.
     resume: Option<TypeExpr>,
+    /// The type the type checker resolved for each `yield` in the function
+    /// being rewritten, by span, when `loop main` does not declare it. `None`
+    /// for a specialization, whose source function is generic and has no
+    /// entry.
+    resolved_resumes: Option<&'a BTreeMap<crate::token::Span, TypeExpr>>,
 }
 
 impl CallSpecializer<'_> {
     /// An expression's type for specialization, with a `yield` typed by the
     /// resume type, which `infer_arg_type` has no context to know.
     fn infer(&self, expr: &Expr) -> Option<TypeExpr> {
-        if matches!(expr, Expr::Yield { .. }) {
-            return self.resume.clone();
+        if let Expr::Yield { span, .. } = expr {
+            return self.resume.clone().or_else(|| {
+                self.resolved_resumes
+                    .and_then(|table| table.get(span))
+                    .cloned()
+            });
         }
         infer_arg_type(expr, self.locals, self.fn_returns, Some(self.struct_table))
     }
