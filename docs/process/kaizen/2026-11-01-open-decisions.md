@@ -68,6 +68,23 @@ files match kept disclosure terms, and the proofs inbox holds the release unread
 branch.
 (b) Leave the branch as it is until the proofs line resumes for its own reasons.
 
+**D4. Dependabot alert 6, `minimatch` in the editor extension.** *Judgment.* The alert
+opened at 22:07 UTC on 2026-10-31 against `editors/vscode/package-lock.json` on `main`,
+advisory GHSA-g3hv-75wg-m249, a moderate denial of service through glob pattern
+amplification, fixed in `minimatch` 11.0.1. The lockfile holds 10.2.6 as a runtime
+dependency of `vscode-languageclient`. **Fact.** Every published `vscode-languageclient`
+up to the latest, 11.0.0 of 2026-10-22, requires `minimatch` `^10.2.6`, so no upstream
+release admits the fix. **Inference.** The vulnerable patterns reach the client from the
+language server's file watcher registrations, which the project's own `keleusma-lsp`
+sends, so an attacker-supplied pattern is unlikely. That is not verified.
+(a) Force `minimatch` 11.0.1 through an npm `overrides` entry on a branch, and keep it
+only if the extension builds and its tests pass. A green security-only pull request
+into `main` is pre-authorized. The override puts a major version under a library that
+did not ask for it.
+(b) Leave the alert open and check for an upstream release weekly.
+(c) Dismiss the alert as tolerable risk, giving the reason above. A dismissal is
+visible on GitHub, so it is the operator's.
+
 ## The operator's own checks
 
 These need an action, not a decision, and are unchanged since 2026-10-30. K6, look in

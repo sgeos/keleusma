@@ -131,7 +131,8 @@ authority, so the startup-file positions reach them first-hand.
 
 [The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) hold the
 list. D1 keeps or drops the pinned shard lists, D2 is the `idleCompaction: false`
-trial, and D3 is a proofs session for K13. The operator's own checks K6, K9, K10 and
+trial, D3 is a proofs session for K13, and D4 is Dependabot alert 6, `minimatch`
+in the editor extension, which no upstream client release can take yet. The operator's own checks K6, K9, K10 and
 K11 remain, and K14 is held.
 
 ## Concerns
