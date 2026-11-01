@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 843a6dbf HEAD     # the merge of PR 689 into v0.2.3
+git merge-base --is-ancestor 10b8985c HEAD     # the merge of PR 703 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -39,14 +39,15 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-10-31
+## State on 2026-11-01
 
 - **Merged.** Into `v0.2.3`, PRs 620, 625, 626, 624, 630, 633, 647, 649, 654 and 656,
   PR 660, `main` merged back after PR 655, as `1ea45456`, and PR 675, the nightly fuzz
   workflow and the fuzz lockfile check, as `b5762e2e`. Into `main`, PR 619, the
   `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82`, PR 655 as
   `430b2625` and PR 676, the fuzz workflow and the `/fuzz` Dependabot entry, as
-  `694783ab`. PR 688 merges `main` back into `v0.2.3` with an identical tree.
+  `694783ab`. PR 688 merges `main` back into `v0.2.3` with an identical tree. PRs 689,
+  693, 696 to 699 and 703 merged into `v0.2.3` on 2026-10-31 and 2026-11-01.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md).
@@ -68,20 +69,17 @@ run.
 - **Third operator ruling of 2026-10-31.** "Accept all obvious choices and address all
   open concerns that need no further input from me.", recorded with dispositions in the
   same file.
-- **Shard balance, N6.** PR 689, `843a6dbf`, pins 43 self-host tests over 150 seconds
-  to shards by measured duration and hashes the rest, guarded in
-  `tests/ci_shard_coverage.rs`. Its one full run put the shards at 32.5 to 35.5
-  minutes, against 26 to 37 before. Measure four more full runs, and if the longest
-  shard is not clearly shorter, put keeping the lists or plain hashing to the operator.
-- **Scratch volume.** On the operator's request of 2026-10-31 this worktree's `target`
-  is a link to `/Volumes/Scratch/keleusma/kaizen/target`. Run
+- **Shard balance, N6.** PR 689, `843a6dbf`, pins 43 self-host tests to shards by
+  measured duration, guarded in `tests/ci_shard_coverage.rs`. Over 19 runs after it the
+  longest shard's median was 35.9 minutes against 37.4 over 47 before, not clearly
+  shorter, so keeping the lists is decision D1 of
+  [the open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md).
+- **Scratch volume.** This worktree's `target` links to
+  `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
-  target` after any `cargo clean`. The operator approved
-  [the proposal](../kaizen/2026-10-31-scratch-volume-proposal.md). Branch
-  `chore/kaizen-scratch-worktrees` implements it, for the operator to merge, and the
-  notices to the other lines follow the merge. The administrator session deletes the
-  orphaned copy. Export the interline checkpoint, with the bodies of sequences 193 and
-  194 redacted, once V0.3.X reports that it has rebuilt its own redacted.
+  target` after any `cargo clean`. PR 697 made `worktree.sh` link and remove build
+  output, the notices went out in sequences 213 to 215, and PR 703 moved the gate's
+  output there. The redacted checkpoint merged in PR 698.
 - **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
   so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
   Applying it is the operator's decision.
@@ -114,8 +112,8 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and measure
-   the shards on four full runs after PR 689.
+1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
+   shard evidence current until D1 is ruled.
 2. Claude Code makes its agent trees under `.claude/worktrees/` without
    `worktree.sh`, so PR 697 does not link them, as the administrator session noted on
    2026-10-31. Four held 11.7 GB of `target` on the data volume that day. Check for a
@@ -131,11 +129,10 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-[The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
-list. Whether to apply `idleCompaction: false` is open, and so is the merge of the
-scratch pull request. The operator's own checks K6,
-K9, K10 and K11 remain, and K14 is held. K13 waits on a proofs session, because
-`origin/proofs` is unchanged since the release and its inbox holds the release unread.
+[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) hold the
+list. D1 keeps or drops the pinned shard lists, D2 is the `idleCompaction: false`
+trial, and D3 is a proofs session for K13. The operator's own checks K6, K9, K10 and
+K11 remain, and K14 is held.
 
 ## Concerns
 
