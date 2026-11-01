@@ -54,6 +54,10 @@ type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>;
 /// **Deriving the width is the right repair ONLY where the float is incidental.** Where the float
 /// width IS the subject, deriving it makes the test vacuous; see
 /// `wider_float_bytecode_never_reaches_execution`, which is repaired differently for that reason.
+///
+/// Only the `floats`-gated tests read it, so it is gated with them and a build without `floats`
+/// reports no dead code.
+#[cfg(feature = "floats")]
 const fn build_float_bits_log2() -> u8 {
     // DERIVED FROM THE CRATE, NOT RESTATED. A `cfg!(feature = "narrow-float-32")` here would be a
     // second copy of a condition the runtime already owns, and would be silently wrong the day a

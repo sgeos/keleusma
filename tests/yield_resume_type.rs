@@ -169,3 +169,132 @@ fn a_resume_value_that_is_discarded_or_fixed_by_its_use_is_admitted() {
         "{source}"
     );
 }
+
+mod delegation {
+    //! A delegated callee yields and resumes at the entry's types.
+    //!
+    //! A `yield` or `loop` function called from `loop main` or from another such
+    //! function suspends the whole call stack when it yields, so the host observes
+    //! the callee's yielded value as the entry's output. Before the repair the type
+    //! checker held each `yield` to its own function's declared return type only,
+    //! so `loop child() -> bool { yield true }` called under
+    //! `loop main(t: Word) -> Byte` handed the host a `bool` where it decodes a
+    //! `Byte`. The operator ruled on 2026-10-31 that such a delegation is refused
+    //! at compile time. The callee's yield type is its declared return type,
+    //! instantiated at the call. A `loop` callee that declares a first parameter
+    //! declares a resume type, which must be the entry's first parameter type.
+
+    use keleusma::Arena;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+
+    fn compile(source: &str) -> Result<keleusma::bytecode::Module, String> {
+        let tokens = keleusma::lexer::tokenize(source).expect("lex");
+        let program = keleusma::parser::parse(&tokens).expect("parse");
+        keleusma::compiler::compile(&program).map_err(|e| e.message)
+    }
+
+    #[test]
+    fn a_delegated_callee_yielding_another_type_is_refused() {
+        for (source, callee) in [
+            // The two forms the V0.3.X line reported.
+            (
+                "loop child() -> bool { yield true }\nloop main(t: Word) -> Byte { child(); yield (t as Byte) }",
+                "child",
+            ),
+            (
+                "yield emit() -> Float { yield 0.5; 0.5 }\nloop main(t: Word) -> Word { emit(); yield t }",
+                "emit",
+            ),
+            // The same delegation through a pipe.
+            (
+                "yield emit(x: Word) -> Float { yield 0.5; 0.5 }\nloop main(t: Word) -> Word { let f = t |> emit(); yield t }",
+                "emit",
+            ),
+            // A delegation two calls deep, where the middle function agrees with the
+            // entry and the innermost does not.
+            (
+                "yield a() -> Float { yield 0.5; 0.5 }\nyield b() -> Word { let f = a(); yield 1; 1 }\nloop main(t: Word) -> Word { let x = b(); yield t }",
+                "a",
+            ),
+            // A generic callee instantiated at another type.
+            (
+                "yield g<T>(x: T) -> T { yield x; x }\nloop main(t: Word) -> Word { let f = g(0.5); yield t }",
+                "g",
+            ),
+            // A loop callee whose declared resume type differs from the entry's.
+            (
+                "loop child(r: bool) -> Word { yield 1 }\nloop main(t: Word) -> Word { child(true); yield t }",
+                "child",
+            ),
+            // The entry declares no resume type and the loop callee declares one.
+            (
+                "loop child(r: bool) -> Word { yield 1 }\nloop main() -> Word { child(true); yield 0 }",
+                "child",
+            ),
+        ] {
+            let err = compile(source).expect_err(source);
+            assert!(
+                err.contains("delegat") && err.contains(&format!("`{callee}`")),
+                "{source}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_delegated_callee_at_the_entry_types_is_admitted() {
+        for source in [
+            "yield emit() -> Word { yield 5; 6 }\nloop main(t: Word) -> Word { let x = emit(); yield x }",
+            "yield emit(x: Word) -> Word { yield x; x }\nloop main(t: Word) -> Word { let x = t |> emit(); yield x }",
+            "yield g<T>(x: T) -> T { yield x; x }\nloop main(t: Word) -> Word { let f = g(3); yield t }",
+            "loop child() -> Word { yield 1 }\nloop main(t: Word) -> Word { child(); yield t }",
+            "loop child(r: Word) -> Word { yield r }\nloop main(t: Word) -> Word { child(t); yield t }",
+            // A `fn` callee is not a delegation, so its return type is free.
+            "fn half(x: Word) -> Float { (x as Float) / 2.0 }\nloop main(t: Word) -> Word { let f = half(t); yield t }",
+        ] {
+            compile(source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        }
+    }
+
+    /// A pipe is held to the category-call discipline as the plain call is, so a
+    /// `fn` cannot reach a `yield` function through a pipe. Before the repair the
+    /// pipe skipped the discipline that the plain call applied.
+    #[test]
+    fn a_pipe_from_an_atomic_function_into_a_yield_function_is_refused_as_the_call_is() {
+        for source in [
+            "yield g(x: Word) -> Word { yield x; x }\nfn h(t: Word) -> Word { t |> g() }\nloop main(t: Word) -> Word { yield h(t) }",
+            "yield g(x: Word) -> Word { yield x; x }\nfn h(t: Word) -> Word { g(t) }\nloop main(t: Word) -> Word { yield h(t) }",
+        ] {
+            let err = compile(source).expect_err(source);
+            assert!(err.contains("may not call"), "{source}: {err}");
+        }
+    }
+
+    /// An admitted delegation yields to the host at the entry's output type at
+    /// every suspension, the delegated one included.
+    #[test]
+    fn an_admitted_delegation_yields_the_entry_output_type_to_the_host() {
+        let source = "yield emit() -> Word { yield 5; 6 }\nloop main(t: Word) -> Word { let x = emit(); yield x }";
+        let module = compile(source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        let need = keleusma::vm::required_persistent_capacity_for(&module);
+        let mut arena = Arena::with_capacity(1 << 20);
+        arena.resize_persistent(need).unwrap();
+        let mut vm = Vm::new(module, &arena).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        let mut states = vec![vm.call(&[Value::Int(0)])];
+        states.push(vm.resume(Value::Int(1)));
+        let rendered: Vec<String> = states.iter().map(|s| format!("{s:?}")).collect();
+        assert_eq!(
+            rendered,
+            vec![
+                format!(
+                    "{:?}",
+                    Ok::<VmState, keleusma::vm::VmError>(VmState::Yielded(Value::Int(5)))
+                ),
+                format!(
+                    "{:?}",
+                    Ok::<VmState, keleusma::vm::VmError>(VmState::Yielded(Value::Int(6)))
+                ),
+            ]
+        );
+    }
+}

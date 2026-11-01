@@ -3504,7 +3504,13 @@ fn compile_with_recorded_type_hook(
     // `DEFAULT_FIXED_FRAC_BITS` (Q31.32) regardless of target.
     normalize_fixed_defaults(&mut owned, target.fixed_default_frac_bits());
     desugar_generic_pipes(&mut owned);
-    crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
+    // The check also returns the type each `yield` resolved to where no
+    // `loop main` parameter declares the resume type, which monomorphization
+    // reads below. The pipeline order is unchanged.
+    let resolved_resumes = crate::typecheck::check_with_target_resolving_resumes(
+        &mut owned, *target,
+    )
+    .map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
     })?;
@@ -3515,7 +3521,8 @@ fn compile_with_recorded_type_hook(
     // reference the specialized name. Generic functions for which
     // no concrete instantiation could be inferred remain unchanged
     // and rely on runtime polymorphism through the Value tag.
-    let (mut owned, generic_provenance) = crate::monomorphize::monomorphize_with_provenance(owned);
+    let (mut owned, generic_provenance) =
+        crate::monomorphize::monomorphize_with_resolved_resumes(owned, &resolved_resumes);
     // Re-typecheck the monomorphized program so specialized bodies
     // benefit from concrete-type method resolution. This pass also records
     // the authoritative per-function expression-type table into
@@ -9197,10 +9204,10 @@ fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), C
 /// A pipe with more than one placeholder is left for the type checker to
 /// refuse.
 ///
-/// The resolution of the target name is unchanged only where no local of the
-/// same name shadows the generic function, since a pipe always names a
-/// declared function and a call may name a local closure. That shadowing case
-/// is not distinguished here and is a known residual.
+/// The rewrite is not scope-aware and needs not be. Where a local of the same
+/// name shadows the generic function, the type checker refuses the resulting
+/// call as it refuses the pipe and the plain call, since no local is callable,
+/// so a shadowed name resolves identically in all three forms.
 fn desugar_generic_pipes(program: &mut Program) {
     use crate::visitor::MutVisitor;
     struct Desugar {
