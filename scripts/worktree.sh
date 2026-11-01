@@ -138,7 +138,7 @@ report_unlinked() {
   local paths tree target
   paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
   while IFS= read -r tree; do
-    [ -n "$tree" ] && [ -d "$tree" ] || continue
+    if [ -z "$tree" ] || [ ! -d "$tree" ]; then continue; fi
     while IFS= read -r target; do
       if [ -n "$target" ] && [ -d "$tree/$target" ] && [ ! -L "$tree/$target" ]; then
         printf 'build output not on the scratch volume: %s (%s)\n' \
