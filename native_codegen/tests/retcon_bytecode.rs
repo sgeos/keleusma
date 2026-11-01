@@ -1504,6 +1504,37 @@ fn private_body_kind_tracks_the_most_recent_write() {
         panic!("constructor")
     };
     *kind = CompositeKind::Struct;
+    // Since absorption 129 the compiler copies the later read of `st.p`
+    // through a typed element read, which takes the static kind and so would
+    // hide the rewritten one. Removing those four ops restores the plain read
+    // this test is about.
+    let ops = &mut program.chunks[entry].ops;
+    let read = ops
+        .iter()
+        .position(|op| matches!(op, Op::GetData(_)))
+        .unwrap();
+    assert!(matches!(
+        ops[read + 1],
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Array,
+            count: 1,
+            ..
+        })
+    ));
+    assert!(matches!(ops[read + 4], Op::PopN(_)));
+    ops.drain(read + 1..read + 5);
+    for op in ops.iter_mut() {
+        if let Op::If(target)
+        | Op::Else(target)
+        | Op::Loop(target)
+        | Op::EndLoop(target)
+        | Op::Break(target)
+        | Op::BreakIf(target) = op
+            && *target as usize > read
+        {
+            *target -= 4;
+        }
+    }
     keleusma::verify::verify(&program).unwrap();
     let mut arena = keleusma_arena::Arena::with_capacity(65536);
     arena
@@ -3732,8 +3763,12 @@ fn composite_operands_survive_direct_and_nested_suspension() {
 
 #[test]
 fn coroutine_body_values_preserve_private_storage_aliasing() {
+    // Since absorption 129 a private composite read that a later write can
+    // reach is copied, on the operator's ruling of 2026-10-31 as V0.2.X
+    // records it, so `keep` holds the body as it was read. Until then the
+    // second yield of each cycle saw the write, 14, 6 and 2.
     let replies = [7, 20, 3, 40, 1, 0];
-    let expected = [5, 14, 20, 6, 40, 2];
+    let expected = [5, 12, 20, 23, 40, 41];
     let src = "private data st { p: (Word, Word) } loop main(t: Word) -> Word { st.p = (t, t); let keep = st.p; let r: Word = yield t; st.p = (r, r); yield keep.0 + st.p.0 }";
     assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
     for optimize in [false, true] {
@@ -4144,7 +4179,9 @@ fn flat_host_ownership_preserves_private_aliases_in_the_same_frame() {
     flat_inputs(
         "private data st { p: (Word, Word) } loop main(t: (Word, Word)) -> Word { st.p = t; let alias = st.p; let owned = t; let r = yield t.0; st.p = r; yield alias.0 + owned.0 + st.p.0 }",
         &inputs,
-        &[5, 19, 20, 26, 40, 42],
+        // Since absorption 129 `alias` is a copy of the body as read, so it
+        // keeps `t.0` after the write. It once saw the write, 19, 26 and 42.
+        &[5, 17, 20, 43, 40, 81],
     );
 }
 
@@ -5967,8 +6004,12 @@ fn native_instance_borrows_preserve_aliases_while_snapshots_copy() {
         "use host::alias\nprivate data st { pair: (Word, Word) } yield main(a: Word) -> Word { st.pair = (a, a + 1); let keep: (Word, Word) = host::alias(st.pair); yield keep.0; st.pair = (7, 8); keep.1 }",
     );
     program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+    // Since absorption 129 the compiler copies `st.pair` before the native
+    // call, because a call may write private data, so an instance borrow
+    // aliases that copy rather than the slot and the later write no longer
+    // reaches `keep`. Both contracts now read 6, where the borrow read 8.
     for (contract, expected) in [
-        (NativeBodyReturn::InstanceBorrow, 8),
+        (NativeBodyReturn::InstanceBorrow, 6),
         (NativeBodyReturn::Snapshot, 6),
     ] {
         let mut arena = keleusma_arena::Arena::with_capacity(65536);
