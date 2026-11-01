@@ -111,8 +111,10 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
-   shard evidence current until D1 is ruled.
+1. The first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, never started. A
+   manual run on `v0.2.3`, 41309332430, passed in 33 minutes with all five targets
+   run 360 seconds and no crash. Check that the run of 2026-11-02 starts. If it does
+   not, the schedule is broken rather than dropped.
 2. Confirm that the D5 `build-dir` file takes effect on the next agent tree that
    builds, by its size in `worktree.sh list` and a folder under scratch `agents/`.
 3. `idleCompaction` is false from 05:42 UTC on 2026-11-01. Run `context_quality.py`
@@ -132,12 +134,14 @@ is adopted from the first release after the operator makes a key. The operator d
 whether V0.2.X removes the merged agent tree, whether V0.3.X's archive folder moves,
 and whether the main checkout's `target` is linked. The K-series checks K6, K9, K10 and
 K11 remain, and K14 is held. Merges into `v0.2.3` hold until V0.2.X reports that PR 707
-merged, by sequences 233 and 234.
+merged, by sequences 233 and 234. V0.2.X merged it as `3e71844a` and released the
+hold.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
-- The fuzz workflow ran only locally. Its crash path and artifact upload are untested.
+- The fuzz job has run on GitHub, but its crash path and artifact upload are untested,
+  because no target has crashed.
 - Dependabot alert 6 has no compatible fix. Recheck `vscode-languageclient` weekly.
 - Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
   They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
