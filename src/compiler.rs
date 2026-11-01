@@ -3504,7 +3504,13 @@ fn compile_with_recorded_type_hook(
     // `DEFAULT_FIXED_FRAC_BITS` (Q31.32) regardless of target.
     normalize_fixed_defaults(&mut owned, target.fixed_default_frac_bits());
     desugar_generic_pipes(&mut owned);
-    crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
+    // The check also returns the type each `yield` resolved to where no
+    // `loop main` parameter declares the resume type, which monomorphization
+    // reads below. The pipeline order is unchanged.
+    let resolved_resumes = crate::typecheck::check_with_target_resolving_resumes(
+        &mut owned, *target,
+    )
+    .map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
     })?;
@@ -3515,7 +3521,8 @@ fn compile_with_recorded_type_hook(
     // reference the specialized name. Generic functions for which
     // no concrete instantiation could be inferred remain unchanged
     // and rely on runtime polymorphism through the Value tag.
-    let (mut owned, generic_provenance) = crate::monomorphize::monomorphize_with_provenance(owned);
+    let (mut owned, generic_provenance) =
+        crate::monomorphize::monomorphize_with_resolved_resumes(owned, &resolved_resumes);
     // Re-typecheck the monomorphized program so specialized bodies
     // benefit from concrete-type method resolution. This pass also records
     // the authoritative per-function expression-type table into
@@ -7101,13 +7108,14 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 ))
             }
         }
-        #[cfg(feature = "text")]
-        Expr::Call { name, args, .. }
-            if crate::text_intrinsic::namespace_member(name).is_some() =>
-        {
-            text_intrinsics::result_type(fc, name, args)
-        }
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
+        #[cfg(feature = "text")]
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => text_intrinsics::result_type(fc, receiver, method, args),
         Expr::Ident { name, .. } => fc.local_type(name).cloned(),
         Expr::FieldAccess { object, field, .. } => {
             let owner = fc.struct_name_of(object)?;
@@ -9197,10 +9205,10 @@ fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), C
 /// A pipe with more than one placeholder is left for the type checker to
 /// refuse.
 ///
-/// The resolution of the target name is unchanged only where no local of the
-/// same name shadows the generic function, since a pipe always names a
-/// declared function and a call may name a local closure. That shadowing case
-/// is not distinguished here and is a known residual.
+/// The rewrite is not scope-aware and needs not be. Where a local of the same
+/// name shadows the generic function, the type checker refuses the resulting
+/// call as it refuses the pipe and the plain call, since no local is callable,
+/// so a shadowed name resolves identically in all three forms.
 fn desugar_generic_pipes(program: &mut Program) {
     use crate::visitor::MutVisitor;
     struct Desugar {
@@ -10807,7 +10815,39 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // mangled name `Trait::Head::method` in the function map.
             // The receiver is passed as the first argument to the
             // resolved chunk.
-            let head = match infer_expr_type(fc, receiver).and_then(|t| type_expr_head(&t)) {
+            //
+            // A bundled text operation is decided first, by the receiver type,
+            // as the type checker decides it. The type checker has already
+            // refused it in a build without the `text` feature, and the refusal
+            // is repeated here so that a program reaching the compiler by
+            // another route is refused too.
+            let receiver_type = infer_expr_type(fc, receiver);
+            if let Some(TypeExpr::TextN(..)) = receiver_type.as_ref().map(strip_type_labels) {
+                match crate::text_intrinsic::resolve_method(method) {
+                    Err(message) => {
+                        return Err(CompileError {
+                            message,
+                            span: *span,
+                        });
+                    }
+                    #[cfg(feature = "text")]
+                    Ok(Some(op)) => {
+                        return text_intrinsics::compile(fc, op, receiver, args, *span);
+                    }
+                    #[cfg(not(feature = "text"))]
+                    Ok(Some(op)) => {
+                        return Err(CompileError {
+                            message: format!(
+                                "method `{}` on `Text<N>` requires the `text` cargo feature",
+                                op.name()
+                            ),
+                            span: *span,
+                        });
+                    }
+                    Ok(None) => {}
+                }
+            }
+            let head = match receiver_type.and_then(|t| type_expr_head(&t)) {
                 Some(h) => h,
                 None => {
                     return Err(CompileError {
@@ -12886,28 +12926,6 @@ fn compile_call(
     args: &[Expr],
     span: &Span,
 ) -> Result<(), CompileError> {
-    // A bundled text operation lowers in place. The type checker has already
-    // refused it in a build without the `text` feature, and the refusal is
-    // repeated here so that a program reaching the compiler by another route
-    // is refused too.
-    match crate::text_intrinsic::resolve(name) {
-        Err(message) => {
-            return Err(CompileError {
-                message,
-                span: *span,
-            });
-        }
-        #[cfg(feature = "text")]
-        Ok(Some(op)) => return text_intrinsics::compile(fc, op, name, args, *span),
-        #[cfg(not(feature = "text"))]
-        Ok(Some(_)) => {
-            return Err(CompileError {
-                message: format!("`{name}` requires the `text` cargo feature"),
-                span: *span,
-            });
-        }
-        Ok(None) => {}
-    }
     // Newtype construction. `Name(value)` where `Name` is a
     // declared newtype emits the inner expression's bytecode
     // directly with no `Op::Call`. Newtypes are transparent at the

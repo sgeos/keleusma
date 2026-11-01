@@ -489,6 +489,7 @@ fn the_name_correspondence_is_total_over_the_stage_table() {
 // ---------------------------------------------------------------------------
 
 /// The fourteen stage sources, all covered by the byte-identity corpus.
+#[cfg(feature = "compile")]
 const STAGE_SOURCES: &[(&str, &str)] = &[
     ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
     ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
@@ -538,6 +539,7 @@ const STAGE_SOURCES: &[(&str, &str)] = &[
 ];
 
 /// The stages the byte-identity oracle actually covers, derived from the oracle's own test names.
+#[cfg(feature = "compile")]
 fn corpus_stages() -> Vec<&'static str> {
     STAGE_SOURCES
         .iter()
@@ -662,6 +664,7 @@ fn the_stage_corpus_names_every_unexercised_op_tag() {
 ///
 /// Not a design choice — a measurement, and the reason it is written out rather than counted is
 /// that the NAMES are the deliverable. They are where a transposition would hide from the oracle.
+#[cfg(feature = "compile")]
 const EXPECTED_UNEXERCISED: &[&str] = &[
     // Bare first-pass division now uses CheckedDiv/CheckedMod. These legacy
     // polymorphic forms remain valid transport tags but leave the stage corpus.
@@ -854,6 +857,7 @@ fn the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named() {
 /// **The defect was mine and its shape is worth keeping**: the test's INPUT lived outside the
 /// region its expectation was pinned in. A directory scan is not a corpus; it is whatever the
 /// branch happens to contain.
+#[cfg(feature = "compile")]
 const CENSUS_EXAMPLES: &[&str] = &[
     "01_arithmetic.kel",
     "02_struct_field.kel",
@@ -879,6 +883,7 @@ const CENSUS_EXAMPLES: &[&str] = &[
 // `callnative` joined in Order 6 slice 2. None of the fifteen census programs imports a
 // native, so the census cannot reach it, and its coverage is the native cases and the corpus
 // table in `tests/selfhost_full_language.rs`.
+#[cfg(feature = "compile")]
 const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &[
     "addop",
     "callext",
