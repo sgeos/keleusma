@@ -9148,12 +9148,41 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { y, x: _ } = p; y }",
         ),
-        // A nested destructuring pattern, which the reference compiles and the filter
+        // Nested destructuring patterns and a single-variant enum pattern, which the filter
+        // rewrites to the reference's lowering with a hidden binding per nested pattern since
+        // the operator's ruling of 2026-10-31. The first was `scope/nested_let_pattern__GAP`,
+        // refused, before that.
+        (
+            "let/nested_tuple_destructure",
+            SOk,
+            "fn f() -> Word { let (a, (b, c)) = (1, (2, 3)); a + b + c }",
+        ),
+        (
+            "let/nested_struct_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nstruct Q { p: P, z: Word }\nfn f(q: Q) -> Word { let Q { p: P { x, y }, z } = q; x + y + z }",
+        ),
+        (
+            "let/struct_in_tuple_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let (P { x, y: _ }, c) = (p, 3); x + c }",
+        ),
+        (
+            "let/tuple_in_struct_destructure",
+            SOk,
+            "struct S { t: (Word, Word), z: Word }\nfn f(s: S) -> Word { let S { t: (a, b), z } = s; a + b + z }",
+        ),
+        (
+            "let/enum_variant_destructure",
+            SOk,
+            "enum W { A(Word, Word) }\nfn f(w: W) -> Word { let W::A(x, y) = w; x * 10 + y }",
+        ),
+        // A typed destructuring pattern, which the reference compiles and the filter
         // refuses rather than rewriting.
         (
-            "scope/nested_let_pattern__GAP",
+            "let/typed_pattern__GAP",
             Refuses,
-            "fn f() -> Word { let (a, (b, c)) = (1, (2, 3)); a + b + c }",
+            "fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (
@@ -9333,10 +9362,12 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // literal state took it to 2230 and the peak to 421. The label punctuation,
             // `punct_label`, took it to 2242 on 2026-10-27. The struct pattern states of
             // the destructuring filter, `dq_struct`, took it to 2403 on 2026-10-31 with the
-            // peak unchanged.
+            // peak unchanged. Nested and variant patterns, which replaced `dq_struct` with
+            // the item and frame tables and their helpers, took it to 2744 on 2026-10-31,
+            // with the peak unchanged.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2403,
+            2744,
             421,
         ),
         (

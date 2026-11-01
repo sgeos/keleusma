@@ -2075,6 +2075,7 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
                 ps.last_enum = stmt.let_enum[ps.let_hit];
                 stmt.pending_copt = 0; stmt.pending_cenum = stmt.let_enum[ps.let_hit];
                 stmt.pending_copt = stmt.let_opt[ps.let_hit];
+                enum_payload_arm(stmt.let_enum[ps.let_hit] - 1);
             }
             ln
         } } } } } }
@@ -5120,6 +5121,14 @@ fn value_record(word: Word) -> Word {
         // The field scanner may already have consumed a following dot. Preserve its phase.
         vl.form = 3; vl.decl = ps.fa_fstruct; vl.bytes = (arg / 65536) % 65536;
     }
+    if kind == 30 andalso arg / 4294967296 == 0 andalso ps.fa_ftuple > 0 {
+        // A whole tuple-typed field, so a binding of it reads `t.N` in the field's layout.
+        vl.form = 1; vl.layout = ps.fa_ftuple - 1; vl.bytes = (arg / 65536) % 65536;
+    }
+    if kind == 30 andalso arg / 4294967296 == 3 andalso structdefs.sd_fenum[structdefs.sc_fieldpos] > 0 {
+        // A whole enum-typed field, so a binding of it is a value of that enum.
+        vl.form = 4; vl.decl = structdefs.sd_fenum[structdefs.sc_fieldpos]; vl.bytes = (arg / 65536) % 65536;
+    }
     if kind == 2 { value_local(arg); gn.nt_value = local_is_newtype(arg); }
     if kind == 7 { gn.nt_value = chunkret.ret_nt[arg % call_chunk_radix()]; }
     if kind == 85 { gn.nt_value = 1; }
@@ -5135,6 +5144,7 @@ fn value_record(word: Word) -> Word {
     if kind == 28 { value_scalar(arg / 65536); }
     if kind == 31 { value_scalar(arg); }
     if kind == 37 andalso arg < 4294967296 { value_scalar(arg / 65536); }
+    if kind == 37 andalso arg / 4294967296 >= 6 { enum_payload_value(arg); }
     if kind == 7 {
         if rq.call_desc > 0 {
             let desc = rq.call_desc - 1; rq.call_desc = 0; header_arm(desc);
@@ -6649,6 +6659,7 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         }
         0
     } else {
+        if k == Tok::IntLit() as Word andalso ps.ta_tuple < 0 - 1 { enum_payload_read(v) } else {
         if k == Tok::IntLit() as Word andalso ps.ta_tuple < 0 {
             // An element of an untyped hidden binding: the reference reads it boxed, by index,
             // variant tag 5 on the tuple-field record. Its value has no known layout.
@@ -6690,8 +6701,79 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         } else {
             ps.ta_phase = 0;
             0
-        } }
+        } } }
     }
+}
+
+// A `.N` after a let-bound value of a single-variant enum reads that variant's payload field
+// N, the reference's `GetEnumField` for a variant `let` pattern, which the destructuring
+// filter writes as `let x = T.N;`. The reference rejects the form written by hand, so the
+// cross-check refuses it. The tuple postfix is armed with the variant row encoded below -1
+// in `ta_tuple`, and only when `.` and an integer follow, so a method call on the value is
+// unchanged. A variant whose payload layout is not fully known is left unarmed, and the
+// read is then refused as unsupported syntax.
+private data ep {
+    count: Word,
+    row: Word,
+    fi: Word,
+}
+
+fn enum_payload_arm(name: Word) -> Word {
+    let ahead = ps.cursor + 1 < toks.len andalso ps.cursor + 1 < toks.base + 8;
+    if ahead andalso next_kind() == Tok::Dot() as Word andalso toks.packed[ps.cursor + 1 - toks.base] % 256 == 12 {
+        ep.count = 0;
+        for i in 0..enums.enum_count limit 256 {
+            if enums.edata[i] == name { ep.count = ep.count + 1; ep.row = i; }
+        }
+        if ep.count == 1 andalso nominal_enum_known(name) == 1 {
+            ps.ta_tuple = 0 - 2 - ep.row;
+            ps.ta_phase = 1;
+        }
+    }
+    0
+}
+
+// The payload read itself. Its operand carries the internal variant 6 for a scalar field,
+// and 8 plus the composite variant for a nested one, which codegen maps to `GetEnumField`.
+// The record's source fact is the variant row and field position above 2^40, from which the
+// host types the read by the field's declared type.
+fn enum_payload_read(v: Word) -> Word {
+    let row = 0 - 2 - ps.ta_tuple;
+    if v < 0 orelse v >= enums.evfcount[row] { perr(pe_tuple_index(), v) } else {
+        let fi = enums.evfstart[row] + v;
+        let off = enums.evfoff[fi];
+        let kind = enums.evfkind[fi];
+        ep.fi = fi;
+        ps.ta_phase = 0;
+        ops.expect_operand = 0;
+        let operand = if kind >= 40000 { off + (kind - 40000) * 65536 + 9 * 4294967296 } else {
+            if kind >= 30000 { off + (kind - 30000) * 65536 + 8 * 4294967296 } else {
+            if kind >= 100 { off + (kind - 100) * 65536 + 10 * 4294967296 } else {
+                off + kind * 65536 + 6 * 4294967296
+            } } };
+        ps.field_record = Node::TupleField() as Word + operand * 64;
+        ps.emit_arg = 1099511627776 + row * 1024 + v;
+        104
+    }
+}
+
+// The value an enum payload read yields, from the field's recorded layout.
+fn enum_payload_value(arg: Word) -> Word {
+    let fi = ep.fi;
+    let variant = arg / 4294967296;
+    if variant == 6 { value_scalar((arg / 65536) % 65536); } else {
+    if variant == 8 {
+        value_scalar(0 - 1);
+        vl.form = 1; vl.layout = enums.evftuple[fi] - 1; vl.bytes = (arg / 65536) % 65536;
+    } else {
+    if variant == 10 {
+        value_scalar(0 - 1);
+        vl.form = 3; vl.decl = enums.evfstruct[fi]; vl.bytes = (arg / 65536) % 65536;
+    } else {
+        value_scalar(enums.evfarrkind[fi] - 1);
+        if vl.bytes <= 0 { perr(pe_value_layout(), toks.at); } else { value_array(((arg / 65536) % 65536) / vl.bytes); }
+    } } }
+    0
 }
 
 // The array-access postfix (ps.aa_phase 1), after a let-bound array Local was emitted. A `[` opens
@@ -9458,6 +9540,7 @@ fn header_arm(at: Word) -> Word {
         ps.fa_struct = ht.decl[at] - 1; ps.fa_phase = 1; stmt.pending_cstruct = ht.decl[at];
     } else { if ht.nform[at] == 4 {
         ps.last_enum = ht.decl[at]; stmt.pending_copt = 0; stmt.pending_cenum = ht.decl[at];
+        enum_payload_arm(ht.decl[at] - 1);
     } else {
         let element = ht.child[at];
         if ht.nform[element] == 0 {

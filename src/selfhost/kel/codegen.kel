@@ -1636,9 +1636,14 @@ fn push_field_access(p: Word) -> Word {
 
 // TupleField (kind 37): a flat tuple field read `t.N`. Emit the tuple value ops (the parameter
 // Local, in lhs) then GetTupleField(Flat{offset, kind}) (op tag 53), packed offset + kind*65536,
-// exactly like a struct GetField but the tuple op.
+// exactly like a struct GetField but the tuple op. The parser's internal variant 6 is the
+// payload field of a single-variant enum `let` pattern, GetEnumField(Flat), and 8 plus a
+// composite variant its nested form, GetEnumField(FlatNested), operator ruling of 2026-10-31.
 fn push_tuple_field(p: Word) -> Word {
-    push_emit(wire.gettuplefield + ast.args[p] * wire.radix);
+    let a = ast.args[p];
+    let v = a / 4294967296;
+    push_emit(if v >= 8 { wire.getenumfieldnested + (a - 8 * 4294967296) * wire.radix } else {
+        if v == 6 { wire.getenumfield + (a - 6 * 4294967296) * wire.radix } else { wire.gettuplefield + a * wire.radix } });
     push_visit(ast.lhs[p]);
     0
 }
