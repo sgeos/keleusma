@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor b5762e2e HEAD     # the merge of PR 675 into v0.2.3
+git merge-base --is-ancestor 843a6dbf HEAD     # the merge of PR 689 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -65,20 +65,32 @@ run.
   verbatim in the same file. V0.2.X's record is the source of truth for its item 4,
   now (b), and for its other questions, for those items only. N6 is (a). The
   obvious choices O1 to O7 are adopted. The operator's checks stay open.
-- **Shard balance, N6.** Branch `ci/kaizen-shard-by-duration` pins 43 self-host tests
-  over 150 seconds to shards by measured duration and hashes the rest, guarded in
-  `tests/ci_shard_coverage.rs`. A simulation expects the longest shard to fall from
-  about 35 to about 32 minutes, within runner variance. Measure it after the merge.
-- **N7.** Requested of V0.2.X in sequence 183, exempting `fuzz/corpus/` from the
-  final-newline rule.
+- **Third operator ruling of 2026-10-31.** "Accept all obvious choices and address all
+  open concerns that need no further input from me.", recorded with dispositions in the
+  same file.
+- **Shard balance, N6.** PR 689, `843a6dbf`, pins 43 self-host tests over 150 seconds
+  to shards by measured duration and hashes the rest, guarded in
+  `tests/ci_shard_coverage.rs`. Its one full run put the shards at 32.5 to 35.5
+  minutes, against 26 to 37 before. Measure four more full runs, and if the longest
+  shard is not clearly shorter, put keeping the lists or plain hashing to the operator.
+- **Scratch volume.** On the operator's request of 2026-10-31 this worktree's `target`
+  is a link to `/Volumes/Scratch/keleusma/kaizen/target`. Run
+  `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
+  target` after any `cargo clean`. The proposal to adopt it in `worktree.sh`, and the
+  orphaned copy of `kaizen-test-duration`, wait on the operator. See
+  [the proposal](../kaizen/2026-10-31-scratch-volume-proposal.md).
+- **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
+  so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
+  Applying it is the operator's decision.
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
   at most. The blog's Pages build holds one shared runner for most of a busy day, by
   the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
   count the pruned list. A backup is outside the repository.
 - **Propagation.** `origin/proofs`, unchanged since 2026-08-29, still holds the old
-  `wire_schema.rs` comment and four kept-term lines, item K13. `main` matches no term
-  since PR 650, by V0.2.X's report. V0.3.X confirmed that `v0.3.0` matches no term.
+  `wire_schema.rs` comment and four files matching kept terms, item K13. On this
+  line's scan of 2026-10-31, `main` and `v0.2.3` match no term. V0.3.X confirmed that
+  `v0.3.0` matches no term.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
@@ -99,23 +111,28 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Merge PR 688 and the N6 pull request. Confirm the first scheduled fuzz run, due at
-   10:17 UTC on 2026-11-01, and measure the shards on the runs after N6.
-2. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
-   comparing error rates and cache writes after long gaps with the idle compactions
-   already measured.
-3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and measure
+   the shards on four full runs after PR 689.
+2. Claude Code makes its agent trees under `.claude/worktrees/` without
+   `worktree.sh`, so PR 697 does not link them, as the administrator session noted on
+   2026-10-31. Four held 11.7 GB of `target` on the data volume that day. Check for a
+   worktree hook, or report unlinked trees in `worktree.sh list`. Their output is the
+   operator's to move or delete.
+3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
+   about two weeks later and compare with the trial report.
+4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
-6. Measure branch-run cost again once changelog fragments are in use.
+5. Finish the three selection tasks, record their outcomes, and read the comparison.
+6. A state-file budget guard, once the owning lines have converted their files.
+7. Measure branch-run cost again once changelog fragments are in use.
 
 ## Open with the operator
 
 [The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
-list. No judgment item is open. The operator's own checks K6, K9, K10, K11 and K13
-remain, and K14 is held. The operator will return to them. The stale worktree record
-of `kaizen-test-duration` needs `git worktree prune`, which the sandbox refuses.
+list. Whether to apply `idleCompaction: false` is open, and so are the scratch-volume
+proposal, the orphaned scratch copy and this line's temporary target directories. The operator's own checks K6,
+K9, K10 and K11 remain, and K14 is held. K13 waits on a proofs session, because
+`origin/proofs` is unchanged since the release and its inbox holds the release unread.
 
 ## Concerns
 
@@ -134,7 +151,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `bbcf13708c9660a75ebd1eea1d92d548042d73443986b860ee9fa0a3b5b83299`, 183 messages, 6 unacknowledged at export, none addressed to `kaizen` |
+| [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
@@ -148,8 +165,10 @@ Pilot judgments never change gates.
   cannot read the known hosts file.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
-- `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER` and an
-  isolated `CARGO_TARGET_DIR`.
+- `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER`, in the
+  linked `target`. The isolated `CARGO_TARGET_DIR` directories under the sandbox's
+  temporary directory hold 8.5 GB on the data volume, and their deletion is the
+  operator's decision.
 
 ## Governing rules
 
