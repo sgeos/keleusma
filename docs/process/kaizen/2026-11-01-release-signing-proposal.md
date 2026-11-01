@@ -89,3 +89,42 @@ the steps to its process when it next cuts a release.
 - **Timing.** V0.2.X is preparing the V0.2.3 release now, through pull request 707.
   Adding a signing step to that release would touch its process while it is under
   way, so the operator may prefer to begin with the following release.
+
+## Ruling and procedure
+
+The operator ruled first-hand in this line's session on 2026-11-01, "Minisign.
+Recommendation accepted.", which adopts (a) with (c) from the first release after the
+operator has made a key. The ruling is recorded with the others of that day in
+[the open decisions](./2026-11-01-open-decisions.md).
+
+**Once, by the operator.** Make the key with `minisign -G -p keleusma.pub -s
+<path outside synced folders>/keleusma.key`, with a passphrase. Commit the public key
+as `keys/minisign.pub` and quote it in `SECURITY.md`. Set up Git's SSH signing for tags,
+`git config gpg.format ssh` with `user.signingkey` naming a key the operator holds, and
+register that key with GitHub as a signing key so the tag shows as verified.
+
+**Each release, after the publish step.** The release line runs these commands, and the
+operator runs the signing commands by hand.
+
+```sh
+# Every crate published in this release, as `cargo publish` packaged it.
+python3 scripts/release_manifest.py target/package/<crate>-<version>.crate ... --output SHA256SUMS
+minisign -Sm SHA256SUMS -s <path>/keleusma.key -t "Keleusma vX.Y.Z"   # operator
+minisign -Vm SHA256SUMS -p keys/minisign.pub                          # check before attaching
+gh release upload vX.Y.Z SHA256SUMS SHA256SUMS.minisig keys/minisign.pub
+```
+
+The tag itself is made with `git tag -s` in place of `git tag -a`. A user verifies with
+`minisign -Vm SHA256SUMS -p minisign.pub`, then compares each line with the `.crate`
+file Cargo downloaded, for example with `shasum -a 256 -c SHA256SUMS` in a directory
+holding them, and checks the tag with `git tag -v vX.Y.Z`.
+
+`scripts/release_manifest.py` refuses to write a manifest unless every file is a crate
+whose packaged `Cargo.toml` names it, no crate appears twice, and its SHA-256 equals the
+checksum crates.io records for that version, which must not be yanked. It never
+overwrites an existing manifest. On 2026-11-01 it matched the published
+`keleusma-arena` 0.3.0 against the live index, and refused the same file with one byte
+appended.
+
+These steps reach [the release process](../RELEASE_PROCESS.md) through the line that
+cuts the release, which was told in the interline mailbox.

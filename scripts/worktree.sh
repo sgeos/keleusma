@@ -133,14 +133,20 @@ cmd_new() {
 
 # Report each package `target` of a live tree that is a directory rather than a link,
 # which is build output on the tree's own volume. Trees made without this script, such
-# as Claude Code's agent trees under .claude/worktrees/, are the expected case.
+# as Claude Code's agent trees under .claude/worktrees/, are the expected case. A target
+# under 1 MB is skipped, because a tree whose Cargo `build-dir` points at scratch, as the
+# agent trees' does since 2026-11-01, keeps only a few kilobytes of locks there.
 report_unlinked() {
-  local paths tree target
+  local paths tree target kilobytes
   paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
   while IFS= read -r tree; do
     if [ -z "$tree" ] || [ ! -d "$tree" ]; then continue; fi
     while IFS= read -r target; do
-      if [ -n "$target" ] && [ -d "$tree/$target" ] && [ ! -L "$tree/$target" ]; then
+      if [ -z "$target" ] || [ ! -d "$tree/$target" ] || [ -L "$tree/$target" ]; then
+        continue
+      fi
+      kilobytes="$(du -sk "$tree/$target" | cut -f1)"
+      if [ "$kilobytes" -ge 1024 ]; then
         printf 'build output not on the scratch volume: %s (%s)\n' \
           "$tree/$target" "$(du -sh "$tree/$target" | cut -f1)"
       fi

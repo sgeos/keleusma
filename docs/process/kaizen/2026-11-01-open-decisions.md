@@ -177,6 +177,33 @@ unaffected, since they are not below `.claude/worktrees/`.
 This line recommends (c) and asks the operator to confirm it, or to keep (a) knowing
 the regression.
 
+## Operator ruling, 2026-11-01, third
+
+The operator ruled first-hand in this line's session later on 2026-11-01, in these
+words, and pasted V0.2.X's reply to the O3 advice, which is summarized below.
+
+> D2. Nominally complete.
+> D5. C. Recommendation accepted.
+> Minisign. Recommendation accepted.
+
+| Item | Disposition |
+|---|---|
+| D2 | Applied. **Fact.** The global `settings.json` holds `"idleCompaction": false`, written at 05:42 UTC on 2026-11-01. The trial runs to about 2026-11-15, when this line reruns `context_quality.py` |
+| D5 | (c). The operator creates `.claude/worktrees/.cargo/config.toml` in the main checkout, and this line has made `/Volumes/Scratch/keleusma/agents`. `worktree.sh list` now skips a `target` under 1 MB, which is what such a tree keeps. Whether the file takes effect is checked on the next agent tree that builds |
+| Release signing | (a) with (c) of [the proposal](./2026-11-01-release-signing-proposal.md), adopted, beginning at the first release after the operator has made a key. `scripts/release_manifest.py` builds the manifest |
+
+**O3, V0.2.X's reply and a correction.** V0.2.X reports that process 83575 is alive. It
+is the long-running Claude Code process, started at 22:21 local time on 2026-10-23,
+which locks every agent worktree it creates and held the locks on three agent trees
+V0.2.X unlocked on 2026-11-01 after their agents finished. **Correction.** The test
+this line gave, whether the locking process is alive, cannot show that a lock is
+stale, because the lock names the harness and not the agent. The tree's branch is
+merged and its status is clean, which is the evidence that no work would be lost.
+V0.2.X took none of the three actions. It removes the agent tree on the operator's
+word. It names V0.3.X as the likely maker of the archive folder, because the archives
+are named after V0.3.X worktrees. It does not touch the main checkout, so linking its
+`target` needs the operator's authorization. Those three remain the operator's.
+
 ## Decisions
 
 **D1. N6, keep the pinned shard lists.** *Judgment.* Pull request 689 pins 43 self-host

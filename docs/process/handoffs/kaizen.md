@@ -80,9 +80,8 @@ run.
   target` after any `cargo clean`. PR 697 made `worktree.sh` link and remove build
   output, the notices went out in sequences 213 to 215, and PR 703 moved the gate's
   output there. The redacted checkpoint merged in PR 698.
-- **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
-  so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
-  Applying it is the operator's decision.
+- **Idle compaction.** The operator set `idleCompaction` to false on 2026-11-01, D2.
+  See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
   at most. The blog's Pages build holds one shared runner for most of a busy day, by
   the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
@@ -114,10 +113,10 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
    shard evidence current until D1 is ruled.
-2. D5 waits on the operator's choice between (c) and (a). Under (a), write and test
-   the hook scripts. Under (c), confirm that the operator's file takes effect.
-3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
-   about two weeks later and compare with the trial report.
+2. Confirm that the D5 `build-dir` file takes effect on the next agent tree that
+   builds, by its size in `worktree.sh list` and a folder under scratch `agents/`.
+3. `idleCompaction` is false from 05:42 UTC on 2026-11-01. Run `context_quality.py`
+   again on about 2026-11-15 and compare with the trial report.
 4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
 5. Finish the three selection tasks, record their outcomes, and read the comparison.
@@ -126,15 +125,14 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record two
-rulings of that day. D2 waits on the operator setting `idleCompaction` to false. D4
-stays open until upstream ships a `vscode-languageclient` that takes `minimatch` 11.
-D5 was ruled (a) and is paused on a finding, with (c), a Cargo `build-dir` file,
-recommended instead. Release signing is proposed in
-[the signing proposal](../kaizen/2026-11-01-release-signing-proposal.md). The
-K-series checks K6, K9, K10 and K11 remain, and K14 is held. V0.2.X asked in sequence
-233 that merges into `v0.2.3` hold until its PR 707 merges into `main`, and this line
-agreed in sequence 234.
+[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record three
+rulings of that day. D4 stays open until upstream ships a `vscode-languageclient` that
+takes `minimatch` 11. The operator creates the D5 (c) `build-dir` file. Release signing
+is adopted from the first release after the operator makes a key. The operator decides
+whether V0.2.X removes the merged agent tree, whether V0.3.X's archive folder moves,
+and whether the main checkout's `target` is linked. The K-series checks K6, K9, K10 and
+K11 remain, and K14 is held. Merges into `v0.2.3` hold until V0.2.X reports that PR 707
+merged, by sequences 233 and 234.
 
 ## Concerns
 
