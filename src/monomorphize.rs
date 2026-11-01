@@ -1694,7 +1694,11 @@ fn infer_arg_type(
             }
         }
         Expr::MethodCall {
-            receiver, method, ..
+            receiver,
+            method,
+            #[cfg(feature = "text")]
+            args,
+            ..
         } => {
             // Resolve the receiver's nominal type, take its head, and
             // look up the impl method's return type in fn_returns
@@ -1703,12 +1707,65 @@ fn infer_arg_type(
             // `program.impls`. When the lookup fails (no impl found,
             // or the receiver type is not yet concrete), return None.
             let recv_ty = infer_arg_type(receiver, locals, fn_returns, structs)?;
+            // A bundled text operation is decided by the receiver type, as the
+            // type checker and the compiler decide it, so its result type is
+            // read here rather than from an impl.
+            #[cfg(feature = "text")]
+            if let Some(result) = text_method_result(&recv_ty, method, args, |e| {
+                infer_arg_type(e, locals, fn_returns, structs)
+            }) {
+                return result;
+            }
             let head = type_head_for_impl(&recv_ty);
             let key = alloc::format!("{}::{}", head, method);
             fn_returns.get(&key).cloned()
         }
         _ => None,
     }
+}
+
+/// The result type of a bundled text operation called as a method, for the
+/// instantiation inference above.
+///
+/// `None` when the call is not an operation, so the caller resolves it through
+/// impls. `Some(None)` when it is an operation whose result type cannot be
+/// inferred here, which is a concatenation with a capacity that is not yet a
+/// literal. `infer` types an argument.
+#[cfg(feature = "text")]
+fn text_method_result(
+    recv_ty: &TypeExpr,
+    method: &str,
+    args: &[Expr],
+    infer: impl Fn(&Expr) -> Option<TypeExpr>,
+) -> Option<Option<TypeExpr>> {
+    use crate::text_intrinsic::TextOp;
+    let unlabelled = |t: &TypeExpr| -> TypeExpr {
+        let mut t = t.clone();
+        // Bounded by the nesting depth of the parsed type expression.
+        while let TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) = t {
+            t = *inner;
+        }
+        t
+    };
+    let TypeExpr::TextN(cap, span) = unlabelled(recv_ty) else {
+        return None;
+    };
+    let op = crate::text_intrinsic::resolve_method(method).ok()??;
+    Some(match op {
+        TextOp::Len | TextOp::Capacity => Some(TypeExpr::Prim(PrimType::Word, span)),
+        TextOp::Eq => Some(TypeExpr::Prim(PrimType::Bool, span)),
+        TextOp::Slice => Some(TypeExpr::TextN(cap, span)),
+        TextOp::Concat => {
+            let other = args.first().and_then(&infer).map(|t| unlabelled(&t));
+            match (cap.as_lit(), other) {
+                (Some(a), Some(TypeExpr::TextN(b, _))) => b
+                    .as_lit()
+                    .and_then(|b| a.checked_add(b))
+                    .map(|sum| TypeExpr::TextN(ConstExpr::Lit(sum, span), span)),
+                _ => None,
+            }
+        }
+    })
 }
 
 /// Compute the head string for a `TypeExpr` used to key impl method
