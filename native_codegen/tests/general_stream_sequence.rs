@@ -281,16 +281,16 @@ fn the_parameter_slot_carries_the_resume_value_after_a_suspension() {
 /// coroutine now lowers and agrees with the virtual machine. A return to the
 /// generic form fails the refusal check inside the helper.
 ///
-/// The resume binding is annotated. Measured on absorption 128, the same
-/// program with `let r = yield v` fails to compile with an undefined function
-/// `id` after monomorphization, and so does the plain call `id(r)`, whenever
-/// the module already holds an instance of the template. That is the
-/// reference compiler's and was reported to V0.2.X in sequence 181.
+/// The resume binding is unannotated. Until absorption 129 that form failed
+/// to compile in the reference with an undefined function `id` after
+/// monomorphization whenever the template already had an instance, reported
+/// to V0.2.X in sequence 181, and this test used `let r: Word = yield v`.
+/// Upstream pull request 694 infers the binding from the entry parameter.
 #[test]
 fn a_pipe_into_a_generic_template_agrees_with_the_vm() {
     common::assert_general_stream_agrees(
         "fn id<T>(x: T) -> T { x } \
-         loop main(t: Word) -> Word { let v: Word = t |> id(); let r: Word = yield v; yield r |> id() }",
+         loop main(t: Word) -> Word { let v: Word = t |> id(); let r = yield v; yield r |> id() }",
         5,
         &[3, 0],
     );

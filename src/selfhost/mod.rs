@@ -630,9 +630,91 @@ fn decode_op(w: i64) -> Op {
 
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
-fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
+/// The most private struct slots `codegen.kel`'s copy pass can be told about, the length
+/// of its `ast.dc_slot` table.
+pub const CODEGEN_COPY_SLOT_CAP: usize = 64;
+
+/// Where `codegen.kel`'s copy pass reads its slot table and writes its refusal.
+struct CopyPassSlots {
+    count: usize,
+    slot: usize,
+    size: usize,
+    refuse: usize,
+}
+
+fn copy_pass_slots(m: &Module) -> CopyPassSlots {
+    let find = |name: &str| {
+        m.data_layout
+            .as_ref()
+            .and_then(|l| l.slots.iter().position(|s| s.name == name))
+            .unwrap_or_else(|| panic!("codegen.kel declares no `{name}`"))
+    };
+    CopyPassSlots {
+        count: find("ast.dc_count"),
+        slot: find("ast.dc_slot"),
+        size: find("ast.dc_size"),
+        refuse: find("ast.dc_refuse"),
+    }
+}
+
+/// The shared-slot writes that tell a `codegen.kel` instance compiled to `m` which data
+/// slots are private structs, and their sizes, for its copy pass. Each pair is a shared
+/// slot index and the word to store there.
+///
+/// # Panics
+///
+/// When `composites` holds more than [`CODEGEN_COPY_SLOT_CAP`] slots. That is a refusal
+/// of the program, which the copy pass could not then recognise in full.
+#[must_use]
+pub fn codegen_copy_pass_inputs(m: &Module, composites: &[(u16, u32)]) -> Vec<(usize, i64)> {
+    codegen_copy_pass_inputs_at(&copy_pass_slots(m), composites)
+}
+
+/// The shared slot in which a `codegen.kel` instance compiled to `m` reports, with a
+/// nonzero word, that its copy pass refused the function.
+#[must_use]
+pub fn codegen_copy_refuse_slot(m: &Module) -> usize {
+    copy_pass_slots(m).refuse
+}
+
+fn seed_copy_pass(
+    vm: &dyn StageExecutor,
+    shared: &mut [u8],
+    slots: &CopyPassSlots,
+    composites: &[(u16, u32)],
+) {
+    for (slot, word) in codegen_copy_pass_inputs_at(slots, composites) {
+        vm.set_shared(shared, slot, Value::Int(word))
+            .expect("copy pass input");
+    }
+}
+
+fn codegen_copy_pass_inputs_at(
+    slots: &CopyPassSlots,
+    composites: &[(u16, u32)],
+) -> Vec<(usize, i64)> {
+    assert!(
+        composites.len() <= CODEGEN_COPY_SLOT_CAP,
+        "{} private struct slots exceed the self-hosted copy pass's {CODEGEN_COPY_SLOT_CAP}; \
+         retry with --compiler rust",
+        composites.len()
+    );
+    let mut writes = vec![(slots.count, composites.len() as i64)];
+    for (i, &(slot, size)) in composites.iter().enumerate() {
+        writes.push((slots.slot + i, i64::from(slot)));
+        writes.push((slots.size + i, i64::from(size)));
+    }
+    writes
+}
+
+fn run_codegen(
+    body: &Body,
+    param_count: usize,
+    composites: &[(u16, u32)],
+) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
     let src = read_stage("kel/codegen.kel");
     let m = compile_src(&src);
+    let copy_slots = copy_pass_slots(&m);
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -675,6 +757,7 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
         .expect("param_count");
     vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
         .expect("category");
+    seed_copy_pass(&*vm, &mut shared, &copy_slots, composites);
 
     // Phase 1: ops until Return.
     let mut ops = Vec::new();
@@ -709,6 +792,11 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
             .resume_with_shared(&mut shared, Value::Int(0))
             .expect("resume");
     }
+    assert!(
+        br_shared_word(&*vm, &shared, copy_slots.refuse) == 0,
+        "a function needs more private struct copies than the self-hosted copy pass holds; \
+         retry with --compiler rust"
+    );
 
     // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
     // tags. **THE TAG IS PART OF THE VALUE AND MUST BE CARRIED OUT OF HERE.**
@@ -3269,6 +3357,7 @@ fn chunk_lookup_failure(src: &str, name: &str) -> ! {
 /// emitted by the self-hosted pipeline.
 pub fn self_host_compile(src: &str) -> Module {
     let (mut fns, names, data_records, _enum_records) = parse_functions_fused(src);
+    let composites = private_composite_sizes(&data_records);
     let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     for function in &mut fns {
         relocation
@@ -3299,7 +3388,7 @@ pub fn self_host_compile(src: &str) -> Module {
             let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc, &name)
         };
-        let (ops, pool, lc) = run_codegen(&body, pc);
+        let (ops, pool, lc) = run_codegen(&body, pc, &composites);
         let idx = module
             .chunks
             .iter()
@@ -3948,6 +4037,26 @@ pub fn try_call_type_inputs_from_pipeline(
                 "tuple projection metadata count"
             );
             for ((at, node), &(_, position)) in tuple_nodes.into_iter().zip(tuple_sources) {
+                // A payload field of a single-variant enum `let` pattern carries its variant
+                // row and field position above the base. The value read is the variant's enum,
+                // and the result has the field's declared type, as a payload binding has.
+                if position >= crate::selfhost_host::PARSE_ENUM_PROJECTION_BASE {
+                    let coordinates = position - crate::selfhost_host::PARSE_ENUM_PROJECTION_BASE;
+                    let variant =
+                        usize::try_from(coordinates / 1024).expect("negative variant index");
+                    let field =
+                        usize::try_from(coordinates % 1024).expect("negative payload position");
+                    let (name, types) = &enum_variants[variant];
+                    expressions.push((8, operand(node.lhs), (tag_of(*name), 0, String::new())));
+                    let (value, form, target) = declared_type_operand(
+                        &types[field],
+                        tag_of,
+                        &mut expressions,
+                        &mut bindings,
+                    );
+                    bindings.push((computed_names[&(at as i64)].clone(), value, form, target));
+                    continue;
+                }
                 let row = expressions.len();
                 expressions.push((19, operand(node.lhs), (position, 0, String::new())));
                 bindings.push((
@@ -4998,6 +5107,7 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
 pub fn self_host_compile_fused(src: &str) -> Module {
     // Collect final layout facts without retaining the function records from this pass.
     let (_, data_records, ..) = parse_functions_impl_named(src, &mut |_, _| {});
+    let composites = private_composite_sizes(&data_records);
     let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     let mut module = compile_src(src);
     // The pending group: consecutive heads sharing a name. Flushed when the name changes
@@ -5022,7 +5132,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
             let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc, name)
         };
-        let (ops, pool, lc) = run_codegen(&body, pc);
+        let (ops, pool, lc) = run_codegen(&body, pc, &composites);
         let idx = module
             .chunks
             .iter()
@@ -7325,6 +7435,27 @@ fn assemble_data_layout(
 fn private_composite_pool(
     data_records: &[(i64, i64)],
 ) -> (Vec<crate::bytecode::PrivateCompositeSlot>, u32) {
+    let mut table = Vec::new();
+    let mut total: u32 = 0;
+    for (slot, bytes) in private_composite_sizes(data_records) {
+        table.push(crate::bytecode::PrivateCompositeSlot {
+            slot,
+            offset: total,
+        });
+        total = total
+            .checked_add(bytes)
+            .expect("private composite pool size");
+    }
+    (table, total)
+}
+
+/// Each private composite slot, in pool order, with its flat body size in bytes.
+///
+/// This is the layout `private_composite_pool` places, and it is what `codegen.kel`'s
+/// copy pass needs to recognise a private struct read and size its copy. Every such slot
+/// holds a struct, the only private composite field parse.kel marks with a size record.
+#[must_use]
+pub fn private_composite_sizes(data_records: &[(i64, i64)]) -> Vec<(u16, u32)> {
     use crate::selfhost_host::PARSE_PRIVATE_COMPOSITE_TAG;
     let mut shared_slots: i64 = 0;
     let mut visibility = 0;
@@ -7343,8 +7474,7 @@ fn private_composite_pool(
             _ => {}
         }
     }
-    let mut table = Vec::new();
-    let mut total: u32 = 0;
+    let mut sizes = Vec::new();
     let mut slot = shared_slots;
     let mut field_slot = -1;
     for &(code, value) in data_records {
@@ -7362,18 +7492,12 @@ fn private_composite_pool(
             PARSE_PRIVATE_COMPOSITE_TAG if visibility == 1 => {
                 let slot_u16 = u16::try_from(field_slot).expect("private composite slot");
                 let bytes = u32::try_from(value).expect("private composite size");
-                table.push(crate::bytecode::PrivateCompositeSlot {
-                    slot: slot_u16,
-                    offset: total,
-                });
-                total = total
-                    .checked_add(bytes)
-                    .expect("private composite pool size");
+                sizes.push((slot_u16, bytes));
             }
             _ => {}
         }
     }
-    (table, total)
+    sizes
 }
 
 /// Assemble the enum-layout table from parse.kel's enum record stream.
@@ -7861,6 +7985,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     use crate::bytecode::{Chunk, SlotVisibility};
     let (mut fns, names, data_records, enum_records, native_paths, struct_records) =
         parse_functions_fused_with_natives(src);
+    let composites = private_composite_sizes(&data_records);
     let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     for function in &mut fns {
         relocation
@@ -7890,7 +8015,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
             let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc, &name)
         };
-        let (mut ops, pool, lc) = run_codegen(&body, pc);
+        let (mut ops, pool, lc) = run_codegen(&body, pc, &composites);
         let struct_templates = option_none_templates(&mut ops);
         // The metadata table (already name-sorted) supplies param_count, block_type, and
         // param_types; look this chunk's entry up by name.

@@ -504,3 +504,61 @@ answered.
   per increment.
 - This document does not change the cross-swap rule for private data, which remains with
   pykeleusma question 6.
+
+## Operator rulings, 2026-10-31
+
+Received first-hand in the V0.2.X session. D2, D3, D5, D6 and D7 were relayed by the kaizen line
+as option (a) and confirmed first-hand. The operator answered D1 and D4 as follows.
+
+> D1. A. Switch `Text<N>` to match.
+> D4. A. Also, we want some sort of overflow arm if it is possible to batch push something like
+> 6 elements into a 4 element ring buffer.
+
+D1 is therefore method calls on the ring's data place, `d.r.push(x)`, and the `Text<N>`
+operations move to the same method-call surface. D4 is the overwrite of the oldest element, with
+the optional `evicted(old)` arm on a single `push`.
+
+### The batch push and its overflow arm, proposed 2026-10-31 for review
+
+**Not yet ruled.** This section answers the second half of the D4 ruling and is for the
+operator's review before R1 begins.
+
+`d.r.push_all(xs)` pushes the elements of `xs: [T; K]`, oldest first, as `K` single pushes would.
+`K` is a compile-time constant, since every array length is. With the D4 default, the ring then
+holds the newest `min(N, len + K)` elements, and when `K > N` it holds the last `N` elements of
+`xs`.
+
+Two kinds of loss can happen, and the proposal keeps them apart because a host usually cares
+about the second one.
+
+- **Eviction.** Elements already in the ring are overwritten. Their number is
+  `min(len, max(0, len + K - N))`, known only at run time.
+- **Overflow.** Elements of the batch itself are overwritten by later elements of the same
+  batch. Their number is `max(0, K - N)`, a compile-time constant.
+
+| Arm | Binds | Runs when |
+|---|---|---|
+| `ok` | nothing | No element was lost |
+| `evicted(count)` | the number of ring elements overwritten, a `Word` | At least one ring element was overwritten and no batch element was lost |
+| `overflow(count)` | the number of batch elements lost, a `Word` | At least one batch element was lost |
+
+The write happens on every outcome, as for a single `push`, and the arms only observe it.
+Because overflow is decided by `K` and `N` alone, the compiler knows whether the `overflow` arm
+can run.
+
+**Decisions for the operator**, recommendation first.
+
+- **B1. When `K > N`, is a covering arm required?**
+  (a) Yes. A `push_all` whose batch can never fit is refused at compile time unless it carries an
+  `overflow` arm, so the loss is always written down. When `K <= N`, an `overflow` arm is refused
+  as unreachable.
+  (b) No. The default keeps the newest `N` elements silently, as a single push does.
+- **B2. A run-time batch length.**
+  (a) Not in the first pass. A batch is a whole `[T; K]`.
+  (b) Also `d.r.push_n(xs, n)`, pushing the first `n` elements with `n` at most `K` clamped,
+  where overflow becomes a run-time outcome and the `overflow` arm is optional.
+
+**Cost.** The lowering is the single-push sequence repeated `K` times with the outcome counters
+accumulated, so the instruction count and the worst-case execution time are linear in `K` and
+constant in `N`. No opcode is needed, and the arena use is unchanged, since a ring lives in the
+data segment.

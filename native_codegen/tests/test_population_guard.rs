@@ -130,7 +130,35 @@
 // 845 -> 846: `a_pipe_into_a_generic_template_agrees_with_the_vm` in
 // `general_stream_sequence.rs`, absorption 128, 2026-10-31. No name
 // disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 846;
+// 846 -> 847: `delegated_loop_resets_rebind_the_innermost_parameter_like_the_vm`
+// in `retcon_bytecode.rs`, absorption 129, 2026-11-01. Upstream 704 rebinds a
+// delegated loop's parameter after its Reset, and ten names that pinned the
+// cleared parameter disappeared, each renamed in place with the reason in its
+// own doc comment or body. Their successors, old name first and unquoted
+// because it no longer resolves:
+// cleared_nested_body_access_traps_before_dereferencing_unit as
+// `a_delegated_array_parameter_is_refused_for_its_resume_type`,
+// cleared_ordered_comparison_traps_at_consumption as
+// `an_ordered_comparison_reads_the_rebound_parameter`,
+// equality_of_cleared_values_matches_vm_partial_eq as
+// `equality_of_rebound_parameters_matches_vm_partial_eq`,
+// guarded_composite_construction_from_a_cleared_parameter_executes as
+// `guarded_composite_construction_from_the_parameter_executes`,
+// nested_cleared_enum_inspection_remains_false_without_a_type_fault as
+// `a_delegated_enum_parameter_is_refused_for_its_resume_type`,
+// nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero as
+// `nested_stream_parameter_reads_take_the_reply_after_reset`,
+// private_scalar_consumption_traps_after_a_valid_unit_store as
+// `private_scalar_consumption_reads_the_stored_reply`,
+// private_scalar_slots_preserve_cleared_values as
+// `private_scalar_slots_preserve_stored_parameters`,
+// shortened_constructed_tuple_traps_before_an_out_of_bounds_read as
+// `a_tuple_constructed_from_the_parameter_keeps_its_extent_after_reset`, and
+// shortened_private_view_traps_while_an_older_long_view_remains_valid as
+// `older_and_newer_private_views_both_read_after_reset`. Established by
+// diffing the names of `retcon_bytecode.rs` against 96887065. No other file's
+// names changed.
+const RECORDED_TEST_FUNCTIONS: usize = 847;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

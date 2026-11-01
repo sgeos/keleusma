@@ -123,9 +123,11 @@ fn a_refusal_is_returned_rather_than_ending_the_process() {
     // The point of the fallible entry point, stated as an executable claim: a
     // source that panics the original API comes back as a value here. If this
     // test runs to completion at all, the process was not aborted.
-    // A pipe into a generic template, which the parser refuses. No shipped example is
-    // refused since `07_refinement.kel` came to compile on 2026-10-27.
-    let src = String::from("fn id<T>(x: T) -> T { x } fn main() -> Word { 1 |> id() }");
+    // A typed destructuring `let`, which the parser refuses. No shipped example is
+    // refused since `07_refinement.kel` came to compile on 2026-10-27. A pipe into a generic
+    // template was the source here until it came to compile on 2026-10-31, and a nested
+    // destructuring `let` until it came to compile later that day.
+    let src = String::from("fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }");
 
     let err = try_parse_functions(&src).expect_err("this source is refused today");
     assert!(
@@ -164,9 +166,12 @@ fn assert_unavailable(source: &str, expected_code: i64) {
 fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
     // One construct remains here. A tuple-destructuring `let`, `signed`, and `for` over an
     // array left in Order 6 slices 3a, 3e and 3d and are now supported controls below.
-    // A newtype was the control here until newtypes came to compile on 2026-10-27.
+    // A newtype was the control here until newtypes came to compile on 2026-10-27, and a
+    // pipe into a generic template until it came to compile on 2026-10-31, and a nested
+    // destructuring pattern until it came to compile later that day. The construct now is a
+    // typed destructuring pattern.
     assert_unavailable(
-        "fn id<T>(x: T) -> T { x } fn main() -> Word { 1 |> id() }",
+        "fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
         21,
     );
 }

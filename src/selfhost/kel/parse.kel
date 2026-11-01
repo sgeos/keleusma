@@ -197,6 +197,10 @@ private data gn {
     pw: Word,
     key: Word,
     kind: Word,
+    // A closing template call's argument kinds and count in the template's parameter
+    // order, after a pipe placeholder has moved the piped operand into its position.
+    akind: Word,
+    acount: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -1644,6 +1648,9 @@ private data call {
     // with one argument already counted, because that operand's records precede the
     // call's own arguments in postorder, which is how the reference evaluates it.
     pipe_args: Word,
+    // The piped operand's scalar kind, recorded with `pipe_args`, so a pipe into a generic
+    // template instantiates it as the call `f(x, args)` does.
+    pipe_kind: Word,
     // The native imports, one row per `use` that names a function, in declaration order,
     // which is the order the reference numbers natives in. `nat_path` holds a row's two
     // path segments at `2i` and `2i + 1`. A row whose path is not exactly two segments
@@ -2068,6 +2075,7 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
                 ps.last_enum = stmt.let_enum[ps.let_hit];
                 stmt.pending_copt = 0; stmt.pending_cenum = stmt.let_enum[ps.let_hit];
                 stmt.pending_copt = stmt.let_opt[ps.let_hit];
+                enum_payload_arm(stmt.let_enum[ps.let_hit] - 1);
             }
             ln
         } } } } } }
@@ -5113,6 +5121,14 @@ fn value_record(word: Word) -> Word {
         // The field scanner may already have consumed a following dot. Preserve its phase.
         vl.form = 3; vl.decl = ps.fa_fstruct; vl.bytes = (arg / 65536) % 65536;
     }
+    if kind == 30 andalso arg / 4294967296 == 0 andalso ps.fa_ftuple > 0 {
+        // A whole tuple-typed field, so a binding of it reads `t.N` in the field's layout.
+        vl.form = 1; vl.layout = ps.fa_ftuple - 1; vl.bytes = (arg / 65536) % 65536;
+    }
+    if kind == 30 andalso arg / 4294967296 == 3 andalso structdefs.sd_fenum[structdefs.sc_fieldpos] > 0 {
+        // A whole enum-typed field, so a binding of it is a value of that enum.
+        vl.form = 4; vl.decl = structdefs.sd_fenum[structdefs.sc_fieldpos]; vl.bytes = (arg / 65536) % 65536;
+    }
     if kind == 2 { value_local(arg); gn.nt_value = local_is_newtype(arg); }
     if kind == 7 { gn.nt_value = chunkret.ret_nt[arg % call_chunk_radix()]; }
     if kind == 85 { gn.nt_value = 1; }
@@ -5128,6 +5144,7 @@ fn value_record(word: Word) -> Word {
     if kind == 28 { value_scalar(arg / 65536); }
     if kind == 31 { value_scalar(arg); }
     if kind == 37 andalso arg < 4294967296 { value_scalar(arg / 65536); }
+    if kind == 37 andalso arg / 4294967296 >= 6 { enum_payload_value(arg); }
     if kind == 7 {
         if rq.call_desc > 0 {
             let desc = rq.call_desc - 1; rq.call_desc = 0; header_arm(desc);
@@ -6378,7 +6395,9 @@ fn assert_message_comma(k: Word) -> Word {
 fn step_normal(k: Word, v: Word) -> Word {
     if k == 200 {
         // A pipe placeholder: record 84, an operand, and the call's placeholder is spent.
-        call.call_piped[call.call_sp - 1] = 2;
+        // Its argument position rides above the 2, for a template call to place the piped
+        // operand's kind where reconstruct places the operand.
+        call.call_piped[call.call_sp - 1] = 2 + call.call_count[call.call_sp - 1] * 16;
         ops.expect_operand = 0;
         ps.emit_arg = 0;
         84
@@ -6640,6 +6659,7 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         }
         0
     } else {
+        if k == Tok::IntLit() as Word andalso ps.ta_tuple < 0 - 1 { enum_payload_read(v) } else {
         if k == Tok::IntLit() as Word andalso ps.ta_tuple < 0 {
             // An element of an untyped hidden binding: the reference reads it boxed, by index,
             // variant tag 5 on the tuple-field record. Its value has no known layout.
@@ -6681,8 +6701,79 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         } else {
             ps.ta_phase = 0;
             0
-        } }
+        } } }
     }
+}
+
+// A `.N` after a let-bound value of a single-variant enum reads that variant's payload field
+// N, the reference's `GetEnumField` for a variant `let` pattern, which the destructuring
+// filter writes as `let x = T.N;`. The reference rejects the form written by hand, so the
+// cross-check refuses it. The tuple postfix is armed with the variant row encoded below -1
+// in `ta_tuple`, and only when `.` and an integer follow, so a method call on the value is
+// unchanged. A variant whose payload layout is not fully known is left unarmed, and the
+// read is then refused as unsupported syntax.
+private data ep {
+    count: Word,
+    row: Word,
+    fi: Word,
+}
+
+fn enum_payload_arm(name: Word) -> Word {
+    let ahead = ps.cursor + 1 < toks.len andalso ps.cursor + 1 < toks.base + 8;
+    if ahead andalso next_kind() == Tok::Dot() as Word andalso toks.packed[ps.cursor + 1 - toks.base] % 256 == 12 {
+        ep.count = 0;
+        for i in 0..enums.enum_count limit 256 {
+            if enums.edata[i] == name { ep.count = ep.count + 1; ep.row = i; }
+        }
+        if ep.count == 1 andalso nominal_enum_known(name) == 1 {
+            ps.ta_tuple = 0 - 2 - ep.row;
+            ps.ta_phase = 1;
+        }
+    }
+    0
+}
+
+// The payload read itself. Its operand carries the internal variant 6 for a scalar field,
+// and 8 plus the composite variant for a nested one, which codegen maps to `GetEnumField`.
+// The record's source fact is the variant row and field position above 2^40, from which the
+// host types the read by the field's declared type.
+fn enum_payload_read(v: Word) -> Word {
+    let row = 0 - 2 - ps.ta_tuple;
+    if v < 0 orelse v >= enums.evfcount[row] { perr(pe_tuple_index(), v) } else {
+        let fi = enums.evfstart[row] + v;
+        let off = enums.evfoff[fi];
+        let kind = enums.evfkind[fi];
+        ep.fi = fi;
+        ps.ta_phase = 0;
+        ops.expect_operand = 0;
+        let operand = if kind >= 40000 { off + (kind - 40000) * 65536 + 9 * 4294967296 } else {
+            if kind >= 30000 { off + (kind - 30000) * 65536 + 8 * 4294967296 } else {
+            if kind >= 100 { off + (kind - 100) * 65536 + 10 * 4294967296 } else {
+                off + kind * 65536 + 6 * 4294967296
+            } } };
+        ps.field_record = Node::TupleField() as Word + operand * 64;
+        ps.emit_arg = 1099511627776 + row * 1024 + v;
+        104
+    }
+}
+
+// The value an enum payload read yields, from the field's recorded layout.
+fn enum_payload_value(arg: Word) -> Word {
+    let fi = ep.fi;
+    let variant = arg / 4294967296;
+    if variant == 6 { value_scalar((arg / 65536) % 65536); } else {
+    if variant == 8 {
+        value_scalar(0 - 1);
+        vl.form = 1; vl.layout = enums.evftuple[fi] - 1; vl.bytes = (arg / 65536) % 65536;
+    } else {
+    if variant == 10 {
+        value_scalar(0 - 1);
+        vl.form = 3; vl.decl = enums.evfstruct[fi]; vl.bytes = (arg / 65536) % 65536;
+    } else {
+        value_scalar(enums.evfarrkind[fi] - 1);
+        if vl.bytes <= 0 { perr(pe_value_layout(), toks.at); } else { value_array(((arg / 65536) % 65536) / vl.bytes); }
+    } } }
+    0
 }
 
 // The array-access postfix (ps.aa_phase 1), after a let-bound array Local was emitted. A `[` opens
@@ -7106,9 +7197,9 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
-            // A piped argument's kind is left unknown, so a pipe into a template is refused. The
-            // reference keeps such a call generic rather than instantiating it.
-            call.call_akind[call.call_sp] = 0;
+            // A piped operand's kind is the first argument's, as the reference rewrites a pipe
+            // into a template to the call it stands for before monomorphizing it.
+            call.call_akind[call.call_sp] = call.pipe_args * call.pipe_kind;
             call.call_count[call.call_sp] = call.pipe_args;
             call.call_piped[call.call_sp] = call.pipe_args;
             call.pipe_args = 0;
@@ -7598,7 +7689,9 @@ fn step_draining() -> Word {
         } else { if ops.drain_reason == 19 orelse ops.drain_reason == 20 orelse ops.drain_reason == 21 {
             ops.draining = 0;
             if ops.drain_reason == 21 { for_array_open() } else {
-            if ops.drain_reason == 20 { call.pipe_args = 1; ops.expect_operand = 1; } else { checked.emit = 1; }
+            if ops.drain_reason == 20 {
+                call.pipe_args = 1; call.pipe_kind = option_kind(vl.scalar); ops.expect_operand = 1;
+            } else { checked.emit = 1; }
             0 }
         } else {
         if ops.drain_reason <= 4 {
@@ -9447,6 +9540,7 @@ fn header_arm(at: Word) -> Word {
         ps.fa_struct = ht.decl[at] - 1; ps.fa_phase = 1; stmt.pending_cstruct = ht.decl[at];
     } else { if ht.nform[at] == 4 {
         ps.last_enum = ht.decl[at]; stmt.pending_copt = 0; stmt.pending_cenum = ht.decl[at];
+        enum_payload_arm(ht.decl[at] - 1);
     } else {
         let element = ht.child[at];
         if ht.nform[element] == 0 {
@@ -10153,11 +10247,12 @@ fn gen_note_arg(sp: Word) -> Word {
 fn gen_call_close(sp: Word) -> Word {
     let g = call.call_chunk[sp] - 4096;
     gn.key = 0;
+    gen_pipe_order(sp);
     for t in 0..toks.gen_ntp[g] limit 4 {
         gn.kind = 0;
-        for p in 0..call.call_count[sp] limit 8 {
+        for p in 0..gn.acount limit 8 {
             if toks.gen_pmap[g * 8 + p] == t + 1 {
-                let kind = gen_digit(call.call_akind[sp], p);
+                let kind = gen_digit(gn.akind, p);
                 if kind < 1 orelse kind > 3 orelse (gn.kind != 0 andalso gn.kind != kind) { perr(pe_unresolved_syntax(), toks.at); }
                 gn.kind = kind;
             }
@@ -10173,6 +10268,25 @@ fn gen_call_close(sp: Word) -> Word {
         if toks.gen_rmap[g] > 0 {
             vl.returns[call.call_chunk[sp]] = gen_digit(gn.key, toks.gen_rmap[g] - 1) + 1;
         }
+    }
+    0
+}
+// A template call's argument kinds in parameter order. The parser counts a piped operand
+// first, and a placeholder at position `ph` then takes it, so parameter `f` is argument
+// `f + 1` except at `ph - 1`, which is the operand, the order reconstruct builds the call in.
+fn gen_pipe_order(sp: Word) -> Word {
+    gn.akind = call.call_akind[sp];
+    gn.acount = call.call_count[sp];
+    if call.call_piped[sp] >= 2 {
+        let ph = (call.call_piped[sp] - 2) / 16;
+        gn.key = 0;
+        for f in 0..(gn.acount - 1) limit 8 {
+            let d = if f == ph - 1 { gen_digit(gn.akind, 0) } else { gen_digit(gn.akind, f + 1) };
+            gn.key = gn.key + d * gen_place(f);
+        }
+        gn.akind = gn.key;
+        gn.key = 0;
+        gn.acount = gn.acount - 1;
     }
     0
 }

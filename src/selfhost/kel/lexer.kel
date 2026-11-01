@@ -630,28 +630,65 @@ fn lex_raw() -> Word {
 // string is therefore `let`, which no identifier can be, so it shadows nothing, and the
 // host recovers it from source bytes like any other name.
 //
-// Only a flat pattern of names and wildcards with no annotation is rewritten. Anything
-// else becomes Tok 67, which the parser refuses as unsupported syntax: a nested or typed
-// pattern, more than eight elements, a `let` inside the destructured value, and input
-// that ends inside the statement.
+// A struct pattern takes the same path, Order 6 follow-up of 2026-10-31. `let P { x, y: b,
+// z: _ } = e;` reaches the parser as `let T = e; let x = T.x; let b = T.y; T.z;`, which is
+// the reference's lowering of a struct `let` statement for statement. The struct name is
+// dropped, because the reference type checker has matched it against the value's type
+// before any self-hosted output is accepted.
 //
-// States: 0 passing, 1 a `let` held, 2 inside the pattern, 3 awaiting `=`, 4 inside the
-// value, where `depth` counts open brackets so the statement's own `;` can be found, and
-// 5 after `let _`, awaiting the `=` that is dropped with it.
+// A NESTED pattern and a variant pattern of a single-variant enum take it too, the
+// operator's ruling of 2026-10-31. The reference stores each nested value in a fresh local
+// of its own before reading its elements, depth first in source order, so `let (a, (b, c))
+// = e;` becomes `let T = e; let a = T.0; let U = T.1; let b = U.0; let c = U.1;`. The
+// binding at depth d is interned from the `let` keyword's bytes and the d bytes after it.
+// The byte after `let` cannot continue an identifier, so no such string is an identifier,
+// and the lengths differ, so the bindings of different depths are distinct. A binding of
+// one depth is shadowed only by a later sibling at that depth, after the earlier sibling's
+// reads are done, which is the reference's fresh local for each nested pattern. `let
+// W::A(x, y) = e;` becomes `let T = e; let x = T.0; let y = T.1;`, and the parser reads
+// `T.N` of a value of a single-variant enum as that variant's payload field N, which is the
+// reference's `GetEnumField`. A grouping parenthesis, `(p)`, is transparent as in the
+// reference, so `p` takes its place.
+//
+// Anything else becomes Tok 67, which the parser refuses as unsupported syntax: a literal or
+// typed pattern, `()` and `(p,)`, more than twenty-four pattern items or six open patterns, a
+// `let` inside the destructured value, and input that ends inside the statement.
+//
+// States: 0 passing, 1 a `let` held, 2 awaiting a pattern element, 3 awaiting `=`, 4 inside
+// the value, where `depth` counts open brackets so the statement's own `;` can be found, 5
+// after `let _`, awaiting the `=` that is dropped with it, 6 after `let Name`, holding the
+// name, 7 awaiting a struct field or `}`, 8 after a field name, 9 after a name inside the
+// pattern, 10 after a complete element, 11 after `Name::`, and 12 after the variant name.
 private data dq {
-    q: [Word; 96],
+    q: [Word; 192],
     pos: Word,
     len: Word,
     state: Word,
     depth: Word,
-    n: Word,
-    names: [Word; 8],
-    tmp: Word,
     let_at: Word,
+    held: Word,
+    // The pattern items in source order. Kind 0 binds the name `it_val`, 1 is a wildcard,
+    // 2 opens a nested pattern, 3 closes one, and 4 is a grouping parenthesis that reads
+    // nothing. `it_acc` is the token naming the element in its enclosing pattern.
+    ni: Word,
+    it_kind: [Word; 24],
+    it_val: [Word; 24],
+    it_acc: [Word; 24],
+    // The open patterns, innermost last. Kind 0 is a tuple, 1 a struct and 2 a variant.
+    sp: Word,
+    fr_kind: [Word; 6],
+    fr_count: [Word; 6],
+    fr_comma: [Word; 6],
+    fr_open: [Word; 6],
+    // The pending struct field, the first item read, and the walk's depth and cursor.
+    acc: Word,
+    first: Word,
+    d: Word,
+    c: Word,
 }
 
 fn dq_push(t: Word) -> Word {
-    if dq.len < 96 { dq.q[dq.len] = t; dq.len = dq.len + 1; }
+    if dq.len < 192 { dq.q[dq.len] = t; dq.len = dq.len + 1; }
     0
 }
 
@@ -662,15 +699,102 @@ fn dq_take() -> Word {
     t
 }
 
-// Queue the element statements once the value's `;` has passed. `T.i` reads element i.
+fn dq_refuse() -> Word {
+    dq.state = 0;
+    67
+}
+
+// The hidden binding of depth `d` as an identifier token.
+fn dq_temp(d: Word) -> Word {
+    1 + intern_id(dq.let_at, 3 + d) * 256
+}
+
+// Queue the element statements once the value's `;` has passed. A name reads its element
+// into a binding, a wildcard reads it as an expression statement, and a nested pattern reads
+// it into the hidden binding one depth down.
 fn dq_elements() -> Word {
-    for i in 0..dq.n limit 8 {
-        if dq.names[i] >= 0 {
-            dq_push(38); dq_push(1 + dq.names[i] * 256); dq_push(17);
+    dq.d = 0;
+    for i in 0..dq.ni limit 24 {
+        let kind = dq.it_kind[i];
+        if i >= dq.first andalso kind == 3 { dq.d = dq.d - 1; }
+        if i >= dq.first andalso kind != 3 andalso kind != 4 {
+            let from = dq_temp(dq.d);
+            if kind == 0 { dq_push(38); dq_push(1 + dq.it_val[i] * 256); dq_push(17); }
+            if kind == 2 { dq_push(38); dq_push(dq_temp(dq.d + 1)); dq_push(17); dq.d = dq.d + 1; }
+            dq_push(from); dq_push(40); dq_push(dq.it_acc[i]); dq_push(39);
         }
-        dq_push(1 + dq.tmp * 256); dq_push(40); dq_push(12 + i * 256); dq_push(39);
     }
     0
+}
+
+// The first item after `o` that is not a grouping parenthesis.
+fn dq_first_after(o: Word) -> Word {
+    dq.c = 0 - 1;
+    for j in 0..dq.ni limit 24 {
+        if j > o andalso dq.c < 0 andalso dq.it_kind[j] != 4 { dq.c = j; }
+    }
+    dq.c
+}
+
+// Record an element of the innermost open pattern, with the token that names it there.
+fn dq_item(kind: Word, val: Word) -> Word {
+    if dq.ni >= 24 { dq_refuse() } else {
+        let s = dq.sp - 1;
+        dq.it_kind[dq.ni] = kind;
+        dq.it_val[dq.ni] = val;
+        dq.it_acc[dq.ni] = 0;
+        if s >= 0 {
+            dq.it_acc[dq.ni] = if dq.fr_kind[s] == 1 { dq.acc } else { 12 + dq.fr_count[s] * 256 };
+            dq.fr_count[s] = dq.fr_count[s] + 1;
+        }
+        dq.ni = dq.ni + 1;
+        63
+    }
+}
+
+// Open a tuple, struct or variant pattern as an element of the enclosing one.
+fn dq_open(kind: Word) -> Word {
+    let at = dq.ni;
+    if dq.sp >= 6 { dq_refuse() } else {
+    if dq_item(2, 0) == 67 { 67 } else {
+        dq.fr_kind[dq.sp] = kind;
+        dq.fr_count[dq.sp] = 0;
+        dq.fr_comma[dq.sp] = 0;
+        dq.fr_open[dq.sp] = at;
+        dq.sp = dq.sp + 1;
+        dq.state = if kind == 1 { 7 } else { 2 };
+        63
+    } }
+}
+
+// Close the innermost open pattern. A tuple of one element without a comma is a grouping
+// parenthesis, so its element takes its place. `()` and `(p,)` are refused.
+fn dq_close() -> Word {
+    let s = dq.sp - 1;
+    let tuple = dq.fr_kind[s] == 0;
+    if tuple andalso dq.fr_count[s] == 1 andalso dq.fr_comma[s] == 0 {
+        let o = dq.fr_open[s];
+        dq.it_kind[o] = 4;
+        dq.it_acc[dq_first_after(o)] = dq.it_acc[o];
+        dq.sp = s;
+        dq.state = if s == 0 { 3 } else { 10 };
+        63
+    } else {
+    if tuple andalso dq.fr_count[s] < 2 { dq_refuse() } else {
+    if dq.ni >= 24 { dq_refuse() } else {
+        dq.it_kind[dq.ni] = 3;
+        dq.ni = dq.ni + 1;
+        dq.sp = s;
+        dq.state = if s == 0 { 3 } else { 10 };
+        63
+    } } }
+}
+
+// Begin a pattern after `let`, with no item and no open pattern.
+fn dq_begin(kind: Word) -> Word {
+    dq.ni = 0;
+    dq.sp = 0;
+    dq_open(kind)
 }
 
 fn dq_filter(t: Word) -> Word {
@@ -678,15 +802,18 @@ fn dq_filter(t: Word) -> Word {
     if t == 62 {
         // End of input. A held `let` is released, and anything deeper is refused.
         if dq.state == 1 { dq.state = 0; dq_push(62); 38 } else {
-        if dq.state > 1 { dq.state = 0; 67 } else { 62 } }
+        if dq.state > 1 { dq_refuse() } else { 62 } }
     } else {
     if t == 63 { 63 } else {
+    if dq.state >= 6 { dq_pattern(t, k) } else {
+    if dq.state == 2 { dq_elem(t, k) } else {
     if dq.state == 0 {
         if k == 38 { dq.state = 1; dq.let_at = st.start; 63 } else { t }
     } else {
     if dq.state == 1 {
-        if k == 7 { dq.state = 2; dq.n = 0; 63 } else {
-        if k == 50 { dq.state = 5; 63 } else { dq.state = 0; dq_push(t); 38 } }
+        if k == 7 { dq_begin(0) } else {
+        if k == 50 { dq.state = 5; 63 } else {
+        if k == 1 { dq.state = 6; dq.held = t; 63 } else { dq.state = 0; dq_push(t); 38 } } }
     } else {
     if dq.state == 5 {
         // `let _ = e;` is the expression statement `e;` to the reference, operation for
@@ -694,32 +821,100 @@ fn dq_filter(t: Word) -> Word {
         dq.state = 0;
         if k == 17 { 63 } else { 67 }
     } else {
-    if dq.state == 2 {
-        if (k == 1 orelse k == 50) andalso dq.n < 8 {
-            dq.names[dq.n] = if k == 1 { t / 256 } else { 0 - 1 };
-            dq.n = dq.n + 1;
-            63
-        } else {
-        if k == 10 { 63 } else {
-        if k == 8 andalso dq.n > 0 { dq.state = 3; 63 } else { dq.state = 0; 67 } } }
-    } else {
-    if dq.state == 3 {
-        if k == 17 {
-            dq.state = 4;
-            dq.depth = 0;
-            dq.tmp = intern_id(dq.let_at, 3);
-            dq_push(1 + dq.tmp * 256);
-            dq_push(17);
-            38
-        } else { dq.state = 0; 67 }
-    } else {
-        if k == 38 { dq.state = 0; 67 } else {
+    if dq.state == 3 { dq_assign(k) } else {
+        if k == 38 { dq_refuse() } else {
         if k == 7 orelse k == 41 orelse k == 2 { dq.depth = dq.depth + 1; t } else {
         if k == 8 orelse k == 42 orelse k == 3 {
-            if dq.depth == 0 { dq.state = 0; 67 } else { dq.depth = dq.depth - 1; t }
+            if dq.depth == 0 { dq_refuse() } else { dq.depth = dq.depth - 1; t }
         } else {
         if k == 39 andalso dq.depth == 0 { dq.state = 0; dq_elements(); t } else { t } } } }
-    } } } } } } }
+    } } } } } } } }
+}
+
+// The `=` after a complete pattern. A pattern that is a name in grouping parentheses is
+// the plain `let` of that name, a grouped wildcard drops the `let` as `let _` does, and
+// any other stores the value in the hidden binding of depth zero.
+fn dq_assign(k: Word) -> Word {
+    if k == 17 {
+        dq.state = 4;
+        dq.depth = 0;
+        let top = dq_first_after(0 - 1);
+        dq.first = top + 1;
+        if dq.it_kind[top] == 0 {
+            dq.first = dq.ni;
+            dq_push(1 + dq.it_val[top] * 256);
+            dq_push(17);
+            38
+        } else {
+        if dq.it_kind[top] == 1 { dq.first = dq.ni; 63 } else {
+            dq_push(dq_temp(0));
+            dq_push(17);
+            38
+        } }
+    } else { dq_refuse() }
+}
+
+// State 2, awaiting an element of a tuple or variant pattern, or the pattern of a field.
+// A `)` closes a tuple or variant after a trailing comma or a variant with no payload.
+fn dq_elem(t: Word, k: Word) -> Word {
+    if k == 1 { dq.held = t; dq.state = 9; 63 } else {
+    if k == 50 { dq.state = 10; dq_item(1, 0) } else {
+    if k == 7 { dq_open(0) } else {
+    if k == 8 andalso dq.sp > 0 andalso dq.fr_kind[dq.sp - 1] != 1 { dq_close() } else { dq_refuse() } } } }
+}
+
+// State 10, after a complete element: a comma awaits the next element and the closing
+// bracket of the innermost pattern closes it.
+fn dq_after(k: Word) -> Word {
+    let s = dq.sp - 1;
+    let fs = dq.fr_kind[s] == 1;
+    if k == 10 {
+        dq.fr_comma[s] = 1;
+        dq.state = if fs { 7 } else { 2 };
+        63
+    } else {
+    if (k == 8 andalso not fs) orelse (k == 3 andalso fs) { dq_close() } else { dq_refuse() } }
+}
+
+// A name inside the pattern is a binding unless `{` makes it a struct's or `::` an enum's.
+fn dq_name(k: Word) -> Word {
+    if k == 2 { dq_open(1) } else {
+    if k == 51 { dq.state = 11; 63 } else {
+    if dq_item(0, dq.held / 256) == 67 { 67 } else { dq_after(k) } } }
+}
+
+// After the variant name. A `(` opens its payload pattern, and a bare variant is a variant
+// pattern with no payload, whose following token is read again in the state it leaves.
+fn dq_variant(k: Word) -> Word {
+    if k == 7 { dq_open(2) } else {
+    if dq_open(2) == 67 { 67 } else {
+    if dq_close() == 67 { 67 } else {
+    if dq.sp == 0 { dq_assign(k) } else { dq_after(k) } } } }
+}
+
+// The pattern states from 6. After `let Name`, a `{` opens a struct pattern, a `::` a
+// variant pattern, and anything else releases the held `let` and name as an ordinary
+// binding. A field binds its own name unless a `:` gives it a pattern.
+fn dq_pattern(t: Word, k: Word) -> Word {
+    if dq.state == 6 {
+        if k == 2 { dq_begin(1) } else {
+        if k == 51 { dq.ni = 0; dq.sp = 0; dq.state = 11; 63 } else { dq.state = 0; dq_push(dq.held); dq_push(t); 38 } }
+    } else {
+    if dq.state == 7 {
+        if k == 1 { dq.acc = t; dq.held = t; dq.state = 8; 63 } else {
+        if k == 3 { dq_close() } else { dq_refuse() } }
+    } else {
+    if dq.state == 8 {
+        if k == 9 { dq.state = 2; 63 } else {
+        if k == 10 orelse k == 3 {
+            if dq_item(0, dq.held / 256) == 67 { 67 } else { dq_after(k) }
+        } else { dq_refuse() } }
+    } else {
+    if dq.state == 9 { dq_name(k) } else {
+    if dq.state == 10 { dq_after(k) } else {
+    if dq.state == 11 {
+        if k == 1 { dq.state = 12; 63 } else { dq_refuse() }
+    } else { dq_variant(k) } } } } } }
 }
 
 fn next_token() -> Word {

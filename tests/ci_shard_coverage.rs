@@ -42,6 +42,17 @@
 //! archive file. A shard running a different archive, or an archive built with a filter,
 //! would run a different population with every other check green.
 //!
+//! **THE PINNED LISTS AND THE HASHED REMAINDER COVER EVERY SELF-HOST TEST ONCE.** On
+//! 2026-10-31 the operator adopted option (a) of item N6 in
+//! `docs/process/kaizen/2026-10-31-open-decisions.md`. Each self-host shard runs the
+//! longest tests its `PINNED_<shard>` list names, then the hash partition of every test no
+//! list names. A test named in two lists would run twice, and a hashed run that excluded a
+//! list missing from its expression would leave that list's tests running nowhere. This
+//! file checks that the lists are disjoint, that the hashed run excludes exactly their
+//! union, and that each pinned name still appears in the sources. A stale name is not a
+//! coverage loss, because the test it no longer names falls into the hashed part, but it
+//! is a balance loss nobody would notice, so it fails here.
+//!
 //! The parse is line-based over a workflow this repository writes, and it is not a
 //! general YAML reader. It fails closed: a partitioned command whose shard expression or
 //! matrix it cannot read is a failure, not a skip.
@@ -340,6 +351,26 @@ fn filters(command: &str) -> bool {
         || command.contains("--profile quick")
 }
 
+/// The filter of the self-host shard's pinned run.
+const PINNED_FILTER: &str = "-E \"$PINNED\"";
+
+/// The filter of the self-host shard's hashed run, which excludes all `n` pinned lists.
+fn hashed_filter(n: usize) -> String {
+    let lists: Vec<String> = (1..=n).map(|k| format!("$PINNED_{k}")).collect();
+    format!("-E \"not ({})\"", lists.join(" | "))
+}
+
+/// Whether the command's only filter is one half of the pinned split, which
+/// `pinned_split_errors` checks covers every test once.
+fn is_pinned_split(command: &str) -> bool {
+    let mut rest = command.to_string();
+    for n in 1..=8 {
+        rest = rest.replace(&hashed_filter(n), "");
+    }
+    rest = rest.replace(PINNED_FILTER, "");
+    rest != command && !filters(&rest)
+}
+
 /// Why the workspace and self-host jobs no longer split the suite as intended, or nothing.
 /// `build` is the archive job, when the shards run an archive.
 fn split_errors(workspace: &Job, self_host: &Job, build: Option<&Job>) -> Vec<String> {
@@ -401,7 +432,7 @@ fn split_errors(workspace: &Job, self_host: &Job, build: Option<&Job>) -> Vec<St
             )),
             None => {}
         }
-        if filters(command) {
+        if filters(command) && !is_pinned_split(command) {
             errors.push(format!(
                 "the self-host job filters its tests, so the binaries the workspace job \
                  leaves to it may run nowhere: {command}"
@@ -527,6 +558,220 @@ fn the_shard_check_rejects_a_missing_shard_and_a_foreign_partition() {
             .is_err()
     );
     assert!(partition_count("cargo nextest run --workspace").is_none());
+}
+
+/// The `PINNED_<k>` lists of a job's `env`, in shard order, each as its test names. Each
+/// list is a folded scalar, `PINNED_<k>: >-`, whose more-indented lines are `test(=name)`
+/// terms joined by `|`.
+fn pinned_lists(job: &Job) -> Result<Vec<(usize, Vec<String>)>, String> {
+    let mut lists = Vec::new();
+    let mut lines = job.lines.iter().peekable();
+    while let Some(line) = lines.next() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("PINNED_") else {
+            continue;
+        };
+        let Some(k) = rest.strip_suffix(": >-") else {
+            return Err(format!("a pinned list this check cannot read: {line}"));
+        };
+        let k: usize = k
+            .parse()
+            .map_err(|_| format!("an unreadable pinned list key: {line}"))?;
+        let indent = line.len() - t.len();
+        let mut body = String::new();
+        while let Some(next) = lines.peek() {
+            let nt = next.trim_start();
+            if nt.is_empty() || next.len() - nt.len() <= indent {
+                break;
+            }
+            body.push(' ');
+            body.push_str(nt);
+            lines.next();
+        }
+        let mut names = Vec::new();
+        for term in body.split('|') {
+            let name = term
+                .trim()
+                .strip_prefix("test(=")
+                .and_then(|n| n.strip_suffix(')'))
+                .filter(|n| !n.is_empty() && !n.contains(['(', ')', ' ']))
+                .ok_or_else(|| {
+                    format!(
+                        "PINNED_{k}: a term other than `test(=name)`: `{}`",
+                        term.trim()
+                    )
+                })?;
+            names.push(name.to_string());
+        }
+        lists.push((k, names));
+    }
+    Ok(lists)
+}
+
+/// The text of every `.rs` file under `tests/` and `src/`, which a pinned name's segments
+/// must appear in.
+fn test_sources() -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut dirs = vec![root.join("tests"), root.join("src")];
+    let mut text = String::new();
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a source directory is readable") {
+            let path = entry.expect("a source entry is readable").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                text.push_str(&std::fs::read_to_string(&path).expect("a source file is UTF-8"));
+                text.push('\n');
+            }
+        }
+    }
+    text
+}
+
+/// Whether `word` occurs in `text` as a whole identifier.
+fn has_word(text: &str, word: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(ident) && !after.is_some_and(ident)
+    })
+}
+
+/// Why the self-host job's pinned lists and hashed run no longer cover every test once,
+/// or nothing. `sources` is the text the pinned names must appear in.
+fn pinned_split_errors(job: &Job, sources: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    let lists = match pinned_lists(job) {
+        Ok(lists) => lists,
+        Err(e) => return vec![e],
+    };
+    let n = match shard_matrix(job) {
+        Ok(shards) => shards.len(),
+        Err(e) => return vec![e],
+    };
+    let keys: Vec<usize> = lists.iter().map(|(k, _)| *k).collect();
+    if keys != (1..=n).collect::<Vec<_>>() {
+        errors.push(format!(
+            "the job has {n} shards but pinned lists {keys:?}; each shard needs one list, in order"
+        ));
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for (k, names) in &lists {
+        if names.is_empty() {
+            errors.push(format!("PINNED_{k} names no test"));
+        }
+        for name in names {
+            if seen.contains(&name.as_str()) {
+                errors.push(format!("`{name}` is pinned twice, so it would run twice"));
+            }
+            seen.push(name);
+            for segment in name.split("::") {
+                if !has_word(sources, segment) {
+                    errors.push(format!(
+                        "PINNED_{k} names `{name}`, and `{segment}` appears in no source; \
+                         re-measure and update the list"
+                    ));
+                }
+            }
+        }
+    }
+
+    let commands = nextest_commands(job);
+    let pinned: Vec<&&str> = commands
+        .iter()
+        .filter(|c| c.contains(PINNED_FILTER))
+        .collect();
+    let hashed: Vec<&&str> = commands.iter().filter(|c| c.contains("$PINNED_")).collect();
+    if pinned.len() != 1 || pinned[0].contains("--partition") {
+        errors.push(format!(
+            "expected one unpartitioned run with `{PINNED_FILTER}`, found {pinned:?}"
+        ));
+    }
+    let want = hashed_filter(n);
+    if hashed.len() != 1 || !hashed[0].contains(&want) || partition_count(hashed[0]).is_none() {
+        errors.push(format!(
+            "expected one partitioned run with `{want}`, found {hashed:?}"
+        ));
+    }
+    let selects_shard = "PINNED: ${{ env[format('PINNED_{0}', matrix.shard)] }}";
+    if !job.lines.iter().any(|l| l.trim() == selects_shard) {
+        errors.push(format!(
+            "the pinned run must take its list from `{selects_shard}`"
+        ));
+    }
+    errors
+}
+
+#[test]
+fn the_pinned_lists_and_the_hashed_run_cover_every_self_host_test_once() {
+    let jobs = ci_jobs();
+    let job = jobs
+        .iter()
+        .find(|j| j.key == "test-self-host")
+        .expect("ci.yml has no `test-self-host` job");
+    // NON-VACUITY. A parse that found no names satisfies the disjointness check.
+    let lists = pinned_lists(job).expect("the pinned lists parse");
+    let total: usize = lists.iter().map(|(_, names)| names.len()).sum();
+    assert!(total >= 20, "parsed only {total} pinned names");
+    let errors = pinned_split_errors(job, &test_sources());
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+/// The pinned-split check detects a doubly pinned name, a stale name, and a hashed run
+/// that omits a list.
+#[test]
+fn the_pinned_split_check_rejects_overlap_staleness_and_an_omitted_list() {
+    let job = |a: &str, hashed: &str| Job {
+        key: "test-self-host".to_string(),
+        lines: [
+            "    strategy:",
+            "      matrix:",
+            "        shard: [1, 2]",
+            "    env:",
+            "      PINNED_1: >-",
+            "        test(=alpha) |",
+            "        test(=mod_b::beta)",
+            "      PINNED_2: >-",
+            a,
+            "    steps:",
+            "      - name: Run the tests pinned to this shard",
+            "        env:",
+            "          PINNED: ${{ env[format('PINNED_{0}', matrix.shard)] }}",
+            "        run: cargo nextest run --archive-file a.tar.zst -E \"$PINNED\"",
+            hashed,
+        ]
+        .map(str::to_string)
+        .to_vec(),
+    };
+    let sources = "fn alpha() {} mod mod_b { fn beta() {} } fn gamma() {}";
+    let good_hashed = "        run: cargo nextest run --archive-file a.tar.zst -E \"not ($PINNED_1 | $PINNED_2)\" --partition hash:${{ matrix.shard }}/2";
+    let good = job("        test(=gamma)", good_hashed);
+    assert_eq!(pinned_split_errors(&good, sources), Vec::<String>::new());
+    assert!(is_pinned_split(good.lines[13].trim()));
+    assert!(is_pinned_split(good_hashed.trim()));
+
+    assert_eq!(
+        pinned_split_errors(&job("        test(=alpha)", good_hashed), sources).len(),
+        1
+    );
+    assert_eq!(
+        pinned_split_errors(&job("        test(=delta)", good_hashed), sources).len(),
+        1
+    );
+    let omitted = "        run: cargo nextest run --archive-file a.tar.zst -E \"not ($PINNED_1)\" --partition hash:${{ matrix.shard }}/2";
+    assert_eq!(
+        pinned_split_errors(&job("        test(=gamma)", omitted), sources).len(),
+        1
+    );
+    assert_eq!(
+        pinned_split_errors(&job("        test(~gamma)", good_hashed), sources).len(),
+        1
+    );
+    // A pinned filter with anything else added is a filter, not the split.
+    assert!(!is_pinned_split(
+        "cargo nextest run -E \"$PINNED\" -E 'not test(slow)'"
+    ));
 }
 
 /// **THE REQUIRED CHECK SEES EVERY JOB.** `main` requires `CI result`, which fails when any

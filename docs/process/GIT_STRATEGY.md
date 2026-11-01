@@ -128,7 +128,7 @@ did not carry the package — staged 571 build artifacts.
 Two defences, in order of reliability:
 
 - **Put the rule at the repository root**, where it exists on every branch that
-  has the root file. `**/target/` covers every package, present or future, on
+  has the root file. `**/target` covers every package, present or future, on
   every branch. A rule in a package subdirectory protects only branches that
   carry that subdirectory.
 - **Read `git status --short` before committing after any branch switch**, and

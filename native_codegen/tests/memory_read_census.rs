@@ -85,6 +85,7 @@
 //! | retcon reply cell | the host writes scalar bits or a body pointer before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
 //! | retcon delegate context | five pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
 //! | retcon latest reply | initialised from the start argument and updated after each suspension; LLVM preserves it in the frame until release |
+//! | **delegated loop context** | **the inherited delegate context, read field by field when a delegated `loop` builds its own copy at entry and when its `Reset` reads the latest-reply pointers back.** Every field it reads was written by the entry's `delegate_context` before the first call, so each read has an initialised source |
 //! | **shared data segment** | **the host, by contract.** Out of this backend's reach and deliberately so |
 //!
 //! # Two of the four host-boundary rows are satisfied by a ZEROED buffer
@@ -119,7 +120,8 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 36 -> 37 for the instruction meter's read of its own word.
 // 37 -> 41 for the four text equality reads described above.
 // 41 -> 42 for the copy at the yield's cursor, described above.
-const RECORDED_READ_SITES: usize = 42;
+// 42 -> 44 in absorption 129 for the delegated loop context's two reads.
+const RECORDED_READ_SITES: usize = 44;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

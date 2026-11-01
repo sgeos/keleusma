@@ -152,11 +152,12 @@ verify = []
 shell = []
 
 # Enables the bundled text operations over `Text<N>`, the compiler intrinsics
-# `text::len`, `text::capacity`, `text::concat`, `text::eq` and `text::slice`.
-# Each lowers to existing opcodes with a static cost, so the feature adds no
-# opcode, no native and no runtime dependency, and it is `no_std`. With the
-# feature off, a call under the `text::` path is refused at compile time rather
-# than resolved as a host native. See `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+# called as methods `t.len()`, `t.capacity()`, `a.concat(b)`, `a.eq(b)` and
+# `t.slice(start, end)`. Each lowers to existing opcodes with a static cost, so
+# the feature adds no opcode, no native and no runtime dependency, and it is
+# `no_std`. With the feature off, calling one of these methods on a `Text<N>` is
+# refused at compile time naming the feature. See
+# `docs/decisions/TEXT_CAPACITY_TYPE.md`.
 text = []
 
 # Enables compiled-module signing and signature verification at

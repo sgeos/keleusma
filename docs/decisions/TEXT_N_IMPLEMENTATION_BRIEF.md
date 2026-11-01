@@ -92,7 +92,7 @@ Four increments are merged. **Do not re-plan them; read what they settled.**
 | 3 | A distinct nominal type in the checker | `Type::TextN(ConstDim)`; **five** match sites, all in `typecheck.rs`, measured by the compiler |
 | 4 | The zero value | A zero length word followed by `N` zero bytes, cross-checked against the layout |
 | 5 | Emission and the literal cast, 2026-10-30 | One pooled constant per cast. Recorded in [`TEXT_CAPACITY_TYPE.md`](./TEXT_CAPACITY_TYPE.md#the-literal-cast-increment-landed-2026-10-30) |
-| 6 | The bundled operations as intrinsics, 2026-10-31 | Behind the `text` feature, linear in the capacity. The `ScalarKind::Text` collapse was investigated and stopped, because bare dynamic text still has host producers. Recorded in [`TEXT_CAPACITY_TYPE.md`](./TEXT_CAPACITY_TYPE.md#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31) |
+| 6 | The bundled operations as intrinsics, 2026-10-31 | Behind the `text` feature, called as methods, defined for every operand body, linear in the capacity. The `ScalarKind::Text` collapse was investigated and stopped, because bare dynamic text still has host producers. Recorded in [`TEXT_CAPACITY_TYPE.md`](./TEXT_CAPACITY_TYPE.md#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31) |
 
 **Three refusals remain, and all three are correct.** One in `check_composite_dimensions`, one in the
 whole-program guard, one in data-field validation. They stay until code is generated.

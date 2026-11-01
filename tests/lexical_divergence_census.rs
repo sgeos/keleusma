@@ -270,13 +270,16 @@ fn probes() -> Vec<(String, String)> {
 /// the axis under test would fail the moment the census found a real defect there.
 fn positive_controls() -> &'static [(&'static str, Outcome, &'static str)] {
     &[
-        // A pipe into a generic template, which the reference keeps generic and the parser
-        // refuses rather than miscompiling, boundary row `scope/generic_pipe__GAP`. It replaced
-        // a plain generic call, which compiles byte-identically since Order 6 slice 7.
+        // A typed destructuring `let`, which the reference compiles and the self-hosted
+        // destructuring filter refuses rather than miscompiling, boundary row
+        // `let/typed_pattern__GAP`. It replaced a nested destructuring `let`, which compiles
+        // byte-identically since the operator's ruling of 2026-10-31. That one replaced a pipe
+        // into a generic template, which compiles byte-identically since 2026-10-31, and that
+        // one a plain generic call, which compiles byte-identically since Order 6 slice 7.
         (
-            "control/generic_pipe",
+            "control/typed_let_pattern",
             Outcome::SelfHostRefuses,
-            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { 1 |> id() }",
+            "fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
         ),
         // Equality on a struct whose field is an array of tuples of structs compiles on both
         // sides and produces DIFFERENT bytes, boundary row `eq/struct_field_array_of_tuple__GAP`.

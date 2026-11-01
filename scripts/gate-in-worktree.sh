@@ -93,7 +93,24 @@ GATE_DIR="$TREES_DIR/${KEL_GATE_NAME:-gate}"
 # cache survives and only changed crates recompile. Inside the worktree it would
 # be discarded with the tree; shared with the main tree it would thrash, because
 # the two are usually on different commits.
-GATE_TARGET="${KEL_GATE_TARGET:-"$TREES_DIR/.gate-target"}"
+#
+# When SCRATCH_BASE names a scratch volume, the default lives there, under the
+# repository's folder that scripts/scratch.sh uses, rather than on the system disk.
+# It is a plain directory named in CARGO_TARGET_DIR, not a link, so `cargo clean`
+# cannot strand it. The dot keeps `worktree.sh list` from reporting it as an unused
+# tree folder. Four gate directories of 19.4 GB, unused since 2026-08-10, were
+# deleted from ../keleusma-worktrees on the operator's decision of 2026-10-31, which
+# also adopted this default.
+if [ -n "${SCRATCH_BASE:-}" ]; then
+  if [ ! -d "$SCRATCH_BASE" ] || [ ! -w "$SCRATCH_BASE" ]; then
+    echo "gate-worktree: SCRATCH_BASE '$SCRATCH_BASE' is not a writable directory" >&2
+    exit 1
+  fi
+  DEFAULT_GATE_TARGET="$SCRATCH_BASE/$(basename "$REPO_ROOT")/.gate-target"
+else
+  DEFAULT_GATE_TARGET="$TREES_DIR/.gate-target"
+fi
+GATE_TARGET="${KEL_GATE_TARGET:-"$DEFAULT_GATE_TARGET"}"
 
 # Reuse the worktree across runs; just move it to the commit under test. A stale
 # tree from an interrupted run is reset rather than refused, since the whole

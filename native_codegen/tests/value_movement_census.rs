@@ -102,6 +102,7 @@
 //! | retcon latest reply | yes, until release | the public lowering admits scalar parameters only; initialised at start and updated on resume |
 //! | retcon delegate context | yes, until release | three pointers refer only to the reply cell or entry locals that LLVM captures in the same frame; helper stores update the same scalar entry parameter and latest reply |
 //! | retcon local zero and local reset | no, cleared at Reset | resume stores scalar bits; Reset clears locals and restores the latest scalar reply |
+//! | delegated loop context | yes, until release | one store copies pointers into a delegated `loop`'s own context, six inherited and four replaced by its own parameter slot and flags; every pointer refers to entry or delegate locals that LLVM captures in the same frame, and no body reaches it |
 //! | operand spill slice | no — abandoned when the depth goes to zero | nothing needed |
 //! | composite body field | no — the body is itself region-resident | a `Width::Body` operand is MEMCPY'd, never stored as a word |
 //! | **shared data slot, scalar** | **yes** — host buffer | a body operand with no stated placement is REFUSED |
@@ -172,7 +173,9 @@ const MOVE_FORMS: &[&str] = &[
 // 90 -> 91 for the enum zero fill described above.
 // 91 -> 92 for the composite constant's body copy described above.
 // 92 -> 95 for the copy at the yield's three moves described above.
-const RECORDED_MOVE_SITES: usize = 95;
+// 95 -> 96 in absorption 129 for the delegated loop context's store
+// described above.
+const RECORDED_MOVE_SITES: usize = 96;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

@@ -1089,7 +1089,19 @@ fn compile_kel_file(path: &'static str) -> Module {
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
 fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
+    run_codegen_with(body, param_count, &[])
+}
+
+/// [`run_codegen`] with the private struct slots and sizes the codegen's copy pass needs,
+/// laid out from parse.kel's data records as the shipping driver lays them out.
+fn run_codegen_with(
+    body: &Body,
+    param_count: usize,
+    composites: &[(u16, u32)],
+) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
     let m = compile_kel_file("compiler/kel/codegen.kel");
+    let copy_inputs = keleusma::selfhost::codegen_copy_pass_inputs(&m, composites);
+    let copy_refuse = keleusma::selfhost::codegen_copy_refuse_slot(&m);
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -1132,6 +1144,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
         .expect("param_count");
     vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
         .expect("category");
+    for (slot, word) in copy_inputs {
+        vm.set_shared(&mut shared, slot, Value::Int(word))
+            .expect("copy pass input");
+    }
 
     // Phase 1: ops until Return.
     let mut ops = Vec::new();
@@ -1166,6 +1182,11 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
             .resume_with_shared(&mut shared, Value::Int(0))
             .expect("resume");
     }
+    assert_eq!(
+        vm.get_shared(&shared, copy_refuse).expect("copy refusal"),
+        Value::Int(0),
+        "the codegen's copy pass refused this function"
+    );
 
     // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
     // tags (0 Int, 1 StaticStr). Each pool entry is returned as (value, tag): an Int carries its
@@ -2090,7 +2111,9 @@ fn self_compile_codegen_atomic_functions() {
     // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103), and
     // slice 5b `push_floatlit` (103 -> 104).
     // 105 since `push_refinement`, the refinement check, 2026-10-27.
-    const EXPECTED_SELF_COMPILE: usize = 105;
+    // The private struct read copy pass of 2026-10-31 adds the twelve `dc_` helpers, all
+    // self-compiling (105 -> 117).
+    const EXPECTED_SELF_COMPILE: usize = 117;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -4443,7 +4466,8 @@ fn the_host_unescape_agrees_with_the_reference_on_every_accepted_escape() {
 }
 
 fn self_host_compile(src: &str) -> Module {
-    let (fns, names, _, _) = parse_functions(src);
+    let (fns, names, data_records, _) = parse_functions(src);
+    let composites = keleusma::selfhost::private_composite_sizes(&data_records);
     let mut module = compile_src(src);
     let parsed_names: std::collections::BTreeSet<_> = fns
         .iter()
@@ -4479,7 +4503,7 @@ fn self_host_compile(src: &str) -> Module {
             let category = reconstruct_category_copy(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc, &name)
         };
-        let (ops, pool, lc) = run_codegen(&body, pc);
+        let (ops, pool, lc) = run_codegen_with(&body, pc, &composites);
         let idx = module
             .chunks
             .iter()
@@ -8389,7 +8413,8 @@ fn the_boundary_tables_thin_families_are_the_ones_on_record() {
     // The acknowledged thin families. `literal` is the one that cost something: its single case is
     // `let s = "hi"`, and the string defects of 2026-08-30 lived exactly where that case does not
     // reach.
-    let acknowledged = ["literal", "removed", "tuple"];
+    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it.
+    let acknowledged = ["literal", "tuple"];
     assert_eq!(
         thin.as_slice(),
         acknowledged.as_slice(),
@@ -9104,17 +9129,72 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
         ),
-        // A pipe into a template, which the reference keeps generic rather than instantiating.
+        // A pipe into a template, which both compilers instantiate as the plain call since
+        // 2026-10-31. It was `scope/generic_pipe__GAP`, refused, before that.
         (
-            "scope/generic_pipe__GAP",
-            Refuses,
+            "scope/generic_pipe",
+            SOk,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { 1 |> id() }",
+        ),
+        // A struct pattern in a `let`, which the lexer's destructuring filter rewrites to the
+        // reference's lowering, 2026-10-31.
+        (
+            "let/struct_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { x, y: b } = p; x + b }",
+        ),
+        (
+            "let/struct_destructure_wildcard_field",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { y, x: _ } = p; y }",
+        ),
+        // Nested destructuring patterns and a single-variant enum pattern, which the filter
+        // rewrites to the reference's lowering with a hidden binding per nested pattern since
+        // the operator's ruling of 2026-10-31. The first was `scope/nested_let_pattern__GAP`,
+        // refused, before that.
+        (
+            "let/nested_tuple_destructure",
+            SOk,
+            "fn f() -> Word { let (a, (b, c)) = (1, (2, 3)); a + b + c }",
+        ),
+        (
+            "let/nested_struct_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nstruct Q { p: P, z: Word }\nfn f(q: Q) -> Word { let Q { p: P { x, y }, z } = q; x + y + z }",
+        ),
+        (
+            "let/struct_in_tuple_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let (P { x, y: _ }, c) = (p, 3); x + c }",
+        ),
+        (
+            "let/tuple_in_struct_destructure",
+            SOk,
+            "struct S { t: (Word, Word), z: Word }\nfn f(s: S) -> Word { let S { t: (a, b), z } = s; a + b + z }",
+        ),
+        (
+            "let/enum_variant_destructure",
+            SOk,
+            "enum W { A(Word, Word) }\nfn f(w: W) -> Word { let W::A(x, y) = w; x * 10 + y }",
+        ),
+        // A typed destructuring pattern, which the reference compiles and the filter
+        // refuses rather than rewriting.
+        (
+            "let/typed_pattern__GAP",
+            Refuses,
+            "fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (
             "removed/closure__REJECT",
             RefRejects,
             "fn f() -> Word { let g = |x| x; g(1) }",
+        ),
+        // A refutable `let` pattern, refused by the reference since 2026-10-31.
+        (
+            "removed/refutable_let__REJECT",
+            RefRejects,
+            "fn f() -> Word { let 3 = 5; 7 }",
         ),
     ]
 }
@@ -9280,10 +9360,14 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // pipe token's compound code took it to 1968, the shebang skip to 1991, and
             // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168. The float
             // literal state took it to 2230 and the peak to 421. The label punctuation,
-            // `punct_label`, took it to 2242 on 2026-10-27.
+            // `punct_label`, took it to 2242 on 2026-10-27. The struct pattern states of
+            // the destructuring filter, `dq_struct`, took it to 2403 on 2026-10-31 with the
+            // peak unchanged. Nested and variant patterns, which replaced `dq_struct` with
+            // the item and frame tables and their helpers, took it to 2744 on 2026-10-31,
+            // with the peak unchanged.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2242,
+            2744,
             421,
         ),
         (

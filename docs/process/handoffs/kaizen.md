@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 1ea45456 HEAD     # the merge of PR 660 into v0.2.3
+git merge-base --is-ancestor b24d05c1 HEAD     # the merge of PR 708 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -39,12 +39,15 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-10-31
+## State on 2026-11-01
 
 - **Merged.** Into `v0.2.3`, PRs 620, 625, 626, 624, 630, 633, 647, 649, 654 and 656,
-  and PR 660, `main` merged back after PR 655, as `1ea45456`. Into `main`, PR 619, the
-  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82` and PR 655,
-  the Dependabot ignore entry for `dtolnay/rust-toolchain`, as `430b2625`.
+  PR 660, `main` merged back after PR 655, as `1ea45456`, and PR 675, the nightly fuzz
+  workflow and the fuzz lockfile check, as `b5762e2e`. Into `main`, PR 619, the
+  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82`, PR 655 as
+  `430b2625` and PR 676, the fuzz workflow and the `/fuzz` Dependabot entry, as
+  `694783ab`. PR 688 merges `main` back into `v0.2.3` with an identical tree. PRs 689,
+  693, 696 to 699 and 703 merged into `v0.2.3` on 2026-10-31 and 2026-11-01.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md).
@@ -58,21 +61,37 @@ run.
   choices, take appropriate action, then give me the updated list of questions and
   obvious choices.", recorded with each disposition in
   [the open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md). It
-  adopted N1 to N5, V0.2.X's item 4, since contested, and C7 D2, D3, D5, D6 and D7. Applied on branch
-  `ci/kaizen-nightly-fuzz`, the nightly fuzz workflow, the fuzz lockfile check and the
-  Dependabot entry for `/fuzz`. The workflow and the Dependabot entry take effect only
-  from `main`.
-- **Shard balance.** After PR 662 the four self-host shards ran 13 to 19 minutes for
-  shard 2 and 34 to 37 for shard 4 on four `v0.2.3`-lineage runs. The cause is uneven
-  work per hash bucket, not one long test, which is question N6.
+  adopted N1 to N5 and C7 D2, D3, D5, D6 and D7, applied in PRs 675 and 676.
+- **Second operator ruling of 2026-10-31.** First-hand in this session, recorded
+  verbatim in the same file. V0.2.X's record is the source of truth for its item 4,
+  now (b), and for its other questions, for those items only. N6 is (a). The
+  obvious choices O1 to O7 are adopted. The operator's checks stay open.
+- **Third operator ruling of 2026-10-31.** "Accept all obvious choices and address all
+  open concerns that need no further input from me.", recorded with dispositions in the
+  same file.
+- **Shard balance, N6.** PR 689, `843a6dbf`, pins 43 self-host tests to shards by
+  measured duration, guarded in `tests/ci_shard_coverage.rs`. Over 19 runs after it the
+  longest shard's median was 35.9 minutes against 37.4 over 47 before, not clearly
+  shorter, so keeping the lists is decision D1 of
+  [the open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md).
+- **Scratch volume.** This worktree's `target` links to
+  `/Volumes/Scratch/keleusma/kaizen/target`. Run
+  `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
+  target` after any `cargo clean`. PR 697 made `worktree.sh` link and remove build
+  output, the notices went out in sequences 213 to 215, and PR 703 moved the gate's
+  output there. The redacted checkpoint merged in PR 698.
+- **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
+  so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
+  Applying it is the operator's decision.
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
   at most. The blog's Pages build holds one shared runner for most of a busy day, by
   the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
   count the pruned list. A backup is outside the repository.
-- **Propagation.** `origin/proofs`, unchanged since 2026-08-29, still holds the old
-  `wire_schema.rs` comment and four kept-term lines, item K13. `main` matches no term
-  since PR 650, by V0.2.X's report. V0.3.X confirmed that `v0.3.0` matches no term.
+- **Propagation.** The proofs line merged into `v0.2.3` as PR 708 on 2026-11-01 and its
+  remote branch is gone, closing K13. On this line's scans, `v0.2.3` at `b24d05c1` on
+  2026-11-01 and `main` on 2026-10-31 match no term. V0.3.X confirmed that `v0.3.0`
+  matches no term.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
@@ -93,29 +112,32 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Land `ci/kaizen-nightly-fuzz` on `v0.2.3`, then on `main`, which needs the operator,
-   and confirm the first scheduled run.
-2. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
-   comparing error rates and cache writes after long gaps with the idle compactions
-   already measured.
-3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
+   shard evidence current until D1 is ruled.
+2. `worktree.sh list` now reports agent trees' unlinked output. If D5 is (a), write
+   and test the `WorktreeCreate` and `WorktreeRemove` hook scripts for the operator to
+   apply.
+3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
+   about two weeks later and compare with the trial report.
+4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
-6. Measure branch-run cost again once changelog fragments are in use.
+5. Finish the three selection tasks, record their outcomes, and read the comparison.
+6. A state-file budget guard, once the owning lines have converted their files.
+7. Measure branch-run cost again once changelog fragments are in use.
 
 ## Open with the operator
 
-[The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
-list. N6, the shard partition, and V0.2.X's items 1, 2, 5, 6 D4 and 7 need judgment.
-The operator's own checks are K6, K9, K10, K11 and K14, held. V0.2.X item 4 is contested. This list ruled (a), and V0.2.X
-relays in sequence 175 a later first-hand (b) from its session, which only the operator
-can confirm here. V0.2.X also relays that all its questions are answered.
+[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record the
+operator's ruling of that day. D1 keeps the pinned lists. D2 waits on the operator
+adding `"idleCompaction": false` to the global settings. D3 closed K13. D4 (a) broke
+the language client and was abandoned, so Dependabot alert 6 stays open. D5, a
+worktree hook, is new. The K-series checks K6, K9, K10 and K11 remain, and K14 is held.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
-- The fuzz workflow ran only locally. Its first GitHub run waits on `main`.
+- The fuzz workflow ran only locally. Its crash path and artifact upload are untested.
+- Dependabot alert 6 has no compatible fix. Recheck `vscode-languageclient` weekly.
 - Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
   They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
 
@@ -129,7 +151,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `a63120d73dd868d0b683e92c5613f6b35b7e2a6170d7a31d8853393e07bfeb26`, 164 messages, 5 unacknowledged at export, none addressed to `kaizen` |
+| [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
@@ -143,8 +165,9 @@ Pilot judgments never change gates.
   cannot read the known hosts file.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
-- `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER` and an
-  isolated `CARGO_TARGET_DIR`.
+- `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER`, in the
+  linked `target`. The old isolated `CARGO_TARGET_DIR` folders, 8.0 GB, were deleted on
+  the operator's approval of 2026-10-31.
 
 ## Governing rules
 

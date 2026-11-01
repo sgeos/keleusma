@@ -100,6 +100,7 @@
 //! |---|---|
 //! | stable handle fields | constants 8 and 16 within `slot_bytes(frame_bytes)`, with eight-byte slot alignment required |
 //! | retcon delegate context fields | three constant structure field indices, written by one builder site and read through three parsed LLVM offsets |
+//! | delegated loop context fields | COMPILE-TIME CONSTANT. Three sites in `coroutine.rs` index the ten-pointer context by a literal field number below ten, two to copy the inherited context into a delegated `loop`'s own and one to read the latest-reply pointers at its `Reset` |
 //! | locals in the stream frame | constant — `plan_chunk_region` bytes plus slot index |
 //! | stream state word (three sites) | constant — `stream_state_off` |
 //! | call-site region base | constant — per-site plan |
@@ -159,7 +160,9 @@
 // 46 -> 51 for the five Order 6 sites described above.
 // 51 -> 52 for the composite constant's site base described above.
 // 52 -> 55 for the copy at the yield's three addresses described above.
-const RECORDED_GEP_SITES: usize = 55;
+// 55 -> 58 in absorption 129 for the delegated loop context's three
+// constant field addresses described above.
+const RECORDED_GEP_SITES: usize = 58;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second

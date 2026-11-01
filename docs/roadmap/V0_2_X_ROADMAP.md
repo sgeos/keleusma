@@ -508,10 +508,17 @@ library entry. Capacity and protocol failures remain distinct from invalid-sourc
 The command-line tests assert independent rejection without an output artifact and valid artifact
 execution returning seven. These results do not complete Keleusma wire serialization or final gates.
 
-## Current construct-support boundary, 2026-10-26
+## Current construct-support boundary, 2026-10-31
 
-The executable table in `tests/selfhost_codegen.rs` contains 118 cases with
-113 SOk / 2 Refuses / 2 Diverges / 1 RefRejects. Order 6 slice 7 moved the generic function
+The executable table in `tests/selfhost_codegen.rs` contains 127 cases with
+121 SOk / 2 Refuses / 2 Diverges / 2 RefRejects. The operator's ruling of 2026-10-31 on
+`let` patterns moved the nested destructuring `let` from Refuses to SOk and added four cases
+that are SOk, a nested struct pattern, a struct pattern inside a tuple pattern, a tuple pattern
+inside a struct pattern and a single-variant enum pattern, with a typed destructuring pattern,
+which Refuses. The `let` pattern and pipe follow-ups of
+2026-10-31 moved the pipe into a template from Refuses to SOk, added two struct `let`
+destructuring cases, which are SOk, a nested destructuring `let`, which Refuses, and a
+refutable `let`, which the reference rejects. Order 6 slice 7 moved the generic function
 case from Refuses to SOk and added a pipe into a template, which Refuses. Order 6 slice 5 moved the float
 arithmetic case from Diverges to SOk and added float literal and negation cases, SOk since
 slices 5b and 5c, and a suffixed float literal case, which Refuses. The 2026-10-21 increments added

@@ -8,7 +8,10 @@ first calls of sessions that began fresh rather than from a compaction. It
 reports how the error rate changes with calls since a compaction, the class
 of each failed edit by the harness's fixed error phrases, and how many result
 characters the first calls after a fresh start or a compaction read, with the
-part whose arguments name a process or instruction document.
+part whose arguments name a process or instruction document. For the
+`idleCompaction: false` trial it also reports every resumption after an idle
+gap, compacted or not, with the error rate of the calls that follow and the
+cache tokens the first assistant call after it wrote and read, by day.
 
 Usage: python3 -I context_quality.py > context-quality.json
 
@@ -38,6 +41,8 @@ WINDOW = 50
 # A compaction after this much idle time is the harness's idle compaction, which runs shortly
 # before the one-hour cache expires. A threshold compaction follows activity within minutes.
 IDLE_MINUTES = 30
+# The prompt cache's time to live. An uncompacted resumption past it rewrites the whole prefix.
+CACHE_TTL_MINUTES = 60
 RECOVERY = 30
 SINCE = ((10, "0-9"), (25, "10-24"), (50, "25-49"), (100, "50-99"), (200, "100-199"))
 # Fixed phrases of the harness's own edit errors. Only the class is emitted.
@@ -92,28 +97,44 @@ def records(path):
 
 
 def scan(path):
-    """Return the ordered tool events and compaction positions of one transcript."""
+    """Return the ordered tool events, compaction positions and idle-gap resumptions of one
+    transcript."""
     context = {}
     issued = {}
     events = []
     compaction_at = []
+    gaps = []
+    pending = None
     last_activity = None
     for rec in records(path):
         stamp = rec.get("timestamp")
         moment = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else None
-        if rec.get("isCompactSummary"):
-            idle = moment and last_activity and (moment - last_activity).total_seconds() / 60 >= IDLE_MINUTES
+        summary = bool(rec.get("isCompactSummary"))
+        idle = bool(moment and last_activity and (moment - last_activity).total_seconds() / 60 >= IDLE_MINUTES)
+        # A resumption opens at the first activity or compaction after an idle gap and closes
+        # at the first assistant call with usage, whose cache tokens it records.
+        if idle and pending is None and (summary or rec.get("type") in ("assistant", "user")):
+            pending = {"at": len(events), "day": moment.date().isoformat(), "compacted": False,
+                       "minutes": (moment - last_activity).total_seconds() / 60}
+        if summary:
             compaction_at.append((len(events), "idle" if idle else "threshold"))
+            if pending is not None:
+                pending["compacted"] = True
         msg = rec.get("message")
         if not isinstance(msg, dict):
             continue
-        if moment and rec.get("type") in ("assistant", "user") and not rec.get("isCompactSummary"):
+        if moment and rec.get("type") in ("assistant", "user") and not summary:
             last_activity = moment
         if rec.get("type") == "assistant":
             mid = msg.get("id")
             usage = msg.get("usage")
             if mid and usage:
                 context[mid] = sum(int(usage.get(k) or 0) for k in CONTEXT_KEYS)
+                if pending is not None:
+                    pending["cache_write"] = int(usage.get("cache_creation_input_tokens") or 0)
+                    pending["cache_read"] = int(usage.get("cache_read_input_tokens") or 0)
+                    gaps.append(pending)
+                    pending = None
             for part in msg.get("content") or []:
                 if isinstance(part, dict) and part.get("type") == "tool_use":
                     args = part.get("input") if isinstance(part.get("input"), dict) else {}
@@ -133,7 +154,7 @@ def scan(path):
                                "edit_class": edit_class(text) if error and name in EDIT_TOOLS else None})
     for event in events:
         event["context"] = context.get(event["mid"], 0)
-    return events, compaction_at
+    return events, compaction_at, gaps
 
 
 def rate(rows, guard=True):
@@ -141,6 +162,20 @@ def rate(rows, guard=True):
     counted = [r for r in rows if not r["denied"] and (guard or r["edit_class"] != "not read or modified since read")]
     errors = sum(r["error"] for r in counted)
     return {"calls": len(counted), "errors": errors, "rate": round(errors / len(counted), 4) if counted else None}
+
+
+def median(values):
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) // 2
+
+
+def gap_summary(rows):
+    return {"resumptions": len(rows), "after": rate([r for g in rows for r in g["after"]], guard=False),
+            "first_call_cache_write_median": median([g["cache_write"] for g in rows]),
+            "first_call_cache_read_median": median([g["cache_read"] for g in rows])}
 
 
 def main():
@@ -157,8 +192,12 @@ def main():
     edit_classes = collections.Counter()
     recovery = {"fresh": collections.Counter(), "compaction": collections.Counter()}
     denied = 0
+    resumptions = []
     for path in sorted(ROOT.glob("*keleusma*/*.jsonl")):
-        events, compactions = scan(path)
+        events, compactions, gaps = scan(path)
+        for gap in gaps:
+            gap["after"] = events[gap["at"]:gap["at"] + WINDOW]
+            resumptions.append(gap)
         for event in events:
             denied += event["denied"]
             b = bucket(event["context"])
@@ -227,6 +266,17 @@ def main():
         "after_compaction_errors_by_tool": dict(after_errors_by_tool.most_common()),
         "edit_before_compaction": rate([r for r in before if r["tool"] in EDIT_TOOLS]),
         "edit_after_compaction": rate([r for r in after if r["tool"] in EDIT_TOOLS]),
+        "idle_gap_minutes": IDLE_MINUTES,
+        "idle_gap_resumptions": {
+            "compacted": gap_summary([g for g in resumptions if g["compacted"]]),
+            "uncompacted_within_cache_ttl": gap_summary(
+                [g for g in resumptions if not g["compacted"] and g["minutes"] < CACHE_TTL_MINUTES]),
+            "uncompacted_past_cache_ttl": gap_summary(
+                [g for g in resumptions if not g["compacted"] and g["minutes"] >= CACHE_TTL_MINUTES])},
+        "idle_gap_resumptions_by_day": {
+            day: {kind: sum(1 for g in resumptions if g["day"] == day and g["compacted"] == flag)
+                  for kind, flag in (("compacted", True), ("uncompacted", False))}
+            for day in sorted({g["day"] for g in resumptions})},
     }
     json.dump(out, sys.stdout, indent=1, sort_keys=True)
     sys.stdout.write("\n")

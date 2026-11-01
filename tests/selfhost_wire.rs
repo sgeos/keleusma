@@ -13023,8 +13023,13 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // 35,525. The identity cast's `cast_is_identity` made it 1151 and 35,583.
     // The private initializer kinds for `Text` and struct fields, option (b) of the
     // definite-initialization ruling, added no name and took the blob to 35,613.
-    assert_eq!(worst_names, 1151, "the worst-case name count moved");
-    assert_eq!(worst_blob, 35613, "the worst-case blob size moved");
+    // A pipe into a template, 2026-10-31, added `pipe_kind`, `akind`, `acount` and
+    // `gen_pipe_order`, for 1155, against the 2048 name cap, and took the blob to 35,736.
+    // Nested and variant `let` patterns, the operator's ruling of 2026-10-31, added the
+    // `ep` block with `count`, `row` and `fi`, and `enum_payload_arm`, `enum_payload_read`
+    // and `enum_payload_value`, for 1161, and took the blob to 36,148 against 49,152.
+    assert_eq!(worst_names, 1161, "the worst-case name count moved");
+    assert_eq!(worst_blob, 36148, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

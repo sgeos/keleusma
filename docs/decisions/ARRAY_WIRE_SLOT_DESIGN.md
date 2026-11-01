@@ -526,6 +526,38 @@ Each question lists lettered options with the recommendation first.
    per element, and `[P; 65537]` is refused naming the field, pinned by
    `tests/private_composite_slot_cap.rs`.
 
+## Operator rulings, 2026-10-31
+
+Received first-hand in the V0.2.X session.
+
+> C3.1. Explain encodings F and R.
+> C3.2. A. Authorize without version bump once a decision has been made.
+> C3.3. Fingerprints (and bytecode versions) are only updated when public releases are cut. We
+> are approaching a new public release, so a bumps are premature.
+> C3.4. A.
+> C3.5. A.
+> C3.6. A, option B.
+> C3.7. A.
+
+After the explanation of the two encodings, "Proceed with encoding F."
+
+| Decision | Ruling |
+|---|---|
+| 1, encoding | Encoding F, one record per declared field |
+| 2, the wire change | Authorized at `BYTECODE_VERSION` 2 |
+| 3, the within-cycle hazard | No fingerprint roll and no version change at landing. The release step rolls the fingerprint when the release is cut |
+| 4, the schema hash | H2, the per-field form |
+| 5, packed private storage | S1, authorized as a stage after the encoding |
+| 6, addressing under S1 | Option B, one logical slot per field |
+| 7, `DataLayout` | Changed to fields, a breaking change within the V0.2.x line |
+| 8, stage 0 | Done in pull request 652 |
+
+**What decision 3 leaves open until the release.** Between landing and the release, an artifact
+built under the old layout could be read by a runtime built under the new one, and the
+fingerprint will not tell them apart. Nothing is published, so the exposure is confined to
+artifacts and caches inside the repository. Those are regenerated in the same change, and the
+self-hosted stage artifacts are rebuilt by their tests.
+
 ## What was not verified
 
 - The runtime consequence of the placement truncation above slot 65,535.
