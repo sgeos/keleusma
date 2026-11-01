@@ -107,6 +107,14 @@ pub const POOL_TAG_U16_U16_U8: u8 = 0x02;
 /// indices); the three `u16`s occupy bytes two through seven (B28 P2).
 pub const POOL_TAG_U16_U16_U16: u8 = 0x03;
 
+/// Pool entry type tag for the `(u24, u24)` shape. Used by
+/// `Op::GetDataIndexed` and `Op::SetDataIndexed` (base slot, array
+/// length) so each operand may exceed 64 K. The two twenty-four-bit
+/// little-endian values fill bytes two through seven exactly. Distinct
+/// from [`POOL_TAG_U16_U16`], which stays sixteen-bit for the nested
+/// composite and `IsEnum` shapes.
+pub const POOL_TAG_U24_U24: u8 = 0x04;
+
 /// Byte-three sentinel in a baked `Op::GetTupleField` record marking
 /// the boxed (positional-index) form. Distinguished from a flat
 /// scalar-kind tag because [`crate::value_layout::ScalarKind::to_tag`]
@@ -202,7 +210,8 @@ pub const ED25519_VERIFYING_KEY_BYTES: usize = 32;
 
 /// Width of the encryption-metadata block appended after the
 /// signature extension on encrypted modules. The layout is
-/// documented in [`crate::encryption::EncryptionMetadata`] and in
+/// documented by `encryption::EncryptionMetadata` (that module is gated behind
+/// the `encryption` feature) and in
 /// `tmp/encrypted_signed_modules.md`. Always 88 bytes for the
 /// V0.2.1 X25519+AES-256-GCM scheme; future schemes may use the
 /// same constant or extend it through a scheme-specific
@@ -294,6 +303,14 @@ impl OpcodeRecord {
     pub fn operand_pool_index(&self) -> u32 {
         u32::from_le_bytes([self.0[1], self.0[2], self.0[3], 0])
     }
+
+    /// Decode the inline operand as a twenty-four-bit little-endian
+    /// value across bytes one through three. Used by `GetData` and
+    /// `SetData` for a data-slot index that may exceed 64 K. The
+    /// producer validates the value fits in twenty-four bits.
+    pub fn operand_u24(&self) -> u32 {
+        u32::from_le_bytes([self.0[1], self.0[2], self.0[3], 0])
+    }
 }
 
 impl OperandPoolEntry {
@@ -306,6 +323,25 @@ impl OperandPoolEntry {
         bytes[2..4].copy_from_slice(&a.to_le_bytes());
         bytes[4..6].copy_from_slice(&b.to_le_bytes());
         // Bytes 6 and 7 stay zero for the `(u16, u16)` shape.
+        let parity_payload = [
+            bytes[0], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ];
+        bytes[1] = pool_entry_parity(&parity_payload);
+        OperandPoolEntry(bytes)
+    }
+
+    /// Construct a `(u24, u24)` pool entry: two twenty-four-bit
+    /// little-endian values in bytes two through four and five
+    /// through seven. Computes the parity byte over the type tag and
+    /// the payload. The caller validates each value fits in
+    /// twenty-four bits.
+    pub fn from_u24_u24(a: u32, b: u32) -> Self {
+        let mut bytes = [0u8; OPERAND_POOL_ENTRY_BYTES];
+        bytes[0] = POOL_TAG_U24_U24;
+        let ab = a.to_le_bytes();
+        let bb = b.to_le_bytes();
+        bytes[2..5].copy_from_slice(&ab[0..3]);
+        bytes[5..8].copy_from_slice(&bb[0..3]);
         let parity_payload = [
             bytes[0], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ];
@@ -367,6 +403,16 @@ impl OperandPoolEntry {
         (
             u16::from_le_bytes([self.0[2], self.0[3]]),
             u16::from_le_bytes([self.0[4], self.0[5]]),
+        )
+    }
+
+    /// Decode the `(u24, u24)` payload: two twenty-four-bit
+    /// little-endian values. Caller verifies the tag and parity
+    /// before invoking.
+    pub fn as_u24_u24(&self) -> (u32, u32) {
+        (
+            u32::from_le_bytes([self.0[2], self.0[3], self.0[4], 0]),
+            u32::from_le_bytes([self.0[5], self.0[6], self.0[7], 0]),
         )
     }
 
@@ -555,6 +601,21 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
     OpcodeId(id)
 }
 
+/// The canonical opcode table as `(variant name, wire identifier)` pairs.
+///
+/// Exposed within the crate so a test can range over the whole opcode set
+/// rather than over a hand-written case list. The table is part of the wire
+/// format's application binary interface, so a new opcode must be added here to
+/// be encodable at all, which makes this the authority on what the opcode set
+/// is. A check driven from it reports a newly added opcode by name instead of
+/// silently not covering it. Gated like the test modules that call it, in
+/// `verify.rs` and `vm_operand_effect_tests.rs`, so a build without those
+/// features does not carry it as dead code.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
+pub(crate) fn opcode_table() -> &'static [(&'static str, u8)] {
+    OPCODE_ID_TABLE
+}
+
 /// Look up the variant name for an opcode identifier. Used by
 /// the decoder's error path to surface readable diagnostics.
 fn opcode_name_for_id(id: u8) -> Option<&'static str> {
@@ -669,8 +730,6 @@ pub fn encode_op(
         Op::Const(v)
         | Op::GetLocal(v)
         | Op::SetLocal(v)
-        | Op::GetData(v)
-        | Op::SetData(v)
         | Op::BoundsCheck(v)
         | Op::If(v)
         | Op::Else(v)
@@ -682,6 +741,14 @@ pub fn encode_op(
         | Op::Trap(v) => {
             let b = v.to_le_bytes();
             [b[0], b[1], 0]
+        }
+
+        // `u24` data-slot operand carried little-endian across bytes one
+        // through three (V2). The compiler validates the slot fits in
+        // twenty-four bits, so byte three's contribution is never lost.
+        Op::GetData(v) | Op::SetData(v) => {
+            let b = v.to_le_bytes();
+            [b[0], b[1], b[2]]
         }
 
         // `(u16, u8)` operand carried inline: u16 little-endian in
@@ -745,7 +812,7 @@ pub fn encode_op(
             if idx >= MAX_POOL_ENTRIES {
                 return Err(WireFormatError::OperandPoolIndexOverflow);
             }
-            pool.push(OperandPoolEntry::from_u16_u16(*a, *b));
+            pool.push(OperandPoolEntry::from_u24_u24(*a, *b));
             let idx_bytes = (idx as u32).to_le_bytes();
             [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
         }
@@ -823,14 +890,14 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         0 => Op::Const(record.operand_u16()),
         1 => Op::GetLocal(record.operand_u16()),
         2 => Op::SetLocal(record.operand_u16()),
-        3 => Op::GetData(record.operand_u16()),
-        4 => Op::SetData(record.operand_u16()),
+        3 => Op::GetData(record.operand_u24()),
+        4 => Op::SetData(record.operand_u24()),
         5 => {
-            let (a, b) = decode_pool_u16_u16(record, pool)?;
+            let (a, b) = decode_pool_u24_u24(record, pool)?;
             Op::GetDataIndexed(a, b)
         }
         6 => {
-            let (a, b) = decode_pool_u16_u16(record, pool)?;
+            let (a, b) = decode_pool_u24_u24(record, pool)?;
             Op::SetDataIndexed(a, b)
         }
         7 => Op::BoundsCheck(record.operand_u16()),
@@ -1016,25 +1083,26 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
     Ok(op)
 }
 
-/// Helper: fetch a `(u16, u16)` operand pool entry, validating
-/// the index, the parity, and the type tag.
-fn decode_pool_u16_u16(
+/// Helper: fetch a `(u24, u24)` operand pool entry, validating the
+/// index, the parity, and the type tag. Used by `GetDataIndexed` and
+/// `SetDataIndexed` (V2).
+fn decode_pool_u24_u24(
     record: OpcodeRecord,
     pool: &[OperandPoolEntry],
-) -> Result<(u16, u16), WireFormatError> {
+) -> Result<(u32, u32), WireFormatError> {
     let idx = record.operand_pool_index() as usize;
     let entry = pool
         .get(idx)
         .copied()
         .ok_or(WireFormatError::OperandPoolIndexOutOfBounds(idx))?;
     entry.check_parity()?;
-    if entry.tag() != POOL_TAG_U16_U16 {
+    if entry.tag() != POOL_TAG_U24_U24 {
         return Err(WireFormatError::OperandPoolTagMismatch {
             observed: entry.tag(),
-            expected: POOL_TAG_U16_U16,
+            expected: POOL_TAG_U24_U24,
         });
     }
-    Ok(entry.as_u16_u16())
+    Ok(entry.as_u24_u24())
 }
 
 /// Helper: fetch the `(offset, size)` of a nested composite access from
@@ -1136,6 +1204,11 @@ pub fn parse_signature_metadata(
             WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES,
         )));
     }
+    // The precondition above is the caller's, and this function is public, so
+    // a buffer shorter than the declared header is refused rather than indexed.
+    if bytes.len() < header_length {
+        return Err(LoadError::Truncated);
+    }
     let scheme_id = bytes[64];
     let reserved_byte = bytes[65];
     let signature_length = u16::from_le_bytes([bytes[66], bytes[67]]) as usize;
@@ -1203,10 +1276,17 @@ pub fn parse_signature_metadata(
 const WIRE_FORMAT_CRC32_RESIDUE: u32 = 0x2144DF1C;
 
 /// Wire-format chunk metadata. Mirrors [`Chunk`] but moves the
-/// `ops` vector out of the rkyv-archived body and into the
-/// opcode stream section. Carries the byte offset and record
-/// count needed to recover the chunk's opcode sequence from the
+/// `ops` vector out of the auxiliary body and into the opcode
+/// stream section. Carries the byte offset and record count
+/// needed to recover the chunk's opcode sequence from the
 /// section-partitioned body.
+///
+/// The `Archive`/`Serialize`/`Deserialize` derives below are
+/// VESTIGIAL as of wire format v2: nothing in this module calls
+/// rkyv, and the auxiliary body is built and read by the schema
+/// layer. Recorded rather than removed because the derives sit on
+/// a public type; see
+/// `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md`.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct WireChunk {
     /// Function name; matches `Chunk::name`.
@@ -1326,7 +1406,9 @@ pub struct WireSections<'a> {
     /// Bytes of the operand pool section. Length is a multiple
     /// of [`OPERAND_POOL_ENTRY_BYTES`].
     pub operand_pool: &'a [u8],
-    /// Bytes of the rkyv-archived auxiliary body.
+    /// Bytes of the auxiliary body. Wire format v2: a
+    /// word-oriented container, byte-addressed, NOT an rkyv
+    /// archive.
     pub aux_body: &'a [u8],
 }
 
@@ -1356,10 +1438,11 @@ pub struct HeaderFields {
 /// Parse a framed V0.2.0 wire-format buffer and return slices
 /// for the three body sections. Validates the framing header
 /// (magic, version, header length, total length), the CRC-32
-/// residue, and the section bounds. Does not deserialize the
-/// auxiliary body; callers feed `aux_body` to
-/// `rkyv::access::<ArchivedWireAuxBody, _>` or to
-/// `rkyv::from_bytes::<WireAuxBody, _>`.
+/// residue, and the section bounds. Does not decode the auxiliary
+/// body. Callers feed `aux_body` either to
+/// [`crate::wire_schema::AuxOffsets::resolve`] for a borrowed,
+/// resolve-once read surface, or to
+/// [`crate::wire_schema::decode_aux_body`] for an owned decode.
 ///
 /// The returned slices borrow from the input. Used by both
 /// [`module_from_wire_bytes`] and the VM's zero-copy view path.
@@ -1456,7 +1539,7 @@ pub fn parse_wire_sections(bytes: &[u8]) -> Result<WireSections<'_>, LoadError> 
 
 /// Read header-mirrored target widths and declared WCET / WCMU
 /// fields from a framed V0.2.0 wire-format buffer. Used by
-/// [`crate::bytecode::Module::access_bytes`] (and the VM's
+/// [`crate::bytecode::Module::validate_bytes`] (and the VM's
 /// zero-copy path) to surface the fast-path metadata without
 /// deserializing the auxiliary body.
 pub fn read_header_fields(bytes: &[u8]) -> Result<HeaderFields, LoadError> {
@@ -1525,8 +1608,8 @@ pub fn decode_op_stream(
 }
 
 /// Encode a [`Module`] into the V0.2.0 wire format: 64-byte
-/// framing header, opcode stream, operand pool, rkyv-archived
-/// auxiliary body, 4-byte CRC-32 trailer.
+/// framing header, opcode stream, operand pool, auxiliary body,
+/// 4-byte CRC-32 trailer.
 ///
 /// The opcode stream packs every chunk's opcodes as 4-byte
 /// records in chunk declaration order. The auxiliary body's
@@ -1581,7 +1664,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
         private_data_bytes: module.private_data_bytes,
         schema_hash: module.schema_hash,
     };
-    let aux_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&aux)
+    let aux_bytes = crate::wire_schema::encode_aux_body(&aux)
         .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
 
     // Flatten operand pool to bytes.
@@ -1637,8 +1720,21 @@ fn assemble_wire_bytes(
     // Compute section offsets. The opcode stream begins
     // immediately after the framing header. Each section is then
     // padded to an 8-byte boundary so the next section starts
-    // aligned. The aux body is rkyv-archived and requires 8-byte
-    // alignment for in-place access.
+    // aligned.
+    //
+    // CORRECTED 2026-09-27. This said the aux body "is
+    // rkyv-archived and requires 8-byte alignment for in-place
+    // access". Wire format v2 replaced that body, and
+    // `Module::validate_bytes` documents the opposite in as many
+    // words: "No alignment requirement. The wire format v2
+    // auxiliary body is byte-addressed." A host implementer
+    // reading the old comment would provision alignment the
+    // public contract calls unnecessary.
+    //
+    // The PADDING ITSELF IS RETAINED and is what the code below
+    // does; only its stated justification was stale. Whether it is
+    // still needed is a separate question, unanswered here, and
+    // changing it would change the wire format.
     let opcode_stream_offset = header_length as u32;
     let opcode_stream_length = opcode_stream.len() as u32;
     let mut after_opcodes = opcode_stream_offset + opcode_stream_length;
@@ -1745,8 +1841,64 @@ pub fn module_to_signed_wire_bytes(
     module: &Module,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<Vec<u8>, LoadError> {
-    use ed25519_dalek::Signer;
+    module_to_signed_wire_bytes_opt(module, signing_key, false)
+}
 
+#[cfg(feature = "signatures")]
+/// Signs a module whose auxiliary body carries a (72,64) SECDED parity plane
+/// per region.
+///
+/// # Why both exist, and why the plane is inside the signature
+///
+/// A parity plane repairs a flipped bit; a signature refuses a changed byte.
+/// Composing them has a right order, and the plane being **inside** the signed
+/// span is what makes the right order available: a repair reproduces the
+/// original bytes exactly, so the signature computed over those bytes verifies
+/// against the repaired artifact.
+///
+/// **The repair must precede the verification, and every later repair must be
+/// followed by a fresh verification.** A signature check is a statement about
+/// the bytes at the moment it ran, and a scrub is a modification. See
+/// [`crate::wire_schema::SchemaBuilder::with_ecc`] and
+/// `docs/decisions/ECC_SIGNATURE_ORDERING.md`.
+///
+/// # Errors
+///
+/// As [`module_to_signed_wire_bytes`].
+pub fn module_to_signed_wire_bytes_with_ecc(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<Vec<u8>, LoadError> {
+    module_to_signed_wire_bytes_opt(module, signing_key, true)
+}
+
+/// The three body sections of a signed module, before framing.
+///
+/// Produced by [`signing_sections`]. The signed encoders frame these, and the
+/// self-hosted cryptographic framing (Order 5) frames the same bytes, so the two
+/// differ only in the framing under comparison.
+#[cfg(feature = "signatures")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningSections {
+    /// The opcode stream.
+    pub opcodes: Vec<u8>,
+    /// The operand pool.
+    pub operands: Vec<u8>,
+    /// The auxiliary body, whose flags carry `FLAG_REQUIRES_SIGNATURE`, with a
+    /// parity plane per region when requested.
+    pub auxiliary: Vec<u8>,
+}
+
+/// Encode the body sections a signed module carries. The auxiliary body records
+/// the module's flags with `FLAG_REQUIRES_SIGNATURE` set, as the signed header
+/// does. With `ecc` each auxiliary region carries a (72,64) SECDED parity plane.
+///
+/// # Errors
+///
+/// `LoadError::Codec` when an instruction or the auxiliary body cannot be
+/// encoded.
+#[cfg(feature = "signatures")]
+pub fn signing_sections(module: &Module, ecc: bool) -> Result<SigningSections, LoadError> {
     // Re-run the per-chunk encoding so we have the opcode stream,
     // operand pool, and aux body bytes to hand to the shared
     // assembler. This is a small duplication of `module_to_wire_bytes`
@@ -1793,20 +1945,40 @@ pub fn module_to_signed_wire_bytes(
         private_data_bytes: module.private_data_bytes,
         schema_hash: module.schema_hash,
     };
-    let aux_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&aux)
-        .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
+    let aux_bytes = if ecc {
+        crate::wire_schema::encode_aux_body_with_ecc(&aux)
+    } else {
+        crate::wire_schema::encode_aux_body(&aux)
+    }
+    .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
     let mut operand_pool_bytes: Vec<u8> =
         Vec::with_capacity(operand_pool.len() * OPERAND_POOL_ENTRY_BYTES);
     for entry in &operand_pool {
         operand_pool_bytes.extend_from_slice(&entry.0);
     }
+    Ok(SigningSections {
+        opcodes: opcode_stream,
+        operands: operand_pool_bytes,
+        auxiliary: aux_bytes,
+    })
+}
+
+#[cfg(feature = "signatures")]
+fn module_to_signed_wire_bytes_opt(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    ecc: bool,
+) -> Result<Vec<u8>, LoadError> {
+    use ed25519_dalek::Signer;
+
+    let sections = signing_sections(module, ecc)?;
 
     // Assemble with a zeroed signature payload.
     let mut buf = assemble_wire_bytes(
         module,
-        &opcode_stream,
-        &operand_pool_bytes,
-        &aux_bytes,
+        &sections.opcodes,
+        &sections.operands,
+        &sections.auxiliary,
         Some(SIGNATURE_SCHEME_ED25519),
     )?;
     let total_length = buf.len();
@@ -1858,7 +2030,12 @@ pub fn verify_module_signature(
     }
     let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
     let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    if total_length > bytes.len() {
+    // The declared total must hold the declared header and the trailer, as
+    // `module_from_wire_bytes` requires. Without the lower bound a header that
+    // declares a signed length over a shorter total indexed past the slice
+    // below, so an untrusted artifact panicked the host from
+    // `Vm::load_signed_bytes` instead of being refused.
+    if total_length > bytes.len() || total_length < header_length + WIRE_FORMAT_FOOTER_BYTES {
         return Err(LoadError::Truncated);
     }
     let bytes = &bytes[..total_length];
@@ -2148,6 +2325,13 @@ pub fn decrypt_encrypted_signed_to_signed_bytes(
     // and ensures the encryption metadata has not been tampered
     // with.
     verify_module_signature(bytes, verifying_keys)?;
+    // The verified region ends at the declared total, which the signature check has bounded
+    // by the buffer. Bytes appended after it are not part of the artifact, so the ciphertext
+    // ends there too, as the operator ruled first-hand on 2026-10-28. It used to run to the end
+    // of the buffer, so an encrypted artifact with trailing bytes failed authentication while
+    // the same signed artifact loaded.
+    let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    let bytes = &bytes[..total_length];
 
     // Step 3. Parse the encryption metadata.
     let encrypted_header_len = encrypted_signed_header_length();
@@ -2245,9 +2429,9 @@ fn patch_section_offsets_subtract(buf: &mut [u8], shift: usize) {
 ///
 /// Validates the framing header, the CRC residue, and the
 /// declared section offsets/lengths. Reads the opcode stream
-/// and operand pool, deserializes the rkyv-archived auxiliary
-/// body, and reconstructs each chunk's `ops` from its byte
-/// offset and record count.
+/// and operand pool, decodes the auxiliary body through the
+/// wire format v2 schema layer, and reconstructs each chunk's
+/// `ops` from its byte offset and record count.
 ///
 /// V0.2.0 Phase 7b ships this function as a parallel route to
 /// [`Module::from_bytes`]; the cutover is Phase 7c.
@@ -2397,25 +2581,14 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         });
     }
 
-    // Deserialize the auxiliary body. `rkyv::from_bytes` calls
-    // `rkyv::access` internally which validates the archive in
-    // place; the validation requires the buffer to be aligned to
-    // `align_of::<ArchivedWireAuxBody>()` (8 bytes). The
-    // `aux_body_bytes` subslice inherits the input buffer's
-    // alignment, which is not guaranteed for `include_bytes!`
-    // payloads, file reads, or arbitrary host-supplied byte
-    // sources. Copy into an 8-byte-aligned scratch buffer so the
-    // archive validation observes the required alignment on every
-    // target architecture. The legacy `Module::from_bytes` path
-    // (pre V0.2.0 Phase 7c) used the same pattern; the cutover
-    // dropped the copy step, which produced an unaligned decode
-    // on 32-bit targets where the input buffer happens to land at
-    // a 4-byte boundary.
-    let mut aligned: rkyv::util::AlignedVec<8> =
-        rkyv::util::AlignedVec::with_capacity(aux_body_bytes.len());
-    aligned.extend_from_slice(aux_body_bytes);
-    let aux = rkyv::from_bytes::<WireAuxBody, rkyv::rancor::Error>(&aligned)
-        .map_err(|e| LoadError::Codec(format!("aux body decode failed: {}", e)))?;
+    // Decode the auxiliary body. The v2 format is byte-addressed and
+    // imposes no alignment requirement, so the 8-byte-aligned scratch
+    // copy the rkyv path needed is gone -- with it the class of bug
+    // that copy existed to prevent, an unaligned decode on a 32-bit
+    // target where the input buffer happened to land at a 4-byte
+    // boundary. Decoding reads the slice where it lies.
+    let aux = crate::wire_schema::decode_aux_body(aux_body_bytes)
+        .map_err(|e| LoadError::Codec(format!("aux body decode failed: {:?}", e)))?;
 
     // Cross-check header-mirrored fields against the auxiliary
     // body. The header is the fast-path view; the aux body is
@@ -2512,6 +2685,98 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
     })
 }
 
+/// Repairs a framed module's auxiliary body in place, on the caller's schedule.
+///
+/// This is the **scrub** verb at the module level. It locates the auxiliary body
+/// from the framing header and hands it to [`keleusma_wire::scrub`], which is
+/// the step a caller must not get wrong by hand: the wire container is the
+/// auxiliary body ALONE, and passing the whole framed buffer makes the container
+/// parse fail on its magic and the scrub silently repair nothing.
+///
+/// Returns `None` when the module carries no parity plane, which is the default,
+/// and is deliberately distinguished from a clean scrub of a protected module.
+///
+/// # The caller schedules this, and the caller must re-authenticate afterwards
+///
+/// Scrubbing is a maintenance operation and its schedule is the host's. What is
+/// **not** the host's choice is what follows it: **a repair must be followed by
+/// a fresh verification**, because a signature check describes the bytes at the
+/// moment it ran and a scrub modifies them. For a signed module,
+/// `scrub_and_verify_signed` (gated behind the `signatures` feature) performs
+/// the pair in the sound order and is the
+/// call to prefer.
+///
+/// The reason is measured rather than cautionary. A (72,64) code reports
+/// **23,364 of 41,664 triple-bit fault patterns as a successful repair while
+/// producing the wrong word**, so a caller that trusted the returned report and
+/// skipped re-verification would run bytes no publisher signed.
+///
+/// # Errors
+///
+/// Returns `None` rather than an error for a module that is unprotected, too
+/// short, or whose header does not describe a well-formed auxiliary body. This
+/// function repairs or does nothing; it is not a validator.
+pub fn scrub_module_bytes(bytes: &mut [u8]) -> Option<keleusma_wire::EccReport> {
+    if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
+        return None;
+    }
+    if bytes[0..4] != BYTECODE_MAGIC {
+        return None;
+    }
+    let start = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+    let len = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+    let end = start.checked_add(len)?;
+    if len == 0 || end > bytes.len() {
+        return None;
+    }
+    keleusma_wire::scrub(&mut bytes[start..end])
+}
+
+/// Scrubs a signed module and then verifies it, which is the sound order.
+///
+/// # Why this exists
+///
+/// The two orders a scrub and a signature check can compose in are
+/// indistinguishable on every undamaged module and differ only on damaged input,
+/// which is the case the parity plane exists for. Getting them the wrong way
+/// round leaves the scrub's writes unauthenticated.
+///
+/// **This function makes the sound order the convenient one.** It repairs, then
+/// verifies what the repair produced, and returns the report only if
+/// verification passed. A caller cannot obtain the report and skip the check,
+/// because there is no path through this function that returns one without
+/// having verified.
+///
+/// # What each outcome means
+///
+/// - `Ok(report)` with `report.is_clean()`: the module was undamaged and
+///   verified.
+/// - `Ok(report)` with `report.corrected > 0`: the module had taken repairable
+///   damage, the repair reproduced the publisher's bytes exactly, and the
+///   signature confirms it. **The buffer has been rewritten** and should be
+///   written back to storage so the margin is restored before a second fault
+///   lands in a word that already carries one.
+/// - `Err(_)`: the module is not the one that was signed. This covers damage the
+///   code could not repair, damage it repaired WRONGLY, and ordinary tampering,
+///   and it does not distinguish them, because none of them may be loaded.
+///
+/// That last case is the one the design turns on. The corrector reports success
+/// on inputs outside its guarantee, and the signature is what refuses them.
+///
+/// # Errors
+///
+/// [`LoadError`] when the module is unsigned, malformed, or fails verification
+/// against every supplied key.
+#[cfg(feature = "signatures")]
+pub fn scrub_and_verify_signed(
+    bytes: &mut [u8],
+    keys: &[ed25519_dalek::VerifyingKey],
+) -> Result<keleusma_wire::EccReport, LoadError> {
+    let report = scrub_module_bytes(bytes).unwrap_or_default();
+    verify_module_signature(bytes, keys)?;
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2522,6 +2787,26 @@ mod tests {
         record.check_parity().expect("parity");
         let decoded = decode_op(record, &pool).expect("decode");
         assert_eq!(op, decoded);
+    }
+
+    // The twenty-four-bit data operands round-trip at values above the old
+    // sixteen-bit ceiling: `GetData`/`SetData` inline across three bytes and
+    // `GetDataIndexed`/`SetDataIndexed` through the `(u24, u24)` pool entry.
+    #[test]
+    fn data_ops_roundtrip_beyond_16_bits() {
+        for op in [
+            Op::GetData(0),
+            Op::GetData(65_535),
+            Op::GetData(65_536),
+            Op::GetData(1_000_000),
+            Op::GetData((1 << 24) - 1),
+            Op::SetData((1 << 24) - 1),
+            Op::GetDataIndexed(65_536, 70_000),
+            Op::GetDataIndexed((1 << 24) - 1, (1 << 24) - 1),
+            Op::SetDataIndexed(1_000_000, 2_000_000),
+        ] {
+            roundtrip(op);
+        }
     }
 
     #[test]
@@ -2866,11 +3151,11 @@ mod tests {
 
     #[test]
     fn pool_tag_mismatch_surfaces_error() {
-        // A pool entry tagged for (u16, u16) cannot satisfy an
+        // A pool entry tagged for (u24, u24) cannot satisfy an
         // opcode that wants (u16, u16, u8). Hand-craft the
         // mismatch and confirm the decoder rejects.
         let mut pool: Vec<OperandPoolEntry> = Vec::new();
-        // First, encode something that uses the (u16, u16) shape.
+        // First, encode something that uses the (u24, u24) shape.
         let _record = encode_op(&Op::GetDataIndexed(1, 2), &mut pool).expect("encode");
         // Manufacture a NewEnum record that references the same
         // (mismatched) entry.
@@ -2889,7 +3174,7 @@ mod tests {
         assert_eq!(
             result,
             Err(WireFormatError::OperandPoolTagMismatch {
-                observed: POOL_TAG_U16_U16,
+                observed: POOL_TAG_U24_U24,
                 expected: POOL_TAG_U16_U16_U8,
             }),
         );

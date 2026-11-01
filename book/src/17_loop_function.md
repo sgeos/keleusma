@@ -12,6 +12,7 @@ A `yield` function pauses and resumes, but in the end it finishes. A
 goes on as long as the host keeps it running: an audio engine, a game, a
 control loop. It runs, and runs, and runs.
 
+<!-- verify: compile -->
 ```
 loop main(input: Word) -> Word {
     let _ = yield input;
@@ -78,8 +79,10 @@ The same program can be compiled to a bytecode file for later execution:
 keleusma compile pulse.kel -o pulse.bin
 ```
 
-The tool prints `wrote pulse.bin (2372 bytes)` confirming the program is
-valid. Part VIII runs a more elaborate `loop` program, a song, inside
+The tool prints a line naming the file it wrote and that file's size,
+confirming the program is valid. The size is not a fixed property of the
+program; it moves whenever the bytecode format or the compiler's output
+changes, so this guide does not quote it. Part VIII runs a more elaborate `loop` program, a song, inside
 the piano roll.
 
 ## What you now know

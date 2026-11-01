@@ -1,0 +1,36 @@
+Ordering is not a completion criterion. Any order that leaves the tree in
+the state below is complete.
+
+1. Every arithmetic operation that produces a floating-point value
+   narrows its result to the width the loaded module's header declares.
+   No site that produces such a value is exempt.
+
+2. This holds in a build with no width-selecting features enabled. The
+   behaviour follows the module's declared width, not the build's
+   configuration, so a stock build loading a module that declares a
+   narrower float computes at that narrower width.
+
+3. A value that passes through a composite field and a value that stays
+   on the operand stack agree. The same expression does not yield two
+   answers depending on whether an intermediate was stored.
+
+4. A test exercises the arithmetic at a declared width NARROWER than the
+   runtime's and would fail if any single producing site were left
+   un-narrowed. A suite that passes only at equal widths does not
+   satisfy this, because narrowing is the identity there.
+
+5. Narrowing goes directly from the computed wide value to the declared
+   width, never through an intermediate format.
+
+6. No public type alias changes its floating-point parameter as a result
+   of this work.
+
+7. Any rung of the width ladder that is not implemented is recorded as
+   unimplemented, naming what it needs, rather than silently behaving as
+   a wider one.
+
+8. Every statement about what passes names the feature set and the
+   target selection measured. No result from one configuration is
+   reported as a conclusion about another.
+
+9. The full release gate passes.

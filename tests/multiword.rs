@@ -255,6 +255,11 @@ fn multiword_cast_rejects_wrong_tuple_arity() {
 }
 
 #[test]
+// The probe source carries a float literal, which the LEXER refuses without the
+// `floats` feature, so this test cannot run there. It failed rather than skipping
+// because nothing built this configuration: the release gate's no-default step does
+// not add `compile,verify`.
+#[cfg(feature = "floats")]
 fn multiword_cast_rejects_non_word_element() {
     // A Float element cannot pack into a Multiword word.
     assert!(compile_fails(

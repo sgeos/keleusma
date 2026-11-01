@@ -1,0 +1,921 @@
+// src/hosted/interp.kel -- the hosted runtime, a bytecode interpreter for Keleusma written in
+// Keleusma (Order 4, roadmap Workstream D). See docs/decisions/ORDER4_HOSTED_RUNTIME_PLAN.md.
+//
+// The host decodes a verified module and marshals it into the `io` tables below. This program
+// executes it. Each resume runs one TICK of at most `FUEL` interpreted instructions and yields a
+// status, so the per-tick time and memory bounds of this program are constants, by the operator
+// ruling of 2026-10-25 on bound composition. A tick ends early when the interpreted program
+// finishes, traps, or the interpreter faults.
+//
+// The resume value is a command. 1 starts the interpreted entry chunk with the marshalled
+// arguments. 2 runs one tick. 3 resumes an interpreted yield or reset with the input in
+// `io.res_t` and `io.res_w` and runs one tick. The yielded status is 0 running, 1 finished,
+// 2 yielded, 3 trapped, 4 faulted and 5 reset.
+//
+// A value is a tag and a word. The tags are 0 Unit, 1 Word, 2 Bool, 3 Byte and 4 None. A Bool
+// word is 0 or 1. A Byte word is in [0, 255]. A flat composite is tag 5 tuple, 6 array, 7 struct
+// or 8 enum, which is 5 plus the composite kind, with its word the byte offset of its body in
+// `io.heap` and its size in the parallel `vs` array. Bodies are never written after they are
+// built, so a nested field or element is a view into its parent, an offset and a size, and
+// needs no copy. Tag 9 is a string constant, which the first pass carries only as the inert name
+// operand of `IsEnum`. A scalar kind code inside a composite read is the scalar's tag.
+//
+// The heap holds one byte per Word, in [0, 255]. The host writes composite arguments below
+// `io.hp0` and reads a composite result from it.
+//
+// A FAULT is a state the host's admission should have made unreachable: an instruction form
+// outside the supported set, an operand of an unexpected tag, a capacity exceeded. It is
+// reported as status 4 with a code in `io.out_fault` rather than as a trap, because it is a
+// defect in admission or in this interpreter, never a behaviour of the interpreted program.
+// The codes are 1 operand stack full, 2 operand stack empty, 3 frame stack full, 4 unsupported
+// instruction, 5 operand tag, 6 instruction pointer past the chunk, 7 constant index, 8 local
+// index, 9 started without a valid entry, 10 heap full, 11 composite read outside its body.
+//
+// Every indexed write below is guarded by an explicit capacity test, so a fault never becomes
+// an index trap of this program.
+require word >= 64;
+
+// The marshalled module, the arguments and the outputs. The instruction tables are indexed by
+// a chunk's start plus its instruction pointer. Each instruction is a tag and up to three
+// operands. The tags are listed at `step`.
+shared data io {
+    n_chunks: Word,
+    entry: Word,
+    nargs: Word,
+    op_t: [Word; 4096],
+    op_a: [Word; 4096],
+    op_b: [Word; 4096],
+    op_c: [Word; 4096],
+    k_count: Word,
+    k_t: [Word; 512],
+    k_w: [Word; 512],
+    ch_start: [Word; 64],
+    ch_len: [Word; 64],
+    ch_locals: [Word; 64],
+    ch_params: [Word; 64],
+    ch_stream: [Word; 64],
+    res_t: Word,
+    res_w: Word,
+    iter_steps: Word,
+    max_iter: Word,
+    arg_t: [Word; 16],
+    arg_w: [Word; 16],
+    arg_sz: [Word; 16],
+    hp0: Word,
+    heap: [Word; 2048],
+    d_count: Word,
+    d_t: [Word; 256],
+    d_w: [Word; 256],
+    out_t: Word,
+    out_w: Word,
+    out_sz: Word,
+    out_kind: Word,
+    out_index: Word,
+    out_bound: Word,
+    out_fault: Word,
+    steps: Word,
+}
+
+// The interpreter state, which persists across ticks. `vt` and `vw` are the operand stack.
+// The frame stack holds each frame's chunk, instruction pointer and operand-stack base, at
+// which the frame's locals begin, as in the Rust virtual machine.
+private data st {
+    status: Word,
+    sp: Word,
+    fp: Word,
+    hp: Word,
+    acc: Word,
+    off: Word,
+    vt: [Word; 512],
+    vw: [Word; 512],
+    vs: [Word; 512],
+    dt: [Word; 256],
+    dw: [Word; 256],
+    ds: [Word; 256],
+    f_chunk: [Word; 64],
+    f_ip: [Word; 64],
+    f_base: [Word; 64],
+}
+
+fn stack_cap() -> Word { 512 }
+fn heap_cap() -> Word { 2048 }
+fn frame_cap() -> Word { 64 }
+
+// Latch a fault. The first fault wins, so the reported code names the first failure.
+fn fault(code: Word) -> Word {
+    if st.status == 0 {
+        st.status = 4;
+        io.out_fault = code;
+    }
+    0
+}
+
+// Push a value with its composite size, zero for a scalar. A full stack faults instead of
+// writing.
+fn push_sized(t: Word, w: Word, sz: Word) -> Word {
+    if st.sp < stack_cap() {
+        st.vt[st.sp] = t;
+        st.vw[st.sp] = w;
+        st.vs[st.sp] = sz;
+        st.sp = st.sp + 1;
+        0
+    } else {
+        fault(1)
+    }
+}
+
+// Push a scalar.
+fn push(t: Word, w: Word) -> Word {
+    push_sized(t, w, 0)
+}
+
+// Push a copy of the value in slot `i`.
+fn push_slot(i: Word) -> Word {
+    push_sized(st.vt[i], st.vw[i], st.vs[i])
+}
+
+fn is_composite(t: Word) -> bool {
+    t >= 5 andalso t <= 8
+}
+
+// Pop a value and return the slot it occupied, which stays readable until the next push. An
+// empty stack faults and returns slot 0, whose contents are then ignored.
+fn pop() -> Word {
+    if st.sp > 0 {
+        st.sp = st.sp - 1;
+        st.sp
+    } else {
+        fault(2)
+    }
+}
+
+// Push the three outputs of a checked operation, bottom to top, as the Rust virtual machine
+// does: the low half, the high half and the outcome flag.
+fn push3(lt: Word, lo: Word, ht: Word, hi: Word, fl: Word) -> Word {
+    push(lt, lo);
+    push(ht, hi);
+    push(1, fl)
+}
+
+// The high half of an in-range result, which is the sign extension of the low half.
+fn sext(v: Word) -> Word {
+    if v < 0 { 0 - 1 } else { 0 }
+}
+
+fn b2w(b: bool) -> Word {
+    if b { 1 } else { 0 }
+}
+
+// The base of the running frame's locals.
+fn frame_base() -> Word {
+    st.f_base[st.fp - 1]
+}
+
+fn jump(target: Word) -> Word {
+    st.f_ip[st.fp - 1] = target;
+    0
+}
+
+// Start the entry chunk with the marshalled arguments. The locals beyond the arguments start
+// as Unit, as the Rust virtual machine's call does.
+fn start() -> Word {
+    st.status = 0;
+    st.sp = 0;
+    st.fp = 0;
+    io.out_fault = 0;
+    io.steps = 0;
+    io.iter_steps = 0;
+    io.max_iter = 0;
+    let e = io.entry;
+    if e < 0 orelse e >= io.n_chunks orelse e >= frame_cap() orelse io.nargs > io.ch_locals[e]
+        orelse io.d_count < 0 orelse io.d_count > data_cap() {
+        fault(9)
+    } else {
+        st.hp = io.hp0;
+        for d in 0..256 limit 256 {
+            if d < io.d_count {
+                st.dt[d] = io.d_t[d];
+                st.dw[d] = io.d_w[d];
+                st.ds[d] = 0;
+            }
+        }
+        for i in 0..16 limit 16 {
+            if i < io.nargs { push_sized(io.arg_t[i], io.arg_w[i], io.arg_sz[i]); }
+        }
+        for i in 0..512 limit 512 {
+            if i >= io.nargs andalso i < io.ch_locals[e] { push(0, 0); }
+        }
+        st.f_chunk[0] = e;
+        st.f_ip[0] = 0;
+        st.f_base[0] = 0;
+        st.fp = 1;
+        0
+    }
+}
+
+fn op_const(idx: Word) -> Word {
+    if idx >= 0 andalso idx < io.k_count {
+        push(io.k_t[idx], io.k_w[idx])
+    } else {
+        fault(7)
+    }
+}
+
+fn op_get_local(n: Word) -> Word {
+    let slot = frame_base() + n;
+    if slot >= 0 andalso slot < st.sp {
+        push_slot(slot)
+    } else {
+        fault(8)
+    }
+}
+
+fn op_set_local(n: Word) -> Word {
+    let i = pop();
+    let slot = frame_base() + n;
+    if st.status == 0 andalso slot >= 0 andalso slot < st.sp {
+        st.vt[slot] = st.vt[i];
+        st.vw[slot] = st.vw[i];
+        st.vs[slot] = st.vs[i];
+        0
+    } else {
+        fault(8)
+    }
+}
+
+fn op_pop_n(n: Word) -> Word {
+    if n >= 0 andalso n <= st.sp {
+        st.sp = st.sp - n;
+        0
+    } else {
+        fault(2)
+    }
+}
+
+fn op_dup() -> Word {
+    if st.sp > 0 {
+        push_slot(st.sp - 1)
+    } else {
+        fault(2)
+    }
+}
+
+// `PushImmediate`: 0 Unit, 1 true, 2 false, 3 None, and 4 to 19 the Words 0 to 15.
+fn op_push_immediate(v: Word) -> Word {
+    if v == 0 { push(0, 0) } else {
+    if v == 1 { push(2, 1) } else {
+    if v == 2 { push(2, 0) } else {
+    if v == 3 { push(4, 0) } else {
+    if v >= 4 andalso v <= 19 { push(1, v - 4) } else { fault(4) } } } } }
+}
+
+// `If` falls through on true and jumps on false. `BreakIf` jumps on true.
+fn op_branch(target: Word, jump_on: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 2 { fault(5) } else {
+            if st.vw[i] == jump_on { jump(target) } else { 0 }
+        }
+    }
+}
+
+// Return pops the result, drops the frame and its locals, and pushes the result for the
+// caller. Returning from the entry frame finishes the program.
+fn op_return() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let t = st.vt[i];
+        let w = st.vw[i];
+        let z = st.vs[i];
+        st.sp = frame_base();
+        st.fp = st.fp - 1;
+        if st.fp == 0 {
+            io.out_t = t;
+            io.out_w = w;
+            io.out_sz = z;
+            st.status = 1;
+            0
+        } else {
+            push_sized(t, w, z)
+        }
+    }
+}
+
+fn op_not() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] == 2 { push(2, 1 - st.vw[i]) } else { fault(5) }
+    }
+}
+
+// Equality compares tag and word, which is the Rust virtual machine's structural equality on
+// the scalar values this interpreter holds. `ne` selects the negation.
+fn op_eq(ne: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        // The compiler compares composites field by field, and the Rust virtual machine
+        // refuses a flat composite reaching `CmpEq`, so one here is a fault.
+        if is_composite(st.vt[i]) orelse is_composite(st.vt[j]) orelse st.vt[i] == 9 { fault(5) } else {
+            let eq = st.vt[i] == st.vt[j] andalso st.vw[i] == st.vw[j];
+            push(2, b2w(eq) bxor ne)
+        }
+    }
+}
+
+// Ordering over two Words or two Bytes. `rel` is 0 less, 1 greater, 2 less or equal and 3
+// greater or equal.
+fn op_order(rel: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let t = st.vt[i];
+        if t != st.vt[j] orelse (t != 1 andalso t != 3) { fault(5) } else {
+            let x = st.vw[i];
+            let y = st.vw[j];
+            let r = if rel == 0 { x < y } else { if rel == 1 { x > y } else {
+                if rel == 2 { x <= y } else { x >= y } } };
+            push(2, b2w(r))
+        }
+    }
+}
+
+// The checked Word operations use the language's own checked-arithmetic construct, whose
+// overflow and underflow arms bind the true result's high and low halves. An in-range result's
+// high half is its sign extension, as the Rust virtual machine computes it in i128.
+fn checked_add_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x + y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        underflow(h, l) => (l, h, 2),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+fn checked_sub_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x - y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        underflow(h, l) => (l, h, 2),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+fn checked_mul_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x * y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        underflow(h, l) => (l, h, 2),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+// Division and modulo by zero push the numerator, a zero high half and flag 3. The one
+// overflowing quotient is the minimum Word divided by minus one.
+fn checked_div_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x / y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        zero_divisor(n) => (n, 0, 3),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+fn checked_mod_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x % y {
+        ok(v) => (v, sext(v), 0),
+        zero_divisor(n) => (n, 0, 3),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+// The checked Byte operations are unsigned. The low half is the wrapped Byte, the high half a
+// zero Byte, and the flag 1 above 255 or 2 below zero.
+fn checked_byte(r: Word) -> Word {
+    let fl = if r > 255 { 1 } else { if r < 0 { 2 } else { 0 } };
+    push3(3, r band 255, 3, 0, fl)
+}
+
+// The binary checked operations. `which` is 0 add, 1 sub, 2 mul, 3 div and 4 mod.
+fn op_checked(which: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let t = st.vt[i];
+        let x = st.vw[i];
+        let y = st.vw[j];
+        if t != st.vt[j] { fault(5) } else {
+            if t == 1 {
+                if which == 0 { checked_add_word(x, y) } else {
+                if which == 1 { checked_sub_word(x, y) } else {
+                if which == 2 { checked_mul_word(x, y) } else {
+                if which == 3 { checked_div_word(x, y) } else { checked_mod_word(x, y) } } } }
+            } else {
+                if t == 3 andalso which <= 2 {
+                    if which == 0 { checked_byte(x + y) } else {
+                    if which == 1 { checked_byte(x - y) } else { checked_byte(x * y) } }
+                } else { fault(5) }
+            }
+        }
+    }
+}
+
+// Negation is the subtraction from zero, whose true result is the same.
+fn op_checked_neg() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] == 1 { checked_sub_word(0, st.vw[i]) } else { fault(5) }
+    }
+}
+
+// The Word bitwise operations and shifts. `which` is 0 and, 1 or, 2 xor, 3 shift left and 4
+// arithmetic shift right. A shift amount is masked to the word width, as the Rust virtual
+// machine masks it.
+fn op_bits(which: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 1 orelse st.vt[j] != 1 { fault(5) } else {
+            let x = st.vw[i];
+            let y = st.vw[j];
+            let r = if which == 0 { x band y } else { if which == 1 { x bor y } else {
+                if which == 2 { x bxor y } else { if which == 3 { x lsl (y band 63) } else {
+                    x asr (y band 63) } } } };
+            push(1, r)
+        }
+    }
+}
+
+// The wrapping Byte operations `Add`, `Sub` and `Mul`, which the compiler emits only for Byte.
+// They compute on the widened words and keep the low eight bits. `which` is 0 add, 1 sub and 2
+// mul.
+fn op_byte_arith(which: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 3 orelse st.vt[j] != 3 { fault(5) } else {
+            let x = st.vw[i];
+            let y = st.vw[j];
+            let r = if which == 0 { x + y } else { if which == 1 { x - y } else { x * y } };
+            push(3, r band 255)
+        }
+    }
+}
+
+// `ByteToWord` and `WordToByte`. The narrowing keeps the low eight bits.
+fn op_convert(to_byte: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if to_byte == 1 {
+            if st.vt[i] == 1 { push(3, st.vw[i] band 255) } else { fault(5) }
+        } else {
+            if st.vt[i] == 3 { push(1, st.vw[i]) } else { fault(5) }
+        }
+    }
+}
+
+// A trap ends the program with its kind. The bounds trap, kind 8, first pops its payload: four
+// little-endian byte limbs of the bound, most significant on top, and then the index.
+fn op_trap(kind: Word) -> Word {
+    if kind == 8 {
+        let l3 = st.vw[pop()] band 255;
+        let l2 = st.vw[pop()] band 255;
+        let l1 = st.vw[pop()] band 255;
+        let l0 = st.vw[pop()] band 255;
+        let ix = st.vw[pop()];
+        io.out_bound = (l3 lsl 24) bor (l2 lsl 16) bor (l1 lsl 8) bor l0;
+        io.out_index = ix;
+    }
+    if st.status == 0 {
+        if kind >= 0 andalso kind <= 8 {
+            io.out_kind = kind;
+            st.status = 3;
+            0
+        } else { fault(4) }
+    } else { 0 }
+}
+
+// The byte width of a scalar kind code inside a flat body: Unit 0, Word 8, Bool 1 and Byte 1.
+// Any other code is not a flat scalar this interpreter reads, and is reported as -1.
+fn scalar_width(k: Word) -> Word {
+    if k == 0 { 0 } else { if k == 1 { 8 } else { if k == 2 orelse k == 3 { 1 } else { 0 - 1 } } }
+}
+
+// The packed width of the value in slot `i`, or -1 when it cannot be packed flat. The Rust
+// virtual machine boxes such a composite instead, which this interpreter does not model.
+fn packed_width(i: Word) -> Word {
+    let t = st.vt[i];
+    if is_composite(t) { st.vs[i] } else { if t <= 3 { scalar_width(t) } else { 0 - 1 } }
+}
+
+// Read the little-endian scalar of kind `k` at byte `at` of the heap. The caller has checked the
+// range. A Bool reads true for any nonzero byte, as the Rust virtual machine reads it.
+fn read_scalar(at: Word, k: Word) -> Word {
+    if k == 1 {
+        let lo = io.heap[at] bor (io.heap[at + 1] lsl 8) bor (io.heap[at + 2] lsl 16)
+            bor (io.heap[at + 3] lsl 24);
+        let hi = io.heap[at + 4] bor (io.heap[at + 5] lsl 8) bor (io.heap[at + 6] lsl 16)
+            bor (io.heap[at + 7] lsl 24);
+        lo bor (hi lsl 32)
+    } else {
+        if k == 2 { if io.heap[at] != 0 { 1 } else { 0 } } else {
+            if k == 3 { io.heap[at] } else { 0 } }
+    }
+}
+
+// Write the scalar `w` of kind `k` at byte `at` of the heap. The caller has checked the range.
+fn write_scalar(at: Word, k: Word, w: Word) -> Word {
+    if k == 1 {
+        for b in 0..8 limit 8 {
+            io.heap[at + b] = (w asr (8 * b)) band 255;
+        }
+        0
+    } else {
+        if k == 2 orelse k == 3 { io.heap[at] = w; 0 } else { 0 }
+    }
+}
+
+// The largest composite body, in bytes. Admission refuses a larger argument, and `heap_alloc`
+// refuses a larger construction, so every bounded copy below covers a whole body.
+fn body_cap() -> Word { 256 }
+
+// Copy `n` heap bytes from `from` to `to`.
+fn copy_bytes(from: Word, to: Word, n: Word) -> Word {
+    for b in 0..n limit 256 {
+        io.heap[to + b] = io.heap[from + b];
+    }
+    0
+}
+
+// Reserve `n` heap bytes and return their offset, or fault on a full heap.
+fn heap_alloc(n: Word) -> Word {
+    if n >= 0 andalso n <= body_cap() andalso st.hp + n <= heap_cap() {
+        let at = st.hp;
+        st.hp = st.hp + n;
+        at
+    } else {
+        fault(10)
+    }
+}
+
+// `NewComposite`: pop `count` values and pack them contiguously in order, padding a struct or an
+// enum to its baked size, as the Rust virtual machine's flat packer does. `kind` is the
+// composite kind, 0 tuple, 1 array, 2 struct and 3 enum. The running width and offset live in
+// `st.acc` and `st.off`, because the language has no mutable locals.
+fn op_new_composite(kind: Word, count: Word, byte_size: Word) -> Word {
+    if count < 0 orelse count > st.sp orelse count > 64 { fault(2) } else {
+        let base = st.sp - count;
+        st.acc = 0;
+        for k in 0..count limit 64 {
+            let pw = packed_width(base + k);
+            if pw < 0 { fault(5); } else { st.acc = st.acc + pw; }
+        }
+        let size = if (kind == 2 orelse kind == 3) andalso byte_size > st.acc { byte_size } else {
+            st.acc };
+        let at = heap_alloc(size);
+        if st.status != 0 { 0 } else {
+            st.off = at;
+            for k in 0..count limit 64 {
+                let i = base + k;
+                let t = st.vt[i];
+                if is_composite(t) {
+                    copy_bytes(st.vw[i], st.off, st.vs[i]);
+                    st.off = st.off + st.vs[i];
+                } else {
+                    write_scalar(st.off, t, st.vw[i]);
+                    st.off = st.off + scalar_width(t);
+                }
+            }
+            for z in 0..size limit 256 {
+                if at + z >= st.off { io.heap[at + z] = 0; }
+            }
+            st.sp = base;
+            push_sized(5 + kind, at, size)
+        }
+    }
+}
+
+// A flat scalar field read at `offset`, used for struct, tuple and enum fields.
+fn op_field(offset: Word, k: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let w = scalar_width(k);
+        if (not is_composite(st.vt[i])) orelse w < 0 { fault(5) } else {
+            if offset < 0 orelse offset + w > st.vs[i] { fault(11) } else {
+                push(k, read_scalar(st.vw[i] + offset, k))
+            }
+        }
+    }
+}
+
+// A nested composite field: a view of `size` bytes at `offset`, of composite kind `variant`.
+fn op_field_nested(offset: Word, size: Word, variant: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if not is_composite(st.vt[i]) { fault(5) } else {
+            if offset < 0 orelse size < 0 orelse offset + size > st.vs[i] { fault(11) } else {
+                push_sized(5 + variant, st.vw[i] + offset, size)
+            }
+        }
+    }
+}
+
+// Push the bounds outcome of an element read after its value, as the Rust virtual machine does:
+// the index, the four little-endian bytes of the bound each sign-extended from eight bits, and
+// the flag, 1 for an invalid index.
+fn push_index_tail(index: Word, bound: Word, invalid: Word) -> Word {
+    push(1, index);
+    push_bound_tail(bound, invalid)
+}
+
+// The four sign-extended bound bytes and the flag, without the index.
+fn push_bound_tail(bound: Word, invalid: Word) -> Word {
+    for b in 0..4 limit 4 {
+        let byte = (bound asr (8 * b)) band 255;
+        push(1, if byte >= 128 { byte - 256 } else { byte });
+    }
+    push(1, invalid)
+}
+
+// `BoundsCheck(bound)` keeps the Word index on top and pushes the bound tail after it.
+fn op_bounds_check(bound: Word) -> Word {
+    if st.sp == 0 { fault(2) } else {
+        let i = st.sp - 1;
+        if st.vt[i] != 1 { fault(5) } else {
+            let ix = st.vw[i];
+            push_bound_tail(bound, b2w(ix < 0 orelse ix >= bound))
+        }
+    }
+}
+
+// A flat scalar element read. An invalid index yields a typed zero.
+fn op_index(k: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let w = scalar_width(k);
+        if st.vt[i] != 6 orelse st.vt[j] != 1 orelse w <= 0 { fault(5) } else {
+            let ix = st.vw[j];
+            let len = st.vs[i] / w;
+            let invalid = ix < 0 orelse ix >= len;
+            if invalid { push(k, 0); } else { push(k, read_scalar(st.vw[i] + ix * w, k)); }
+            push_index_tail(ix, len, b2w(invalid))
+        }
+    }
+}
+
+// A nested element read. An invalid index yields a zero-filled placeholder of the element size.
+fn op_index_nested(size: Word, variant: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 6 orelse st.vt[j] != 1 orelse size <= 0 { fault(5) } else {
+            let ix = st.vw[j];
+            let len = st.vs[i] / size;
+            let invalid = ix < 0 orelse ix >= len;
+            if invalid {
+                let at = heap_alloc(size);
+                if st.status == 0 {
+                    for z in 0..size limit 256 { io.heap[at + z] = 0; }
+                    push_sized(5 + variant, at, size);
+                }
+            } else {
+                push_sized(5 + variant, st.vw[i] + ix * size, size);
+            }
+            push_index_tail(ix, len, b2w(invalid))
+        }
+    }
+}
+
+// `IsEnum` keeps the value and pushes whether a flat enum's discriminant, the Word at offset 0,
+// equals the constant `disc`. The name operands do not take part for a flat enum.
+fn op_is_enum(disc: Word) -> Word {
+    if st.sp == 0 { fault(2) } else {
+        let i = st.sp - 1;
+        if st.vt[i] != 8 orelse st.vs[i] < 8 { fault(5) } else {
+            if disc < 0 orelse disc >= io.k_count orelse io.k_t[disc] != 1 { fault(7) } else {
+                push(2, b2w(read_scalar(st.vw[i], 1) == io.k_w[disc]))
+            }
+        }
+    }
+}
+
+// The data segment. The first pass supports private scalar slots, which the host seeds at start
+// with the values the Rust virtual machine gives them at load. A slot holds any value, so its
+// size travels with it as on the operand stack.
+fn data_cap() -> Word { 256 }
+
+fn op_get_data(slot: Word) -> Word {
+    if slot < 0 orelse slot >= io.d_count { fault(8) } else {
+        push_sized(st.dt[slot], st.dw[slot], st.ds[slot])
+    }
+}
+
+fn op_set_data(slot: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if slot < 0 orelse slot >= io.d_count { fault(8) } else {
+            st.dt[slot] = st.vt[i];
+            st.dw[slot] = st.vw[i];
+            st.ds[slot] = st.vs[i];
+            0
+        }
+    }
+}
+
+// `GetDataIndexed`: pop the fallback and the index, and push the slot's value, or the fallback
+// for an invalid index, followed by the bounds tail.
+fn op_get_data_indexed(base: Word, len: Word) -> Word {
+    let f = pop();
+    let j = pop();
+    if st.status != 0 { 0 } else {
+        let ft = st.vt[f];
+        if (ft != 0 andalso ft != 1 andalso ft != 3) orelse st.vt[j] != 1 { fault(5) } else {
+            if base < 0 orelse len < 0 orelse base + len > io.d_count { fault(8) } else {
+                let ix = st.vw[j];
+                let invalid = ix < 0 orelse ix >= len;
+                if invalid { push(ft, st.vw[f]); } else {
+                    push_sized(st.dt[base + ix], st.dw[base + ix], st.ds[base + ix]);
+                }
+                push_index_tail(ix, len, b2w(invalid))
+            }
+        }
+    }
+}
+
+// `SetDataIndexed`: pop the index and the value, write only a valid index, and push the bounds
+// tail.
+fn op_set_data_indexed(base: Word, len: Word) -> Word {
+    let j = pop();
+    let v = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[j] != 1 { fault(5) } else {
+            if base < 0 orelse len < 0 orelse base + len > io.d_count { fault(8) } else {
+                let ix = st.vw[j];
+                let invalid = ix < 0 orelse ix >= len;
+                if not invalid {
+                    st.dt[base + ix] = st.vt[v];
+                    st.dw[base + ix] = st.vw[v];
+                    st.ds[base + ix] = st.vs[v];
+                }
+                push_index_tail(ix, len, b2w(invalid))
+            }
+        }
+    }
+}
+
+// `Call(chunk, argc)`: the top `argc` values become the callee's first locals, the rest start as
+// Unit, and a frame is pushed, as the Rust virtual machine's call does. The caller's instruction
+// pointer has already advanced past the call, so the callee's return resumes after it.
+fn op_call(callee: Word, argc: Word) -> Word {
+    if callee < 0 orelse callee >= io.n_chunks orelse argc < 0 orelse argc > st.sp
+        orelse argc > io.ch_locals[callee] { fault(9) } else {
+        if st.fp >= frame_cap() { fault(3) } else {
+            let base = st.sp - argc;
+            for i in 0..512 limit 512 {
+                if i >= argc andalso i < io.ch_locals[callee] { push(0, 0); }
+            }
+            st.f_chunk[st.fp] = callee;
+            st.f_ip[st.fp] = 0;
+            st.f_base[st.fp] = base;
+            st.fp = st.fp + 1;
+            0
+        }
+    }
+}
+
+// `Yield` pops the output, publishes it and ends the tick with status 2. The host reads it and
+// resumes with an input, as it reads a yielded value before resuming the Rust virtual machine.
+fn op_yield() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        io.out_t = st.vt[i];
+        io.out_w = st.vw[i];
+        io.out_sz = st.vs[i];
+        st.status = 2;
+        0
+    }
+}
+
+// `Reset` ends one stream iteration, as the Rust virtual machine's does. The running frame's
+// locals become Unit, the operand stack keeps only them, the heap above the host's arguments is
+// reclaimed, and the frame resumes just past its `Stream`. The tick ends with status 5. The
+// instructions the iteration executed are folded into `io.max_iter` for the bound check.
+fn op_reset() -> Word {
+    let c = st.f_chunk[st.fp - 1];
+    let base = frame_base();
+    let n = io.ch_locals[c];
+    if io.ch_stream[c] < 0 orelse base + n > stack_cap() { fault(4) } else {
+        for i in 0..n limit 512 {
+            st.vt[base + i] = 0;
+            st.vw[base + i] = 0;
+            st.vs[base + i] = 0;
+        }
+        st.sp = base + n;
+        st.hp = io.hp0;
+        jump(io.ch_stream[c] + 1);
+        if io.iter_steps > io.max_iter { io.max_iter = io.iter_steps; }
+        io.iter_steps = 0;
+        st.status = 5;
+        0
+    }
+}
+
+// Resume after a yield or a reset with the host's input in `io.res_t` and `io.res_w`. For a stream
+// entry with a parameter, the input also replaces parameter 0, and it is then pushed, as the Rust
+// virtual machine's resume does. The first pass takes scalar inputs only.
+fn resume() -> Word {
+    if st.status != 2 andalso st.status != 5 { fault(9) } else {
+        st.status = 0;
+        if io.ch_stream[io.entry] >= 0 andalso io.ch_params[io.entry] > 0 {
+            st.vt[st.f_base[0]] = io.res_t;
+            st.vw[st.f_base[0]] = io.res_w;
+            st.vs[st.f_base[0]] = 0;
+        }
+        push(io.res_t, io.res_w)
+    }
+}
+
+// Execute one instruction. The instruction tags are fixed by the host's encoder in
+// src/hosted/mod.rs and are listed in its `Tag` enumeration.
+fn step() -> Word {
+    let c = st.f_chunk[st.fp - 1];
+    let ip = st.f_ip[st.fp - 1];
+    if ip < 0 orelse ip >= io.ch_len[c] { fault(6) } else {
+        let k = io.ch_start[c] + ip;
+        st.f_ip[st.fp - 1] = ip + 1;
+        io.steps = io.steps + 1;
+        io.iter_steps = io.iter_steps + 1;
+        let a = io.op_a[k];
+        match io.op_t[k] {
+            1 => op_const(a),
+            2 => op_get_local(a),
+            3 => op_set_local(a),
+            4 => op_pop_n(a),
+            5 => op_dup(),
+            6 => op_push_immediate(a),
+            7 => op_branch(a, 0),
+            8 => jump(a),
+            9 => 0,
+            10 => 0,
+            11 => jump(a),
+            12 => jump(a),
+            13 => op_branch(a, 1),
+            14 => op_return(),
+            15 => op_not(),
+            16 => op_eq(0),
+            17 => op_eq(1),
+            18 => op_order(0),
+            19 => op_order(1),
+            20 => op_order(2),
+            21 => op_order(3),
+            22 => op_checked(0),
+            23 => op_checked(1),
+            24 => op_checked(2),
+            25 => op_checked(3),
+            26 => op_checked(4),
+            27 => op_checked_neg(),
+            28 => op_bits(0),
+            29 => op_bits(1),
+            30 => op_bits(2),
+            31 => op_bits(3),
+            32 => op_bits(4),
+            33 => op_convert(0),
+            34 => op_convert(1),
+            35 => op_trap(a),
+            36 => op_byte_arith(0),
+            37 => op_byte_arith(1),
+            38 => op_byte_arith(2),
+            39 => op_new_composite(a, io.op_b[k], io.op_c[k]),
+            40 => op_field(a, io.op_b[k]),
+            41 => op_field_nested(a, io.op_b[k], io.op_c[k]),
+            42 => op_index(a),
+            43 => op_index_nested(a, io.op_b[k]),
+            44 => op_is_enum(a),
+            45 => op_get_data(a),
+            46 => op_set_data(a),
+            47 => op_get_data_indexed(a, io.op_b[k]),
+            48 => op_set_data_indexed(a, io.op_b[k]),
+            49 => op_bounds_check(a),
+            50 => op_call(a, io.op_b[k]),
+            51 => 0,
+            52 => op_yield(),
+            53 => op_reset(),
+            _ => fault(4),
+        }
+    }
+}
+
+// One tick of at most FUEL instructions. FUEL is the literal 32 in the loop header.
+fn tick() -> Word {
+    for i in 0..32 limit 32 {
+        if st.status == 0 { step(); }
+    }
+    st.status
+}
+
+loop main(cmd: Word) -> Word {
+    let result = if cmd == 1 { start(); st.status } else {
+        if cmd == 3 { resume(); tick() } else { tick() } };
+    yield result
+}

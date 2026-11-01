@@ -228,7 +228,7 @@ Per-task restart policy declared in the manifest. Three modes.
 | Mode | Behaviour |
 |------|-----------|
 | `never` | Task error or normal termination is fatal for that task. Other tasks continue. The scheduler logs the termination and removes the task from the ready set. |
-| `on_error` | Task is restarted on any `VmError`. Normal termination (loop body exits, which is unusual for `loop main`) is treated as terminal. |
+| `on_error` | Task is restarted on any `VmError`. Normal termination (loop body exits) is treated as terminal. **Measured 2026-09-24: this is more than "unusual", which is what this cell used to say. A `loop main` that never yields CANNOT BE COMPILED** — structural verification requires a Stream block to contain at least one yield, directly or by delegation. So the distinction between this mode and `always` rests on a case valid source does not readily produce, and `tests/runtasks_scheduler.rs` records that it is not tested for that reason rather than by omission. |
 | `always` | Task is restarted on both error and termination. The script can voluntarily exit through the loop's natural fall-through and the scheduler will respawn it. |
 
 A restart re-allocates the task's arena and re-instantiates the VM from the bytecode. The task's data segment values do not survive a restart; the task observes a fresh allocation.

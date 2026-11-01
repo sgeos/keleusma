@@ -450,4 +450,42 @@ mod tests {
         assert_eq!(c["state"], "finished");
         assert_eq!(c["value"], "3");
     }
+
+    /// `reset` discards the run, so the next step starts from the top again.
+    ///
+    /// The playground's reset button is this method, and it was the one
+    /// exported item with no test: `check`, `disasm`, `keywords`, `new` and
+    /// `step` all had one.
+    ///
+    /// The assertion is BEHAVIOURAL. A test that only called `reset` and
+    /// checked that the next step returned something would pass against a
+    /// `reset` that did nothing at all, since stepping a third time also
+    /// returns something. What distinguishes them is which stop the next step
+    /// lands on and what the step counter says.
+    #[test]
+    fn reset_discards_the_run_so_the_next_step_starts_over() {
+        let src = "yield main() -> Word {\n  yield 1;\n  yield 2;\n  3\n}\n".to_string();
+        let mut s = Session::new(src);
+
+        let a: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(a["value"], "1", "the first stop is not the first yield");
+        let b: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(b["value"], "2", "the second stop is not the second yield");
+        let advanced = b["step"].clone();
+
+        s.reset();
+
+        let c: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(
+            c["value"], "1",
+            "after a reset the next step did not return to the first yield, so the run was \
+             not discarded"
+        );
+        assert_ne!(
+            c["step"], advanced,
+            "the step counter did not go back after a reset; it reported {} both before and \
+             after, so `reset` changed nothing observable",
+            advanced
+        );
+    }
 }

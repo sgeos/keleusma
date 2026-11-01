@@ -1,0 +1,1350 @@
+//! Shared host-side driver for the self-hosted `.kel` stages.
+//!
+//! The loop that drives `parse.kel` and reads its emitted records was historically copied
+//! into every consumer — the self-host integration tests and the detached `compiler/`
+//! subproject — six times over. That duplication is a drift hazard: it is the same class
+//! that let the `compiler/src/selfhost.rs` decoder fall behind and ship `unknown op tag 62`
+//! into v0.2.3 (process audit item 4). This module holds ONE copy of the record-reading
+//! loop, so a change to the parse-to-host record transport — notably the P11 Option E
+//! two-word `(tag, payload)` encoding — is a single edit here rather than six lockstep ones.
+//!
+//! Gated behind `compile` + `verify` (the features the self-host path already requires); it
+//! is a harness helper for the self-host tooling, not part of the stable runtime API.
+
+use crate::bytecode::Value;
+use crate::stage_executor::StageExecutor;
+use crate::vm::VmState;
+use alloc::format;
+use alloc::string::String;
+use core::ops::ControlFlow;
+
+/// Drive a running `parse.kel` coroutine, invoking `on_record(code, val)` for each record it
+/// emits until the callback returns [`ControlFlow::Break`] — which the caller signals on the
+/// DONE record — or until `budget` iterations elapse (a divergence guard; `parse.kel` must
+/// reach DONE first).
+///
+/// `state` is the coroutine state immediately after the caller's `call_with_shared`. This
+/// function owns the record transport, which is a HYBRID and has been since P11 Option E
+/// landed:
+///
+/// - **Legacy sites** yield one word `code + val*64` and leave `emit_arg` at `-1`. The tag
+///   occupies six bits, so a legacy record kind must be **below 64**.
+/// - **Migrated sites** set `emit_arg` to a full-word payload and yield a RAW tag, which may
+///   be 64 or above. Kinds 65, 67 and 68 arrive this way today.
+///
+/// **This paragraph read "today each record is one yielded word `code + val*64`; the P11
+/// Option E change ... lands here and nowhere else" until 2026-08-25**, describing a
+/// transport that had already been replaced. The split sixty lines below was correct
+/// throughout. It matters because this is the first thing an implementer adding a record kind
+/// reads, and following it would cap them at 63 and send them renumbering.
+///
+/// The caller keeps ownership of its accumulator state by capturing it in `on_record`; this
+/// driver borrows only `vm` and `shared`, so a callback must not itself touch them.
+pub fn drive_parse_records<V, F>(
+    vm: &mut V,
+    shared: &mut [u8],
+    state: VmState,
+    budget: usize,
+    on_record: F,
+) where
+    V: StageExecutor + ?Sized,
+    F: FnMut(i64, i64) -> ControlFlow<()>,
+{
+    drive_parse_records_with(vm, shared, state, budget, on_record, |_, _| {});
+}
+
+/// A failure in the parser record transport. A diagnostic retains its numeric stage code.
+/// Capacity, execution and protocol failures are not evidence of a source type error.
+#[derive(Debug)]
+pub enum ParseRecordError {
+    /// The stage reported a diagnostic, with its original tag and payload.
+    Diagnostic {
+        /// Raw negative diagnostic tag.
+        code: i64,
+        /// Stage-defined detail, such as a name identifier or capacity count.
+        detail: i64,
+    },
+    /// The parser virtual machine failed during resume.
+    Execution(crate::vm::VmError),
+    /// The parser did not yield the expected payload word.
+    Protocol(String),
+    /// The parser did not finish within the caller's iteration budget.
+    Budget(usize),
+}
+
+impl ParseRecordError {
+    /// Only explicitly assigned source diagnostics establish rejection. Unknown codes,
+    /// retired codes, capacity limits and transport failures never do.
+    #[must_use]
+    pub fn is_source_rejection(&self) -> bool {
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36 | 39 | 40)))
+    }
+}
+
+impl core::fmt::Display for ParseRecordError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Diagnostic { code, detail } => {
+                f.write_str(&describe_parse_diagnostic(*code, *detail))
+            }
+            Self::Execution(error) => write!(f, "resume parse.kel: {error:?}"),
+            Self::Protocol(message) => f.write_str(message),
+            Self::Budget(budget) => write!(
+                f,
+                "parse.kel ran {budget} steps without reaching DONE. Two causes are on record and \
+                 this guard cannot tell them apart: an unterminated block, string, or bracket, so \
+                 the parser never reaches the end of the declaration; or a construct the stage does \
+                 not handle and spins on rather than refusing. Check the input closes, then check \
+                 whether it uses a construct outside the self-hosted subset."
+            ),
+        }
+    }
+}
+
+/// [`drive_parse_records`] with a hook run before every resume.
+///
+/// **ONE LOOP, NOT TWO.** A fused driver feeding tokens through a sliding window
+/// must correct the window BEFORE the parser is resumed, because the parser reads
+/// at its cursor the moment it runs -- a window fixed afterwards is fixed too
+/// late. That needs a hook inside this loop, and the alternative was a second copy
+/// of the Option E transport in the caller.
+///
+/// This file already records what a second copy costs: the class table duplicated
+/// into a test had drifted, keeping a catch-all after this one became exhaustive,
+/// so the differential that was supposed to be the oracle ran against the
+/// unrepaired table. The transport here is subtler than that table.
+pub fn drive_parse_records_with<V, F, B>(
+    vm: &mut V,
+    shared: &mut [u8],
+    state: VmState,
+    budget: usize,
+    on_record: F,
+    before_resume: B,
+) where
+    V: StageExecutor + ?Sized,
+    F: FnMut(i64, i64) -> ControlFlow<()>,
+    B: FnMut(&mut V, &mut [u8]),
+{
+    try_drive_parse_records_with(vm, shared, state, budget, on_record, before_resume)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// Fallible record transport used by source-rejection consumers.
+/// Callback panics are not caught. The error distinguishes explicit stage diagnostics
+/// from virtual-machine, protocol and budget failures.
+pub fn try_drive_parse_records_with<V, F, B>(
+    vm: &mut V,
+    shared: &mut [u8],
+    state: VmState,
+    budget: usize,
+    mut on_record: F,
+    mut before_resume: B,
+) -> Result<(), ParseRecordError>
+where
+    V: StageExecutor + ?Sized,
+    F: FnMut(i64, i64) -> ControlFlow<()>,
+    B: FnMut(&mut V, &mut [u8]),
+{
+    let mut state = state;
+    for _ in 0..budget {
+        if let VmState::Yielded(Value::Int(t)) = state {
+            // Option E two-word transport: the tag word `t` is followed by its payload word on
+            // the next yield. Read it now.
+            let arg = loop {
+                before_resume(vm, shared);
+                state = vm
+                    .resume_with_shared(shared, Value::Int(0))
+                    .map_err(ParseRecordError::Execution)?;
+                match state {
+                    VmState::Yielded(Value::Int(a)) => break a,
+                    // The productive `loop main` RESETs between its per-iteration yields, so the
+                    // payload word is the next Yielded after any intervening RESETs.
+                    VmState::Reset => {}
+                    other => {
+                        return Err(ParseRecordError::Protocol(format!(
+                            "parse.kel: expected a record payload word, got {other:?}"
+                        )));
+                    }
+                }
+            };
+            // The -1 sentinel marks an un-migrated (still packed) record: recover the classic
+            // tag = w % 64, payload = w / 64 split. A migrated emit site supplies its full-word
+            // payload directly with a raw (possibly >= 64) tag.
+            let (code, val) = if arg == -1 {
+                (t.rem_euclid(64), t.div_euclid(64))
+            } else {
+                (t, arg)
+            };
+            // A DIAGNOSTIC RECORD FROM THE STAGE, not a parse record. `parse.kel` reports
+            // its own capacity limits here rather than letting them surface as raw virtual
+            // machine traps: four separate causes used to arrive as `IndexOutOfBounds`
+            // naming an array's size, and two unrelated limits (locals and operator nesting,
+            // both 64) produced the byte-identical message `IndexOutOfBounds(64, 64)`.
+            //
+            if code <= PARSE_DIAG_TAG_BASE {
+                return Err(ParseRecordError::Diagnostic { code, detail: val });
+            }
+            if on_record(code, val).is_break() {
+                return Ok(());
+            }
+        }
+        before_resume(vm, shared);
+        state = vm
+            .resume_with_shared(shared, Value::Int(0))
+            .map_err(ParseRecordError::Execution)?;
+    }
+    // TWO MEASURED CAUSES, AND THIS MESSAGE USED TO ASSERT ONLY THE FIRST.
+    //
+    // 1. An unterminated block. `fn f() -> Word { let x = 1; x` (no closing brace) exhausts
+    //    the budget rather than reporting anything, because the stage is still waiting for
+    //    the token that closes the body.
+    // 2. **A construct `parse.kel` does not handle**, which spins instead of refusing. A
+    //    match arm whose pattern is a BARE enum path -- `E::A => 1` rather than `E::A() => 1`
+    //    -- does this, measured 2026-09-12. The reference accepts both spellings.
+    //
+    // **The old wording named the first as "the usual cause", which is a claim about a
+    // population nobody measured**, and it would send a reader hunting for an unterminated
+    // brace that does not exist. Naming both, and naming neither as usual, costs nothing and
+    // stops the message from being confidently wrong.
+    Err(ParseRecordError::Budget(budget))
+}
+
+/// The tag `parse.kel` emits a BINDING-NAME record under, restated from
+/// `tag_let_name()` in the stage.
+///
+/// Well above the `Node` codes, which reach 64. Lives HERE rather than in
+/// `crate::selfhost`, which is gated on the `self-host` feature: the harnesses that
+/// must skip this record are gated on `compile + verify` only, and publishing it
+/// from the narrower module broke two feature sets. That is the same correction this
+/// crate already made for the shared-slot layout.
+///
+/// `the_let_name_tag_matches_the_stage` checks the stage and this agree, because a
+/// driver that learned the tag by observing one would only learn it from a stream it
+/// had already mis-read.
+pub const PARSE_LET_NAME_TAG: i64 = 90;
+
+/// Struct name id times 1024 plus declared field count for the following StructInit.
+/// The driver consumes it before reconstruction, so it does not occupy a node slot.
+pub const PARSE_STRUCT_FIELDS_TAG: i64 = 91;
+
+/// Source annotation type-name id for the LetIn following this metadata.
+pub const PARSE_LET_TYPE_TAG: i64 = 92;
+
+/// Declaration-order variant index for the EnumInit following this metadata.
+pub const PARSE_ENUM_VARIANT_TAG: i64 = 93;
+
+/// Variant index times 1024 plus payload position for the following EnumBind.
+/// These source coordinates identify its declared type independently of byte layout.
+pub const PARSE_ENUM_PAYLOAD_BIND_TAG: i64 = 97;
+
+/// Struct source name id times 1024 plus field position for the following field read.
+pub const PARSE_STRUCT_PROJECTION_TAG: i64 = 98;
+/// Start a source let annotation, keyed by its absolute colon token position.
+pub const PARSE_ANNOTATION_START_TAG: i64 = 99;
+/// Postfix array dimension in a source let annotation, without payload packing.
+pub const PARSE_ANNOTATION_ARRAY_TAG: i64 = 100;
+/// End a source let annotation before its initializer.
+pub const PARSE_ANNOTATION_END_TAG: i64 = 101;
+/// Reference a complete composite annotation immediately before a folded let node.
+pub const PARSE_ANNOTATION_REF_TAG: i64 = 102;
+/// Close a grouped source type with payload zero, or an empty unit type with payload one.
+pub const PARSE_ANNOTATION_GROUP_TAG: i64 = 103;
+/// Source tuple element ordinal for the following tuple-field read.
+pub const PARSE_TUPLE_PROJECTION_TAG: i64 = 104;
+/// Source header layout, with return bit, shape form, kind and byte size.
+pub const PARSE_HEADER_LAYOUT_TAG: i64 = 105;
+/// Entry-boundary facts. Bit zero is a used text parameter, bit one a text return type.
+pub const PARSE_TEXT_BOUNDARY_TAG: i64 = 106;
+/// Private initializer scalar kind, chosen by the parser.
+pub const PARSE_PRIVATE_INIT_KIND_TAG: i64 = 107;
+/// Nonnegative private initializer value.
+pub const PARSE_PRIVATE_INIT_VALUE_TAG: i64 = 108;
+/// Bitwise complement of a negative private initializer value.
+pub const PARSE_PRIVATE_INIT_NEGATIVE_TAG: i64 = 109;
+/// Runtime field ordinal times 2^24 plus its assigned slot base.
+pub const PARSE_DATA_FIELD_BASE_TAG: i64 = 110;
+/// Parser token reposition request, carrying an absolute token index.
+pub const PARSE_TOKEN_SEEK_TAG: i64 = 111;
+/// The flat byte size of a private struct-typed data field, following its type record,
+/// Order 6. The host places each such field in the private composite pool.
+pub const PARSE_PRIVATE_COMPOSITE_TAG: i64 = 112;
+/// The type-name argument of a builtin generic in a signature, `Option<T>`, Order 6. It
+/// follows the head's own type record and carries the argument's name id.
+pub const PARSE_GENERIC_TYPE_ARG_TAG: i64 = 113;
+/// The positive length argument of a builtin generic in a signature, `Multiword<N>`.
+pub const PARSE_GENERIC_CONST_ARG_TAG: i64 = 114;
+/// The base above which a payload binding's coordinates carry the scalar kind of an
+/// `Option<T>` payload's `T`, 1 `bool`, 2 `Byte` or 3 `Word`, and a constructor's variant
+/// record carries the `Option` name id, rather than a declared variant row.
+pub const PARSE_OPTION_PAYLOAD_BASE: i64 = 1 << 40;
+/// The base above which a tuple-projection record carries the variant row times 1024 plus
+/// the field position of a payload read from a single-variant enum `let` pattern, rather
+/// than a tuple element ordinal, which is below 256. `enum_payload_read` in `parse.kel`
+/// writes it.
+pub const PARSE_ENUM_PROJECTION_BASE: i64 = 1 << 40;
+
+/// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
+/// than a node count. Node counts are non-negative, so no legitimate count can collide.
+///
+/// Restated here from `rc_fail_base()` in the stage;
+/// `the_reconstruct_diagnostic_tag_base_matches` checks the two agree.
+pub const RECONSTRUCT_DIAG_TAG_BASE: i64 = -900;
+
+/// The node, work-stack and record capacity of `reconstruct.kel`, restated from
+/// `rc_cap_node()`. `the_reconstruct_guard_caps_match_their_arrays` checks it against the
+/// array declarations it guards.
+/// Raised from 1,024 to 4,096 under the operator's ruling of 2026-10-26 that limits may be
+/// raised. It equals `crate::selfhost::AST_NODE_CAP`, the forest the stage hands to codegen.
+pub const RECONSTRUCT_NODE_CAP: usize = 4096;
+
+/// Render a diagnostic yielded by `reconstruct.kel` as a message that names its cause.
+///
+/// **This exists because the stage's arrays fall into six size classes, so an unguarded
+/// out-of-range index named a size class rather than a cause.** Twenty-five of the
+/// stage's twenty-six arrays share a message with at least one sibling. The worst of them
+/// reads as a capacity bound and means the opposite: `IndexOutOfBounds(-1, 1024)` on a
+/// pop is an *underflow*, and a reader who sees the 1024 concludes an array was too small
+/// when in fact the record stream consumed more operands than it produced.
+///
+/// An unknown code is reported as unknown rather than guessed at, for the same reason
+/// [`describe_parse_diagnostic`] does so.
+pub fn describe_reconstruct_diagnostic(code: i64, detail: i64) -> String {
+    match RECONSTRUCT_DIAG_TAG_BASE - code {
+        1 => format!(
+            "too many nodes in one function for reconstruct.kel: it reached {detail} and \
+             `io.kinds`/`args`/`lhs`/`rhs` hold {RECONSTRUCT_NODE_CAP}. Split the function."
+        ),
+        2 => format!(
+            "the reconstruct.kel work stack is full: it reached {detail} and `rs.stack` \
+             holds {RECONSTRUCT_NODE_CAP}. This cause is UNREACHABLE while `push` is \
+             called only from `emit`, because the node guard fires first; \
+             `the_work_stack_cannot_overflow_before_the_node_array` pins that."
+        ),
+        3 => "reconstruct.kel popped an EMPTY work stack. This is an UNDERFLOW, and it is \
+              not a capacity bound: the record stream consumed more operands than it \
+              produced, so the fault is in what `parse.kel` emitted, not in any array's \
+              size."
+            .into(),
+        4 => format!(
+            "a record index past reconstruct.kel's input arrays: it reached {detail} and \
+             `io.rec_kind`/`rec_arg` hold {RECONSTRUCT_NODE_CAP}. Split the function."
+        ),
+        5 => format!(
+            "a record range did not reduce to exactly one node: {detail} remained on the \
+             work stack. A range is one function body or one head of a multiheaded \
+             function and must leave its single root. More than one means the record \
+             stream carries an unfolded operand; zero means it carries none. Before this \
+             cause was named, `reconstruct_range` read slot zero unconditionally and \
+             returned a STALE index for an empty range, or SILENTLY DISCARDED the \
+             remainder for an over-full one."
+        ),
+        6 => {
+            format!("invalid or exhausted outcome storage in reconstruct.kel, detail {detail}")
+        }
+        7 => format!("invalid signed literal complement in reconstruct.kel, detail {detail}"),
+        other => format!(
+            "reconstruct.kel reported diagnostic code {other} (detail {detail}), which \
+             this driver does not know. The stage has grown a cause that \
+             `describe_reconstruct_diagnostic` was not taught."
+        ),
+    }
+}
+
+/// The tag at or below which a record from `parse.kel` is a diagnostic rather than a parse
+/// record. Record tags are non-negative, so no legitimate record can collide.
+///
+/// Restated here from `pe_tag_base()` in the stage; `the_parse_diagnostic_tag_base_matches`
+/// checks the two agree, because a driver that learned the base by observing one would only
+/// learn it from a program that had already failed.
+pub const PARSE_DIAG_TAG_BASE: i64 = -900;
+
+/// Render a diagnostic record from `parse.kel`, retaining its capacity or source cause.
+///
+/// The codes are `pe_opstack`/`pe_bracket`/`pe_locals`/`pe_stmts` in the stage. An unknown
+/// code is reported as unknown rather than guessed at: a stage that grew a fifth cause and
+/// a driver that silently mapped it onto a fourth would be the misdirecting-diagnostic
+/// defect this whole path exists to remove.
+pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
+    match PARSE_DIAG_TAG_BASE - code {
+        1 => format!(
+            "expression nesting is too deep for parse.kel: it reached {detail} pending \
+             operators and `ops.opstack` holds {}. Nesting counts parentheses, calls, \
+             struct and array literals, and pending binary operators. Split the expression.",
+            PARSE_OPSTACK_CAP
+        ),
+        2 => format!(
+            "unmatched closing bracket at token {detail}: parse.kel reached a `]` or a `)` \
+             with no matching opening bracket pending."
+        ),
+        3 => format!(
+            "too many local bindings in one function for parse.kel: it reached {detail} and \
+             `stmt.let_names` holds {}. Every `let`, every `for` loop variable, and every \
+             pattern binding takes a slot. Split the function.",
+            PARSE_LOCALS_CAP
+        ),
+        4 => format!(
+            "too many statements in one body for parse.kel: it reached {detail} and \
+             `stmt.stmt_kind` holds {}. Split the body.",
+            PARSE_STMTS_CAP
+        ),
+        5 => format!(
+            "too many parameters on one function for parse.kel: it reached {detail} and \
+             `ps.pnames` holds {PARSE_PARAMS_CAP}. Pass a data block or a composite instead."
+        ),
+        6 => format!(
+            "`if` nesting is too deep for parse.kel: it reached {detail} and `branch.if_seq` \
+             holds {PARSE_IF_DEPTH_CAP}. Flatten the branches or split the function."
+        ),
+        7 => format!(
+            "`for` nesting is too deep for parse.kel: it reached {detail} and `forst.for_seq` \
+             holds {PARSE_FOR_DEPTH_CAP}. Move an inner loop into its own function."
+        ),
+        8 => format!(
+            "array-literal nesting is too deep for parse.kel: it reached {detail} and \
+             `call.al_count` holds {PARSE_ARRAY_NEST_CAP}. Bind an inner array with `let` first."
+        ),
+        10 => format!(
+            "call nesting is too deep for parse.kel: it reached {detail} and `call.call_chunk` \
+             holds {PARSE_CALL_DEPTH_CAP}. Bind an inner call with `let` first."
+        ),
+        // Code 12 was `pe_bare_for`, retired when the bare loop form became supported. It
+        // is not reused: an unassigned code falls to the unknown arm, which is the honest
+        // reading of a stream from a stage that predates the change.
+        11 => format!(
+            "too many data-block fields in one program for parse.kel: it reached {detail} and \
+             `fields.ffield` holds {PARSE_FIELDS_CAP}. Like the enum bound this is a TOTAL \
+             ACROSS THE WHOLE PROGRAM, not one block."
+        ),
+        9 => format!(
+            "too many enum variants for parse.kel: it reached {detail} and `enums.evar` holds \
+             {PARSE_VARIANTS_CAP}. This is a TOTAL ACROSS THE WHOLE PROGRAM, not one enum: 128 \
+             enums of two variants reach it at the same point as one enum of 257."
+        ),
+        13 => format!("undefined identifier with name id {detail} in parse.kel"),
+        14 => format!("unknown struct field with name id {detail} in parse.kel"),
+        15 => format!(
+            "first-class function reference with name id {detail} is not supported in parse.kel"
+        ),
+        16 => format!("field access on a declared scalar at token {detail} in parse.kel"),
+        17 => format!("index access on a declared scalar at token {detail} in parse.kel"),
+        18 => format!(
+            "generic signature or call syntax at token {detail} is outside the parse.kel subset"
+        ),
+        19 => format!("method call at token {detail} is outside the parse.kel subset"),
+        20 => format!("binding pattern is outside the parse.kel subset, detail {detail}"),
+        21 => format!(
+            "unresolved qualified, imported or unsupported syntax with name id {detail} in parse.kel"
+        ),
+        22 => format!("call through a value at token {detail} is not supported in parse.kel"),
+        23 => format!("non-exhaustive match in parse.kel, missing coverage at {detail}"),
+        24 => format!("unknown or mismatched enum variant with name id {detail} in parse.kel"),
+        25 => format!("match nesting depth {detail} exceeds the parse.kel limit of 8"),
+        26 => format!("empty enum constructor requires {detail} payload fields in parse.kel"),
+        27 => format!("unsupported source type annotation syntax at token {detail} in parse.kel"),
+        28 => format!(
+            "source type annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
+        ),
+        29 => format!("tuple layout capacity exhausted with {detail} members in parse.kel"),
+        39 => format!("invalid loop outcome syntax near token {detail} in parse.kel"),
+        40 => format!("invalid checked arithmetic outcome near token {detail} in parse.kel"),
+        41 => format!("checked arithmetic nesting {detail} exceeds 32 contexts in parse.kel"),
+        42 => format!(
+            "checked operation near token {detail} is outside the implemented arithmetic families in parse.kel"
+        ),
+        38 => format!("expression layout unavailable near token {detail} in parse.kel"),
+        30 => format!("expression block at token {detail} is outside the parse.kel subset"),
+        31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
+        32 => format!("a fixed-size array must have a positive length, got {detail}, in parse.kel"),
+        33 => format!("tuple field index {detail} is out of range in parse.kel"),
+        34 => format!("initializer at token {detail} requires a private scalar field in parse.kel"),
+        35 => format!(
+            "initializer value at token {detail} is incompatible with its private field type in parse.kel"
+        ),
+        36 => format!("invalid private scalar initializer syntax at token {detail} in parse.kel"),
+        37 => format!(
+            "data field length {detail} exceeds the remaining 24-bit slot address space in parse.kel"
+        ),
+        other => format!(
+            "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
+             does not know. The stage has grown a cause that `describe_parse_diagnostic` was \
+             not taught."
+        ),
+    }
+}
+
+/// The usable capacities behind the three counted limits, restated from `pe_cap_op`,
+/// `pe_cap_let` and `pe_cap_stmt` in the stage. `the_parse_guard_caps_match_their_arrays`
+/// checks all three against the array declarations they guard.
+pub const PARSE_OPSTACK_CAP: usize = 64;
+/// See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_LOCALS_CAP: usize = 256;
+/// See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_STMTS_CAP: usize = 256;
+/// Parameters on one function. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_PARAMS_CAP: usize = 32;
+/// Nesting depth of `if`. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_IF_DEPTH_CAP: usize = 32;
+/// Nesting depth of `for`. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_FOR_DEPTH_CAP: usize = 8;
+/// Nesting depth of array literals. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_ARRAY_NEST_CAP: usize = 8;
+/// Enum variants **across the whole program**, not per enum. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_VARIANTS_CAP: usize = 256;
+/// Nesting depth of calls. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_CALL_DEPTH_CAP: usize = 8;
+/// Data-block fields **across the whole program**, not per block. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_FIELDS_CAP: usize = 1024;
+/// Let annotation nesting. Pushes are checked before writing the stage arrays.
+pub const PARSE_ANNOTATION_DEPTH_CAP: usize = 32;
+
+/// Control-flow class and target for one opcode, as `analyze.kel` consumes them.
+///
+/// **Public so there is ONE class table, not two.** A second copy lived in
+/// `tests/selfhost_codegen.rs` and had already drifted from this one: it kept a
+/// `_ => (0, 0)` catch-all after this function was made exhaustive, and passed
+/// `0` where this passes the real `EndLoop`/`Break`/`BreakIf` target. The
+/// differential that is supposed to be the oracle was therefore running against
+/// the unrepaired table. Same reasoning as the per-item seed accessors: a
+/// reconstruction of an encoding is free to drift from the encoding.
+pub fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
+    use crate::bytecode::Op;
+    match op {
+        Op::If(t) => (1, *t as i64),
+        Op::Else(e) => (2, *e as i64),
+        Op::EndIf => (3, 0),
+        Op::Loop(x) => (4, *x as i64),
+        Op::EndLoop(t) => (5, *t as i64),
+        Op::Break(t) => (6, *t as i64),
+        Op::BreakIf(t) => (7, *t as i64),
+        // Class 8 is PATH EXIT, not "trap". Both `Trap` and `Return` end the
+        // current path without transferring control to an enclosing loop, so
+        // they share it and no tenth class is needed.
+        //
+        // `Return` was in the plain group below until 2026-08-16, mirroring a
+        // reference that let it fall through its own catch-all. That costed and
+        // sized a multiheaded dispatch as though every head ran in sequence.
+        Op::Trap(_) | Op::Return => (8, 0),
+        Op::Call(_, _) => (9, 0),
+        // EVERY REMAINING OPCODE IS LISTED, and the list is the point.
+        //
+        // This was `_ => (0, 0)`. A control-flow opcode added later and not
+        // classified above would have fallen through it and become "plain"
+        // SILENTLY: `analyze.kel` rebuilds the control-flow graph by following
+        // the `If`/`Loop`/`EndLoop`/`Break` targets this function returns, so a
+        // missing arm is a graph missing an edge, and a bound extracted from
+        // that graph is finite and WRONG rather than absent. Nothing downstream
+        // can distinguish "plain opcode" from "unclassified opcode".
+        //
+        // A test cannot close that hole, because it cannot fail for an opcode
+        // nobody has written yet. The compiler can: adding a variant to `Op`
+        // now fails to build here until someone decides which class it belongs
+        // to. That is the whole change -- the classification is unaltered and
+        // every opcode below still maps to `(0, 0)`, exactly as the catch-all
+        // did.
+        Op::Const(..)
+        | Op::GetLocal(..)
+        | Op::SetLocal(..)
+        | Op::GetData(..)
+        | Op::SetData(..)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(..)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::CmpGe
+        | Op::Not
+        | Op::Stream
+        | Op::Reset
+        | Op::Yield
+        | Op::Dup
+        | Op::NewComposite(..)
+        | Op::GetField(..)
+        | Op::GetIndex(..)
+        | Op::GetTupleField(..)
+        | Op::GetEnumField(..)
+        | Op::Len
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(..)
+        | Op::FixedToWord(..)
+        | Op::FixedMul(..)
+        | Op::FixedDiv(..)
+        | Op::CheckedAdd
+        | Op::CheckedSub
+        | Op::CheckedMul(..)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(..)
+        | Op::CheckedMod
+        | Op::PushImmediate(..)
+        | Op::PopN(..)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::CallVerifiedNative(..)
+        | Op::CallExternalNative(..) => (0, 0),
+    }
+}
+
+/// Fine-grained op detail for analyze.kel's loop-bound extraction: `(opk, slot, cval, cint)`.
+/// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
+/// 7 PopN, 8 EndLoop, 9 Loop, 10 Len, 11 array construction, 0 other);
+/// `slot` is the GetLocal/SetLocal slot; `cval` is the array element count or the Const
+/// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
+/// Fine-grained op detail for `analyze.kel`'s loop-bound extraction, as
+/// `(opk, slot, cval, cint)`. Public for the same one-encoding reason as
+/// [`analyze_class`].
+pub fn analyze_opk(
+    op: &crate::bytecode::Op,
+    chunk: &crate::bytecode::Chunk,
+) -> (i64, i64, i64, i64) {
+    use crate::bytecode::{ConstValue, Op};
+    match op {
+        Op::GetLocal(s) => (1, *s as i64, 0, 0),
+        Op::SetLocal(s) => (2, *s as i64, 0, 0),
+        Op::Const(idx) => match chunk.constants.get(*idx as usize) {
+            Some(ConstValue::Int(v)) => (3, 0, *v, 1),
+            _ => (3, 0, 0, 0),
+        },
+        Op::CmpGe => (4, 0, 0, 0),
+        Op::BreakIf(_) => (5, 0, 0, 0),
+        Op::CheckedAdd => (6, 0, 0, 0),
+        Op::PopN(n) => (7, 0, *n as i64, 0),
+        Op::EndLoop(_) => (8, 0, 0, 0),
+        Op::Loop(_) => (9, 0, 0, 0),
+        Op::Len => (10, 0, 0, 0),
+        Op::NewComposite(operand) => {
+            if operand.kind() == crate::value_layout::CompositeKind::Array {
+                (11, 0, i64::from(operand.count()), 0)
+            } else {
+                (0, 0, 0, 0)
+            }
+        }
+        // EXHAUSTIVE FOR THE SAME REASON AS `analyze_class`, though the failure
+        // mode differs and the difference is worth stating.
+        //
+        // Every `opk` use in `analyze.kel` is a POSITIVE pattern requirement
+        // (`wa.opk[ip] == 2`, `== 3`, `== 8`), so an untagged opcode fails to
+        // match and the loop-bound shape is simply not recognised -- a bound is
+        // not extracted, which is CONSERVATIVE. That is the opposite of
+        // `analyze_class`, where a missing arm drops a control-flow edge and
+        // yields a bound that is finite and wrong.
+        //
+        // It is exhaustive anyway, because that argument is REASONING and the
+        // compiler can make it unnecessary. A new opcode should be considered
+        // for bound extraction as deliberately as for classification, and a
+        // catch-all here decides that question by default and silently.
+        Op::GetData(..)
+        | Op::SetData(..)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(..)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::Not
+        | Op::If(..)
+        | Op::Else(..)
+        | Op::EndIf
+        | Op::Break(..)
+        | Op::Stream
+        | Op::Reset
+        | Op::Call(..)
+        | Op::Return
+        | Op::Yield
+        | Op::Dup
+        | Op::GetField(..)
+        | Op::GetIndex(..)
+        | Op::GetTupleField(..)
+        | Op::GetEnumField(..)
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(..)
+        | Op::FixedToWord(..)
+        | Op::FixedMul(..)
+        | Op::FixedDiv(..)
+        | Op::Trap(..)
+        | Op::CheckedSub
+        | Op::CheckedMul(..)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(..)
+        | Op::CheckedMod
+        | Op::PushImmediate(..)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::CallVerifiedNative(..)
+        | Op::CallExternalNative(..) => (0, 0, 0, 0),
+    }
+}
+
+// THE SHARED BLOCK IS ADDRESSED BY SLOT, AND THIS IS THE ONE PLACE THAT SAYS WHERE
+// EACH FIELD SITS.
+//
+// These were seven independent arithmetic literals (`1 + 40960 + 2 + 256 + 7`), and
+// THREE TEST HARNESSES CARRIED THEIR OWN COPIES of the same arithmetic. Widening
+// `toks.chunks` moved the stage's fields and left all three copies seeding the
+// keyword and type ids at the old slots, so `parse.kel` read zero for `word_id` and
+// sized every field as one byte. Sixty-eight tests failed, none of them naming a
+// slot: they reported struct byte sizes of 1 instead of 8 and a scalar kind of
+// `Unit` instead of `Int`.
+//
+// So the offsets are PUBLIC and CHAINED. Public, so the harnesses use these rather
+// than restating them -- the same reasoning as `analyze_class`, where a second copy
+// of the class table had already drifted from the original. Chained, so a widened
+// array moves everything after it automatically.
+// `the_driver_shared_slots_match_the_stage` checks the chain against the stage's
+// declaration order, and `no_other_file_restates_the_shared_layout` checks that the
+// copies have not come back.
+
+/// How many entries `toks.packed` in `parse.kel` holds, one token each.
+///
+/// Measured against the corpus: `parse.kel` itself is the largest at 32,907 tokens,
+/// which is 80% of this. It is the next of the stage's arrays likely to bind.
+pub const PARSE_TOKEN_CAP: usize = 40960;
+
+/// How many entries `toks.chunks` in `parse.kel` holds.
+///
+/// Restated here rather than parsed out of the stage, because a driver that
+/// discovered the cap by overflowing it would already have written past the array.
+/// `the_driver_array_caps_match_the_stage` checks the two agree.
+///
+/// **Sized from measurement, not from the stage that needed it.** The corpus worst
+/// case is `wire.kel` at 486 chunks; the next largest is `parse.kel` at 108, which
+/// grew from 94 in a single increment. 512 would have left `wire` twenty-six chunks
+/// of margin, which one increment can consume.
+pub const PARSE_CHUNK_CAP: usize = 1024;
+
+/// The radix that separates a `Call` record's two packed fields, `chunk + count * RADIX`.
+///
+/// **IT EQUALS [`PARSE_CHUNK_CAP`] DELIBERATELY.** At 256 a chunk index of 256 carried into
+/// the count field: the callee became chunk zero and the argument count became one too many,
+/// so the call popped an operand that was never pushed. `wire.kel` has 486 chunks, and the
+/// symptom surfaced in the CALLER — often a thousand lines from anything that changed, since
+/// chunk indices are assigned by sorted name.
+///
+/// Tying the radix to the chunk capacity means the existing chunk-cap guard is the single
+/// authority on the bound, so **no range exists that overflows silently**. A larger radix
+/// would leave an unguarded span and recreate the same defect one power of two higher.
+///
+/// Widest emitted word: `7 + ((RADIX - 1) + 64 * RADIX) * 64` = 4,259,783, which fits the
+/// `require word >= 32` both stages declare, with roughly 504x headroom.
+pub const CALL_CHUNK_RADIX: usize = PARSE_CHUNK_CAP;
+
+// THE LEXER'S SHARED BLOCK, ON THE SAME TERMS AS THE PARSER'S.
+//
+// `lexer.kel`'s `src` block was restated in FOUR places -- this driver, two test
+// harnesses, and `compiler/src/main.rs` -- exactly as the parser's was in five. The
+// parser's copies were found only because widening an array moved the block and
+// sixty-eight tests failed; the lexer's block has not moved, so its copies had failed
+// nothing and would have behaved identically the day it did.
+//
+// Fixing the instance leaves the class. Both layouts are published and chained here,
+// and `no_other_file_restates_the_shared_layout` looks for restatements of either.
+
+/// Maximum subject instructions per chunk in the first-pass verifier profile.
+/// Sized from the current stage corpus after explicit bounds dispatch expansion. Raised from
+/// 2,048 to 8,192 under the operator's ruling of 2026-10-26 that limits may be raised, since
+/// four repository sources reach 2,056 to 4,702 ops in one chunk.
+pub const VERIFY_OP_CAP: usize = 8192;
+
+/// How many source bytes `src.bytes` in `lexer.kel` holds.
+///
+/// Sized to hold the largest stage source. `parse.kel` exceeds 400 KB; the wire-format v2 twenty-four-bit data operands raised the shared-segment
+/// ceiling from 64 KB to 16 MB, so this may exceed 64 KB.
+pub const LEX_SOURCE_CAP: usize = 524288;
+
+/// How many distinct identifiers `src.istart`/`src.ilen` in `lexer.kel` hold.
+pub const LEX_INTERN_CAP: usize = 1280;
+
+/// Slot of `src.len`, the source byte count.
+pub const BR_LEX_LEN: usize = 0;
+
+/// Slot of `src.bytes[0]`, the source bytes the host places for the lexer to scan.
+pub const BR_LEX_BYTES: usize = BR_LEX_LEN + 1;
+
+/// Slot of `src.istart[0]`, each interned identifier's byte offset into the source.
+pub const BR_LEX_ISTART: usize = BR_LEX_BYTES + LEX_SOURCE_CAP;
+
+/// Slot of `src.ilen[0]`, each interned identifier's byte length.
+pub const BR_LEX_ILEN: usize = BR_LEX_ISTART + LEX_INTERN_CAP;
+
+/// Slot of `src.icount`, how many identifiers the lexer interned.
+pub const BR_LEX_ICOUNT: usize = BR_LEX_ILEN + LEX_INTERN_CAP;
+/// Full-width integer values indexed by the lexer's interned source spelling.
+pub const BR_LEX_VALUES: usize = BR_LEX_ICOUNT + 1;
+
+/// Slot of `toks.len`, the token count `parse.kel` compares its cursor against to
+/// find end of input.
+pub const BR_P_LEN: usize = 0;
+
+/// Slot of `toks.packed[0]`. Each entry is one `kind + payload * 256` token word.
+pub const BR_P_PACKED: usize = BR_P_LEN + 1;
+
+/// Slot of `toks.limit_id`, the interned id of the `limit` keyword.
+pub const BR_P_LIMIT_ID: usize = BR_P_PACKED + PARSE_TOKEN_CAP;
+
+/// Slot of `toks.chunk_count`, how many entries of the chunk table are seeded.
+pub const BR_P_CHUNK_COUNT: usize = BR_P_LIMIT_ID + 1;
+
+/// Slot of `toks.chunks[0]`, the call-resolution table in the module's chunk order.
+pub const BR_P_CHUNKS: usize = BR_P_CHUNK_COUNT + 1;
+
+/// Slot of `toks.require_id`, the interned id of the `require` keyword.
+pub const BR_P_REQUIRE_ID: usize = BR_P_CHUNKS + PARSE_CHUNK_CAP;
+
+/// Slot of `toks.word_id`, the interned id of the `Word` type name.
+pub const BR_P_WORD_ID: usize = BR_P_REQUIRE_ID + 1;
+
+/// Slot of `toks.byte_id`, the interned id of the `Byte` type name.
+pub const BR_P_BYTE_ID: usize = BR_P_WORD_ID + 1;
+
+/// Slot of `toks.bool_id`, the interned id of the `bool` type name.
+pub const BR_P_BOOL_ID: usize = BR_P_BYTE_ID + 1;
+
+/// The interned id of the eager boolean operator `and`, which is seeded by a
+/// harness rather than by this driver. Named here anyway, because the alternative
+/// is a harness restating the arithmetic -- which is exactly what broke.
+pub const BR_P_AND_ID: usize = BR_P_BOOL_ID + 1;
+
+/// The interned id of the eager boolean operator `or`. See [`BR_P_AND_ID`].
+pub const BR_P_OR_ID: usize = BR_P_AND_ID + 1;
+
+/// The absolute token index that `packed[0]` holds. Zero means the whole stream
+/// is seeded, which is what the ordinary driver does.
+pub const BR_P_BASE: usize = BR_P_OR_ID + 1;
+
+/// The cursor, written back by the stage on every token read, so a host feeding a
+/// window knows where to slide it without the stage needing a protocol to ask.
+pub const BR_P_AT: usize = BR_P_BASE + 1;
+
+/// The interned id of `true`, so `parse.kel` can recognise the literal.
+///
+/// **The token space is full**, so `true` and `false` are lexed as ordinary
+/// identifiers, exactly like the eager `and`/`or`. Without these ids the stage
+/// resolved them as variable references and emitted `GetLocal` where the reference
+/// emits `PushImmediate` — a silent miscompile the self-compilation oracle could
+/// not see, because no stage source contains a boolean literal.
+pub const BR_P_TRUE_ID: usize = BR_P_AT + 1;
+
+/// The interned id of `false`. See [`BR_P_TRUE_ID`].
+pub const BR_P_FALSE_ID: usize = BR_P_TRUE_ID + 1;
+
+/// Whole-source presence of native imports, including forward import declarations.
+pub const BR_P_HAS_IMPORTS: usize = BR_P_FALSE_ID + 1;
+
+/// Contextual assertion keyword, distinct from a user function called `assert`.
+pub const BR_P_ASSERT_ID: usize = BR_P_HAS_IMPORTS + 1;
+
+/// Float type-name id plus one. Zero means no Float type name was supplied.
+pub const BR_P_FLOAT_ID: usize = BR_P_ASSERT_ID + 1;
+/// Fixed type-name id plus one.
+pub const BR_P_FIXED_ID: usize = BR_P_FLOAT_ID + 1;
+/// Text type-name id plus one.
+pub const BR_P_TEXT_ID: usize = BR_P_FIXED_ID + 1;
+/// Enable source return-range queries and explicit token reposition requests.
+pub const BR_P_RETURN_QUERIES: usize = BR_P_TEXT_ID + 1;
+/// Contextual outcome keywords, interned identifier plus one.
+pub const BR_P_ON_ID: usize = BR_P_RETURN_QUERIES + 1;
+/// OK outcome label, interned identifier plus one.
+pub const BR_P_OK_ID: usize = BR_P_ON_ID + 1;
+/// Overflow outcome keyword, interned identifier plus one.
+pub const BR_P_OVERFLOW_ID: usize = BR_P_OK_ID + 1;
+/// Underflow outcome keyword, interned identifier plus one.
+pub const BR_P_UNDERFLOW_ID: usize = BR_P_OVERFLOW_ID + 1;
+/// Zero-divisor outcome keyword, interned identifier plus one.
+pub const BR_P_ZERO_DIVISOR_ID: usize = BR_P_UNDERFLOW_ID + 1;
+/// Full-width literal values transported from the lexer without host parsing.
+pub const BR_P_VALUES: usize = BR_P_ZERO_DIVISOR_ID + 1;
+/// Contextual indexed-read outcome label, interned identifier plus one.
+pub const BR_P_INVALID_INDEX_ID: usize = BR_P_VALUES + LEX_INTERN_CAP;
+/// `toks.mt_count`, the number of method-table rows, Order 6.
+pub const BR_P_MT_COUNT: usize = BR_P_INVALID_INDEX_ID + 1;
+/// `toks.mt_head`, each row's receiver head name id.
+pub const BR_P_MT_HEAD: usize = BR_P_MT_COUNT + 1;
+/// `toks.mt_name`, each row's method name id.
+pub const BR_P_MT_NAME: usize = BR_P_MT_HEAD + 64;
+/// `toks.mt_chunk`, each row's chunk index.
+pub const BR_P_MT_CHUNK: usize = BR_P_MT_NAME + 64;
+/// The checked-arm word `saturate_max`, interned identifier plus one, Order 6.
+pub const BR_P_SATMAX_ID: usize = BR_P_MT_CHUNK + 64;
+/// The checked-arm word `saturate_min`, interned identifier plus one, Order 6.
+pub const BR_P_SATMIN_ID: usize = BR_P_SATMAX_ID + 1;
+/// The destructuring filter's hidden binding, whose string is `let`, interned identifier plus
+/// one, Order 6.
+pub const BR_P_HIDDEN_ID: usize = BR_P_SATMIN_ID + 1;
+/// The builtin generic enum name `Option`, interned identifier plus one, Order 6.
+pub const BR_P_OPTION_ID: usize = BR_P_HIDDEN_ID + 1;
+/// The `Option` variant name `Some`, interned identifier plus one.
+pub const BR_P_SOME_ID: usize = BR_P_OPTION_ID + 1;
+/// The `Option` variant name `None`, interned identifier plus one.
+pub const BR_P_NONE_ID: usize = BR_P_SOME_ID + 1;
+/// The number of generic templates the host's syntactic scan found, Order 6.
+pub const BR_P_GEN_COUNT: usize = BR_P_NONE_ID + 1;
+/// Per template, its name id.
+pub const BR_P_GEN_NAME: usize = BR_P_GEN_COUNT + 1;
+/// Per template, the token position of its `fn`.
+pub const BR_P_GEN_FN: usize = BR_P_GEN_NAME + GEN_TEMPLATE_CAP;
+/// Per template, the token position of its `<`.
+pub const BR_P_GEN_LT: usize = BR_P_GEN_FN + GEN_TEMPLATE_CAP;
+/// Per template, the token position of its parameter list's `(`.
+pub const BR_P_GEN_PAREN: usize = BR_P_GEN_LT + GEN_TEMPLATE_CAP;
+/// Per template, the token position of its body's closing brace.
+pub const BR_P_GEN_END: usize = BR_P_GEN_PAREN + GEN_TEMPLATE_CAP;
+/// Per template, its type parameter count.
+pub const BR_P_GEN_NTP: usize = BR_P_GEN_END + GEN_TEMPLATE_CAP;
+/// Per template, four type parameter name ids.
+pub const BR_P_GEN_TP: usize = BR_P_GEN_NTP + GEN_TEMPLATE_CAP;
+/// Per template, eight value parameters' type parameter plus one, else zero.
+pub const BR_P_GEN_PMAP: usize = BR_P_GEN_TP + GEN_TEMPLATE_CAP * GEN_TYPE_PARAM_CAP;
+/// Per template, the return type's type parameter plus one, else zero.
+pub const BR_P_GEN_RMAP: usize = BR_P_GEN_PMAP + GEN_TEMPLATE_CAP * GEN_VALUE_PARAM_CAP;
+/// The number of seeded instantiations.
+pub const BR_P_SPEC_COUNT: usize = BR_P_GEN_RMAP + GEN_TEMPLATE_CAP;
+/// Per instantiation, its template.
+pub const BR_P_SPEC_GEN: usize = BR_P_SPEC_COUNT + 1;
+/// Per instantiation, its key, the type arguments' scalar kinds in base sixteen.
+pub const BR_P_SPEC_KEY: usize = BR_P_SPEC_GEN + GEN_INSTANCE_CAP;
+/// Per instantiation, its chunk index.
+pub const BR_P_SPEC_CHUNK: usize = BR_P_SPEC_KEY + GEN_INSTANCE_CAP;
+/// Per instantiation, its name id.
+pub const BR_P_SPEC_NAME: usize = BR_P_SPEC_CHUNK + GEN_INSTANCE_CAP;
+/// The information-flow operator `classify`, interned identifier plus one, Order 6.
+pub const BR_P_CLASSIFY_ID: usize = BR_P_SPEC_NAME + GEN_INSTANCE_CAP;
+/// The information-flow operator `declassify`, interned identifier plus one.
+pub const BR_P_DECLASSIFY_ID: usize = BR_P_CLASSIFY_ID + 1;
+/// The number of newtypes the host's syntactic scan found.
+pub const BR_P_NT_COUNT: usize = BR_P_DECLASSIFY_ID + 1;
+/// Per newtype, its name id.
+pub const BR_P_NT_NAME: usize = BR_P_NT_COUNT + 1;
+/// Per newtype, its base type's name id.
+pub const BR_P_NT_BASE: usize = BR_P_NT_NAME + NEWTYPE_CAP;
+/// Per newtype, one when it carries a refinement predicate.
+pub const BR_P_NT_REFINED: usize = BR_P_NT_BASE + NEWTYPE_CAP;
+/// Per newtype, the token position of its declaration's first token.
+pub const BR_P_NT_BEGIN: usize = BR_P_NT_REFINED + NEWTYPE_CAP;
+/// Per newtype, the token position of its declaration's last token.
+pub const BR_P_NT_END: usize = BR_P_NT_BEGIN + NEWTYPE_CAP;
+/// Per newtype, its refinement predicate's chunk index, else -1.
+pub const BR_P_NT_PRED: usize = BR_P_NT_END + NEWTYPE_CAP;
+/// Newtypes `parse.kel` holds, restated from `toks.nt_name`.
+pub const NEWTYPE_CAP: usize = 16;
+/// Generic templates `parse.kel` holds, restated from `toks.gen_name`.
+pub const GEN_TEMPLATE_CAP: usize = 16;
+/// Type parameters per template, restated from `toks.gen_tp`.
+pub const GEN_TYPE_PARAM_CAP: usize = 4;
+/// Value parameters per template the parameter map covers, restated from `toks.gen_pmap`.
+pub const GEN_VALUE_PARAM_CAP: usize = 8;
+/// Seeded instantiations, restated from `toks.spec_gen`.
+pub const GEN_INSTANCE_CAP: usize = 64;
+/// A header type the reference tags as opaque, following that type's own record. Payload
+/// one is an information-flow label, which keeps the type's shape, and payload two a
+/// newtype, whose shape is `Top`. Either makes a parameter's tag `Composite`.
+pub const PARSE_OPAQUE_TYPE_TAG: i64 = 141;
+/// The tag `parse.kel` requests an unseeded instantiation under, carrying the template plus
+/// sixteen times the key.
+/// No other record, body records included, uses this tag.
+pub const PARSE_GENERIC_REQUEST_TAG: i64 = 140;
+
+#[cfg(test)]
+mod shared_layout_tests {
+    use super::*;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    /// The slot offset and length of every field in `parse.kel`'s `shared data toks`
+    /// block, derived by reading the stage.
+    ///
+    /// **The constants above are addressed BY SLOT, and the block is written in
+    /// declaration order, so one miscounted field silently shifts every field after
+    /// it.** That has already happened once in this file's history and broke four
+    /// tests. Restating the layout as arithmetic is what makes it possible; deriving
+    /// it here is what makes a restatement that has drifted impossible to land.
+    fn stage_layout() -> Vec<(String, usize, usize)> {
+        const STAGE: &str = include_str!("selfhost/kel/parse.kel");
+        let body = STAGE
+            .split_once("shared data toks {")
+            .expect("parse.kel declares `shared data toks`")
+            .1
+            .split_once("\n}")
+            .expect("the block is closed")
+            .0;
+        let mut out = Vec::new();
+        let mut off = 0usize;
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("//") {
+                continue;
+            }
+            let Some((name, rest)) = t.split_once(':') else {
+                panic!("unparsed line in `shared data toks`: {t:?}");
+            };
+            let rest = rest.trim().trim_end_matches(',').trim();
+            let len = if let Some(inner) = rest.strip_prefix("[Word;") {
+                inner
+                    .trim_end_matches(']')
+                    .trim()
+                    .parse()
+                    .unwrap_or_else(|_| panic!("unparsed array length in {t:?}"))
+            } else if rest == "Word" {
+                1
+            } else {
+                panic!("unparsed field type in {t:?}");
+            };
+            out.push((String::from(name.trim()), off, len));
+            off += len;
+        }
+        out
+    }
+
+    fn slot_of(layout: &[(String, usize, usize)], name: &str) -> usize {
+        layout
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("`shared data toks` has no field `{name}`"))
+            .1
+    }
+
+    fn len_of(layout: &[(String, usize, usize)], name: &str) -> usize {
+        layout
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("`shared data toks` has no field `{name}`"))
+            .2
+    }
+
+    /// **Every `BR_P_*` constant must equal the slot the stage actually puts that
+    /// field at.**
+    ///
+    /// Verified by mutation: changing any array length in `shared data toks`, or
+    /// reordering two fields, fails this by name. Without it, widening `toks.chunks`
+    /// means editing seven arithmetic literals consistently and finding out later.
+    #[test]
+    fn the_driver_shared_slots_match_the_stage() {
+        let layout = stage_layout();
+        assert_eq!(len_of(&layout, "values"), LEX_INTERN_CAP);
+        let cases: &[(&str, &str, usize)] = &[
+            ("len", "BR_P_LEN", BR_P_LEN),
+            ("packed", "BR_P_PACKED", BR_P_PACKED),
+            ("limit_id", "BR_P_LIMIT_ID", BR_P_LIMIT_ID),
+            ("chunk_count", "BR_P_CHUNK_COUNT", BR_P_CHUNK_COUNT),
+            ("chunks", "BR_P_CHUNKS", BR_P_CHUNKS),
+            ("require_id", "BR_P_REQUIRE_ID", BR_P_REQUIRE_ID),
+            ("word_id", "BR_P_WORD_ID", BR_P_WORD_ID),
+            ("byte_id", "BR_P_BYTE_ID", BR_P_BYTE_ID),
+            ("bool_id", "BR_P_BOOL_ID", BR_P_BOOL_ID),
+            ("and_id", "BR_P_AND_ID", BR_P_AND_ID),
+            ("or_id", "BR_P_OR_ID", BR_P_OR_ID),
+            ("base", "BR_P_BASE", BR_P_BASE),
+            ("at", "BR_P_AT", BR_P_AT),
+            ("true_id", "BR_P_TRUE_ID", BR_P_TRUE_ID),
+            ("false_id", "BR_P_FALSE_ID", BR_P_FALSE_ID),
+            ("has_imports", "BR_P_HAS_IMPORTS", BR_P_HAS_IMPORTS),
+            ("assert_id", "BR_P_ASSERT_ID", BR_P_ASSERT_ID),
+            ("float_id", "BR_P_FLOAT_ID", BR_P_FLOAT_ID),
+            ("fixed_id", "BR_P_FIXED_ID", BR_P_FIXED_ID),
+            ("text_id", "BR_P_TEXT_ID", BR_P_TEXT_ID),
+            ("return_queries", "BR_P_RETURN_QUERIES", BR_P_RETURN_QUERIES),
+            ("on_id", "BR_P_ON_ID", BR_P_ON_ID),
+            ("ok_id", "BR_P_OK_ID", BR_P_OK_ID),
+            ("values", "BR_P_VALUES", BR_P_VALUES),
+            (
+                "invalid_index_id",
+                "BR_P_INVALID_INDEX_ID",
+                BR_P_INVALID_INDEX_ID,
+            ),
+            ("overflow_id", "BR_P_OVERFLOW_ID", BR_P_OVERFLOW_ID),
+            ("underflow_id", "BR_P_UNDERFLOW_ID", BR_P_UNDERFLOW_ID),
+            (
+                "zero_divisor_id",
+                "BR_P_ZERO_DIVISOR_ID",
+                BR_P_ZERO_DIVISOR_ID,
+            ),
+            ("mt_count", "BR_P_MT_COUNT", BR_P_MT_COUNT),
+            ("mt_head", "BR_P_MT_HEAD", BR_P_MT_HEAD),
+            ("mt_name", "BR_P_MT_NAME", BR_P_MT_NAME),
+            ("mt_chunk", "BR_P_MT_CHUNK", BR_P_MT_CHUNK),
+            ("satmax_id", "BR_P_SATMAX_ID", BR_P_SATMAX_ID),
+            ("satmin_id", "BR_P_SATMIN_ID", BR_P_SATMIN_ID),
+            ("hidden_id", "BR_P_HIDDEN_ID", BR_P_HIDDEN_ID),
+            ("option_id", "BR_P_OPTION_ID", BR_P_OPTION_ID),
+            ("some_id", "BR_P_SOME_ID", BR_P_SOME_ID),
+            ("none_id", "BR_P_NONE_ID", BR_P_NONE_ID),
+            ("gen_count", "BR_P_GEN_COUNT", BR_P_GEN_COUNT),
+            ("gen_name", "BR_P_GEN_NAME", BR_P_GEN_NAME),
+            ("gen_fn", "BR_P_GEN_FN", BR_P_GEN_FN),
+            ("gen_lt", "BR_P_GEN_LT", BR_P_GEN_LT),
+            ("gen_paren", "BR_P_GEN_PAREN", BR_P_GEN_PAREN),
+            ("gen_end", "BR_P_GEN_END", BR_P_GEN_END),
+            ("gen_ntp", "BR_P_GEN_NTP", BR_P_GEN_NTP),
+            ("gen_tp", "BR_P_GEN_TP", BR_P_GEN_TP),
+            ("gen_pmap", "BR_P_GEN_PMAP", BR_P_GEN_PMAP),
+            ("gen_rmap", "BR_P_GEN_RMAP", BR_P_GEN_RMAP),
+            ("spec_count", "BR_P_SPEC_COUNT", BR_P_SPEC_COUNT),
+            ("spec_gen", "BR_P_SPEC_GEN", BR_P_SPEC_GEN),
+            ("spec_key", "BR_P_SPEC_KEY", BR_P_SPEC_KEY),
+            ("spec_chunk", "BR_P_SPEC_CHUNK", BR_P_SPEC_CHUNK),
+            ("spec_name", "BR_P_SPEC_NAME", BR_P_SPEC_NAME),
+            ("classify_id", "BR_P_CLASSIFY_ID", BR_P_CLASSIFY_ID),
+            ("declassify_id", "BR_P_DECLASSIFY_ID", BR_P_DECLASSIFY_ID),
+            ("nt_count", "BR_P_NT_COUNT", BR_P_NT_COUNT),
+            ("nt_name", "BR_P_NT_NAME", BR_P_NT_NAME),
+            ("nt_base", "BR_P_NT_BASE", BR_P_NT_BASE),
+            ("nt_refined", "BR_P_NT_REFINED", BR_P_NT_REFINED),
+            ("nt_begin", "BR_P_NT_BEGIN", BR_P_NT_BEGIN),
+            ("nt_end", "BR_P_NT_END", BR_P_NT_END),
+            ("nt_pred", "BR_P_NT_PRED", BR_P_NT_PRED),
+        ];
+        for &(field, konst, value) in cases {
+            assert_eq!(
+                slot_of(&layout, field),
+                value,
+                "`{konst}` is {value} but the stage puts `toks.{field}` at slot {}. The \
+                 block is addressed by slot, so every field after the first mismatch is \
+                 also wrong.",
+                slot_of(&layout, field)
+            );
+        }
+    }
+
+    /// **A CAP IS A FAMILY, AND IT APPEARS IN THREE PLACES.**
+    ///
+    /// Raising `toks.chunks` from 256 to 1024 did not admit `wire.kel`. The chunk
+    /// index also addresses the six `chunkret.ret_*` arrays, which were 256 as well,
+    /// and it also bounds two `for i in 0..toks.chunk_count limit 256` loops. Widening
+    /// the one array named "the chunk table" moved the wall from an index trap to a
+    /// loop-limit trap and then to a different index trap, each naming a size and
+    /// none naming the cap.
+    ///
+    /// **This is the second family in two increments.** The eight local-binding arrays
+    /// were the first. So the check derives the family from the stage rather than
+    /// listing it: anything the stage indexes with a chunk index, and any loop it
+    /// bounds by the chunk count, must admit as many chunks as the driver accepts.
+    #[test]
+    fn every_chunk_indexed_array_admits_the_chunk_cap() {
+        const STAGE: &str = include_str!("selfhost/kel/parse.kel");
+        let layout = stage_layout();
+        assert_eq!(
+            len_of(&layout, "chunks"),
+            PARSE_CHUNK_CAP,
+            "the family below is checked against the driver's cap, so this must hold first"
+        );
+
+        // Arrays addressed by a chunk index. `ps.cur_chunk` is the writing site and
+        // `call.call_chunk[..]` the reading one; both are chunk numbers.
+        let mut checked = 0usize;
+        for idx in ["ps.cur_chunk", "call.call_chunk["] {
+            for (i, _) in STAGE.match_indices(idx) {
+                // The index expression is preceded by the `[` that opens the subscript,
+                // and the array name is the identifier before THAT. Reading the
+                // identifier straight back from `i` finds the `[` first and yields the
+                // empty string, which is what the first version of this did: it found
+                // zero arrays and the vacuity assertion below caught it.
+                let Some(before) = STAGE[..i].strip_suffix('[') else {
+                    continue;
+                };
+                let name: alloc::string::String = before
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                if name.is_empty() {
+                    continue;
+                }
+                let Some(len) = declared_array_len(STAGE, &name) else {
+                    continue;
+                };
+                assert!(
+                    len >= PARSE_CHUNK_CAP,
+                    "`{name}` is indexed by a chunk number but holds only {len}, and the \
+                     driver accepts {PARSE_CHUNK_CAP} chunks. Widening `toks.chunks` alone \
+                     leaves the wall exactly where it was."
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 6,
+            "only {checked} chunk-indexed arrays were found; the derivation has stopped \
+             seeing the family and this check has gone vacuous"
+        );
+
+        // Return queries index their arrays with a callee id instead of ps.cur_chunk.
+        let returns = STAGE
+            .split_once("private data rq {")
+            .expect("return-query data block")
+            .1
+            .split('}')
+            .next()
+            .unwrap();
+        for name in ["begin", "end", "known", "scalar", "cache", "epoch"] {
+            assert_eq!(
+                declared_array_len(returns, name),
+                Some(PARSE_CHUNK_CAP),
+                "return-query array {name} must admit every chunk"
+            );
+        }
+
+        // Loops bounded by the chunk COUNT. A `limit` below the cap turns an admitted
+        // program into `LoopLimitExceeded`, which names neither the chunk table nor the
+        // program's function count.
+        let mut loops = 0usize;
+        for line in STAGE.lines() {
+            let t = line.trim();
+            let Some(rest) = t.strip_prefix("for i in 0..toks.chunk_count limit ") else {
+                continue;
+            };
+            let n: usize = rest
+                .trim_end_matches(" {")
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("unparsed loop limit in {t:?}"));
+            assert!(
+                n >= PARSE_CHUNK_CAP,
+                "a loop over the chunk table is bounded at {n} while the driver accepts \
+                 {PARSE_CHUNK_CAP} chunks; a program between the two traps with \
+                 `LoopLimitExceeded`"
+            );
+            loops += 1;
+        }
+        assert!(
+            loops >= 2,
+            "only {loops} chunk-count loops were found; the derivation has gone vacuous"
+        );
+    }
+
+    /// The declared length of `name` as an array in `src`, or `None`.
+    fn declared_array_len(src: &str, name: &str) -> Option<usize> {
+        src.lines()
+            .map(str::trim)
+            .find(|l| l.starts_with(&alloc::format!("{name}: [Word;")))
+            .and_then(|l| l.split(';').nth(1))
+            .and_then(|t| t.split(']').next())
+            .and_then(|n| n.trim().parse().ok())
+    }
+
+    /// **THE LEXER'S BLOCK ON THE SAME TERMS**, because the parser's copies were found
+    /// only by a change that moved the block, and the lexer's block has not moved yet.
+    ///
+    /// Four files restated it: this driver, two harnesses, and `compiler/src/main.rs`.
+    /// None had failed anything, which is exactly the state the parser's five copies were
+    /// in the day before the chunk table was widened.
+    #[test]
+    fn the_lexer_shared_slots_match_the_stage() {
+        const STAGE: &str = include_str!("selfhost/kel/lexer.kel");
+        let body = STAGE
+            .split_once("shared data src {")
+            .expect("lexer.kel declares `shared data src`")
+            .1
+            .split_once("\n}")
+            .expect("the block is closed")
+            .0;
+        let mut off = 0usize;
+        let mut at: alloc::vec::Vec<(alloc::string::String, usize, usize)> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("//") {
+                continue;
+            }
+            let (name, rest) = t
+                .split_once(':')
+                .unwrap_or_else(|| panic!("unparsed: {t:?}"));
+            let rest = rest.trim().trim_end_matches(',').trim();
+            // `bytes` is `[Byte; N]`; every other field is `Word`-shaped. Both occupy one
+            // slot per element in the shared segment.
+            let len = if let Some(i) = rest.strip_prefix("[Byte;").or(rest.strip_prefix("[Word;")) {
+                i.trim_end_matches(']').trim().parse().expect("length")
+            } else {
+                1
+            };
+            at.push((alloc::string::String::from(name.trim()), off, len));
+            off += len;
+        }
+        let slot = |n: &str| at.iter().find(|(x, _, _)| x == n).expect("field").1;
+        let len = |n: &str| at.iter().find(|(x, _, _)| x == n).expect("field").2;
+
+        assert_eq!(
+            len("bytes"),
+            LEX_SOURCE_CAP,
+            "`src.bytes` and LEX_SOURCE_CAP differ"
+        );
+        assert_eq!(
+            len("istart"),
+            LEX_INTERN_CAP,
+            "`src.istart` and LEX_INTERN_CAP differ"
+        );
+        assert_eq!(len("values"), LEX_INTERN_CAP);
+        assert_eq!(
+            len("ilen"),
+            LEX_INTERN_CAP,
+            "`src.ilen` and LEX_INTERN_CAP differ"
+        );
+        for (field, konst, value) in [
+            ("len", "BR_LEX_LEN", BR_LEX_LEN),
+            ("bytes", "BR_LEX_BYTES", BR_LEX_BYTES),
+            ("istart", "BR_LEX_ISTART", BR_LEX_ISTART),
+            ("ilen", "BR_LEX_ILEN", BR_LEX_ILEN),
+            ("icount", "BR_LEX_ICOUNT", BR_LEX_ICOUNT),
+            ("values", "BR_LEX_VALUES", BR_LEX_VALUES),
+        ] {
+            assert_eq!(
+                slot(field),
+                value,
+                "`{konst}` is {value} but the stage puts `src.{field}` at slot {}",
+                slot(field)
+            );
+        }
+    }
+
+    /// The two capacities the driver restates are the stage's own array lengths.
+    ///
+    /// A driver that learned either by overflowing it would already have written past
+    /// the array, which is why they are restated rather than discovered.
+    #[test]
+    fn the_driver_array_caps_match_the_stage() {
+        let layout = stage_layout();
+        assert_eq!(
+            len_of(&layout, "chunks"),
+            PARSE_CHUNK_CAP,
+            "`toks.chunks` holds {} entries and the driver refuses at {PARSE_CHUNK_CAP}",
+            len_of(&layout, "chunks")
+        );
+        assert_eq!(
+            len_of(&layout, "packed"),
+            PARSE_TOKEN_CAP,
+            "`toks.packed` holds {} entries and the driver's cap is {PARSE_TOKEN_CAP}",
+            len_of(&layout, "packed")
+        );
+    }
+}

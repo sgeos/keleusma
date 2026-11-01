@@ -472,8 +472,8 @@ mod tests {
         fs::create_dir_all(&dir).expect("create temp dir");
 
         // Generate two keys and write them.
-        let key1 = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng).verifying_key();
-        let key2 = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng).verifying_key();
+        let key1 = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]).verifying_key();
+        let key2 = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]).verifying_key();
         fs::write(dir.join("alice.pub"), key1.to_bytes()).expect("write alice");
         fs::write(dir.join("bob.pub"), key2.to_bytes()).expect("write bob");
 

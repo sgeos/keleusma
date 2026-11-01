@@ -1,0 +1,1347 @@
+{
+  "schema_version": 1,
+  "observed_on": "2026-10-23 America/Los_Angeles",
+  "commit": "b1dbfe4f258a3b9f8145c571da188999b3ad7526",
+  "run_id": 39989231681,
+  "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681",
+  "status": "completed",
+  "conclusion": "success",
+  "source_commands": [
+    "gh run view 39989231681 --repo sgeos/keleusma --json databaseId,headSha,status,conclusion,url,jobs",
+    "gh run view 39989231681 --repo sgeos/keleusma --log"
+  ],
+  "notes": [
+    "Reviewed extraction from GitHub Actions metadata and logs. No local execution is claimed.",
+    "All selected test builds report test profile unoptimized + debuginfo. nextest --profile ci is a runner profile, not Cargo release.",
+    "Shard skipped counts include tests assigned to other shards. Do not add skipped counts across shards.",
+    "Original ignored local logs from the completion declarations are historical and are not reconstructed by this successor receipt."
+  ],
+  "jobs": [
+    {
+      "name": "Doc",
+      "id": 120536365794,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794"
+    },
+    {
+      "name": "Test (signatures feature)",
+      "id": 120536365955,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955"
+    },
+    {
+      "name": "Format",
+      "id": 120536366071,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366071"
+    },
+    {
+      "name": "Miri",
+      "id": 120536366084,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366084"
+    },
+    {
+      "name": "MSRV keleusma-arena (1.85)",
+      "id": 120536366086,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366086"
+    },
+    {
+      "name": "RTOS demonstrator build (N6 / thumbv8m.main-none-eabihf)",
+      "id": 120536366092,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366092"
+    },
+    {
+      "name": "Test (shard 2/4)",
+      "id": 120536366163,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366163"
+    },
+    {
+      "name": "Test (no default features)",
+      "id": 120536366200,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200"
+    },
+    {
+      "name": "Test (keleusma-wire)",
+      "id": 120536366221,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221"
+    },
+    {
+      "name": "Dependency advisories",
+      "id": 120536366227,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366227"
+    },
+    {
+      "name": "RTOS host demonstrator",
+      "id": 120536366255,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366255"
+    },
+    {
+      "name": "Test (keleusma-bench)",
+      "id": 120536366296,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366296"
+    },
+    {
+      "name": "no_std build",
+      "id": 120536366335,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366335"
+    },
+    {
+      "name": "MSRV keleusma (1.88)",
+      "id": 120536366337,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366337"
+    },
+    {
+      "name": "Doc links",
+      "id": 120536366373,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366373"
+    },
+    {
+      "name": "Clippy",
+      "id": 120536366378,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366378"
+    },
+    {
+      "name": "Test (self-host feature, shard 2/4)",
+      "id": 120536366390,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366390"
+    },
+    {
+      "name": "Examples (SDL3 feature)",
+      "id": 120536366422,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366422"
+    },
+    {
+      "name": "Test (self-host feature, shard 4/4)",
+      "id": 120536366427,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366427"
+    },
+    {
+      "name": "Self-hosted compiler subproject",
+      "id": 120536366455,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366455"
+    },
+    {
+      "name": "WASM playground crate",
+      "id": 120536366458,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366458"
+    },
+    {
+      "name": "Test (shard 1/4)",
+      "id": 120536366483,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483"
+    },
+    {
+      "name": "Test (self-host feature, shard 1/4)",
+      "id": 120536366531,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531"
+    },
+    {
+      "name": "Test (shard 4/4)",
+      "id": 120536366560,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366560"
+    },
+    {
+      "name": "LSP (keleusma-lsp)",
+      "id": 120536366567,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366567"
+    },
+    {
+      "name": "Test (shard 3/4)",
+      "id": 120536366598,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366598"
+    },
+    {
+      "name": "VS Code extension",
+      "id": 120536366609,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366609"
+    },
+    {
+      "name": "Shell scripts",
+      "id": 120536366625,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366625"
+    },
+    {
+      "name": "Test (self-host feature, shard 3/4)",
+      "id": 120536366667,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366667"
+    },
+    {
+      "name": "Check",
+      "id": 120536366804,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366804"
+    },
+    {
+      "name": "Test (broad features)",
+      "id": 120536366813,
+      "conclusion": "success",
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813"
+    }
+  ],
+  "populations": {
+    "workspace": {
+      "passed": 3458,
+      "failed": 0,
+      "unique_ignored": 2,
+      "keleusma_library_passed": 1439,
+      "passed_identity_sha256": "8da114999f6764cfa2e71d569ad9e2204920d4d108987d5c63f5a7d3420d1db0",
+      "count_rule": "Unique nextest PASS binary/test pairs across all four hash partitions. The common discovered population minus their union is the ignored count. Library count uses binary keleusma only.",
+      "discovered": 3460
+    },
+    "self-host": {
+      "passed": 3199,
+      "failed": 0,
+      "unique_ignored": 2,
+      "keleusma_library_passed": 1389,
+      "passed_identity_sha256": "f5f2166ce8300b770d0a6a3eb3c0b88dd83e6bc4243e82f4abc0be3d5a6b3898",
+      "count_rule": "Unique nextest PASS binary/test pairs across all four hash partitions. The common discovered population minus their union is the ignored count. Library count uses binary keleusma only.",
+      "discovered": 3201
+    }
+  },
+  "commands": [
+    {
+      "job": "Test (shard 1/4)",
+      "job_id": 120536366483,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483",
+      "command": "cargo nextest run --profile ci --workspace --partition hash:1/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 842,
+          "failed": 0,
+          "skipped": 2618,
+          "excerpt": "Summary [13078.093s] 842 tests run: 842 passed (43 slow), 2618 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (shard 1/4)",
+      "job_id": 120536366483,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483",
+      "command": "cargo test --workspace --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (shard 2/4)",
+      "job_id": 120536366163,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366163",
+      "command": "cargo nextest run --profile ci --workspace --partition hash:2/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 861,
+          "failed": 0,
+          "skipped": 2599,
+          "excerpt": "Summary [4700.621s] 861 tests run: 861 passed (34 slow), 2599 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (shard 3/4)",
+      "job_id": 120536366598,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366598",
+      "command": "cargo nextest run --profile ci --workspace --partition hash:3/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 825,
+          "failed": 0,
+          "skipped": 2635,
+          "excerpt": "Summary [7747.787s] 825 tests run: 825 passed (35 slow), 2635 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (shard 4/4)",
+      "job_id": 120536366560,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366560",
+      "command": "cargo nextest run --profile ci --workspace --partition hash:4/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 930,
+          "failed": 0,
+          "skipped": 2530,
+          "excerpt": "Summary [7166.602s] 930 tests run: 930 passed (40 slow), 2530 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (self-host feature, shard 1/4)",
+      "job_id": 120536366531,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531",
+      "command": "cargo nextest run --profile ci -p keleusma --features self-host --partition hash:1/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 790,
+          "failed": 0,
+          "skipped": 2411,
+          "excerpt": "Summary [13292.942s] 790 tests run: 790 passed (41 slow), 2411 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (self-host feature, shard 1/4)",
+      "job_id": 120536366531,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531",
+      "command": "cargo test -p keleusma --features self-host --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (self-host feature, shard 2/4)",
+      "job_id": 120536366390,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366390",
+      "command": "cargo nextest run --profile ci -p keleusma --features self-host --partition hash:2/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 782,
+          "failed": 0,
+          "skipped": 2419,
+          "excerpt": "Summary [5734.291s] 782 tests run: 782 passed (35 slow), 2419 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (self-host feature, shard 3/4)",
+      "job_id": 120536366667,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366667",
+      "command": "cargo nextest run --profile ci -p keleusma --features self-host --partition hash:3/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 757,
+          "failed": 0,
+          "skipped": 2444,
+          "excerpt": "Summary [7008.641s] 757 tests run: 757 passed (33 slow), 2444 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (self-host feature, shard 4/4)",
+      "job_id": 120536366427,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366427",
+      "command": "cargo nextest run --profile ci -p keleusma --features self-host --partition hash:4/4",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 870,
+          "failed": 0,
+          "skipped": 2331,
+          "excerpt": "Summary [9418.119s] 870 tests run: 870 passed (47 slow), 2331 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (no default features)",
+      "job_id": 120536366200,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200",
+      "command": "cargo nextest run --profile ci -p keleusma --no-default-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 331,
+          "failed": 0,
+          "skipped": 0,
+          "excerpt": "Summary [   3.588s] 331 tests run: 331 passed, 0 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (no default features)",
+      "job_id": 120536366200,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200",
+      "command": "cargo test -p keleusma --no-default-features --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 2,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (signatures feature)",
+      "job_id": 120536365955,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955",
+      "command": "cargo nextest run --profile ci -p keleusma --features signatures",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 2458,
+          "failed": 0,
+          "skipped": 0,
+          "excerpt": "Summary [ 285.295s] 2458 tests run: 2458 passed (1 slow), 0 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (signatures feature)",
+      "job_id": 120536365955,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955",
+      "command": "cargo test -p keleusma --features signatures --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (broad features)",
+      "job_id": 120536366813,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813",
+      "command": "cargo nextest run --profile ci -p keleusma --features signatures,shell",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 2475,
+          "failed": 0,
+          "skipped": 0,
+          "excerpt": "Summary [ 284.424s] 2475 tests run: 2475 passed (1 slow), 0 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (broad features)",
+      "job_id": 120536366813,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813",
+      "command": "cargo test -p keleusma --features signatures,shell --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (keleusma-wire)",
+      "job_id": 120536366221,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221",
+      "command": "cargo nextest run --profile ci -p keleusma-wire --all-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 53,
+          "failed": 0,
+          "skipped": 0,
+          "excerpt": "Summary [   0.095s] 53 tests run: 53 passed, 0 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (keleusma-wire)",
+      "job_id": 120536366221,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221",
+      "command": "cargo test -p keleusma-wire --all-features --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (keleusma-wire)",
+      "job_id": 120536366221,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221",
+      "command": "cargo nextest run --profile ci -p keleusma-wire --no-default-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 19,
+          "failed": 0,
+          "skipped": 0,
+          "excerpt": "Summary [   0.033s] 19 tests run: 19 passed, 0 skipped"
+        }
+      ]
+    },
+    {
+      "job": "Test (keleusma-wire)",
+      "job_id": 120536366221,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221",
+      "command": "cargo test -p keleusma-wire --no-default-features --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (keleusma-bench)",
+      "job_id": 120536366296,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366296",
+      "command": "cargo nextest run --profile ci -p keleusma-bench\ncargo test -p keleusma-bench --doc",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "nextest",
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0,
+          "excerpt": "Summary [   3.804s] 6 tests run: 6 passed, 0 skipped"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Test (keleusma-bench)",
+      "job_id": 120536366296,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366296",
+      "command": "cargo build -p keleusma-bench --no-default-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": []
+    },
+    {
+      "job": "Self-hosted compiler subproject",
+      "job_id": 120536366455,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366455",
+      "command": "cd compiler\ncargo fmt --all -- --check\ncargo clippy --all-targets -- -D warnings\ncargo test",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ],
+        [
+          "test",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1704.07s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3916.90s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 266.74s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.21s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 46,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 596.85s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 159.70s"
+        },
+        {
+          "runner": "cargo test",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0,
+          "excerpt": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "job": "Clippy",
+      "job_id": 120536366378,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366378",
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": []
+    },
+    {
+      "job": "Format",
+      "job_id": 120536366071,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366071",
+      "command": "cargo fmt --check",
+      "exit_status": 0,
+      "build_profiles": [],
+      "summaries": []
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma --no-deps --features signatures,encryption,shell",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma --no-deps --features self-host",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma-arena --no-deps --all-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma-macros --no-deps",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma-bench --no-deps",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma-cli --no-deps",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma --no-deps --features self-host",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma-wire --no-deps --all-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "Doc",
+      "job_id": 120536365794,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365794",
+      "command": "cargo doc -p keleusma-wire-derive --no-deps",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings -A rustdoc::redundant-explicit-links"
+      }
+    },
+    {
+      "job": "MSRV keleusma (1.88)",
+      "job_id": 120536366337,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366337",
+      "command": "cargo check -p keleusma",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "toolchain": "1.88"
+    },
+    {
+      "job": "MSRV keleusma (1.88)",
+      "job_id": 120536366337,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366337",
+      "command": "cargo check -p keleusma --no-default-features",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "toolchain": "1.88"
+    },
+    {
+      "job": "MSRV keleusma (1.88)",
+      "job_id": 120536366337,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366337",
+      "command": "cargo check -p keleusma --features signatures",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "toolchain": "1.88"
+    },
+    {
+      "job": "MSRV keleusma (1.88)",
+      "job_id": 120536366337,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366337",
+      "command": "cargo check -p keleusma --tests",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": [],
+      "toolchain": "1.88"
+    },
+    {
+      "job": "no_std build",
+      "job_id": 120536366335,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366335",
+      "command": "cargo build -p keleusma --target thumbv7em-none-eabihf",
+      "exit_status": 0,
+      "build_profiles": [
+        [
+          "dev",
+          "unoptimized + debuginfo"
+        ]
+      ],
+      "summaries": []
+    },
+    {
+      "job": "Doc links",
+      "job_id": 120536366373,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366373",
+      "command": "cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel",
+      "exit_status": 0,
+      "build_profiles": [],
+      "summaries": []
+    },
+    {
+      "job": "Doc links",
+      "job_id": 120536366373,
+      "url": "https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366373",
+      "command": "cargo build -q -p keleusma-cli\npython3 book/ci/verify_examples.py target/debug/keleusma book/src",
+      "exit_status": 0,
+      "build_profiles": [],
+      "summaries": []
+    }
+  ],
+  "named_test_passes": [
+    {
+      "test": "production_compiler_matches_every_complete_stage_artifact",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T20:24:40.4198594Z         PASS [12993.248s] (842/842) keleusma::selfhost_artifact_identity production_compiler_matches_every_complete_stage_artifact"
+    },
+    {
+      "test": "complete_artifact_corpus_covers_every_stage_source",
+      "job": "Test (shard 2/4)",
+      "excerpt": "2026-10-23T16:47:38.2655460Z         PASS [   0.006s] (562/861) keleusma::selfhost_artifact_identity complete_artifact_corpus_covers_every_stage_source"
+    },
+    {
+      "test": "production_types_reach_corpus_and_rule_form_census",
+      "job": "Test (shard 2/4)",
+      "excerpt": "2026-10-23T17:49:57.6116322Z         PASS [ 463.376s] (739/861) keleusma::selfhost_typecheck production_types_reach_corpus_and_rule_form_census"
+    },
+    {
+      "test": "pipeline_expression_extraction_reaches_every_stage",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T19:39:10.8046438Z         PASS [6041.924s] (840/842) keleusma::selfhost_typecheck pipeline_expression_extraction_reaches_every_stage"
+    },
+    {
+      "test": "derived_binding_verdict_depends_on_the_keleusma_decision",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T16:46:51.3912333Z         PASS [  15.686s] (438/930) keleusma selfhost::typecheck::tests::derived_binding_verdict_depends_on_the_keleusma_decision"
+    },
+    {
+      "test": "all_stage_artifacts_are_independent_of_recorded_expression_types",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T16:46:53.5763659Z         PASS [  11.222s] (125/842) keleusma compiler::inference_independence::all_stage_artifacts_are_independent_of_recorded_expression_types"
+    },
+    {
+      "test": "the_same_source_compiles_identically_in_separate_processes",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T18:53:20.1846433Z         PASS [  94.633s] (814/842) keleusma-cli::compile_reproducible the_same_source_compiles_identically_in_separate_processes"
+    },
+    {
+      "test": "independent_type_rejection_reaches_the_command",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T18:13:06.9258385Z         PASS [  18.097s] (796/825) keleusma-cli::self_hosted_refusal independent_type_rejection_reaches_the_command"
+    },
+    {
+      "test": "every_current_stage_completes_the_fallible_verifier",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T17:08:58.6452179Z         PASS [1224.437s] (586/930) keleusma::selfhost_admission every_current_stage_completes_the_fallible_verifier"
+    },
+    {
+      "test": "scalar_and_nested_array_strides_reach_the_typed_stage",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T17:50:49.9822682Z         PASS [   3.877s] (673/930) keleusma::selfhost_rejection_families scalar_and_nested_array_strides_reach_the_typed_stage"
+    },
+    {
+      "test": "declared_local_assignment_checks_shape",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T17:14:37.1652158Z         PASS [   2.051s] (610/825) keleusma::selfhost_rejection_families declared_local_assignment_checks_shape"
+    },
+    {
+      "test": "yield_resume_shape_controls_field_admission",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T17:50:51.5362183Z         PASS [   1.552s] (674/930) keleusma::selfhost_rejection_families yield_resume_shape_controls_field_admission"
+    },
+    {
+      "test": "every_flat_projection_family_checks_the_extent",
+      "job": "Test (shard 2/4)",
+      "excerpt": "2026-10-23T17:35:04.3596328Z         PASS [   8.033s] (644/861) keleusma::selfhost_rejection_families every_flat_projection_family_checks_the_extent"
+    },
+    {
+      "test": "loop_back_edge_height_must_be_neutral",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T17:14:42.3172097Z         PASS [   2.159s] (612/825) keleusma::selfhost_rejection_families loop_back_edge_height_must_be_neutral"
+    },
+    {
+      "test": "layout_reconciliation_checks_prefix_count_and_private_order",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T17:14:40.1582176Z         PASS [   2.993s] (611/825) keleusma::selfhost_rejection_families layout_reconciliation_checks_prefix_count_and_private_order"
+    },
+    {
+      "test": "packed_call_shape_pool_accepts_its_exact_capacity",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T17:49:29.5763957Z         PASS [   3.504s] (642/842) keleusma::selfhost_rejection_families packed_call_shape_pool_accepts_its_exact_capacity"
+    },
+    {
+      "test": "loop_termination_preserves_the_reference_post_loop_checks",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T17:50:46.1072159Z         PASS [   3.143s] (672/930) keleusma::selfhost_rejection_families loop_termination_preserves_the_reference_post_loop_checks"
+    },
+    {
+      "test": "current_stage_graphs_preserve_reference_order",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T16:47:14.6313702Z         PASS [  32.018s] (137/842) keleusma selfhost::call_graph::tests::current_stage_graphs_preserve_reference_order"
+    },
+    {
+      "test": "stage_order_and_cycle_verdict_match_the_reference",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T16:46:43.2673659Z         PASS [   0.650s] (116/842) keleusma selfhost::call_graph::tests::stage_order_and_cycle_verdict_match_the_reference"
+    },
+    {
+      "test": "cycle_verdict_depends_on_the_stage_with_identical_inputs",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T16:52:55.8831971Z         PASS [   0.493s] (112/825) keleusma selfhost::call_graph::tests::cycle_verdict_depends_on_the_stage_with_identical_inputs"
+    },
+    {
+      "test": "admission_and_summary_use_depend_on_stage_decisions",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T16:46:52.2683755Z         PASS [   3.523s] (124/842) keleusma selfhost::resources::tests::admission_and_summary_use_depend_on_stage_decisions"
+    },
+    {
+      "test": "membership_and_convergence_are_stage_owned",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T16:46:40.5305538Z         PASS [   0.405s] (130/930) keleusma selfhost::yield_fixpoint::tests::membership_and_convergence_are_stage_owned"
+    },
+    {
+      "test": "text_lattice_matches_the_reference_over_control_flow_and_calls",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T17:49:48.5828831Z         PASS [   0.860s] (645/842) keleusma::selfhost_resource_admission text_lattice_matches_the_reference_over_control_flow_and_calls"
+    },
+    {
+      "test": "text_heap_saturates_and_stops_at_the_same_instruction",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T17:15:40.2752155Z         PASS [   0.276s] (619/825) keleusma::selfhost_resource_admission text_heap_saturates_and_stops_at_the_same_instruction"
+    },
+    {
+      "test": "heap_arithmetic_saturates_like_the_reference",
+      "job": "Test (shard 1/4)",
+      "excerpt": "2026-10-23T17:49:47.7233702Z         PASS [   8.701s] (644/842) keleusma::selfhost_resource_admission heap_arithmetic_saturates_like_the_reference"
+    },
+    {
+      "test": "native_attestations_preserve_per_site_and_per_chunk_charging",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T17:53:02.5932366Z         PASS [  71.239s] (682/930) keleusma::selfhost_resource_admission native_attestations_preserve_per_site_and_per_chunk_charging"
+    },
+    {
+      "test": "every_stage_matches_complete_resource_admission",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T18:46:00.9863070Z         PASS [3309.452s] (930/930) keleusma::selfhost_resource_admission every_stage_matches_complete_resource_admission"
+    },
+    {
+      "test": "iteration_counts_obey_the_reference_u32_boundary",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T17:14:49.5842343Z         PASS [   7.268s] (613/825) keleusma::selfhost_resource_admission iteration_counts_obey_the_reference_u32_boundary"
+    },
+    {
+      "test": "malformed_stage_responses_are_protocol_errors",
+      "job": "Test (shard 4/4)",
+      "excerpt": "2026-10-23T16:46:37.0372177Z         PASS [   0.534s] (127/930) keleusma selfhost::validation::tests::malformed_stage_responses_are_protocol_errors"
+    },
+    {
+      "test": "command_distinguishes_valid_invalid_and_unavailable",
+      "job": "Test (shard 2/4)",
+      "excerpt": "2026-10-23T17:53:50.1406830Z         PASS [   2.117s] (830/861) keleusma-cli::validator command_distinguishes_valid_invalid_and_unavailable"
+    },
+    {
+      "test": "command_checks_resource_capacity_without_running_the_stream",
+      "job": "Test (shard 2/4)",
+      "excerpt": "2026-10-23T17:53:48.0220035Z         PASS [   2.914s] (829/861) keleusma-cli::validator command_checks_resource_capacity_without_running_the_stream"
+    },
+    {
+      "test": "reference_disagreement_prevents_successful_admission",
+      "job": "Test (shard 2/4)",
+      "excerpt": "2026-10-23T17:53:52.8296821Z         PASS [   2.690s] (831/861) keleusma-cli::validator reference_disagreement_prevents_successful_admission"
+    },
+    {
+      "test": "shipping_validator_reaches_every_current_stage",
+      "job": "Test (shard 3/4)",
+      "excerpt": "2026-10-23T19:02:02.9461521Z         PASS [2953.835s] (825/825) keleusma-cli::validator shipping_validator_reaches_every_current_stage"
+    }
+  ],
+  "source_inventory": {
+    "commit": "b1dbfe4f258a3b9f8145c571da188999b3ad7526",
+    "root_integration_files": 186,
+    "root_test_attributes": 1822,
+    "count_rule": "Direct tests/*.rs files, counting lines whose trimmed text starts with #[test]. Not a run count."
+  },
+  "book": {
+    "run_id": 39989231699,
+    "url": "https://github.com/sgeos/keleusma/actions/runs/39989231699",
+    "commit": "b1dbfe4f258a3b9f8145c571da188999b3ad7526",
+    "conclusion": "success",
+    "note": "Book success is metadata evidence. The CI Doc links command supplies the reviewed example output below.",
+    "example_excerpts": [
+      "2026-10-23T16:51:34.8331007Z blocks 174  complete programs 60  claim/REPL assertions 51  program assertions 34"
+    ]
+  },
+  "environment": {
+    "CARGO_TERM_COLOR": "always",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "default_toolchain": "stable, rustc 1.99.1 as recorded by the run",
+  "exit_status_basis": "Zero is inferred from successful GitHub Actions jobs and bash -e steps, not from a printed numeric success status. No continue-on-error is configured for these commands in the recorded workflow."
+}

@@ -165,6 +165,24 @@ Variants identified by name are the script-side mechanism for pattern matching; 
 
 Restrictions: discriminants must be integer literals, optionally preceded by a unary minus for negative values. Expressions, named constants, and casts are not admissible in the discriminant clause itself. Duplicate discriminant values within a single enum are rejected at parse time.
 
+#### Matching a `Word` by variant discriminant
+
+A `match` whose scrutinee is a `Word` may use a no-payload enum-variant pattern. The pattern matches when the word equals the variant's discriminant.
+
+```
+enum TokenKind { Fn = 0, Ident = 1, Plus = 21 }
+
+fn classify(k: Word) -> Word {
+    match k {
+        TokenKind::Fn()    => 1,
+        TokenKind::Ident() => 2,
+        _ => 0,
+    }
+}
+```
+
+This is a zero-cost switch on a tag word. The compiler folds each pattern to the variant's discriminant and emits the same comparison an integer-literal arm would, so no enum value is constructed and no variant test opcode is involved. It exists so host-fed tagged data, such as a token stream keyed by an `enum TokenKind`, can dispatch by variant name while the stream stays a plain `Word`. The variant must exist and carry no payload, since a `Word` has none to bind, and a wildcard arm is required because a `Word` ranges beyond the declared variants. An enum-typed scrutinee is unaffected and matches by the general variant test.
+
 #### Casting an enum value to `Word`
 
 An enum-typed value can be cast to `Word` to extract its variant's discriminant.
@@ -178,7 +196,9 @@ fn main() -> Word {
 }
 ```
 
-The cast compiles to a chain of variant tests; on a match it pushes the variant's discriminant as a `Word`. Implicit and explicit discriminants both round-trip correctly. Casts on enum values whose variant is not declared in the source (constructed by host code outside the declaration) trap at runtime; this is an enforced invariant of the type system rather than a fall-through return.
+A cast of a value whose variant is not known at compile time compiles to a chain of variant tests; on a match it pushes the variant's discriminant as a `Word`. Implicit and explicit discriminants both round-trip correctly. Casts on enum values whose variant is not declared in the source (constructed by host code outside the declaration) trap at runtime; this is an enforced invariant of the type system rather than a fall-through return.
+
+A cast of a literal unit-variant constructor, `Enum::Variant() as Word`, is a compile-time constant and folds to a single load of the discriminant with no construction and no variant-test chain. This makes an enum with explicit discriminants a first-class replacement for a table of named integer constants: a variant reference cast to `Word` costs exactly what a literal would. Only the no-payload form folds, since a payload constructor's argument expressions may carry side effects that must still run.
 
 ### Tuples
 
@@ -252,20 +272,57 @@ The host writes an `impl HostOpaque for MyType` block and registers native funct
 
 ## Type Coercion
 
-Keleusma does not perform implicit type coercion. To convert between numeric types, use the `as` keyword.
+Keleusma does not perform implicit type coercion. To convert between types, use the `as` keyword.
 
-- `Word` to `Float`: Widens the integer to a floating-point value.
-- `Float` to `Word`: Truncates toward zero, discarding the fractional part.
+### Scalar conversions
+
+Each row is implemented by the correspondingly named opcode in
+[`INSTRUCTION_SET.md`](./INSTRUCTION_SET.md).
+
+| Conversion | Opcode | Semantics |
+|---|---|---|
+| `Word` to `Float` | `IntToFloat` | Widens. Gated on the `floats` feature. |
+| `Float` to `Word` | `FloatToInt` | Truncates toward zero, discarding the fractional part. Gated on the `floats` feature. |
+| `Word` to `Byte` | `WordToByte` | **Truncates to the low eight bits, silently.** |
+| `Byte` to `Word` | `ByteToWord` | Zero-extends. A `Byte` is unsigned, so `0xFF` becomes 255 and never -1. |
+| `Word` to `Fixed<F>` | `WordToFixed` | Scales into Q-format with `F` fraction bits. |
+| `Fixed<F>` to `Word` | `FixedToWord` | Takes the integer portion. |
+
+**`Word` to `Byte` discards the high bits without a fault**, which is the one row worth
+reading twice. `300 as Byte` is 44. The type checker does require the cast rather than
+inserting it, so the narrowing is visible at the site, but nothing reports the loss at
+compile time or at run time. Code that forms a byte from a wider value should mask
+explicitly, so the narrowing is stated where a reader can see it rather than left to the
+conversion.
+
+The `Word` and `Fixed<F>` pair saturates rather than wrapping. Converting `i64::MAX` to
+`Fixed<8>` and back yields `i64::MAX >> 8`, which is the saturated value rather than a
+wrapped one. Which of the two conversions saturates is not pinned here, only that the pair
+does not wrap.
 
 ```
 let x: Word = 42;
 let y: Float = x as Float;
 
 let a: Float = 3.9;
-let b: Word = a as Word;  // b is 3
+let b: Word = a as Word;      // b is 3
+
+let big: Word = 300;
+let n: Byte = big as Byte;    // n is 44 -- the high bits are gone, silently
+let back: Word = n as Word;   // back is 44, not 300
 ```
 
-No other type conversions are available through the `as` keyword. Conversions between non-numeric types require explicit function calls.
+### Composite conversions
+
+Two further `as` forms are not scalar conversions and are specified in their own sections
+above:
+
+- **An enum value to `Word`**, extracting the variant's discriminant. See
+  [Casting an enum value to `Word`](#casting-an-enum-value-to-word).
+- **A tuple of `N` words to `Multiword<N, F>`**, which is how a multi-word value is
+  constructed. See [Multi-Word Fixed-Point Types](#multi-word-fixed-point-types).
+
+Conversions between other non-numeric types require explicit function calls.
 
 ## Runtime Value Representation
 

@@ -1,0 +1,484 @@
+// compiler/kel/verify_structural.kel -- the self-hosted structural verifier: `verify.rs`'s
+// first structural pass (block nesting, branch targets, operand bounds) and its second pass
+// (block-type constraints), leaving only the third pass (productive divergence). It is the
+// load-time structural check that precedes the WCET/WCMU resource analysis already self-hosted
+// in `analyze.kel`.
+//
+// The second pass (block-type constraints) checks each chunk's marker-op profile against its
+// declared block type: a Func block contains no Yield/Stream/Reset; a Reentrant block contains
+// an effective Yield (a direct Yield, or a Call delegating to an always-yielding chunk) and no
+// Stream/Reset; a Stream block contains exactly one Stream, exactly one Reset, and an effective
+// Yield. The marker counts and the block type are self-hosted here; the one inter-procedural
+// input -- whether the chunk Calls an always-yielding chunk (`calls_ay`) -- is resolved by the
+// host driver from the reference's always-yielding fixpoint, marshalled as a per-chunk flag,
+// until that fixpoint is itself self-hosted alongside the third pass (they share the analysis).
+//
+// The reference `verify()` walks each chunk maintaining a block stack and a parallel If stack,
+// rejecting a chunk whose structured control flow or operand indices are malformed. This stage
+// reproduces the block-nesting and target checks decidable from the marshalled `(class, arg)`
+// op table (the same table `analyze.kel` receives, with the EndLoop/Break/BreakIf targets now
+// populated), namely:
+//
+//   * branch-target bounds: an `If`/`Loop` exit target in `[0, op_count]`, an `Else` target in
+//     `[0, op_count)`, and a `Break`/`BreakIf` target in `[0, op_count]`;
+//   * block nesting: `Else`/`EndIf` match an open `If`, `EndLoop` matches an open `Loop`, the
+//     block stack is empty at chunk end (no unclosed `If`/`Loop`);
+//   * break containment: a `Break`/`BreakIf` occurs only inside an enclosing `Loop`;
+//   * exact target equality (the control-flow-integrity checks, reference audit findings D2
+//     and E1): an `If` with an `Else` targets its else-body start (`else_ip + 1`); an `Else`
+//     targets an `EndIf`; an `If` without an `Else` targets its `EndIf`; an `EndLoop`
+//     back-edge equals `loop_ip + 1` and its paired `Loop` exit equals `endloop_ip + 1`; a
+//     `Break`/`BreakIf` targets the innermost enclosing loop's exit.
+//
+// Together the above are the whole of `verify.rs`'s first-pass block-nesting-and-target checks.
+// This stage also carries the operand-bounds family of the same first pass: every per-op
+// operand index validated against a chunk or module table.
+//
+//   * local slot: `GetLocal`/`SetLocal` slot `< local_count`;
+//   * data slot: `GetData`/`SetData` slot `< data_len` (and a declared data layout), and
+//     `GetDataIndexed`/`SetDataIndexed` range `[base, base + len)` within `data_len`;
+//   * constant pool: `Const`/`IsStruct`/`GetField(Boxed)` index `< const_count`, and all three
+//     of `IsEnum`'s indices `< const_count`;
+//   * call target and arity: `Call` callee `< nchunks` and argument count `<= callee locals`;
+//   * native index: a native call names an entry `< native count`, carried in its operand;
+//   * fixed-point fraction bits: a Q-format `fb < word_bits`;
+//   * boxed struct/enum template: `NewComposite(Boxed)` meta index `< template_count`.
+//
+// Still outside this stage (later slices): the block-type constraints (second reference pass)
+// and the productive-divergence analysis (third pass).
+//
+// The class encoding matches the host's `analyze_class`: 0 plain, 1 If (arg the branch
+// target), 2 Else (arg the matching EndIf), 3 EndIf, 4 Loop (arg the exit target), 5 EndLoop
+// (arg the back-edge), 6 Break (arg the loop exit), 7 BreakIf (arg the loop exit), 8 Trap,
+// 9 Call. The operand-bounds encoding is a parallel table `opb`/`o1`/`o2`/`o3` from the host's
+// `structural_opbounds`: opb 0 none, 1 data-single (`o1` slot), 2 data-range (`o1` base, `o2`
+// len), 3 constant-single (`o1` index), 4 enum-triple (`o1`/`o2`/`o3` indices), 5 call (`o1`
+// callee, `o2` argument count, `o3` the callee's local count resolved by the host), 6
+// fixed-fraction (`o1` fraction bits), 7 local (`o1` slot), 8 boxed struct/enum template (`o1`
+// meta index). The stage sets `out_reject` to 1 on the first malformed construct it proves, and
+// 0 for a well-formed chunk. The walk latches `bad` rather than stopping (the reference returns
+// on first error; this stage folds to the same boolean verdict).
+require word >= 32;
+
+// The host-facing block: the per-chunk and per-module counts the operand-bounds and block-type
+// checks validate against (`block_type` is 0 Func, 1 Reentrant, 2 Stream; `calls_ay` is 1 when
+// the chunk Calls an always-yielding chunk), the marshalled op table (control-flow `class`/
+// `arg`, operand-bounds `opb`/`o1`/`o2`/`o3`, and the block-type marker `mark` -- 1 Yield, 2
+// Stream, 3 Reset, 0 other -- indexed by instruction pointer), and the verdict `out_reject`.
+// `op_count` bounds the walk.
+shared data sv {
+    op_count: Word,
+    local_count: Word,
+    const_count: Word,
+    template_count: Word,
+    data_len: Word,
+    nchunks: Word,
+    word_bits: Word,
+    block_type: Word,
+    calls_ay: Word,
+    class: [Word; 8192],
+    arg: [Word; 8192],
+    opb: [Word; 8192],
+    o1: [Word; 8192],
+    o2: [Word; 8192],
+    o3: [Word; 8192],
+    mark: [Word; 8192],
+    out_reject: Word,
+    // Mode 1 checks structure before delegated-yield facts are available.
+    mode: Word,
+}
+
+// The block-nesting scratch. The open blocks form a stack of frames in nesting order: `kind`
+// (1 If, 2 Loop), `b_ip` the opening op's instruction pointer, `b_tgt` its target (an If's
+// branch target or a Loop's exit target), `b_else` an If frame's else-seen flag. `depth` is
+// the stack height, `loop_depth` counts the open Loop frames (break containment), `le` is the
+// enclosing-loop-exit scratch, `bad` latches the first proven malformation.
+private data sd {
+    kind: [Word; 8192],
+    b_ip: [Word; 8192],
+    b_tgt: [Word; 8192],
+    b_else: [Word; 8192],
+    depth: Word,
+    loop_depth: Word,
+    le: Word,
+    yc: Word,
+    sc: Word,
+    rc: Word,
+    bad: Word,
+}
+
+// Latch `bad` when `x` and `y` differ (an equality obligation the reference enforces with a
+// direct `!=`, expressed here with the two ordered comparisons the self-compiling subset
+// admits).
+fn ne_bad(x: Word, y: Word) -> Word {
+    if x > y orelse y > x {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Open an If frame for the `If` at `ip` with branch target `tgt`. A push past the static stack
+// capacity (unreachable while `op_count <= 8192`, since each op opens at most one block)
+// latches `bad` rather than faulting.
+fn push_if(ip: Word, tgt: Word) -> Word {
+    if sd.depth > 1023 {
+        sd.bad = 1;
+    } else {
+        sd.kind[sd.depth] = 1;
+        sd.b_ip[sd.depth] = ip;
+        sd.b_tgt[sd.depth] = tgt;
+        sd.b_else[sd.depth] = 0;
+        sd.depth = sd.depth + 1;
+    }
+    0
+}
+
+// Open a Loop frame for the `Loop` at `ip` with exit target `tgt`.
+fn push_loop(ip: Word, tgt: Word) -> Word {
+    if sd.depth > 1023 {
+        sd.bad = 1;
+    } else {
+        sd.kind[sd.depth] = 2;
+        sd.b_ip[sd.depth] = ip;
+        sd.b_tgt[sd.depth] = tgt;
+        sd.depth = sd.depth + 1;
+        sd.loop_depth = sd.loop_depth + 1;
+    }
+    0
+}
+
+// The exit target of the innermost enclosing Loop frame: the exit of the highest-indexed Loop
+// on the stack. Only meaningful with `loop_depth > 0`, which every caller guarantees.
+fn innermost_loop_exit() -> Word {
+    sd.le = 0;
+    for j in 0..8192 limit 8192 {
+        if sd.depth > j andalso sd.kind[j] == 2 {
+            sd.le = sd.b_tgt[j];
+        }
+    }
+    sd.le
+}
+
+// Handle an `Else` at `ip` with target `a`: require an open If on top, whose branch target must
+// be this Else's body start (`ip + 1`); the Else's own target must be an in-bounds `EndIf`.
+fn handle_else(ip: Word, a: Word) -> Word {
+    if sd.depth > 0 andalso sd.kind[sd.depth - 1] == 1 {
+        let top = sd.depth - 1;
+        sd.b_else[top] = 1;
+        ne_bad(sd.b_tgt[top], ip + 1);
+    } else {
+        sd.bad = 1;
+    }
+    if a >= sv.op_count {
+        sd.bad = 1;
+    } else {
+        ne_bad(sv.class[a], 3);
+    }
+    0
+}
+
+// Handle an `EndIf` at `ip`: a no-Else If must target this EndIf; close the open If frame.
+fn handle_endif(ip: Word) -> Word {
+    if sd.depth > 0 andalso sd.kind[sd.depth - 1] == 1 {
+        let top = sd.depth - 1;
+        if sd.b_else[top] == 0 {
+            ne_bad(sd.b_tgt[top], ip);
+        }
+        sd.depth = sd.depth - 1;
+    } else {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Handle an `EndLoop` at `ip` with back-edge `a`: the back-edge must be `loop_ip + 1` and the
+// paired Loop's exit must be `ip + 1`; close the open Loop frame.
+fn handle_endloop(ip: Word, a: Word) -> Word {
+    if sd.depth > 0 andalso sd.kind[sd.depth - 1] == 2 {
+        let top = sd.depth - 1;
+        ne_bad(a, sd.b_ip[top] + 1);
+        ne_bad(sd.b_tgt[top], ip + 1);
+        sd.depth = sd.depth - 1;
+        if sd.loop_depth > 0 {
+            sd.loop_depth = sd.loop_depth - 1;
+        }
+    } else {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Handle a `Break`/`BreakIf` at `ip` with target `a`: valid only inside an enclosing Loop, in
+// bounds, and targeting that loop's exit.
+fn handle_break(ip: Word, a: Word) -> Word {
+    if sd.loop_depth > 0 {
+        if a > sv.op_count {
+            sd.bad = 1;
+        }
+        ne_bad(a, innermost_loop_exit());
+    } else {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Validate the operand indices of the op at `ip` against the chunk/module counts, by its
+// operand-bounds kind `opb` (0 for an op with no operand index to check). Control-flow and
+// operand-bounds roles are disjoint per op except `Call`, which is both a control-flow class
+// (9, no nesting effect) and an operand-bounds op (5); the two roles are checked independently.
+fn check_opbounds(ip: Word) -> Word {
+    let k = sv.opb[ip];
+    let a = sv.o1[ip];
+    let b = sv.o2[ip];
+    let d = sv.o3[ip];
+    if k == 1 {
+        // GetData/SetData(slot = a): a declared, in-range data slot.
+        if sv.data_len == 0 {
+            sd.bad = 1;
+        } else {
+            if a >= sv.data_len {
+                sd.bad = 1;
+            }
+        }
+        0
+    } else {
+    if k == 2 {
+        // GetDataIndexed/SetDataIndexed(base = a, len = b): range within the data slots.
+        if a + b > sv.data_len { sd.bad = 1; }
+        0
+    } else {
+    if k == 3 {
+        // Const/IsStruct/GetField(Boxed)(index = a): a constant-pool index.
+        if a >= sv.const_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 4 {
+        // IsEnum(a, b, d): three constant-pool indices.
+        if a >= sv.const_count orelse b >= sv.const_count orelse d >= sv.const_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 5 {
+        // Call(callee = a, argc = b, callee locals = d): a named chunk, arity within locals.
+        if a >= sv.nchunks {
+            sd.bad = 1;
+        } else {
+            if b > d {
+                sd.bad = 1;
+            }
+        }
+        0
+    } else {
+    if k == 6 {
+        // Fixed-point fraction bits (a): a Q-format count below the word width.
+        if a >= sv.word_bits {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 7 {
+        // GetLocal/SetLocal(slot = a): a declared local slot.
+        if a >= sv.local_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 8 {
+        // NewComposite(Boxed struct/enum)(meta = a): a boxed-metadata template index.
+        if a >= sv.template_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 9 {
+        // CallVerifiedNative or CallExternalNative(native = a), with the module's native count
+        // in b: an entry of the native table, rejected at admission since 2026-10-28.
+        if a >= b {
+            sd.bad = 1;
+        }
+        0
+    } else {
+        0
+    } } } } } } } } }
+}
+
+// Process one op at instruction pointer `ip` by its control-flow class.
+fn step(ip: Word) -> Word {
+    let c = sv.class[ip];
+    let a = sv.arg[ip];
+    if c == 1 {
+        // If: bounds-check the branch target (`<= op_count`), open an If frame.
+        if a > sv.op_count {
+            sd.bad = 1;
+        }
+        push_if(ip, a)
+    } else {
+    if c == 2 {
+        handle_else(ip, a)
+    } else {
+    if c == 3 {
+        handle_endif(ip)
+    } else {
+    if c == 4 {
+        // Loop: bounds-check the exit target (`<= op_count`), open a Loop frame.
+        if a > sv.op_count {
+            sd.bad = 1;
+        }
+        push_loop(ip, a)
+    } else {
+    if c == 5 {
+        handle_endloop(ip, a)
+    } else {
+    if c == 6 orelse c == 7 {
+        handle_break(ip, a)
+    } else {
+        // Trap/Call/plain and every other class: no nesting effect.
+        0
+    } } } } } }
+}
+
+// Count the chunk's Yield (`yc`), Stream (`sc`), and Reset (`rc`) marker ops from the marshalled
+// `mark` table.
+fn count_markers() -> Word {
+    sd.yc = 0;
+    sd.sc = 0;
+    sd.rc = 0;
+    for ip in 0..8192 limit 8192 {
+        if sv.op_count > ip {
+            if sv.mark[ip] == 1 {
+                sd.yc = sd.yc + 1;
+            }
+            if sv.mark[ip] == 2 {
+                sd.sc = sd.sc + 1;
+            }
+            if sv.mark[ip] == 3 {
+                sd.rc = sd.rc + 1;
+            }
+        }
+    }
+    0
+}
+
+// The block-type constraints (reference Pass 2): the chunk's marker-op profile must match its
+// declared block type. `has_effective_yield` is a direct Yield or a delegated one (`calls_ay`).
+fn check_block_type() -> Word {
+    count_markers();
+    let eff = if sd.yc > 0 orelse sv.calls_ay == 1 { 1 } else { 0 };
+    if sv.block_type == 0 {
+        // Func: no Yield, Stream, or Reset.
+        if sd.yc > 0 {
+            sd.bad = 1;
+        }
+        if sd.sc > 0 {
+            sd.bad = 1;
+        }
+        if sd.rc > 0 {
+            sd.bad = 1;
+        }
+    } else {
+    if sv.block_type == 1 {
+        // Reentrant: an effective Yield, and no Stream or Reset.
+        if eff == 0 {
+            sd.bad = 1;
+        }
+        if sd.sc > 0 {
+            sd.bad = 1;
+        }
+        if sd.rc > 0 {
+            sd.bad = 1;
+        }
+    } else {
+        // Stream: exactly one Stream, exactly one Reset, and an effective Yield.
+        ne_bad(sd.sc, 1);
+        ne_bad(sd.rc, 1);
+        if eff == 0 {
+            sd.bad = 1;
+        }
+    } }
+    0
+}
+
+// Walk the chunk's op range in order (Pass 1: block nesting, targets, operand bounds), require
+// the block stack to be empty (no unclosed If/Loop), run the block-type constraints (Pass 2),
+// and publish the verdict. The walk runs to a static cap; a step past `op_count` is a no-op.
+// (An early `break` on `bad` would be cleaner but is not in the self-hosted codegen subset, so
+// this stage avoids it to stay self-compiling, exactly as `analyze.kel` does.)
+fn run() -> Word {
+    sd.depth = 0;
+    sd.loop_depth = 0;
+    sd.bad = 0;
+    for ip in 0..8192 limit 8192 {
+        if sv.op_count > ip {
+            let c = sv.class[ip];
+            if c == 1 orelse c == 2 orelse c == 4 {
+                if sv.arg[ip] <= ip orelse sv.arg[ip] > sv.op_count { sd.bad = 1; }
+            }
+            step(ip);
+            check_opbounds(ip);
+        }
+    }
+    if sd.depth > 0 {
+        sd.bad = 1;
+    }
+    if sv.mode == 0 { check_block_type(); }
+    if sd.bad == 1 {
+        sv.out_reject = 1;
+    } else {
+        sv.out_reject = 0;
+    }
+    sv.out_reject
+}
+
+// Mode 2 scans raw wire opcode identifiers, not host-computed safety classes.
+// Inputs are class=wire tag, arg=access form or immediate, opb=scalar kind.
+// Access forms are 1 flat scalar, 2 flat nested, 3 boxed. A native call's form is its
+// error-reify bit. Other opcodes use zero.
+// Outputs are out_reject=0 free, 1 explicit trap, 2 unsupported, 3 invalid subject, 4 invalid protocol;
+// o1[0]=first trap, o2[0]=first unsupported/invalid, o3[0]=unsupported reason.
+fn trap_contract(tag: Word, form: Word, scalar: Word) -> Word {
+    if tag < 0 orelse tag > 69 orelse (tag >= 34 andalso tag <= 37) { 5 } else {
+    if tag == 38 orelse tag == 39 orelse tag == 40 orelse tag == 41 {
+        if form < 1 orelse form > 3 orelse scalar < 0 orelse scalar > 7
+            orelse (form != 1 andalso scalar != 0) { 5 } else {
+            if tag == 39 {
+                if form == 2 orelse form == 3 orelse (form == 1 andalso (scalar == 2 orelse scalar == 3)) { 0 } else { 2 }
+            } else { if form == 3 { 3 } else { 0 } }
+        }
+    } else {
+        if scalar != 0 { 5 } else {
+        if tag == 53 { if form < 0 orelse form > 9 { 6 } else { 0 } } else {
+        if tag == 60 { if form < 0 orelse form > 19 { 6 } else { 0 } } else {
+        if tag == 67 orelse tag == 68 { if form == 1 { 0 } else { if form == 0 { 4 } else { 5 } } } else {
+        if form != 0 { 5 } else { 0 }
+        } } } }
+    } }
+}
+fn scan_traps() -> Word {
+    sv.out_reject = 0; sv.o1[0] = 0 - 1; sv.o2[0] = 0 - 1; sv.o3[0] = 0;
+    if sv.op_count < 0 orelse sv.op_count > 8192 { sv.out_reject = 4; } else {
+        for ip in 0..sv.op_count limit 8192 {
+            let reason = trap_contract(sv.class[ip], sv.arg[ip], sv.opb[ip]);
+            if reason >= 5 {
+                if sv.out_reject < 3 { sv.o2[0] = ip; }
+                sv.out_reject = if reason == 5 { 4 } else { 3 };
+            } else {
+                if reason > 0 andalso sv.out_reject < 2 {
+                    sv.out_reject = 2; sv.o2[0] = ip; sv.o3[0] = reason;
+                }
+                if sv.class[ip] == 53 andalso sv.o1[0] < 0 {
+                    sv.o1[0] = ip;
+                    if sv.out_reject == 0 { sv.out_reject = 1; }
+                }
+            }
+        }
+    }
+    sv.out_reject
+}
+
+// Check one chunk and yield its structural or trap-profile verdict.
+loop main(resume: Word) -> Word {
+    yield if sv.mode == 2 { scan_traps() } else { run() }
+}

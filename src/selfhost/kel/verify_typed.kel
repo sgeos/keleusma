@@ -1,0 +1,795 @@
+// compiler/kel/verify_typed.kel -- the self-hosted A.2.1 typed operand-stack verifier (reference
+// `verify_typed.rs`), slices 2a+2b: a frame-stack abstract interpreter over the whole chunk (all
+// control flow), with signature/native/enum seeding.
+//
+// Slice 2b adds the seeding (Phase 2b/3/4): the local frame is seeded from the chunk signature's
+// parameters (`seed_tag`/`seed_size`/`seed_kind`), a `Yield` pushes the seeded resume shape
+// (`resume_*`), a `SetLocal` checks the stored value against the slot's seed (`setlocal_compat`),
+// a `Call`/native pushes the seeded return shape (`ret_*`), and a flat enum `NewComposite`
+// cross-checks its baked body size against the declared set (`eb_vals`/`eb_count`, audit B8). A
+// non-enum flat `NewComposite` also checks that its packed element sizes sum to the baked body
+// when all are known (`NewCompositeSizeMismatch`). A `Call` additionally checks each popped
+// argument against the callee's parameter shapes (`cp_*`, a packed parameter-shape pool, `CallArgMismatch`), and
+// flat compatibility checks tag, size and composite kind. Control-flow widening and bounded
+// storage remain explicit limits. Whole-verdict agreement remains under the Order 2 audit.
+// An unseeded run uses Top locals and empty module tables for isolation.
+//
+// It reconstructs the flat shape of each operand-stack entry -- the lattice `AbsVal` encoded per
+// entry as `(tag, size, kind)`: 0 Top (unknown, defers every check), 1 Scalar (`size` bytes), 2
+// Flat (a flat composite body of `size` bytes and composite `kind`) -- and validates every flat field/array
+// offset against the composite's known size (audit B1/B2), the operand-stack underflow (audit
+// finding 3), the if/else branch-height balance (B3/B4), and the loop back-edge height
+// neutrality (B5). Locals are tracked the same way; in isolation every param/local starts Top.
+//
+// The control flow is walked by the same explicit region-frame stack `verify_yield.kel` and
+// `verify_depth.kel` use (if-else staging, fresh-scope loops), but the state carried is the live
+// operand shape stack whose height is the operand depth. Per the operator's chosen trade-off,
+// shapes are the SOUND OVER-APPROXIMATION the reference itself falls back to: precise within a
+// basic block, and reset to Top across every control-flow boundary (both if/else arms rejoin to
+// Top; a loop invalidates every local to Top and Tops the operand entries above the loop entry).
+// This never rejects a valid program -- a Top defers to the retained runtime bounds guard -- and
+// catches every within-basic-block flat violation plus the underflow and height-balance
+// obligations; it forgoes only the cross-join shape precision (loop-carried-local flat checks),
+// which defer. The host marshals, per op, the control-flow class/arg, a Trap/Return flag, the
+// operand consumption `req` (the reference `op_depth_effect`) and generic push count `prod`, and
+// the shape-transfer kind `tk` with operands `ta`/`tb`.
+require word >= 32;
+
+// The host-facing block. `tk` selects the shape transfer (0 generic pop `req`/push `prod`
+// unknowns; 1 Dup; 2 push scalar of `ta` bytes; 3 GetLocal slot `ta`; 4 SetLocal slot `ta`; 6
+// NewComposite flat, pop `req`, push Flat `tb` bytes; 7 flat scalar field at offset `ta`, field
+// `tb` bytes; 8 flat nested field at offset `ta`, size `tb`; 9 flat array scalar element of `ta`
+// bytes; 10 flat array nested element of `ta` bytes). `class` is the control-flow role (1 If, 2
+// Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, else 0/8/9); `arg` the branch target;
+// `is_term` flags Trap/Return.
+shared data tv {
+    op_count: Word,
+    resume_tag: Word,
+    resume_size: Word,
+    resume_kind: Word,
+    eb_count: Word,
+    class: [Word; 8192],
+    arg: [Word; 8192],
+    is_term: [Word; 8192],
+    tk: [Word; 8192],
+    req: [Word; 8192],
+    prod: [Word; 8192],
+    ta: [Word; 8192],
+    tb: [Word; 8192],
+    tc: [Word; 8192],
+    ret_tag: [Word; 8192],
+    ret_size: [Word; 8192],
+    ret_kind: [Word; 8192],
+    seed_tag: [Word; 256],
+    seed_size: [Word; 256],
+    seed_kind: [Word; 256],
+    eb_vals: [Word; 256],
+    cp_tag: [Word; 12288],
+    cp_size: [Word; 12288],
+    cp_kind: [Word; 12288],
+    out_reject: Word,
+    // Each call indexes its own declared-shape slice in the existing pool.
+    cp_first: [Word; 8192],
+    cp_count: [Word; 8192],
+    // 1 operand capacity, 2 frame capacity, 3 unfinished work budget.
+    out_cause: Word,
+}
+
+// The live operand shape stack (`st_tag`/`st_size`, height `dsp`), the local frame
+// (`lc_tag`/`lc_size`), and the control-flow region-frame stack. Each frame is one region
+// `[f_ip, f_end)`: `f_esp` its entry operand height (for the if/else reset and the loop back-edge
+// neutrality check), `f_fell` whether it falls through, `f_hb`/`f_bmax` its break-scope height
+// summary. While a frame waits on a child it sets `f_pa` and records how to fold it in: `f_pk` 1
+// bare-if, 2 if-else, 3 loop; `f_ps` the if-else stage; `f_resume` the resume op; `f_elstart`/
+// `f_elend` the else region; `f_tsp`/`f_tfell` the stashed then result. `child_*` carry a
+// completed frame's result. `bad` latches the first proven violation.
+private data tf {
+    st_tag: [Word; 256],
+    st_size: [Word; 256],
+    st_kind: [Word; 256],
+    dsp: Word,
+    over: Word,
+    lc_tag: [Word; 256],
+    lc_size: [Word; 256],
+    lc_kind: [Word; 256],
+    fsp: Word,
+    f_ip: [Word; 64],
+    f_end: [Word; 64],
+    f_esp: [Word; 64],
+    // Operand entries below the nearest loop entry are preserved by its body.
+    f_floor: [Word; 64],
+    f_fell: [Word; 64],
+    f_hb: [Word; 64],
+    f_bmax: [Word; 64],
+    f_pa: [Word; 64],
+    f_pk: [Word; 64],
+    f_ps: [Word; 64],
+    f_resume: [Word; 64],
+    f_elstart: [Word; 64],
+    f_elend: [Word; 64],
+    f_tsp: [Word; 64],
+    f_tfell: [Word; 64],
+    child_fell: Word,
+    child_esp: Word,
+    child_hb: Word,
+    child_bmax: Word,
+    pop_tag: Word,
+    pop_size: Word,
+    pop_kind: Word,
+    flag: Word,
+    sum: Word,
+    allknown: Word,
+    bad: Word,
+    // Each entry's `Text` field offsets when its body was built by the program, the reference's
+    // `AbsVal::Flat::text`: `st_tn` the count, -1 unknown, and up to four offsets at `j * 4`.
+    // A scalar entry's `st_kind` is 1 for a `Text` scalar. Locals carry the same.
+    st_tn: [Word; 256],
+    st_t: [Word; 1024],
+    lc_tn: [Word; 256],
+    lc_t: [Word; 1024],
+    pop_tn: Word,
+    pop_t: [Word; 4],
+    lt_n: Word,
+    lt_ok: Word,
+    lt: [Word; 4],
+    off: Word,
+    found: Word,
+}
+
+// --- live operand shape stack --------------------------------------------------------------
+
+fn st_pop() -> Word {
+    if tf.dsp > 0 {
+        tf.dsp = tf.dsp - 1;
+        tf.pop_tag = tf.st_tag[tf.dsp];
+        tf.pop_size = tf.st_size[tf.dsp];
+        tf.pop_kind = tf.st_kind[tf.dsp];
+        tf.pop_tn = tf.st_tn[tf.dsp];
+        for q in 0..4 limit 4 { tf.pop_t[q] = tf.st_t[tf.dsp * 4 + q]; }
+    } else {
+        tf.pop_tag = 0;
+        tf.pop_size = 0;
+        tf.pop_kind = 0;
+        tf.pop_tn = -1;
+    }
+    0
+}
+
+// Push a scalar/Top entry (composite kind defaults to 0).
+fn st_push(tag: Word, size: Word) -> Word {
+    if tf.dsp < 256 {
+        tf.st_tag[tf.dsp] = tag;
+        tf.st_size[tf.dsp] = size;
+        tf.st_kind[tf.dsp] = 0;
+        tf.st_tn[tf.dsp] = -1;
+        tf.dsp = tf.dsp + 1;
+    } else { tf.over = 1; }
+    0
+}
+
+// Push a flat composite entry carrying its composite `kind` (for the shape-compatibility checks;
+// the flat-offset checks use only the size).
+fn st_push_k(tag: Word, size: Word, kind: Word) -> Word {
+    if tf.dsp < 256 {
+        tf.st_tag[tf.dsp] = tag;
+        tf.st_size[tf.dsp] = size;
+        tf.st_kind[tf.dsp] = kind;
+        tf.st_tn[tf.dsp] = -1;
+        tf.dsp = tf.dsp + 1;
+    } else { tf.over = 1; }
+    0
+}
+
+fn st_pop_n(n: Word) -> Word {
+    if tf.dsp >= n {
+        tf.dsp = tf.dsp - n;
+    } else {
+        tf.dsp = 0;
+    }
+    0
+}
+
+fn st_push_tops(n: Word) -> Word {
+    if n >= 1 {
+        st_push(0, 0);
+    }
+    if n >= 2 {
+        st_push(0, 0);
+    }
+    if n >= 3 {
+        st_push(0, 0);
+    }
+    if n >= 4 {
+        st_push(0, 0);
+    }
+    0
+}
+
+// Set every operand entry from `lo` up to the current height to Top -- the sound join
+// over-approximation applied when a control-flow boundary rejoins.
+fn top_from(lo: Word) -> Word {
+    for j in 0..256 limit 256 {
+        if j >= lo andalso j < tf.dsp {
+            tf.st_tag[j] = 0;
+            tf.st_size[j] = 0;
+            tf.st_kind[j] = 0;
+            tf.st_tn[j] = -1;
+        }
+    }
+    0
+}
+
+// A flat scalar/nested field reads `[offset, need)` of a composite of shape `(vtag, vsize)`;
+// `need` is `offset + extent`. Flat is bounds-checked, Scalar is a type error, Top defers.
+fn check_flat_extent(vtag: Word, vsize: Word, need: Word) -> Word {
+    if vtag == 2 {
+        if need > vsize {
+            tf.bad = 1;
+        }
+    } else {
+        if vtag == 1 {
+            tf.bad = 1;
+        }
+    }
+    0
+}
+
+// A flat array element access requires the baked element stride to evenly divide the array body
+// (remainder by division, avoiding a modulo). Zero-size element defers; Scalar is a type error.
+fn check_stride(atag: Word, asize: Word, elem: Word) -> Word {
+    if atag == 2 {
+        if elem > 0 {
+            if asize - (asize / elem) * elem > 0 {
+                tf.bad = 1;
+            }
+        }
+    } else {
+        if atag == 1 {
+            tf.bad = 1;
+        }
+    }
+    0
+}
+
+// Whether a value shape `(vtag, vsize, vkind)` is compatible with a declared shape
+// `(dtag, dsize, dkind)` -- the reference `shapes_compatible`, used for a `SetLocal` store against
+// the slot seed and a `Call` argument against the callee parameter: Top on either side defers;
+// two scalars are compatible; two flats are compatible when their size AND composite kind match; a
+// scalar and a flat never match. Latches the reject on an incompatibility.
+fn shapes_compat(
+    vtag: Word,
+    vsize: Word,
+    vkind: Word,
+    dtag: Word,
+    dsize: Word,
+    dkind: Word,
+) -> Word {
+    if vtag > 0 andalso dtag > 0 {
+        if vtag == dtag {
+            if vtag == 2 {
+                if vsize > dsize orelse dsize > vsize {
+                    tf.bad = 1;
+                }
+                if vkind > dkind orelse dkind > vkind {
+                    tf.bad = 1;
+                }
+            }
+        } else {
+            tf.bad = 1;
+        }
+    }
+    0
+}
+
+// Latch the reject unless `size` is one of the declared flat enum body sizes (audit B8). With no
+// declared enum bodies (`eb_count == 0`, an isolated check or an enum-free module) the check
+// defers.
+fn eb_check(size: Word) -> Word {
+    if tv.eb_count == 0 {
+        0
+    } else {
+        tf.flag = 0;
+        for j in 0..256 limit 256 {
+            if j < tv.eb_count andalso tv.eb_vals[j] == size {
+                tf.flag = 1;
+            }
+        }
+        if tf.flag == 0 {
+            tf.bad = 1;
+        }
+        0
+    }
+}
+
+// Give the top entry the layout `count`/`offsets[q]` held at `src` in the entry table.
+fn copy_top_layout_from_entry(src: Word) -> Word {
+    if tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.st_tn[d] = tf.st_tn[src];
+        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.st_t[src * 4 + q]; }
+    }
+    0
+}
+
+// Record offset `x` in the layout being built, or mark it unknown past four offsets.
+fn lt_add(x: Word) -> Word {
+    if tf.lt_n < 4 {
+        tf.lt[tf.lt_n] = x;
+        tf.lt_n = tf.lt_n + 1;
+    } else { tf.lt_ok = 0; }
+    0
+}
+
+// The `Text` offsets of the body packed from the `r` entries on top of the stack, the
+// reference's `built_text_layout`, into `lt`, with `lt_ok` 0 when any element's is unknown.
+fn build_layout(r: Word) -> Word {
+    tf.lt_n = 0;
+    tf.lt_ok = 1;
+    tf.off = 0;
+    if tf.dsp < r { tf.lt_ok = 0; }
+    for kk in 0..256 limit 256 {
+        if kk < r andalso tf.lt_ok == 1 {
+            let j = tf.dsp - r + kk;
+            if tf.st_tag[j] == 0 { tf.lt_ok = 0; }
+            if tf.st_tag[j] == 1 andalso tf.st_kind[j] == 1 { lt_add(tf.off); }
+            if tf.st_tag[j] == 2 {
+                if tf.st_tn[j] < 0 { tf.lt_ok = 0; } else {
+                    for q in 0..4 limit 4 {
+                        if q < tf.st_tn[j] { lt_add(tf.off + tf.st_t[j * 4 + q]); }
+                    }
+                }
+            }
+            tf.off = tf.off + tf.st_size[j];
+        }
+    }
+    0
+}
+
+// The top entry takes local `slot`'s layout, for a `GetLocal`.
+fn top_layout_from_local(slot: Word) -> Word {
+    if tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.st_tn[d] = tf.lc_tn[slot];
+        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lc_t[slot * 4 + q]; }
+    }
+    0
+}
+
+// Local `slot` takes the popped entry's layout, for a `SetLocal`.
+fn local_layout_from_pop(slot: Word) -> Word {
+    tf.lc_tn[slot] = tf.pop_tn;
+    for q in 0..4 limit 4 { tf.lc_t[slot * 4 + q] = tf.pop_t[q]; }
+    0
+}
+
+// The top entry takes the layout `build_layout` produced, when it is known.
+fn top_layout_from_built() -> Word {
+    if tf.lt_ok == 1 andalso tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.st_tn[d] = tf.lt_n;
+        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lt[q]; }
+    }
+    0
+}
+
+// The top entry, a nested body at `[offset, offset + size)` of the popped one, takes the
+// popped layout's offsets within it.
+fn top_layout_nested(offset: Word, size: Word) -> Word {
+    if tf.pop_tn >= 0 andalso tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.lt_n = 0;
+        for q in 0..4 limit 4 {
+            if q < tf.pop_tn andalso tf.pop_t[q] >= offset andalso tf.pop_t[q] < offset + size {
+                tf.st_t[d * 4 + tf.lt_n] = tf.pop_t[q] - offset;
+                tf.lt_n = tf.lt_n + 1;
+            }
+        }
+        tf.st_tn[d] = tf.lt_n;
+    }
+    0
+}
+
+// A `Text` field read of a body whose layout is known must find `Text` at its offset.
+fn check_text_field(ip: Word) -> Word {
+    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 {
+        if pop_has_text_at(tv.ta[ip]) == 0 { tf.bad = 1; }
+    }
+    0
+}
+
+// A `Text` element read needs `Text` at every element's offset, since the index is known only
+// at run time.
+fn check_text_elements(ip: Word) -> Word {
+    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 andalso tv.ta[ip] > 0 {
+        let count = tf.pop_size / tv.ta[ip];
+        if count > tf.pop_tn { tf.bad = 1; } else {
+            for q in 0..4 limit 4 {
+                if q < count andalso pop_has_text_at(q * tv.ta[ip]) == 0 { tf.bad = 1; }
+            }
+        }
+    }
+    0
+}
+
+// Whether the popped entry's known layout holds `Text` at `offset`, into `found`.
+fn pop_has_text_at(offset: Word) -> Word {
+    tf.found = 0;
+    for q in 0..4 limit 4 {
+        if q < tf.pop_tn andalso tf.pop_t[q] == offset { tf.found = 1; }
+    }
+    tf.found
+}
+
+// Apply the shape transfer of the op at `ip` to the live operand stack (and check its flat
+// offsets). Underflow (`dsp < req`) latches the reject.
+fn apply_typed(ip: Word) -> Word {
+    let k = tv.tk[ip];
+    let r = tv.req[ip];
+    let floor = tf.f_floor[tf.fsp - 1];
+    if tf.dsp < r orelse (floor > 0 andalso tf.dsp < floor + r) {
+        tf.bad = 1;
+    }
+    if k == 0 {
+        st_pop_n(r);
+        st_push_tops(tv.prod[ip]);
+    } else {
+    if k == 1 {
+        if tf.dsp > 0 {
+            let dt = tf.st_tag[tf.dsp - 1];
+            let ds = tf.st_size[tf.dsp - 1];
+            let dk = tf.st_kind[tf.dsp - 1];
+            let src = tf.dsp - 1;
+            st_push_k(dt, ds, dk);
+            copy_top_layout_from_entry(src);
+        }
+    } else {
+    if k == 2 orelse k == 15 orelse k == 16 {
+        if k == 16 { st_pop_n(2); }
+        let count = if k == 16 { 6 } else { if k == 15 { 5 } else { 1 } };
+        for j in 0..count limit 6 { st_push(1, tv.ta[ip]); }
+        // A static string constant is a `Text` scalar.
+        if k == 2 andalso tv.tc[ip] == 1 { tf.st_kind[tf.dsp - 1] = 1; }
+    } else {
+    if k == 3 {
+        st_push_k(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]], tf.lc_kind[tv.ta[ip]]);
+        top_layout_from_local(tv.ta[ip]);
+    } else {
+    if k == 4 {
+        // SetLocal: the stored value must be compatible with the slot's seed shape; the tracked
+        // live shape is then updated to what was stored.
+        st_pop();
+        shapes_compat(
+            tf.pop_tag,
+            tf.pop_size,
+            tf.pop_kind,
+            tv.seed_tag[tv.ta[ip]],
+            tv.seed_size[tv.ta[ip]],
+            tv.seed_kind[tv.ta[ip]],
+        );
+        tf.lc_tag[tv.ta[ip]] = tf.pop_tag;
+        tf.lc_size[tv.ta[ip]] = tf.pop_size;
+        tf.lc_kind[tv.ta[ip]] = tf.pop_kind;
+        local_layout_from_pop(tv.ta[ip]);
+    } else {
+    if k == 6 {
+        // NewComposite non-enum flat: pop the packed elements; when every element size is known,
+        // their sum must equal the baked body size (`NewCompositeSizeMismatch`).
+        build_layout(r);
+        tf.sum = 0;
+        tf.allknown = 1;
+        for kk in 0..256 limit 256 {
+            if kk < r {
+                st_pop();
+                if tf.pop_tag == 0 {
+                    tf.allknown = 0;
+                } else {
+                    tf.sum = tf.sum + tf.pop_size;
+                }
+            }
+        }
+        if tf.allknown == 1 {
+            if tf.sum > tv.tb[ip] orelse tv.tb[ip] > tf.sum {
+                tf.bad = 1;
+            }
+        }
+        st_push_k(2, tv.tb[ip], tv.tc[ip]);
+        top_layout_from_built();
+    } else {
+    if k == 7 {
+        st_pop();
+        check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
+        check_text_field(ip);
+        st_push_k(1, tv.tb[ip], tv.tc[ip]);
+    } else {
+    if k == 8 {
+        st_pop();
+        check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
+        st_push_k(2, tv.tb[ip], tv.tc[ip]);
+        top_layout_nested(tv.ta[ip], tv.tb[ip]);
+    } else {
+    if k == 9 orelse k == 17 orelse k == 18 {
+        st_pop();
+        st_pop();
+        if k == 18 { st_push(0, 0); } else {
+            check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
+            check_text_elements(ip);
+            st_push_k(1, tv.ta[ip], tv.tc[ip]);
+        }
+        if k == 17 orelse k == 18 { for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); } }
+    } else {
+    if k == 10 {
+        // A nested-composite read is total. The element or its placeholder is
+        // followed by the index, four bound limbs and the flag, as Words.
+        st_pop();
+        st_pop();
+        check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
+        st_push_k(2, tv.ta[ip], tv.tc[ip]);
+        for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); }
+    } else {
+    if k == 11 {
+        // Yield: pop the output value, push the seeded resume shape.
+        st_pop();
+        st_push_k(tv.resume_tag, tv.resume_size, tv.resume_kind);
+    } else {
+    if k == 12 {
+        // Call/native: check each argument against the callee parameter (an unmarshalled
+        // parameter -- beyond the callee's count, or a native -- is Top and defers), pop the
+        // arguments, push the return shape and any native error flag (as Top). The `kk`-th pop is
+        // parameter `r - 1 - kk`, checked against its complete transported slice.
+        for kk in 0..256 limit 256 {
+            if kk < r {
+                st_pop();
+                let p = r - 1 - kk;
+                if p < tv.cp_count[ip] {
+                    shapes_compat(
+                        tf.pop_tag,
+                        tf.pop_size,
+                        tf.pop_kind,
+                        tv.cp_tag[tv.cp_first[ip] + p],
+                        tv.cp_size[tv.cp_first[ip] + p],
+                        tv.cp_kind[tv.cp_first[ip] + p],
+                    );
+                }
+            }
+        }
+        st_push_k(tv.ret_tag[ip], tv.ret_size[ip], tv.ret_kind[ip]);
+        if tv.prod[ip] > 1 {
+            st_push_tops(tv.prod[ip] - 1);
+        }
+    } else {
+        // k == 14 NewComposite flat enum: pop the packed elements, cross-check the baked enum
+        // body size against the declared set (B8), push the Flat body.
+        st_pop_n(r);
+        eb_check(tv.tb[ip]);
+        st_push_k(2, tv.tb[ip], tv.tc[ip]);
+    } } } } } } } } } } } }
+    0
+}
+
+// Invalidate every local to Top (the sound loop over-approximation: a prior iteration may have
+// overwritten any slot).
+fn invalidate_locals() -> Word {
+    for j in 0..256 limit 256 {
+        tf.lc_tag[j] = 0;
+        tf.lc_size[j] = 0;
+        tf.lc_kind[j] = 0;
+        tf.lc_tn[j] = -1;
+    }
+    0
+}
+
+// Seed the live local frame from the marshalled per-slot seed shapes (parameters carry their
+// declared shape; every other slot is Top). Run once at entry.
+fn seed_locals() -> Word {
+    for j in 0..256 limit 256 {
+        tf.lc_tag[j] = tv.seed_tag[j];
+        tf.lc_size[j] = tv.seed_size[j];
+        tf.lc_kind[j] = tv.seed_kind[j];
+        tf.lc_tn[j] = -1;
+    }
+    0
+}
+
+// --- control-flow region-frame stack -------------------------------------------------------
+
+fn push_frame(ip: Word, end: Word, esp: Word) -> Word {
+    if tf.fsp > 63 {
+        tf.over = 2;
+    } else {
+        let j = tf.fsp;
+        tf.f_ip[j] = ip;
+        if end > tv.op_count {
+            tf.f_end[j] = tv.op_count;
+        } else {
+            tf.f_end[j] = end;
+        }
+        tf.f_esp[j] = esp;
+        tf.f_floor[j] = if j == 0 { 0 } else { tf.f_floor[j - 1] };
+        tf.f_fell[j] = 1;
+        tf.f_hb[j] = 0;
+        tf.f_bmax[j] = 0;
+        tf.f_pa[j] = 0;
+        tf.fsp = tf.fsp + 1;
+    }
+    0
+}
+
+fn deliver(i: Word) -> Word {
+    tf.child_fell = tf.f_fell[i];
+    tf.child_esp = tf.dsp;
+    tf.child_hb = tf.f_hb[i];
+    tf.child_bmax = tf.f_bmax[i];
+    tf.fsp = tf.fsp - 1;
+    0
+}
+
+fn record_break(i: Word) -> Word {
+    if tf.f_hb[i] == 0 {
+        tf.f_hb[i] = 1;
+        tf.f_bmax[i] = tf.dsp;
+    } else {
+        ne_bad(tf.dsp, tf.f_bmax[i]);
+    }
+    0
+}
+
+// Latch the reject if `x` and `y` differ (a height-balance obligation).
+fn ne_bad(x: Word, y: Word) -> Word {
+    if x > y orelse y > x {
+        tf.bad = 1;
+    }
+    0
+}
+
+fn scan_op(i: Word) -> Word {
+    let ip = tf.f_ip[i];
+    if tv.is_term[ip] == 1 {
+        // Check terminal payloads and their loop-frame floor before exiting.
+        apply_typed(ip);
+        tf.f_fell[i] = 0;
+        tf.f_ip[i] = tf.f_end[i];
+    } else {
+    if tv.class[ip] == 6 {
+        // Break: record the exit height, no fall-through.
+        record_break(i);
+        tf.f_fell[i] = 0;
+        tf.f_ip[i] = tf.f_end[i];
+    } else {
+    if tv.class[ip] == 7 {
+        // BreakIf: pop the condition, record the break edge, continue.
+        apply_typed(ip);
+        record_break(i);
+        tf.f_ip[i] = ip + 1;
+    } else {
+    if tv.class[ip] == 1 {
+        // If: pop the condition, spawn the then-branch (and, for an if-else, the else-branch).
+        apply_typed(ip);
+        let t = tv.arg[ip];
+        if t > 0 andalso t <= tv.op_count andalso tv.class[t - 1] == 2 {
+            let endif = tv.arg[t - 1];
+            tf.f_pk[i] = 2;
+            tf.f_ps[i] = 0;
+            tf.f_esp[i] = tf.dsp;
+            tf.f_elstart[i] = t;
+            tf.f_elend[i] = endif;
+            tf.f_resume[i] = endif + 1;
+            tf.f_pa[i] = 1;
+            push_frame(ip + 1, t - 1, tf.dsp);
+        } else {
+            tf.f_pk[i] = 1;
+            tf.f_esp[i] = tf.dsp;
+            tf.f_resume[i] = t + 1;
+            tf.f_pa[i] = 1;
+            push_frame(ip + 1, t, tf.dsp);
+        }
+    } else {
+    if tv.class[ip] == 4 {
+        // Loop: invalidate locals (over-approximation), spawn the body as a fresh break-scope.
+        invalidate_locals();
+        tf.f_pk[i] = 3;
+        tf.f_esp[i] = tf.dsp;
+        tf.f_resume[i] = tv.arg[ip];
+        tf.f_pa[i] = 1;
+        let previous_depth = tf.fsp;
+        push_frame(ip + 1, tv.arg[ip] - 1, tf.dsp);
+        if tf.fsp > previous_depth { tf.f_floor[tf.fsp - 1] = tf.dsp; }
+    } else {
+    if tv.class[ip] == 2 orelse tv.class[ip] == 3 orelse tv.class[ip] == 5 {
+        // Else/EndIf/EndLoop: structural markers, stepped over.
+        tf.f_ip[i] = ip + 1;
+    } else {
+        // Plain op or Call: apply the shape transfer.
+        apply_typed(ip);
+        tf.f_ip[i] = ip + 1;
+    } } } } } }
+    0
+}
+
+// Branches share their parent's break scope; loop bodies have a fresh scope.
+fn merge_breaks(i: Word) -> Word {
+    if tf.child_hb == 1 {
+        if tf.f_hb[i] == 0 { tf.f_hb[i] = 1; tf.f_bmax[i] = tf.child_bmax; }
+        else { ne_bad(tf.f_bmax[i], tf.child_bmax); }
+    }
+    0
+}
+fn resolve_pending(i: Word) -> Word {
+    if tf.f_pk[i] == 1 {
+        merge_breaks(i);
+        if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
+        tf.dsp = tf.f_esp[i]; top_from(0); invalidate_locals();
+        tf.f_ip[i] = tf.f_resume[i]; tf.f_pa[i] = 0;
+    } else { if tf.f_pk[i] == 2 {
+        merge_breaks(i);
+        if tf.f_ps[i] == 0 {
+            tf.f_tsp[i] = tf.dsp; tf.f_tfell[i] = tf.child_fell;
+            tf.dsp = tf.f_esp[i]; top_from(0); invalidate_locals();
+            tf.f_ps[i] = 1;
+            push_frame(tf.f_elstart[i], tf.f_elend[i], tf.f_esp[i]);
+        } else {
+            if tf.f_tfell[i] == 1 andalso tf.child_fell == 1 { ne_bad(tf.f_tsp[i], tf.dsp); }
+            else { if tf.f_tfell[i] == 1 { tf.dsp = tf.f_tsp[i]; } }
+            top_from(0); invalidate_locals();
+            if tf.f_tfell[i] == 0 andalso tf.child_fell == 0 {
+                tf.f_fell[i] = 0; tf.f_ip[i] = tf.f_end[i];
+            } else { tf.f_ip[i] = tf.f_resume[i]; }
+            tf.f_pa[i] = 0;
+        }
+    } else {
+        if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
+        if tf.child_hb == 1 { tf.dsp = tf.child_bmax; }
+        else { if tf.child_fell == 0 { tf.dsp = tf.f_esp[i]; } }
+        top_from(tf.f_esp[i]); invalidate_locals();
+        // The reference restores the neutral body exit or loop-entry state when
+        // there are no break states, even if the body terminated. Keep checking
+        // instructions after the loop against that fallback state.
+        tf.f_ip[i] = tf.f_resume[i];
+        tf.f_pa[i] = 0;
+    } }
+    0
+}
+
+fn step() -> Word {
+    let i = tf.fsp - 1;
+    if tf.f_pa[i] == 1 {
+        resolve_pending(i)
+    } else {
+        if tf.f_ip[i] >= tf.f_end[i] {
+            deliver(i)
+        } else {
+            scan_op(i)
+        }
+    }
+}
+
+// Interpret the whole chunk `[0, op_count)` from an empty stack and all-Top locals, and publish
+// whether any flat offset, underflow, or height-balance obligation is violated.
+fn run() -> Word {
+    tf.dsp = 0;
+    tf.over = 0;
+    tf.fsp = 0;
+    tf.bad = 0;
+    tf.child_fell = 1;
+    tf.child_esp = 0;
+    tf.child_hb = 0;
+    tf.child_bmax = 0;
+    seed_locals();
+    push_frame(0, tv.op_count, 0);
+    for s in 0..32768 limit 32768 {
+        if tf.fsp > 0 {
+            step();
+        }
+    }
+    if tf.fsp > 0 andalso tf.over == 0 { tf.over = 3; }
+    tv.out_cause = tf.over;
+    if tf.bad == 1 orelse tf.over != 0 {
+        tv.out_reject = 1;
+    } else {
+        tv.out_reject = 0;
+    }
+    tv.out_reject
+}
+
+loop main(resume: Word) -> Word {
+    yield run()
+}

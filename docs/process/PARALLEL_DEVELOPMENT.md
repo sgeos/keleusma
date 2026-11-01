@@ -1,0 +1,580 @@
+# Parallel-Agent Development
+
+> **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
+
+How to run more than one agent (or human) on this repository at the same time
+without the working trees, the process channels, or the release-line gate
+colliding. This document is the protocol; [`scripts/worktree.sh`](../../scripts/worktree.sh)
+is the mechanical enabler.
+
+The guiding principle is **isolate the mutable, serialize the shared**. Each agent
+gets a private working tree and branch (isolated). The release line and the full
+gate are shared resources and are entered one agent at a time (serialized).
+
+## 0a. The collaboration strategy (2026-08-09)
+
+Two sessions ran in parallel for a day and the arrangement worked, in the sense
+that each caught real defects in the other's work. It also cost the operator an
+afternoon of relaying prose between them. This section is what that experience
+plus a measurement says the arrangement should be.
+
+### The governing principle: minimise seams, do not build machinery
+
+The multi-agent failure literature's consistent finding is that failures cluster
+**at the seams** — specification, inter-agent misalignment, and verification —
+rather than inside any single agent. More coordination surface means more failure,
+not more throughput. Every mechanism below is therefore chosen to *remove* a seam
+rather than to manage one, and nothing here is a new tool.
+
+The corollary is a standing rule: **adopt or reuse, never build orchestration.**
+Parallel execution over isolated worktrees is a solved, commoditised shape. If a
+coordination need genuinely outgrows what git and the filesystem provide, take
+something off the shelf. Do not write a bus.
+
+### git is already the message bus
+
+Worktrees share one object store, so each session can read the other's branch
+directly. That is the blackboard pattern the modern agent buses re-instantiate,
+available here with no protocol and no tooling:
+
+```
+git show <other-branch>:docs/process/handoffs/<leaf>.md     # read their state
+git log --oneline <mine>..<theirs>                          # what they landed
+```
+
+**A mailbox lives on the VERSION branch, never on a feature branch.** Each session
+owns exactly one, `docs/process/handoffs/<version-branch>.md`, updated by **direct
+commit to the version branch** — which [`GIT_STRATEGY.md`](./GIT_STRATEGY.md)
+already permits for small green documentation and process changes, and a mailbox is
+exactly that.
+
+**This is not a stylistic preference; the alternative fails silently.** Any session
+doing real work is on a feature branch cut from its version branch, so a mailbox
+kept there sits one branch removed from where the convention says to look. The
+lookup then returns whatever the version branch last had — no error, no missing
+file, just older content that reads as current. That is the stale-but-plausible
+case this project has been bitten by repeatedly, reproduced here by the very
+artefact meant to reduce coordination cost. It was found on 2026-08-09 when the
+documented read path returned a day-old orientation document.
+
+**Every mailbox opens with the branch it describes and the commit it has LAST
+SYNCED FROM the other branch**, so a reader can tell how much of their own line the
+author has absorbed:
+
+```
+git show <version-branch>:docs/process/handoffs/<version-branch>.md
+git log -1 --format=%cd <version-branch> -- <that-path>     # when it last moved
+```
+
+**Stamp the last-synced commit, not this branch's own tip.** A self-tip stamp goes
+stale on every commit to the branch whether or not the mailbox changed, so it
+manufactures the false-stale reading the stamp exists to prevent — corrected
+2026-08-09 by the `v0.3.0` session after the original convention produced exactly
+that. And do not hand-maintain a "when did this change" field at all: `git log -1`
+answers it authoritatively and cannot drift.
+
+### Why not a real message bus? Decided 2026-08-09, with a trigger to revisit
+
+Purpose-built agent-to-agent buses exist and are mature enough to adopt. The
+recurring design is a shared SQLite or Maildir append-only log with a per-harness
+hook and a **wake mechanism**, no broker and no network. `hcom` is the strongest
+candidate: permissively licensed, and it documents Claude Code support.
+
+**Not adopted yet, for one reason: communication is not the binding constraint.**
+The measured bottleneck is the gate at ~2h33m, and it is repetition-bound. A
+channel's ceiling is `1 / (1 - f_c)` where `f_c` is the fraction of time lost to
+coordination overhead, so a perfect channel buys almost nothing while `f_c` is
+small and the gate dominates. Fixing the gate is worth more than any channel.
+
+**The honest defect in the git mailbox is that it is pull-only.** There is no
+wake, so neither session knows when the other has written — which is why prose was
+being relayed through the operator to *signal*, not to carry content. Mitigated by
+convention rather than tooling, because coordination only matters at increment
+boundaries:
+
+> **Read the other session's mailbox before starting an increment and after
+> finishing one.** That is the whole polling protocol.
+
+**Adopt a real bus when** either of these holds:
+
+- signalling is needed *mid-increment* rather than at boundaries; or
+- a session acts on stale information more than once despite the boundary checks.
+
+**Then adopt, do not build.** Native inter-agent messaging is expected to land in
+the major harnesses within roughly six to twelve months, so anything bespoke here
+would be subsumed before it paid back. The git mailbox is zero investment and
+disposable, which is the correct posture against a capability that is
+commoditizing underneath us.
+
+One local note against the general advice: single-vendor mailbox features are
+usually ruled out for spanning a mixed fleet. **Both sessions here are Claude
+Code**, so that disqualifier does not apply, and a native feature is a legitimate
+candidate the moment one is available and stable.
+
+### Give every coordination artefact the same treatment as a predicate
+
+Raised by the `v0.3.0` session, from the failure above. A mechanism introduced to
+remove a seam introduced a new one, which is precisely what the seam literature
+predicts and precisely what the artefact was supposed to avoid.
+
+So before relying on any coordination mechanism, run both directions on it, exactly
+as for a test predicate:
+
+- a **must-return-right case** — the documented path reaches the intended thing;
+- a **must-not-silently-return-wrong case** — when the path is wrong, stale, or
+  unreachable, does it say so, or does it hand back something plausible?
+
+The second is the one that gets skipped, and it is the one that matters. A
+coordination mechanism that fails loudly is recoverable. One that fails quietly
+propagates a wrong belief into both sessions at once.
+
+**Reserve the operator for decisions, not transport.** Escalate a genuine fork —
+a semantics change, a tradeoff needing judgment, an irreversible action. Do not
+escalate status, findings, or questions the other session can answer.
+
+### Read the other branch before assuming; state facts with their tip
+
+Every stale-document failure in this project has the same shape: a claim true when
+written and false when read. Under parallelism it gets worse, because the other
+branch moves while you reason.
+
+- **Before acting on anything about the other stream, read its current state.**
+- **Stamp claims with the tip they were established against.** A result is valid
+  only for the commit it was checked at, and that applies to gates, measurements,
+  and rehearsed command sequences alike.
+
+### Keep the shared surface small, and enumerate it
+
+Coordination cost is proportional to shared surface. Today it is exactly one file,
+[`scripts/release-gate.sh`](../../scripts/release-gate.sh), edited in separate
+regions. The three process channels are single-writer by assignment. Code
+dependencies across branches are read-only and declared.
+
+**Anything that becomes genuinely shared gets written down here, or it becomes an
+unowned conflict.**
+
+### The measured bottleneck is the gate, and it is repetition
+
+Measured 2026-08-09 on a ten-core machine, otherwise idle:
+
+| Quantity | Value |
+|---|---|
+| `selfhost_codegen`, standalone | 1008 s wall, 82 min CPU |
+| Parallelism achieved | 4.85 of 10 cores |
+| Full gate | ~2h33m |
+
+**The gate is not contention-bound.** It is *under*-subscribed, so raising test
+parallelism buys nothing; the tail is a few whole-stage self-compiles running
+alone. The cost is that this same 17-minute suite runs about four times, once per
+feature configuration, and the heavy self-host tests are insensitive to the
+features being varied (`signatures` is signing, `shell` is CLI surface).
+
+That matters for parallelism because the gate is the serial fraction, and by
+Amdahl the achievable speedup from adding a second stream is capped at `1/f`
+regardless of how well the sessions cooperate. **Reducing the gate is worth more
+than any coordination improvement**, and it is the lever to pull before adding
+process.
+
+Batching three or four increments per merge remains the cheapest available
+mitigation and costs no coverage.
+
+## 0. Two version branches (the current arrangement, 2026-08-08)
+
+**Sections 1 to 5 assume several feature branches off ONE trunk. That is not the
+current topology, and the difference changes what they prescribe.** Two version
+branches are live:
+
+| Branch | Owns | Working tree |
+|---|---|---|
+| `v0.2.3` | The wire-format programme | the primary repo directory |
+| `v0.3.0` | Native code generation | `../keleusma-worktrees/<leaf>` |
+
+`v0.3.0` was cut from `v0.2.3` and they have since diverged. Feature branches are
+cut from whichever version branch owns the work, with `KEL_TRUNK=v0.3.0` where
+needed — both `worktree.sh` and `merge-to-trunk.sh` honour it.
+
+### Current channel ownership
+
+The V0.2.X line maintains the current-state blocks in `TASKLOG.md` and
+`REVERSE_PROMPT.md`. The V0.3.X line resumes from its own brief and handoff under
+`docs/process/handoffs/` and preserves its attributed reverse-prompt addendum.
+During absorption, keep both lines' material and outstanding reports. A native
+regression guard checks that the addendum survives. Journal entries remain
+attributed, and concurrent edits to a shared channel require reconciliation.
+
+The following single-writer arrangement records the original policy. The current
+arrangement above reflects the shared addendum already maintained and checked by
+the native line. It does not grant either line ownership of the other's code.
+
+### Original channel arrangement
+
+
+`REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`, and `TASKLOG.md` would conflict on
+**every** merge between version branches. `DESIGN_JOURNAL.md` is newest-first, so
+its conflict lands at the top of the file every single time.
+
+**`v0.3.0` therefore touches none of the three** and writes only
+`docs/process/handoffs/v0.3.0.md`, which exists **on `v0.3.0` only** and is
+deliberately not linked here, since a cross-branch link cannot resolve on this
+branch. `v0.2.3` keeps the three channels moving so there
+is a coherent history to inherit when `v0.3.0` becomes a line in its own right.
+This asymmetry is deliberate and the cost falls on `v0.3.0`.
+
+### The downstream branch REBASES, and owns doing it
+
+**Operator decision, 2026-08-08: `v0.3.0` is rebased onto `v0.2.3` as work
+proceeds, not merged.** Keeping it a linear extension means the eventual
+integration is a fast-forward rather than an accumulated tangle of merge commits.
+
+```
+git fetch origin && git checkout v0.3.0 && git rebase origin/v0.2.3
+```
+
+`v0.3.0` pulls; **`v0.2.3` never pushes into `v0.3.0`**. One-directional ownership
+means nobody edits a branch they do not own, and — critically under a rebase
+policy — nobody rewrites history under a session that has local work built on it.
+
+**Sync before starting each increment, not on a timer.** `v0.3.0` was cut two
+commits stale on 2026-08-08 and inherited a specification describing a format that
+no longer existed plus a plan document saying its own work was blocked. Drift here
+does not announce itself; it presents as confidently reading the wrong thing.
+
+#### What rebasing costs, stated plainly
+
+Rebasing rewrites history, so once `v0.3.0` is published each sync needs a
+**force-push**. That is normally a guarded action; here it is standing policy for
+`v0.3.0` specifically, and it carries obligations:
+
+- Use `--force-with-lease`, never a bare `--force`. It refuses when the remote
+  moved unexpectedly, which is the difference between overwriting your own stale
+  view and overwriting someone else's work.
+- **Only the branch owner force-pushes it**, and only when no other session has
+  unpushed work on top. Announce it rather than assume.
+- **Feature branches off `v0.3.0` must rebase after each such sync.**
+  `merge-to-trunk.sh` already rebases onto `origin/$TRUNK` before gating, so the
+  normal merge path handles this; a long-lived feature branch between syncs is the
+  case that needs manual attention.
+- A gate result is only valid for the exact tip it ran against. A rebase changes
+  the tip, so a gate that predates it must be re-run.
+
+**Rebase early and often.** The cost scales with how much has accumulated on both
+sides, and the force-push hazard scales with how many sessions have built on the
+old history. A sync per increment is nearly free; a sync per week is not.
+
+#### Converting a merge-synced branch to a rebased one: the range is the trap
+
+If a branch was previously synced by **merging** the trunk in, then
+`git rebase --onto <new-base> <old-base>` is **the wrong range**, and it fails in
+a confusing place.
+
+`<old-base>` predates the commits that entered through the merge, so
+`<old-base>..HEAD` contains the *trunk's own* commits. The rebase then tries to
+replay the trunk's history back onto a base that already has a newer version of
+it, and conflicts in whatever file the trunk changed most recently — nowhere near
+the branch's actual work. This was hit for real on 2026-08-09: the conflict landed
+in `PARALLEL_DEVELOPMENT.md`, a file the branch had never touched.
+
+**Replay only the commits genuinely unique to the branch — and in a three-level
+topology, "unique" is measured against the VERSION BRANCH, not the trunk.**
+
+```
+git log --no-merges --oneline <old-version-branch-tip>..<feature-branch>
+```
+
+Cherry-pick that set onto the rebased base. The result is linear with no merge
+commits, and files that both sides edited in separate regions —
+`release-gate.sh` — come out carrying both changes.
+
+**Using the trunk as the endpoint is wrong here**, and this document said so until
+2026-08-09. `<trunk>..<feature-branch>` also returns the version branch's own
+commits, which the version branch's rebase has already replayed; cherry-picking
+that list applies them a second time. Everything between the trunk and the version
+branch is the version branch's history and is not the feature branch's to carry.
+
+The general form: the endpoint is the commit the feature branch was actually cut
+from, which under `trunk → version branch → feature branch` is the version
+branch's old tip.
+
+Once a branch is on the rebase policy this does not recur, because there are no
+merge commits to confuse the range. It is a one-time conversion hazard, and the
+habit that produces it is live as long as `GIT_STRATEGY.md` prescribes `--no-ff`.
+
+**Rehearse a history rewrite on throwaway refs before touching the real ones.**
+That is how the above was found rather than discovered mid-conflict. Setting
+`refs/backup/*` before starting costs nothing and makes any rewrite revertible.
+
+#### Feature branches into `v0.3.0` land FAST-FORWARD, not `--no-ff`
+
+Raised by the `v0.3.0` session, and it is a real gap one level below where the
+policy was written. [`GIT_STRATEGY.md`](./GIT_STRATEGY.md) says feature branches
+merge into a version branch via a **no-fast-forward merge commit**. Under a rebase
+policy that reintroduces exactly the tangle the policy exists to remove: `v0.3.0`
+would accumulate merge commits from its own feature branches, and the next rebase
+onto `v0.2.3` would flatten or mangle them.
+
+**So the two version branches differ, deliberately:**
+
+| Branch | Feature branches land | Why |
+|---|---|---|
+| `v0.2.3` | `--no-ff` merge commit, per `GIT_STRATEGY.md` | nothing rebases it; the bubble keeps red work off the spine |
+| `v0.3.0` | rebase, then land as **one green commit** (squash) | it is itself rebased, so it must stay linear AND keep red off the spine |
+
+**Corrected 2026-08-09.** This table previously said `v0.3.0` should rebase then
+`--ff-only`, which quietly gave up the invariant `--no-ff` exists to protect.
+`git rebase` **drops merge commits**, so a bubble on a rebased line is destroyed
+by the next sync and its red work-in-progress is replayed onto the spine. A bare
+`--ff-only` has the same problem by a different route: it puts each of the
+branch's commits on the spine individually, red intermediates included.
+
+Squashing to one green commit keeps the spine green, stays linear, and survives
+rebasing. The cost is the per-increment commits. See
+[`GIT_STRATEGY.md`](./GIT_STRATEGY.md#exception-a-line-that-is-itself-rebased).
+
+`scripts/merge-to-trunk.sh` implements the `--ff-only` form, so it is correct only
+when every commit on the branch is green. Squash first, or verify each commit,
+before relying on it.
+
+**A pre-existing inconsistency this surfaced.** `merge-to-trunk.sh` has always used
+`--ff-only`, while `GIT_STRATEGY.md` prescribes `--no-ff`, so the script and the
+strategy document have disagreed for as long as both existed. Merges done by hand
+on `v0.2.3` have followed the document; merges done through the script have not.
+That is now a deliberate split rather than an accident, but `GIT_STRATEGY.md`
+should be reconciled — either by noting the `v0.3.0` exception, or by deciding
+which of the two the script ought to implement.
+
+### Cross-branch code dependencies are read-only, declared, and one-directional
+
+`v0.3.0` reads `src/wire_schema.rs` (`AuxView`, `AuxOffsets`) and
+`src/bytecode.rs`, and commits to modifying neither. `v0.2.3` commits to
+announcing changes to that surface before making them. If a widening is genuinely
+needed, it is requested rather than taken.
+
+Note `AuxResolved` in `src/vm.rs` is **private** and deliberately not part of that
+surface; it is a VM-internal cache. `AuxView` is the shared read surface.
+
+### Genuinely shared files
+
+[`scripts/release-gate.sh`](../../scripts/release-gate.sh) is the only one so far.
+Keep edits in separate regions — the orphan-reap preflight sits above the first
+`step()` call, per-package steps go at the end — and expect to rebase rather than
+merge when both lines touch it.
+
+### Where `v0.3.0` merges
+
+The rebase policy settles the mechanism: `v0.3.0` stays a linear extension of
+`v0.2.3`, so its integration is a fast-forward whenever it happens, and
+`merge-to-trunk.sh`'s `v0.2.3` default is the correct one rather than an accident.
+
+What remains open is only the *timing* — whether `v0.3.0` lands while `v0.2.3` is
+still the active line, or follows it to `main` afterwards. That is a release
+question rather than a branching one, and it does not need answering to proceed.
+
+### What does not change
+
+Full-gate serialization (section 4) still binds, and matters more here than under
+sibling feature branches. A full gate runs about 2h30m, only one may run at a
+time, and the result reaches the other session only through the operator. Plan for
+roughly one merge per stream per half-day and batch accordingly.
+
+**Reap orphans with a PATH-SCOPED pattern.** `pkill -f "$PWD/target/debug/deps"`
+from the worktree whose gate died. An unscoped `pkill -f 'target/debug/deps'`
+matches every worktree on the machine and will kill a sibling session's live gate.
+
+## 1. Isolation: one worktree and one branch per agent
+
+Every concurrent agent works in its own git worktree on its own short-lived
+feature branch cut from the active trunk (currently `v0.2.3`). Worktrees share
+one `.git` object store but have independent working directories and indexes, so
+two agents never fight over one dirty tree.
+
+```
+scripts/worktree.sh new  feat/some-thing    # tree + branch off the trunk
+scripts/worktree.sh list                     # show all trees
+scripts/worktree.sh rm   feat/some-thing     # remove tree + delete branch
+```
+
+Trees live under `../keleusma-worktrees/<leaf>`, siblings of the repo. The trunk
+defaults to `v0.2.3` and is overridable with `KEL_TRUNK`. Branch names follow the
+[`GIT_STRATEGY.md`](./GIT_STRATEGY.md) scope convention (`feat/`, `fix/`, `docs/`,
+`refactor/`, `test/`, `chore/`).
+
+### Build output on a scratch volume
+
+A machine may keep build output on a separate volume, so that it fills that volume
+instead of the system disk. When `SCRATCH_BASE` names the volume, `worktree.sh new`
+moves the `target` of every package present in the new tree, the root's and the
+nested ones listed in the script, to `$SCRATCH_BASE/keleusma/<leaf>/` through
+[`scripts/scratch.sh`](../../scripts/scratch.sh) and leaves symbolic links. `rm`
+deletes that folder once the tree is gone, and `list` reports any folder no tree
+uses, deleting none, because the operator decides deletions. Without `SCRATCH_BASE`
+nothing changes. An existing tree is moved with `scripts/scratch.sh link` from
+inside it, one directory at a time, when nothing is building there.
+
+- **A clean deletes the link.** `cargo clean` removes the link, not the copy, and the
+  next build makes a real `target` in the tree. Run `scripts/scratch.sh link` after a
+  clean and before building. If a build has already recreated it, `link` refuses,
+  and the stale copy on scratch must be deleted first.
+- **`new` refuses a leaf that is already in use** on scratch or by another worktree,
+  because the new tree would otherwise build into that tree's output. Trees under
+  `.worktrees/` and under `../keleusma-worktrees/` share one namespace on scratch, so
+  `rm` likewise keeps a folder whose name a live tree still uses.
+- **The path-scoped `pkill` pattern still matches.** nextest runs test binaries by
+  their path in the tree, through the link, as observed on 2026-10-31.
+- **The gate builds there too.** With `SCRATCH_BASE` set, `gate-in-worktree.sh`
+  defaults its `CARGO_TARGET_DIR` to `$SCRATCH_BASE/keleusma/.gate-target`, a plain
+  directory rather than a link. `KEL_GATE_TARGET` still overrides it.
+- **Trees made elsewhere are reported, not linked.** Claude Code creates its agent
+  trees under `.claude/worktrees/` with `git worktree add`, so their output stays on
+  the system disk. With `SCRATCH_BASE` set, `list` names every package `target` of a
+  live tree that is a directory rather than a link, with its size, and changes
+  nothing.
+- **`scratch.sh` is vendored unchanged** from `sgeos/project-template` v1.0.8, so
+  that it can be compared with the template's copy. Change it there first.
+
+The operator approved this on 2026-10-31. See
+[the proposal](./kaizen/2026-10-31-scratch-volume-proposal.md).
+
+When spawning agents from within a Claude Code session instead of separate
+terminals, the `Agent` tool's `isolation: "worktree"` option provides the same
+isolation automatically for agents that mutate files.
+
+### Worktrees or separate clones?
+
+Both give an agent an independent working directory on its own branch. The choice:
+
+- **Worktrees (the default, what `worktree.sh` uses).** One clone, many working
+  directories sharing a single `.git` object store, remotes, and hooks.
+  Disk-efficient, one fetch serves every tree, and a branch may be checked out in
+  at most one tree at a time — a useful guardrail against two agents editing the
+  same branch. Each tree gets its own `target/`, so builds do not collide. Best
+  for several agents on one machine.
+- **Separate clones (`git clone` per agent).** Full independence: each clone has
+  its own object store, config, hooks, and `target/`. Heavier on disk (a whole
+  copy apiece) and each fetches on its own, but there is zero shared state and two
+  clones may sit on the same branch. Best when agents run on different machines,
+  when you want total isolation from a shared hook or object store, or when you
+  deliberately want two checkouts of one branch.
+
+Recommendation: prefer worktrees on a single development machine — they are what
+the tooling here assumes and they avoid duplicating the object store — and reach
+for separate clones for cross-machine work or a fully decoupled checkout. Either
+way the per-branch handoffs, the merge protocol, and the gate discipline below
+apply unchanged.
+
+## 2. Pick non-conflicting workstreams
+
+Parallelism only helps when the streams do not edit the same files. The table
+below maps each stream to the paths it owns. Two agents are safely concurrent
+when their owned paths do not overlap.
+
+| Workstream | Owns (primary paths) | Notes |
+|-----------|----------------------|-------|
+| Runtime / ISA | `src/`, `tests/` | A wire-format or `BYTECODE_VERSION` change here forces a `compiler/` re-sync — see the coupling note below |
+| Self-host pipeline | `compiler/kel/`, `compiler/src/` | Internally **lockstep**; treat as a single stream (see below) |
+| Guide / book | `book/`, `docs/` | Independent of code |
+| Arena | `keleusma-arena/` | Standalone crate, independent |
+| Cost-model bench | `keleusma-bench/` | Independent |
+| CLI | `keleusma-cli/` | Mostly independent |
+| RTOS example | `examples/rtos/` | Detached crate, fully independent |
+
+### The coupling that limits self-host parallelism (be honest about this)
+
+The self-hosted pipeline still has coupling that bounds true concurrency, though the
+biggest single blocker is now gone:
+
+- **P11 (encoding capacity) has LANDED** (2026-07-24, see
+  [`docs/decisions/ENCODING_CAPACITY_BRIEF.md`](../decisions/ENCODING_CAPACITY_BRIEF.md)):
+  the inter-stage encodings have ample tag headroom and the split-tag workarounds are
+  retired. New construct work no longer competes for scarce encoding slots, so several
+  self-host constructs that touch *disjoint* `.kel` code can now proceed in parallel — the
+  former hard serialization is lifted.
+- Remaining coupling: a change to the **shared inter-stage protocol** (a stage's record/
+  token/op format, or the host driver in `compiler/src/` — one shared `drive_parse_records`
+  after the consolidation) still needs cross-stage coordination and should be a single
+  stream. Likewise a runtime **wire-format** change edits `src/` and requires re-syncing
+  `compiler/`, so it is not concurrent with self-host work.
+- Two agents editing the *same* `.kel` stage still conflict; partition by stage or by
+  disjoint construct areas.
+
+So near-term concurrency spans the independent streams (guide/book, arena, bench, the RTOS
+example, runtime features that do not touch the wire format) **and now** self-host construct
+work on disjoint areas. Reserve a single stream only for shared-protocol / wire-format
+changes.
+
+## 3. Communication channels under parallelism
+
+The single-writer process files in [`COMMUNICATION.md`](./COMMUNICATION.md) assume
+one active session. Under parallelism they need per-agent lanes so agents do not
+overwrite each other:
+
+| Channel | Solo behaviour | Parallel behaviour |
+|---------|----------------|--------------------|
+| `REVERSE_PROMPT.md` | Overwritten each task | **Do not** overwrite from a parallel branch. Write a per-branch handoff at `docs/process/handoffs/<branch-leaf>.md` instead |
+| `DESIGN_JOURNAL.md` | Append-only | Still append-only; append a dated, branch-tagged entry. Append/append merge conflicts are trivial (keep both) |
+| `TASKLOG.md` | Shared, incremental | Claim one task row per agent, tagged with the branch; edit only your own row |
+| `PROMPT.md` | Human to AI, read-only for AI | Unchanged |
+
+The primary agent (the one that will overwrite `REVERSE_PROMPT.md` and integrate
+the handoffs at the end) reconciles the per-branch handoffs back into
+`REVERSE_PROMPT.md` when the parallel burst finishes.
+
+## 4. Serialize the release line and the full gate
+
+The release line (`v0.2.3`) and `scripts/release-gate.sh` are shared and must be
+entered one agent at a time.
+
+**Merge protocol (per branch, in turn):**
+
+Run [`scripts/merge-to-trunk.sh`](../../scripts/merge-to-trunk.sh) from the feature
+branch. It performs the whole serialization sequence and refuses to merge if the
+trunk moved under it:
+
+1. Rebase the branch onto the current trunk tip (`git fetch` + `git rebase origin/v0.2.3`).
+2. Verify the branch. **CI on a pull request is what authorizes a merge** (changed 2026-08-11;
+   see [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). `scripts/release-gate.sh` is
+   available for a local pass when working offline or before a release, and this step called it
+   "the mandatory pre-merge gate" until 2026-09-08, which was the superseded rule.
+3. Re-check the trunk tip. If it moved while the gate ran, another agent merged
+   first — abort and re-run (which rebases onto the new tip and re-gates).
+4. Fast-forward merge and push.
+
+The script is a dry-run by default (rebase and gate, then stop and print the
+commands); pass `--execute` to merge and push. Doing it by hand is fine too — the
+sequence above IS the protocol. The re-check in step 3 is the guard against a gate
+that raced another merge; a gate result is only valid for the exact trunk tip it
+ran against, so there is no lock daemon, just "gate, then confirm nothing moved."
+
+**Gate discipline (this is also process-audit item 1):**
+
+- Inner loop: [`scripts/fast-check.sh`](../../scripts/fast-check.sh) is cheap and
+  safe to run concurrently across agents.
+- The full `scripts/release-gate.sh` is CPU-heavy, and the self-host tests already
+  contend for cores. Do **not** run several full gates concurrently — it saturates
+  the machine and inflates every agent's wall-clock. Serialize full gates at the
+  merge point per the protocol above. This is why the merge is a queue, not a
+  free-for-all.
+
+## 5. Checklist for launching a parallel burst
+
+1. Confirm the chosen streams own disjoint paths (section 2).
+2. Confirm no stream depends on a wire-format or shared inter-stage-protocol change
+   that another stream is making concurrently.
+3. `scripts/worktree.sh new <branch>` per stream.
+4. Each agent iterates with `scripts/fast-check.sh`; per-branch handoff in
+   `docs/process/handoffs/`.
+5. Merge back one at a time with `scripts/merge-to-trunk.sh` (section 4).
+6. `scripts/worktree.sh rm <branch>` when merged.
+
+## Status
+
+**Two version branches have been live since 2026-08-08** — see section 0, which
+supersedes the single-trunk assumption in sections 1 to 5 where they differ.
+`v0.3.0` is kept a linear extension of `v0.2.3` by rebasing rather than merging
+(operator decision, 2026-08-08), which makes its eventual integration a
+fast-forward.
+
+The **P11** encoding-capacity change has landed (2026-07-24), which was the hard blocker
+on self-host parallelism — the inter-stage encodings now have headroom, so construct work
+on disjoint `.kel` areas can run in parallel (section 2). The remaining constraint is only
+shared-protocol / wire-format changes, which stay single-stream. See
+[`docs/decisions/ENCODING_CAPACITY_BRIEF.md`](../decisions/ENCODING_CAPACITY_BRIEF.md).

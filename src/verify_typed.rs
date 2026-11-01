@@ -51,6 +51,11 @@ pub enum AbsVal {
         kind: CompositeKind,
         /// The body's byte length.
         size: u32,
+        /// The byte offset of every `Text` field in the body, sorted, when the body's layout is
+        /// known, which is when the program built it. `None` when the body came from outside
+        /// the program, a parameter, a resume value, a native result or a data slot, or when two
+        /// paths disagree. See `docs/decisions/FLAT_TEXT_LAYOUT_PROOF.md`.
+        text: Option<Vec<u32>>,
     },
     /// A value whose shape is not statically known at this phase (a
     /// parameter, local, call result, resume value, reference handle, or
@@ -60,20 +65,38 @@ pub enum AbsVal {
 
 impl AbsVal {
     /// Byte size this value occupies inside a packed flat body, if known.
-    fn packed_size(&self, word_bytes: usize, float_bytes: usize) -> Option<u32> {
+    fn packed_size(&self, word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<u32> {
         match self {
-            AbsVal::Scalar(k) => Some(k.size_in_bytes(word_bytes, float_bytes) as u32),
+            AbsVal::Scalar(k) => Some(k.size_in_bytes(word_bytes, float_bytes, addr_bytes) as u32),
             AbsVal::Flat { size, .. } => Some(*size),
             AbsVal::Top => None,
         }
     }
 
     /// Lattice join: equal values join to themselves, anything else to `Top`.
+    ///
+    /// Two flat bodies of one kind and size join to that kind and size, as before the layout was
+    /// tracked, and keep a layout only when both sides know the same one.
     fn join(&self, other: &AbsVal) -> AbsVal {
-        if self == other {
-            self.clone()
-        } else {
-            AbsVal::Top
+        match (self, other) {
+            (
+                AbsVal::Flat {
+                    kind: k1,
+                    size: s1,
+                    text: t1,
+                },
+                AbsVal::Flat {
+                    kind: k2,
+                    size: s2,
+                    text: t2,
+                },
+            ) if k1 == k2 && s1 == s2 => AbsVal::Flat {
+                kind: *k1,
+                size: *s1,
+                text: if t1 == t2 { t1.clone() } else { None },
+            },
+            _ if self == other => self.clone(),
+            _ => AbsVal::Top,
         }
     }
 
@@ -92,6 +115,7 @@ impl AbsVal {
                 Some(k) => AbsVal::Flat {
                     kind: k,
                     size: *size,
+                    text: None,
                 },
                 None => AbsVal::Top,
             },
@@ -134,6 +158,14 @@ pub enum TypedError {
         /// The size recomputed from the consumed values.
         computed: u32,
     },
+    /// A read of kind `Text` from a flat body whose layout is known finds no `Text` field at
+    /// its offset, so it would rebuild a pointer from another kind's bytes.
+    TextFieldMismatch {
+        /// Instruction index of the read.
+        ip: usize,
+        /// The body offset read.
+        offset: u32,
+    },
     /// The two arms of an `If`/`Else` leave the operand stack at different
     /// heights (a stack imbalance).
     BranchHeightMismatch {
@@ -154,6 +186,34 @@ pub enum TypedError {
         entry_height: usize,
         /// Operand-stack height where the body falls through.
         exit_height: usize,
+    },
+    /// An instruction inside a loop body consumes an operand from BELOW the
+    /// loop's entry height.
+    ///
+    /// Back-edge neutrality (see [`TypedError::LoopNotNeutral`]) compares
+    /// SHAPES, not identities, so a body that pops a below-entry operand and
+    /// pushes a same-shape replacement is neutral — and the surviving entry was
+    /// then constructed in the current iteration while touching none of the
+    /// escaping instructions. That defeats any confinement argument over loop
+    /// bodies, and it was accepted until 2026-08-23.
+    ///
+    /// **The frame floor does not cover this.** `apply_op`'s underflow guard
+    /// fires only on an empty abstract stack, and 122 of 245 compiled `Loop`
+    /// instructions in the shipped corpus carry a NON-EMPTY operand stack at
+    /// entry, so for about half of them the frame floor sits strictly below the
+    /// loop floor.
+    ///
+    /// Adopting this rejected **zero** of the 588 loop instances across the
+    /// shipped corpus, measured before the check was added.
+    LoopFloorBreach {
+        /// Instruction index of the offending instruction.
+        ip: usize,
+        /// Operand-stack height at the enclosing loop's entry.
+        floor: usize,
+        /// Operand-stack height available to the instruction.
+        available: usize,
+        /// Operands the instruction consumes.
+        required: usize,
     },
     /// A `SetLocal` stores a value whose shape is incompatible with the
     /// slot's declared shape, which would make a later `GetLocal` seeding
@@ -246,7 +306,7 @@ pub enum TypedError {
 /// alone cannot determine a value's shape. Phase 2 consumes it; the
 /// compiler emitting it and the wire format carrying it (additively in the
 /// auxiliary body) is the Phase 2b plumbing. Absent, every seed point is
-/// [`AbsVal::Top`](crate::verify_typed::AbsVal::Top) and shape checks defer, which is exactly the Phase 1
+/// [`AbsVal::Top`] and shape checks defer, which is exactly the Phase 1
 /// behaviour.
 #[derive(Clone, Debug, Default)]
 pub struct ChunkSig {
@@ -302,7 +362,19 @@ pub fn typed_check_chunk_with_sig(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
-    check_chunk_seeded(chunk, sig, &[], &[], &[], word_bytes, float_bytes)
+    // A chunk checked in isolation has no module to read an address width from, so it takes the
+    // runtime's own. That is sound here and only here: with no module there is no cross-compiled
+    // target to disagree with.
+    check_chunk_seeded(
+        chunk,
+        sig,
+        &[],
+        &[],
+        &[],
+        word_bytes,
+        float_bytes,
+        (1usize << crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2) / 8,
+    )
 }
 
 /// Check every chunk of a module, seeding each from the module's per-chunk
@@ -318,7 +390,13 @@ pub fn typed_check_module(
     // Wire-table validation (A.2.1 Phase 4): the carried tables are trusted
     // only because verified. B6: every shared slot lies within the shared-data
     // buffer. B8 is enforced per-op below via the enum body-size cross-check.
-    validate_data_layout(module, word_bytes, float_bytes)?;
+    // THE ADDRESS WIDTH IS DERIVED FROM THE MODULE, not taken as a parameter. It is the
+    // module's own declared width, the same field the runtime checks on load, so reading it here
+    // cannot drift from what the compiler baked. Passing `word_bytes` instead would validate the
+    // layout against the wrong field and silently agree wherever the two widths coincide, which
+    // is exactly the latency this ruling removes.
+    let addr_bytes = (1usize << module.addr_bits_log2) / 8;
+    validate_data_layout(module, word_bytes, float_bytes, addr_bytes)?;
 
     // The set of declared flat enum body sizes (`word_bytes + min_payload`),
     // against which a flat-enum `NewComposite` size is cross-checked (B8). A
@@ -343,6 +421,7 @@ pub fn typed_check_module(
             &module.native_return_shapes,
             word_bytes,
             float_bytes,
+            addr_bytes,
         )?;
     }
     Ok(())
@@ -357,6 +436,7 @@ fn validate_data_layout(
     module: &Module,
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Result<(), TypedError> {
     let Some(layout) = &module.data_layout else {
         return Ok(());
@@ -402,24 +482,24 @@ fn validate_data_layout(
             usize::from(sl.len)
         } else {
             match ScalarKind::from_tag(sl.kind) {
-                Some(k) => k.size_in_bytes(word_bytes, float_bytes),
+                Some(k) => k.size_in_bytes(word_bytes, float_bytes, addr_bytes),
                 // An undecodable kind tag cannot be sized; treat as a corrupt
                 // table entry.
                 None => {
                     return Err(TypedError::SharedSlotOutOfBounds {
                         slot,
-                        offset: usize::from(sl.offset),
+                        offset: sl.offset as usize,
                         size: 0,
                         buffer,
                     });
                 }
             }
         };
-        let need = usize::from(sl.offset) + size;
+        let need = sl.offset as usize + size;
         if need > buffer as usize {
             return Err(TypedError::SharedSlotOutOfBounds {
                 slot,
-                offset: usize::from(sl.offset),
+                offset: sl.offset as usize,
                 size,
                 buffer,
             });
@@ -467,6 +547,23 @@ fn validate_data_layout(
 /// Shared entry: interpret one chunk under a seeding signature, a module
 /// signature table, and the set of declared flat enum body sizes (all empty
 /// when the chunk is checked in isolation).
+// EIGHT ARGUMENTS, AND THE ALLOW IS A RECORDED DEBT RATHER THAN A SHRUG.
+//
+// This crossed clippy's threshold when `addr_bytes` joined `word_bytes` and
+// `float_bytes`, which is the moment the three widths became a thing that
+// should travel as one value. The function's own first act is to pack all eight
+// arguments into a `Ctx` it then uses exclusively.
+//
+// The real fix is to bundle the widths, and it is not done here. Measured:
+// `addr_bytes: usize` appears at 43 signatures across seven modules, several of
+// them public. That is a refactor, and this commit is the repair of a change
+// that was already left unfinished once. A redesign inside a repair is how the
+// repair stops being verifiable.
+//
+// Recorded because it will only get more expensive: bundling before the next
+// width lands makes that width nearly free, and the public signatures make it
+// cheaper before a publication than after one.
+#[allow(clippy::too_many_arguments)]
 fn check_chunk_seeded(
     chunk: &Chunk,
     sig: &ChunkSig,
@@ -475,6 +572,7 @@ fn check_chunk_seeded(
     native_return_shapes: &[WireShape],
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Result<(), TypedError> {
     let ctx = Ctx {
         chunk,
@@ -483,6 +581,7 @@ fn check_chunk_seeded(
         enum_body_sizes,
         native_return_shapes,
         wb: word_bytes,
+        ab: addr_bytes,
         fb: float_bytes,
     };
     // The local frame starts from the seed (parameters carry their declared
@@ -498,7 +597,7 @@ fn check_chunk_seeded(
         locals,
     };
     let mut breaks: Vec<AbsState> = Vec::new();
-    interp_region(&ctx, 0, chunk.ops.len(), state, &mut breaks).map(|_| ())
+    interp_region(&ctx, 0, chunk.ops.len(), state, &mut breaks, 0).map(|_| ())
 }
 
 /// Abstract state at a program point: the operand stack and the per-slot
@@ -552,6 +651,10 @@ struct Ctx<'a> {
     wb: usize,
     /// Target float width in bytes.
     fb: usize,
+    /// Target ADDRESS width in bytes, which sizes an `Opaque`. Carried
+    /// separately from `wb` because the two widths are selected independently
+    /// and coincide only in the default configuration.
+    ab: usize,
 }
 
 /// A recursive abstract interpreter over ops `[start, end)`. The immutable
@@ -565,24 +668,32 @@ fn interp_region(
     end: usize,
     mut state: AbsState,
     breaks: &mut Vec<AbsState>,
+    floor: usize,
 ) -> Result<Option<AbsState>, TypedError> {
     let ops = &ctx.chunk.ops;
     let mut ip = start;
     while ip < end {
         let op = &ops[ip];
         match op {
-            Op::Trap(_) | Op::Return => return Ok(None),
+            Op::Trap(_) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
+                apply_op(ctx, op, &mut state.stack, &mut state.locals, ip)?;
+                return Ok(None);
+            }
+            Op::Return => return Ok(None),
             Op::Break(_) => {
                 breaks.push(state);
                 return Ok(None);
             }
             Op::BreakIf(_) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
                 let AbsState { stack, locals } = &mut state;
                 apply_op(ctx, op, stack, locals, ip)?;
                 breaks.push(state.clone());
                 ip += 1;
             }
             Op::If(target) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
                 {
                     let AbsState { stack, locals } = &mut state;
                     apply_op(ctx, op, stack, locals, ip)?;
@@ -593,8 +704,9 @@ fn interp_region(
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
                     };
-                    let then_end = interp_region(ctx, ip + 1, target - 1, state.clone(), breaks)?;
-                    let else_end = interp_region(ctx, target, endif, state, breaks)?;
+                    let then_end =
+                        interp_region(ctx, ip + 1, target - 1, state.clone(), breaks, floor)?;
+                    let else_end = interp_region(ctx, target, endif, state, breaks, floor)?;
                     match join_ends(then_end, else_end, ip)? {
                         Some(joined) => state = joined,
                         None => return Ok(None),
@@ -604,7 +716,7 @@ fn interp_region(
                     // No else: the then-arm merges with the fall-through path
                     // (the state unchanged after popping the condition).
                     let skip = state.clone();
-                    let then_end = interp_region(ctx, ip + 1, target, state, breaks)?;
+                    let then_end = interp_region(ctx, ip + 1, target, state, breaks, floor)?;
                     match join_ends(then_end, Some(skip), ip)? {
                         Some(joined) => state = joined,
                         None => return Ok(None),
@@ -637,8 +749,14 @@ fn interp_region(
                 let mut iters = 0usize;
                 loop {
                     loop_breaks.clear();
-                    body_end =
-                        interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                    body_end = interp_region(
+                        ctx,
+                        ip + 1,
+                        exit - 1,
+                        head.clone(),
+                        &mut loop_breaks,
+                        entry_height,
+                    )?;
                     let Some(be) = &body_end else {
                         // The body always exits via Break/Trap/Return: no
                         // back-edge, so no fixpoint is needed.
@@ -667,8 +785,14 @@ fn interp_region(
                         // only locals, so `head.stack` is unchanged.
                         invalidate_written_locals(ctx.chunk, ip + 1, exit - 1, &mut head.locals);
                         loop_breaks.clear();
-                        body_end =
-                            interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                        body_end = interp_region(
+                            ctx,
+                            ip + 1,
+                            exit - 1,
+                            head.clone(),
+                            &mut loop_breaks,
+                            entry_height,
+                        )?;
                         if let Some(be) = &body_end
                             && be.stack != head.stack
                         {
@@ -694,6 +818,7 @@ fn interp_region(
             }
             _ => {
                 let AbsState { stack, locals } = &mut state;
+                check_floor(ctx, op, stack.len(), floor, ip)?;
                 apply_op(ctx, op, stack, locals, ip)?;
                 ip += 1;
             }
@@ -779,6 +904,37 @@ fn join_all(states: Vec<AbsState>, ip: usize) -> Result<Option<AbsState>, TypedE
 /// discipline exactly matches the scalar depth pass. Shape is tracked
 /// precisely for the ops that carry or consume it and conservatively (`Top`)
 /// otherwise.
+/// Refuse an instruction that would consume an operand from below `floor`.
+///
+/// `floor` is the enclosing loop's entry height, or `0` outside any loop. See
+/// [`TypedError::LoopFloorBreach`] for why the frame-level underflow guard in
+/// [`apply_op`] does not subsume this.
+fn check_floor(
+    ctx: &Ctx,
+    op: &Op,
+    height: usize,
+    floor: usize,
+    ip: usize,
+) -> Result<(), TypedError> {
+    // Outside any loop the floor is the frame, and `apply_op`'s own underflow
+    // guard is the apter diagnosis. Reporting a loop-floor breach there would
+    // name a loop the reader is not inside.
+    if floor == 0 {
+        return Ok(());
+    }
+    let (req, _net) = op_depth_effect(op, ctx.chunk);
+    let req = req.max(0) as usize;
+    if height < floor + req {
+        return Err(TypedError::LoopFloorBreach {
+            ip,
+            floor,
+            available: height,
+            required: req,
+        });
+    }
+    Ok(())
+}
+
 fn apply_op(
     ctx: &Ctx,
     op: &Op,
@@ -798,6 +954,18 @@ fn apply_op(
             stack.push(top);
         }
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => stack.push(AbsVal::Scalar(ScalarKind::Bool)),
+        Op::BoundsCheck(_) => {
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 5));
+        }
+        Op::GetDataIndexed(_, _) => {
+            stack.truncate(stack.len() - 2);
+            stack.push(AbsVal::Top);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
+        Op::SetDataIndexed(_, _) => {
+            stack.truncate(stack.len() - 2);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
 
         // Read a local's tracked shape. A slot beyond the frame is `Top`.
         Op::GetLocal(i) => {
@@ -841,13 +1009,24 @@ fn apply_op(
         }) => {
             let mut computed: u32 = 0;
             let mut all_known = true;
+            let mut elements: Vec<AbsVal> = Vec::new();
             for _ in 0..*count {
                 let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-                match v.packed_size(ctx.wb, ctx.fb) {
+                match v.packed_size(ctx.wb, ctx.fb, ctx.ab) {
                     Some(n) => computed = computed.saturating_add(n),
                     None => all_known = false,
                 }
+                elements.push(v);
             }
+            // The elements were popped last first, and a body packs them first to last.
+            elements.reverse();
+            let text = if matches!(kind, CompositeKind::Enum) {
+                // An enum body pads its payload to the largest variant, so its fields do not sit
+                // at their packed offsets. Its layout is left unknown.
+                None
+            } else {
+                built_text_layout(&elements, ctx.wb, ctx.fb, ctx.ab)
+            };
             if matches!(kind, CompositeKind::Enum) {
                 // An enum body pads its payload to the largest variant, so its
                 // size is not the sum of the packed elements; instead it must
@@ -875,12 +1054,14 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *kind,
                 size: u32::from(*byte_size),
+                text,
             });
         }
 
         Op::GetField(StructField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
+            check_text_field(&v, u32::from(*offset), *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetField(StructField::FlatNested {
@@ -893,6 +1074,7 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: nested_text_layout(&v, u32::from(*offset), u32::from(*size)),
             });
         }
 
@@ -901,7 +1083,8 @@ fn apply_op(
         // nested composite field at its offset and size (A.2.1 Phase 3).
         Op::GetTupleField(TupleField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
+            check_text_field(&v, u32::from(*offset), *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetTupleField(TupleField::FlatNested {
@@ -914,6 +1097,7 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: nested_text_layout(&v, u32::from(*offset), u32::from(*size)),
             });
         }
 
@@ -922,7 +1106,8 @@ fn apply_op(
         // struct field against the padded enum body (A.2.1 Phase 3).
         Op::GetEnumField(EnumField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
+            check_text_field(&v, u32::from(*offset), *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetEnumField(EnumField::FlatNested {
@@ -935,20 +1120,25 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: nested_text_layout(&v, u32::from(*offset), u32::from(*size)),
             });
         }
 
         // Flat array element access pops the index and the array. The element
         // offset is `index * element_size` computed at run time, so the index
-        // bound stays a runtime trap; the static check validates that the
+        // bound is handled at runtime; the static check validates that the
         // baked element stride evenly divides the array body (A.2.1 Phase 3),
         // then pushes the element shape.
         Op::GetIndex(ArrayElem::Flat { kind }) => {
             let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             let arr = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            let elem = kind.size_in_bytes(ctx.wb, ctx.fb) as u32;
+            let elem = kind.size_in_bytes(ctx.wb, ctx.fb, ctx.ab) as u32;
             check_flat_array_stride(&arr, elem, ip)?;
+            check_text_elements(&arr, elem, *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
+            if (ArrayElem::Flat { kind: *kind }).has_bounds_outcome() {
+                stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+            }
         }
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
             let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
@@ -957,7 +1147,19 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: element_text_layout(&arr, u32::from(*size)),
             });
+            // The total read's diagnostic suffix and flag, as for a flat
+            // Word or Byte element.
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
+        // A boxed read is total with an unknown element shape, followed by the
+        // diagnostic suffix and flag, as an indexed data read is.
+        Op::GetIndex(ArrayElem::Boxed) => {
+            stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            stack.push(AbsVal::Top);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
         }
 
         // A script-to-script call: pop the arguments, check each against the
@@ -1041,11 +1243,12 @@ fn check_flat_scalar(
     kind: ScalarKind,
     wb: usize,
     fb: usize,
+    ab: usize,
     ip: usize,
 ) -> Result<(), TypedError> {
     match v {
         AbsVal::Flat { size, .. } => {
-            let need = usize::from(offset) + kind.size_in_bytes(wb, fb);
+            let need = usize::from(offset) + kind.size_in_bytes(wb, fb, ab);
             if need > *size as usize {
                 return Err(TypedError::OffsetOutOfBounds {
                     ip,
@@ -1103,6 +1306,111 @@ fn check_flat_array_stride(arr: &AbsVal, element_size: u32, ip: usize) -> Result
     }
 }
 
+/// The `Text` field offsets of a body packed from `elements`, or `None` when an element's own
+/// layout is unknown.
+fn built_text_layout(elements: &[AbsVal], wb: usize, fb: usize, ab: usize) -> Option<Vec<u32>> {
+    let mut offsets = Vec::new();
+    let mut at: u32 = 0;
+    for e in elements {
+        match e {
+            AbsVal::Scalar(ScalarKind::Text) => offsets.push(at),
+            AbsVal::Scalar(_) => {}
+            AbsVal::Flat {
+                text: Some(inner), ..
+            } => offsets.extend(inner.iter().map(|o| at.saturating_add(*o))),
+            AbsVal::Flat { text: None, .. } | AbsVal::Top => return None,
+        }
+        at = at.saturating_add(e.packed_size(wb, fb, ab)?);
+    }
+    Some(offsets)
+}
+
+/// The layout of the nested body at `[offset, offset + size)` of `parent`, when the parent's is
+/// known.
+fn nested_text_layout(parent: &AbsVal, offset: u32, size: u32) -> Option<Vec<u32>> {
+    match parent {
+        AbsVal::Flat {
+            text: Some(offsets),
+            ..
+        } => Some(
+            offsets
+                .iter()
+                .filter(|o| **o >= offset && **o < offset.saturating_add(size))
+                .map(|o| o - offset)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The layout every element of an array of `size`-byte bodies shares, when the array's layout
+/// is known and every element's is the same.
+fn element_text_layout(array: &AbsVal, size: u32) -> Option<Vec<u32>> {
+    let AbsVal::Flat {
+        size: total,
+        text: Some(_),
+        ..
+    } = array
+    else {
+        return None;
+    };
+    if size == 0 || total % size != 0 {
+        return None;
+    }
+    let first = nested_text_layout(array, 0, size)?;
+    (1..total / size)
+        .all(|e| nested_text_layout(array, e * size, size).as_ref() == Some(&first))
+        .then_some(first)
+}
+
+/// Refuse a `Text` read at an offset of a body whose layout is known to hold no `Text` there.
+fn check_text_field(
+    v: &AbsVal,
+    offset: u32,
+    kind: ScalarKind,
+    ip: usize,
+) -> Result<(), TypedError> {
+    if kind == ScalarKind::Text
+        && let AbsVal::Flat {
+            text: Some(offsets),
+            ..
+        } = v
+        && !offsets.contains(&offset)
+    {
+        return Err(TypedError::TextFieldMismatch { ip, offset });
+    }
+    Ok(())
+}
+
+/// Refuse a `Text` element read from an array whose layout is known to hold anything but `Text`
+/// at some element's offset, since the index is known only at run time.
+fn check_text_elements(
+    array: &AbsVal,
+    elem: u32,
+    kind: ScalarKind,
+    ip: usize,
+) -> Result<(), TypedError> {
+    if kind != ScalarKind::Text || elem == 0 {
+        return Ok(());
+    }
+    if let AbsVal::Flat {
+        size,
+        text: Some(offsets),
+        ..
+    } = array
+    {
+        for e in 0..size / elem {
+            if !offsets.contains(&(e * elem)) {
+                return Err(TypedError::TextFieldMismatch {
+                    ip,
+                    offset: e * elem,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Whether a value's shape may be stored into a slot of the declared
 /// shape. `Top` on either side defers. Two scalars are compatible
 /// regardless of kind (they share the word/byte/float width the layout
@@ -1112,9 +1420,14 @@ fn shapes_compatible(value: &AbsVal, declared: &AbsVal) -> bool {
     match (value, declared) {
         (AbsVal::Top, _) | (_, AbsVal::Top) => true,
         (AbsVal::Scalar(_), AbsVal::Scalar(_)) => true,
-        (AbsVal::Flat { kind: k1, size: s1 }, AbsVal::Flat { kind: k2, size: s2 }) => {
-            k1 == k2 && s1 == s2
-        }
+        (
+            AbsVal::Flat {
+                kind: k1, size: s1, ..
+            },
+            AbsVal::Flat {
+                kind: k2, size: s2, ..
+            },
+        ) => k1 == k2 && s1 == s2,
         _ => false,
     }
 }
@@ -1331,6 +1644,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Array,
                 size: 12,
+                text: None,
             }],
             resume: None,
         };
@@ -1664,6 +1978,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
@@ -1715,6 +2030,7 @@ mod tests {
             resume: Some(AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }),
         };
         let good = chunk(
@@ -1755,6 +2071,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
@@ -1781,6 +2098,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
@@ -1866,12 +2184,25 @@ mod tests {
         ));
     }
 
-    // A loop body that returns to the entry height but with a different slot
-    // shape is not neutral (Phase 1 residual: back-edge equality, not just
-    // height). Modelled by a body that pops a seeded composite local and
-    // pushes a scalar in its place across the back-edge.
+    // A loop body that returns to the entry height with a different slot shape
+    // is refused -- but SINCE 2026-08-23 THE ENTRY-HEIGHT FLOOR CATCHES IT
+    // FIRST, and that subsumption is the point of this test rather than an
+    // inconvenience to work around.
+    //
+    // Replacing a slot's shape at EQUAL HEIGHT necessarily pops an entry that
+    // was on the stack at loop entry and pushes a different one, because an
+    // entry created and destroyed within the body leaves the back-edge shape
+    // untouched. So every witness for the shape case is also a below-entry
+    // reach, and `LoopFloorBreach` now reports it more precisely: it names the
+    // reach rather than its downstream effect on the back edge.
+    //
+    // **`LoopNotNeutral` IS NOT DEAD.** Its HEIGHT case remains reachable and
+    // is covered by `loop_neutrality` below, whose second case pushes and never
+    // pops, so the back edge differs in HEIGHT rather than in shape. Only the equal-height shape witness is
+    // subsumed. This test was updated deliberately when the floor landed; the
+    // assertion it used to carry is recorded above so the change is legible.
     #[test]
-    fn loop_non_neutral_by_shape_rejects() {
+    fn loop_shape_replacement_is_caught_by_the_entry_floor() {
         // Entry stack seeded with one composite via GetLocal; the loop body
         // replaces it with a scalar (Const) at equal height.
         let ops = vec![
@@ -1886,15 +2217,18 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
         assert!(
             matches!(
                 typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8),
-                Err(TypedError::LoopNotNeutral { .. })
+                Err(TypedError::LoopFloorBreach { .. })
             ),
-            "a loop back-edge that changes a slot's shape at equal height must be rejected"
+            "a loop body that replaces a below-entry slot must be rejected, and \
+             since the entry-height floor landed the floor names the cause; \
+             before that it surfaced as LoopNotNeutral"
         );
     }
 

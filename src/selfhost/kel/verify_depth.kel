@@ -1,0 +1,652 @@
+// compiler/kel/verify_depth.kel -- the self-hosted operand-stack depth-balance pass (reference
+// `verify_stack_depth`/`verify_depth_region`, `src/verify.rs`). It walks a chunk tracking the
+// absolute operand-stack depth through the structured control flow and rejects any op that would
+// underflow the operand stack (audit finding 3). This is the fourth per-chunk check `verify()`
+// runs, alongside the block-nesting/target/operand pass, the block-type pass, and the productive-
+// divergence pass already self-hosted.
+//
+// The reference is a recursive walk returning `Option<i32>` (`Some(end_depth)` on fall-through,
+// `None` when every path exits via Break/Trap/Return), threading a mutable break-depth list a
+// Loop consumes to resume at the depth its exits leave. This stage reformulates that recursion
+// as one explicit region-frame stack (as `verify_yield.kel` does for yield coverage) and
+// eliminates the mutable list by returning each region's break summary up through the frame
+// result: `fell` (some path falls through), `depth` (operand depth on fall-through), `hb` (this
+// break-scope saw a break), `bmax` (the max depth over those breaks). An If shares its parent's
+// break-scope (child summaries merge up); a Loop body is a fresh scope (its breaks decide the
+// loop and do not propagate). At a control-flow merge the depth is the reference's `max` of the
+// arms; underflow (`depth < required`) latches the reject.
+//
+// The host marshals, per op: `class` (as in `analyze_class`: 1 If, 2 Else, 3 EndIf, 4 Loop, 5
+// EndLoop, 6 Break, 7 BreakIf, others 0/8/9), `arg` (branch/exit target and matching-EndIf), the
+// operand-consumption `dreq`/`dnet` (the reference `op_depth_effect`, NOT the WCMU stack effect),
+// and `is_term` (1 for Trap/Return, which end a path). The stage self-hosts the control-flow walk
+// and the underflow check.
+//
+// The same run also decides the definite-initialization rule, reference `verify_init.rs`, over the
+// op table already marshalled here. That rule is a forward must-analysis over the chunk's locals,
+// in which a `GetLocal` of a local that some path to it leaves unwritten is refused. It needs
+// only the successors that `class`, `arg` and `is_term` already give, and the host adds `lget`
+// and `lset`, the local each op reads and writes. Its verdict is published apart from `out_reject`, so a depth caller
+// that reads only the depth verdict sees no change. The reasoning is beside `init_run` below.
+require word >= 32;
+
+// The host-facing block: the op table and the verdict. `op_count` bounds the walk and the
+// target lookups (the reference's clamps).
+shared data dv {
+    op_count: Word,
+    class: [Word; 8192],
+    arg: [Word; 8192],
+    dreq: [Word; 8192],
+    dnet: [Word; 8192],
+    is_term: [Word; 8192],
+    out_reject: Word,
+    // WHY THE VERDICT IS NOT ENOUGH ON ITS OWN.
+    //
+    // `out_reject` is sound but not informative: a chunk rejected for an operand
+    // underflow and a chunk refused because it nests deeper than the declared cap
+    // are the same value, and a caller cannot tell a PROVEN defect from an
+    // UNANALYSED program. That is the shared-message defect this line has recorded
+    // against four separate guards.
+    //
+    // 0 = the walk completed and the verdict is a real analysis result.
+    // 1 = the walk hit `max_nesting()` and the verdict is default-deny.
+    //
+    // APPENDED LAST. The block is addressed by SLOT and inserting in the middle
+    // shifts every field after the insertion point.
+    out_cause: Word,
+    // The definite-initialization facts, appended after `out_cause` for the same reason. Per
+    // op, `lget` is one more than the local it reads, or 0, and `lset` is one more than the
+    // local it writes, -1 for `Stream`, or 0. `l_width` is the chunk's local count,
+    // `l_params` the locals written at entry, and `l_stream_bit` 1 when each resume after
+    // `Stream` writes slot 0.
+    lget: [Word; 8192],
+    lset: [Word; 8192],
+    l_width: Word,
+    l_params: Word,
+    l_stream_bit: Word,
+    // 1 when some reached read may observe a local that some path leaves unwritten, with the
+    // lowest such op in `out_init_ip`. `out_init_cause` is 0 for a completed analysis, 1 when
+    // `l_width` exceeds `init_locals()`, and 2 when the sweep budget ended before the fixpoint.
+    out_init_reject: Word,
+    out_init_ip: Word,
+    out_init_cause: Word,
+    // Rule 2 of the reference, over private data slots whose load-time initializer is `Unit`.
+    // The host numbers those slots densely and `d_width` is how many there are, 0 for none,
+    // in which case nothing below is read. Per op, `d_set` is one more than the dense slot a
+    // `SetData` writes, -1 at a `Return`, or 0, `d_lo` and `d_hi` bound the dense slots a
+    // `GetData` or `GetDataIndexed` reads, and `d_call` is one more than the row of `d_sum`
+    // holding the callee's must-write summary, eight words a row, or 0. The verdict follows,
+    // with the same causes as `out_init_cause`, and `out_data_sum` is this chunk's own summary,
+    // the meet of its sets at every reached `Return`.
+    d_width: Word,
+    d_set: [Word; 8192],
+    d_lo: [Word; 8192],
+    d_hi: [Word; 8192],
+    d_call: [Word; 8192],
+    d_sum: [Word; 8192],
+    out_data_reject: Word,
+    out_data_ip: Word,
+    out_data_cause: Word,
+    out_data_sum: [Word; 8],
+}
+
+// THE DECLARED NESTING CAP. Operator ruling, 2026-08-19: 32 for now.
+//
+// **A DECLARED BOUND, NOT A NUMBER READ OFF TODAY'S CORPUS.** The `v0.3.0` line
+// measured a deepest observed nesting of 19 over 985 chunks in 64 modules and
+// warned -- correctly -- that this is what the corpus CONTAINS and not a bound on
+// what the language ADMITS. A verifier written in Keleusma needs a cap it declares
+// and enforces, with programs past it refused. This is that cap.
+//
+// **FRAMES ARE NESTING PLUS ONE.** `run` pushes a root frame for the whole chunk
+// region before any nested construct, so a chunk at nesting depth `d` occupies
+// `d + 1` frames. The arrays are therefore sized `max_nesting() + 1` and the guard
+// admits exactly `max_nesting()` levels of nesting. Getting this off by one would
+// silently refuse a program at the stated cap, which is a unilateral narrowing.
+fn max_nesting() -> Word { 32 }
+
+// The frame-stack capacity implied by the cap. One source of truth: the arrays
+// below are sized from this and the guard compares against it.
+fn frame_cap() -> Word { max_nesting() + 1 }
+
+// The region-frame work stack. Each frame is one `verify_depth_region([f_ip, f_end))`: `f_depth`
+// its running operand depth, `f_fell` whether it falls through, `f_hb`/`f_bmax` its break-scope
+// summary. While a frame waits on a child it sets `f_pa` and records how to fold it in: `f_pk` 1
+// bare-if, 2 if-else, 3 loop; `f_ps` the if-else stage; `f_resume` the resume op; `f_elstart`/
+// `f_elend` the else region; `f_tf`/`f_td` the stashed then result. `child_*` carry a completed
+// frame's result. `bad` latches an underflow.
+private data df {
+    sp: Word,
+    f_ip: [Word; 33],
+    f_end: [Word; 33],
+    f_depth: [Word; 33],
+    f_fell: [Word; 33],
+    f_hb: [Word; 33],
+    f_bmax: [Word; 33],
+    f_pa: [Word; 33],
+    f_pk: [Word; 33],
+    f_ps: [Word; 33],
+    f_resume: [Word; 33],
+    f_elstart: [Word; 33],
+    f_elend: [Word; 33],
+    f_tf: [Word; 33],
+    f_td: [Word; 33],
+    child_fell: Word,
+    child_depth: Word,
+    child_hb: Word,
+    child_bmax: Word,
+    bad: Word,
+    // Latches when a push would exceed `frame_cap()`. Separate from `bad`, which
+    // latches a PROVEN operand underflow: conflating them would report an
+    // unanalysed program as a defective one.
+    over: Word,
+}
+
+// The definite-initialization state. `reach[ip]` is 1 once some path reaches op `ip`, and
+// `st[ip * 8 ..]` is the set of locals every path to it writes, eight words of 32 bits each.
+// `cur` is the set after the op being swept, and `changed` whether a sweep changed any set.
+private data di {
+    reach: [Word; 8192],
+    st: [Word; 65536],
+    cur: [Word; 8],
+    changed: Word,
+    // 0 while the sweep applies the transfer of rule 1 over locals, 1 for rule 2 over the
+    // dense private slots, and `ret` whether rule 2 has met a reached `Return`.
+    mode: Word,
+    ret: Word,
+}
+
+// Push a fresh frame for region `[ip, end)` with entry depth `depth`; `end` is clamped to
+// `op_count`.
+//
+// **A PUSH PAST THE CAP LATCHES A REFUSAL. IT USED TO BE DROPPED SILENTLY.**
+//
+// The previous text called the drop deliberate. It is not defensible in a
+// VERIFIER: a dropped push means the nested region is never walked, the parent
+// folds in whatever `child_*` the PREVIOUS delivery left behind, and `deliver`
+// later decrements `sp` for a frame that was never pushed. The pass then publishes
+// a verdict computed over a program it did not traverse, and that verdict can be
+// wrong in EITHER direction -- it can miss a real underflow, and it can invent one.
+//
+// The sound behaviour is default-deny, which is also this project's stated
+// conservative-verification stance: a program whose bound the analysis cannot
+// establish is refused rather than admitted. `over` latches so the refusal is
+// reported as UNANALYSED rather than as a proven defect.
+//
+// **THE GUARD PRECEDES THE WRITE.** `sp` is the index about to be written, so the
+// comparison is `>=` against the capacity and the highest index ever written is
+// `frame_cap() - 1`. A guard on the increment instead would fire one write too
+// late, which is the defect this line has recorded against the parser's caps.
+fn push_frame(ip: Word, end: Word, depth: Word) -> Word {
+    if df.sp >= frame_cap() {
+        df.over = 1;
+    } else {
+        let j = df.sp;
+        df.f_ip[j] = ip;
+        if end > dv.op_count {
+            df.f_end[j] = dv.op_count;
+        } else {
+            df.f_end[j] = end;
+        }
+        df.f_depth[j] = depth;
+        df.f_fell[j] = 1;
+        df.f_hb[j] = 0;
+        df.f_bmax[j] = 0;
+        df.f_pa[j] = 0;
+        df.sp = df.sp + 1;
+    }
+    0
+}
+
+// Complete frame `i`: publish its result to `child_*` and pop it.
+fn deliver(i: Word) -> Word {
+    df.child_fell = df.f_fell[i];
+    df.child_depth = df.f_depth[i];
+    df.child_hb = df.f_hb[i];
+    df.child_bmax = df.f_bmax[i];
+    df.sp = df.sp - 1;
+    0
+}
+
+// Record a break at frame `i`'s current depth into its break-scope summary.
+fn record_break(i: Word) -> Word {
+    if df.f_hb[i] == 0 {
+        df.f_hb[i] = 1;
+        df.f_bmax[i] = df.f_depth[i];
+    } else {
+        if df.f_depth[i] > df.f_bmax[i] {
+            df.f_bmax[i] = df.f_depth[i];
+        }
+    }
+    0
+}
+
+// Merge the last child's break summary into frame `i`'s scope (for If children, which share the
+// parent's break-scope).
+fn merge_child_breaks(i: Word) -> Word {
+    if df.child_hb == 1 {
+        if df.f_hb[i] == 0 {
+            df.f_hb[i] = 1;
+            df.f_bmax[i] = df.child_bmax;
+        } else {
+            if df.child_bmax > df.f_bmax[i] {
+                df.f_bmax[i] = df.child_bmax;
+            }
+        }
+    }
+    0
+}
+
+// Latch the reject if the op at `ip` requires more operands than frame `i` currently has.
+fn check_underflow(i: Word, ip: Word) -> Word {
+    if df.f_depth[i] < dv.dreq[ip] {
+        df.bad = 1;
+    }
+    0
+}
+
+// Consume one op of frame `i`'s region.
+fn scan_op(i: Word) -> Word {
+    let ip = df.f_ip[i];
+    if dv.is_term[ip] == 1 {
+        // Terminal instructions can consume diagnostic payloads.
+        check_underflow(i, ip);
+        df.f_fell[i] = 0;
+        df.f_ip[i] = df.f_end[i];
+    } else {
+    if dv.class[ip] == 6 {
+        // Break: record the depth, end this path.
+        record_break(i);
+        df.f_fell[i] = 0;
+        df.f_ip[i] = df.f_end[i];
+    } else {
+    if dv.class[ip] == 7 {
+        // BreakIf: pop the condition, record the break edge, continue.
+        check_underflow(i, ip);
+        df.f_depth[i] = df.f_depth[i] + dv.dnet[ip];
+        record_break(i);
+        df.f_ip[i] = ip + 1;
+    } else {
+    if dv.class[ip] == 1 {
+        // If: pop the condition, spawn the then-branch (and, for an if-else, the else-branch).
+        check_underflow(i, ip);
+        df.f_depth[i] = df.f_depth[i] + dv.dnet[ip];
+        let t = dv.arg[ip];
+        if t > 0 andalso t <= dv.op_count andalso dv.class[t - 1] == 2 {
+            let endif = dv.arg[t - 1];
+            df.f_pk[i] = 2;
+            df.f_ps[i] = 0;
+            df.f_elstart[i] = t;
+            df.f_elend[i] = endif;
+            df.f_resume[i] = endif + 1;
+            df.f_pa[i] = 1;
+            push_frame(ip + 1, t - 1, df.f_depth[i]);
+        } else {
+            df.f_pk[i] = 1;
+            df.f_resume[i] = t + 1;
+            df.f_pa[i] = 1;
+            push_frame(ip + 1, t, df.f_depth[i]);
+        }
+    } else {
+    if dv.class[ip] == 4 {
+        // Loop: spawn the body `[ip+1, endloop)` as a fresh break-scope.
+        let t = dv.arg[ip];
+        df.f_pk[i] = 3;
+        df.f_resume[i] = t;
+        df.f_pa[i] = 1;
+        push_frame(ip + 1, t - 1, df.f_depth[i]);
+    } else {
+    if dv.class[ip] == 2 orelse dv.class[ip] == 3 orelse dv.class[ip] == 5 {
+        // Else/EndIf/EndLoop: structural markers, stepped over.
+        df.f_ip[i] = ip + 1;
+    } else {
+        // Plain op or Call: pop `dreq`, apply the net depth change.
+        check_underflow(i, ip);
+        df.f_depth[i] = df.f_depth[i] + dv.dnet[ip];
+        df.f_ip[i] = ip + 1;
+    } } } } } }
+    0
+}
+
+// Fold the last child's result into the waiting frame `i` and resume it.
+fn resolve_pending(i: Word) -> Word {
+    if df.f_pk[i] == 1 {
+        // Bare if: merge the child's breaks; on child fall-through, depth = max(depth, child).
+        merge_child_breaks(i);
+        if df.child_fell == 1 {
+            if df.child_depth > df.f_depth[i] {
+                df.f_depth[i] = df.child_depth;
+            }
+        }
+        df.f_ip[i] = df.f_resume[i];
+        df.f_pa[i] = 0;
+    } else {
+    if df.f_pk[i] == 2 {
+        if df.f_ps[i] == 0 {
+            // Then-branch returned: merge, stash, spawn the else-branch from the same entry depth.
+            merge_child_breaks(i);
+            df.f_tf[i] = df.child_fell;
+            df.f_td[i] = df.child_depth;
+            df.f_ps[i] = 1;
+            push_frame(df.f_elstart[i], df.f_elend[i], df.f_depth[i]);
+        } else {
+            // Else-branch returned: merge, combine the two arms by the reference's max rule.
+            merge_child_breaks(i);
+            if df.f_tf[i] == 1 andalso df.child_fell == 1 {
+                if df.f_td[i] > df.child_depth {
+                    df.f_depth[i] = df.f_td[i];
+                } else {
+                    df.f_depth[i] = df.child_depth;
+                }
+                df.f_ip[i] = df.f_resume[i];
+                df.f_pa[i] = 0;
+            } else {
+            if df.f_tf[i] == 1 {
+                df.f_depth[i] = df.f_td[i];
+                df.f_ip[i] = df.f_resume[i];
+                df.f_pa[i] = 0;
+            } else {
+            if df.child_fell == 1 {
+                df.f_depth[i] = df.child_depth;
+                df.f_ip[i] = df.f_resume[i];
+                df.f_pa[i] = 0;
+            } else {
+                // Both arms break out: no fall-through.
+                df.f_fell[i] = 0;
+                df.f_ip[i] = df.f_end[i];
+                df.f_pa[i] = 0;
+            } } }
+        }
+    } else {
+        // Loop: depth after the loop is the max break depth, else the body's fall-through depth,
+        // else the entry depth (unchanged). The body's breaks do not propagate to the parent.
+        if df.child_hb == 1 {
+            df.f_depth[i] = df.child_bmax;
+        } else {
+            if df.child_fell == 1 {
+                df.f_depth[i] = df.child_depth;
+            }
+        }
+        df.f_ip[i] = df.f_resume[i];
+        df.f_pa[i] = 0;
+    } }
+    0
+}
+
+// Advance the analysis by one transition on the top frame.
+fn depth_step() -> Word {
+    let i = df.sp - 1;
+    if df.f_pa[i] == 1 {
+        resolve_pending(i)
+    } else {
+        if df.f_ip[i] >= df.f_end[i] {
+            deliver(i)
+        } else {
+            scan_op(i)
+        }
+    }
+}
+
+// Walk the whole chunk `[0, op_count)` from depth 0 and publish whether any op underflows.
+fn run() -> Word {
+    df.sp = 0;
+    df.bad = 0;
+    df.over = 0;
+    df.child_fell = 1;
+    df.child_depth = 0;
+    df.child_hb = 0;
+    df.child_bmax = 0;
+    push_frame(0, dv.op_count, 0);
+    for step in 0..32768 limit 32768 {
+        if df.sp > 0 {
+            depth_step();
+        }
+    }
+    // DEFAULT DENY, AND SAY WHICH KIND OF DENY IT IS. An over-cap chunk is refused
+    // because it was not analysed, not because a defect was proven; the verdict is
+    // the same and the CAUSE is not, and only the cause tells a caller whether
+    // raising the cap would change the answer.
+    if df.sp > 0 andalso df.over == 0 { df.over = 2; }
+    // A CHUNK MUST NOT RUN OFF ITS OWN END. Once the walk completes, `child_fell` is the root
+    // region's result, and a root that falls through leaves residue the memory bound does not
+    // account for, which the reference rejects. This stage computed it and discarded it, so a
+    // chunk with its final `Return` removed was accepted. Found 2026-10-26 by the Order 6
+    // mutation corpus, which the reference rejects in every such module.
+    if df.sp == 0 andalso df.over == 0 andalso df.child_fell == 1 { df.bad = 1; }
+    if df.over > 0 {
+        dv.out_reject = 1;
+        dv.out_cause = df.over;
+    } else {
+        dv.out_cause = 0;
+        if df.bad == 1 {
+            dv.out_reject = 1;
+        } else {
+            dv.out_reject = 0;
+        }
+    }
+    init_run();
+    dv.out_reject
+}
+
+// THE DEFINITE-INITIALIZATION RULE.
+//
+// The reference computes, by a worklist over the chunk's control-flow edges, the greatest
+// fixpoint of the sets of locals that every path writes before each op, in which an unreached op
+// is the top, and then refuses a reached `GetLocal` whose local is outside the set before it.
+// The transfer only adds a written local, except at `Stream`, which leaves slot 0 alone for a
+// stream with a parameter and the empty set otherwise. A join is intersection, and the first
+// arrival at an op copies the set, which is intersection with the top. Every such transfer is
+// monotone, so every iteration that starts from the entry set and applies the transfers until
+// nothing changes reaches the same greatest fixpoint, whatever order it visits the ops in. This stage therefore does not walk the region
+// frames above. It sweeps the op table in index order until a sweep changes nothing, and then
+// checks the reads. The verdict agrees with the reference because the two compute the same
+// fixpoint, not because they visit the ops alike, and a nested `Stream` or an unstructured
+// target needs no special case.
+//
+// A forward edge is settled within one sweep, since its target follows its source, and each
+// back edge of a loop needs at most one further sweep per level of nesting, so a structured
+// chunk within the 32-level nesting cap converges well inside `init_sweeps()`. A chunk that does
+// not converge in that budget is reported as unfinished, cause 2, and never as a verdict.
+
+// The locals a set holds, eight words of 32 bits. A wider chunk is refused as unanalysed.
+fn init_locals() -> Word { 256 }
+
+// The sweep budget. The final sweep must change nothing for the fixpoint to be established.
+fn init_sweeps() -> Word { 72 }
+
+// Whether local `b` is in the set of op `ip`.
+fn init_has(ip: Word, b: Word) -> Word {
+    (di.st[ip * 8 + b / 32] lsr (b % 32)) band 1
+}
+
+// Meet `cur` into the set of op `to`, the first arrival making `to` reached and copying `cur`.
+fn init_join(to: Word) -> Word {
+    if di.reach[to] == 0 {
+        di.reach[to] = 1;
+        for w in 0..8 limit 8 { di.st[to * 8 + w] = di.cur[w]; }
+        di.changed = 1;
+    } else {
+        for w in 0..8 limit 8 {
+            let old = di.st[to * 8 + w];
+            let next = old band di.cur[w];
+            if next != old {
+                di.st[to * 8 + w] = next;
+                di.changed = 1;
+            }
+        }
+    }
+    0
+}
+
+// Apply op `ip` to its set into `cur`, then join `cur` into each successor. The successors are
+// the reference's. `If` and `BreakIf` fall through and jump, `Else`, `EndLoop` and `Break` only
+// jump, a path exit has none, and every other op falls through. A target outside the chunk adds
+// no edge.
+fn init_step(ip: Word) -> Word {
+    for w in 0..8 limit 8 { di.cur[w] = di.st[ip * 8 + w]; }
+    if di.mode == 0 {
+        let s = dv.lset[ip];
+        if s > 0 andalso s <= dv.l_width {
+            let b = s - 1;
+            di.cur[b / 32] = di.cur[b / 32] bor (1 lsl (b % 32));
+        }
+        if s < 0 {
+            for w in 0..8 limit 8 { di.cur[w] = 0; }
+            di.cur[0] = dv.l_stream_bit;
+        }
+    } else {
+        // Rule 2 adds a written slot and a callee's summary. `Stream` changes nothing, since
+        // private data persists across `Reset`.
+        let s = dv.d_set[ip];
+        if s > 0 andalso s <= dv.d_width {
+            let b = s - 1;
+            di.cur[b / 32] = di.cur[b / 32] bor (1 lsl (b % 32));
+        }
+        let c = dv.d_call[ip];
+        if c > 0 andalso c <= 1024 {
+            for w in 0..8 limit 8 { di.cur[w] = di.cur[w] bor dv.d_sum[(c - 1) * 8 + w]; }
+        }
+    }
+    if dv.is_term[ip] == 0 {
+        let k = dv.class[ip];
+        let t = dv.arg[ip];
+        if k != 2 andalso k != 5 andalso k != 6 andalso ip + 1 < dv.op_count {
+            init_join(ip + 1);
+        }
+        let jumps = k == 1 orelse k == 2 orelse k == 5 orelse k == 6 orelse k == 7;
+        if jumps andalso t >= 0 andalso t < dv.op_count {
+            init_join(t);
+        }
+    }
+    0
+}
+
+// One sweep over the op table in index order.
+fn init_sweep() -> Word {
+    di.changed = 0;
+    for ip in 0..dv.op_count limit 8192 {
+        if di.reach[ip] == 1 { init_step(ip); }
+    }
+    0
+}
+
+// Check the reads against the fixpoint in index order, so that the op reported is the lowest
+// refused, as in the reference.
+fn init_check() -> Word {
+    for ip in 0..dv.op_count limit 8192 {
+        let g = dv.lget[ip];
+        if dv.out_init_reject == 0 andalso di.reach[ip] == 1 andalso g > 0 andalso g <= dv.l_width {
+            if init_has(ip, g - 1) == 0 {
+                dv.out_init_reject = 1;
+                dv.out_init_ip = ip;
+            }
+        }
+    }
+    0
+}
+
+// Sweep from the entry set already in the set of op 0 until a sweep changes nothing, under the
+// transfer `di.mode` selects. 1 when the fixpoint is established, 0 when the budget ended first.
+fn init_solve() -> Word {
+    for ip in 0..dv.op_count limit 8192 { di.reach[ip] = 0; }
+    di.reach[0] = 1;
+    di.changed = 1;
+    for r in 0..72 limit 72 {
+        if di.changed == 1 andalso r < init_sweeps() { init_sweep(); }
+    }
+    1 - di.changed
+}
+
+// Decide the rule for the marshalled chunk and publish it in the `out_init` fields.
+fn init_run() -> Word {
+    dv.out_init_reject = 0;
+    dv.out_init_ip = 0;
+    dv.out_init_cause = 0;
+    if dv.l_width < 0 orelse dv.l_width > init_locals() orelse dv.op_count > 8192 {
+        dv.out_init_cause = 1;
+    } else {
+    if dv.op_count > 0 {
+        di.mode = 0;
+        for w in 0..8 limit 8 { di.st[w] = 0; }
+        // Clamped to the width, so that the range never exceeds its limit.
+        let np = if dv.l_params < dv.l_width { dv.l_params } else { dv.l_width };
+        for p in 0..np limit 256 { di.st[p / 32] = di.st[p / 32] bor (1 lsl (p % 32)); }
+        if init_solve() == 0 {
+            dv.out_init_cause = 2;
+        } else {
+            init_check();
+        }
+    } }
+    data_run();
+    0
+}
+
+// RULE 2, PRIVATE DATA. The reference holds a private slot whose load-time initializer is
+// `Unit` to a write on every path before any `GetData` or `GetDataIndexed` reads it. It is the
+// same must-analysis as rule 1 over the dense slots, with three differences. Every chunk starts
+// from the empty set, since the host may enter any chunk. A `Call` adds the callee's summary,
+// which the host supplies from an earlier run of this stage over the callee, callees first.
+// `Stream` clears nothing. The sweep, its budget and its convergence argument are rule 1's.
+
+// Check each reached read against the fixpoint in index order, so that the op reported is the
+// lowest refused. A read of several dense slots is refused when any one of them is outside.
+fn data_check() -> Word {
+    for ip in 0..dv.op_count limit 8192 {
+        let lo = dv.d_lo[ip];
+        let n = dv.d_hi[ip] - lo;
+        if dv.out_data_reject == 0 andalso di.reach[ip] == 1 andalso lo >= 0 andalso n > 0 {
+            for k in 0..n limit 256 {
+                if lo + k < dv.d_width andalso init_has(ip, lo + k) == 0 {
+                    dv.out_data_reject = 1;
+                    dv.out_data_ip = ip;
+                }
+            }
+        }
+    }
+    0
+}
+
+// This chunk's must-write summary, the meet of its sets at every reached `Return`, and the
+// empty set when no `Return` is reached.
+fn data_summary() -> Word {
+    di.ret = 0;
+    for w in 0..8 limit 8 { dv.out_data_sum[w] = 0 - 1; }
+    for ip in 0..dv.op_count limit 8192 {
+        if di.reach[ip] == 1 andalso dv.d_set[ip] == 0 - 1 {
+            di.ret = 1;
+            for w in 0..8 limit 8 { dv.out_data_sum[w] = dv.out_data_sum[w] band di.st[ip * 8 + w]; }
+        }
+    }
+    if di.ret == 0 { for w in 0..8 limit 8 { dv.out_data_sum[w] = 0; } }
+    0
+}
+
+// Decide rule 2 for the marshalled chunk and publish it in the `out_data` fields. A width of 0
+// tracks nothing and costs nothing, which is every chunk of every module the compilers emit
+// short of the residual `Unit` slots.
+fn data_run() -> Word {
+    dv.out_data_reject = 0;
+    dv.out_data_ip = 0;
+    dv.out_data_cause = 0;
+    for w in 0..8 limit 8 { dv.out_data_sum[w] = 0; }
+    if dv.d_width < 0 orelse dv.d_width > init_locals() orelse dv.op_count > 8192 {
+        dv.out_data_cause = 1;
+    } else {
+    if dv.d_width > 0 andalso dv.op_count > 0 {
+        di.mode = 1;
+        for w in 0..8 limit 8 { di.st[w] = 0; }
+        if init_solve() == 0 {
+            dv.out_data_cause = 2;
+        } else {
+            data_check();
+            data_summary();
+        }
+        di.mode = 0;
+    } }
+    0
+}
+
+// Check the chunk's operand-stack depth balance in one call and yield the verdict.
+loop main(resume: Word) -> Word {
+    yield run()
+}

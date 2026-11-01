@@ -1,0 +1,47 @@
+COMPLETION CONDITION — the driver's discard-arm reachability census
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge only the end state of the tree.
+
+A. Reachability is measured, not reasoned about.
+   For each silent-discard match arm in the self-hosted driver, the tree records
+   whether that arm is reached while compiling the corpus. The record is
+   produced by observing execution, not by reading the code and judging it.
+
+B. The count of such arms is derived, not restated.
+   A test or tool recomputes how many discard arms the driver contains and
+   fails if that number differs from what the tree records, so a newly added
+   arm is noticed rather than silently joining the set.
+
+C. Unmeasured is reported as unmeasured.
+   An arm never reached on any corpus input is recorded as having unknown
+   safety. No document describes such an arm as safe, benign, or verified on
+   the strength of not having been observed to fire.
+
+D. The measurement cannot pass vacuously.
+   Whatever produces the reachability data asserts that it observed a non-zero
+   amount of compilation, and fails if it observed none. A run that instrumented
+   nothing must not report every arm as unreached.
+
+E. Findings are recorded, not silently fixed.
+   Any arm found reached-and-discarding is recorded with what reaches it. If
+   its disposition is left open, the tree says so. No arm is changed from a
+   discard to a panic or an error in this work on the strength of the census
+   alone.
+
+F. No arm is removed for style.
+   Discard arms that are exhaustive by construction remain. Nothing in the tree
+   asserts that a catch-all arm is itself a defect.
+
+G. Claims match the tree.
+   Any figure stated in a document added or modified by this work is either
+   recomputed by a test or carries the date it was measured, and every named
+   identifier resolves to something that exists.
+
+H. The tree is green under the checks this project already runs, with no new
+   warnings, and the byte-identity agreement of the existing stage sources is
+   unchanged.
+
+Not required for completion: any particular branch, commit, merge, or review
+state; repairing anything the census finds; extending the census beyond the
+self-hosted driver; any particular instrumentation technique or file layout.

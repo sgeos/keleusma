@@ -44,6 +44,27 @@ type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>;
 /// Narrow-Word but f64-Float alias. Used to exercise the lifted
 /// `Library<W, A, f64>` impls of `stddsl::Math` and `stddsl::Audio`
 /// on a runtime whose word type is narrower than the default i64.
+/// The float width this BUILD's runtime supports, as the base-2 exponent of bits.
+///
+/// A target declaring a wider float than the runtime is refused by `compile_with_target` with
+/// "target float_bits_log2 = N exceeds runtime maximum M". Tests whose subject is something else
+/// entirely -- registering a library on a narrow-word runtime, say -- must not pin a float width,
+/// or they fail under `narrow-float-32` for a reason that has nothing to do with what they check.
+///
+/// **Deriving the width is the right repair ONLY where the float is incidental.** Where the float
+/// width IS the subject, deriving it makes the test vacuous; see
+/// `wider_float_bytecode_never_reaches_execution`, which is repaired differently for that reason.
+///
+/// Only the `floats`-gated tests read it, so it is gated with them and a build without `floats`
+/// reports no dead code.
+#[cfg(feature = "floats")]
+const fn build_float_bits_log2() -> u8 {
+    // DERIVED FROM THE CRATE, NOT RESTATED. A `cfg!(feature = "narrow-float-32")` here would be a
+    // second copy of a condition the runtime already owns, and would be silently wrong the day a
+    // narrower float feature is added. `Target::host` reads the same constant.
+    keleusma::bytecode::RUNTIME_FLOAT_BITS_LOG2
+}
+
 #[cfg(feature = "floats")]
 type NarrowWordF64Vm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f64>;
 
@@ -98,8 +119,8 @@ fn narrow_runtime_rejects_wider_word_bytecode() {
     };
     let msg = format!("{:?}", err);
     assert!(
-        msg.contains("word_bits_log2"),
-        "expected width-mismatch error, got: {}",
+        is_width_mismatch(&msg),
+        "expected a width-mismatch rejection, got: {}",
         msg
     );
 }
@@ -112,8 +133,13 @@ fn narrow_float_runtime_runs_f32_bytecode() {
     // float width. The host closure's f64 parameters truncate to
     // f32 through Float::from_f64 / Float::to_f64.
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        // **THE BUILD'S WIDTH, NOT A LITERAL 64.** The subject of this test is the FLOAT
+        // dimension; the word and address are incidental. Hard-coding 6 made the compiler refuse
+        // the target outright under `narrow-word-16`, where the runtime maximum is 4, so the test
+        // failed on a dimension it is not about. Taking the build's own maxima keeps the float
+        // claim intact at every width. See `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md`.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 5,
         has_floats: true,
         has_strings: false,
@@ -137,26 +163,75 @@ fn narrow_float_runtime_runs_f32_bytecode() {
 
 #[cfg(feature = "floats")]
 #[test]
-fn wider_float_bytecode_rejected_by_f32_runtime() {
-    // Bytecode declaring float_bits_log2 = 6 (f64) must be rejected
-    // by a runtime whose F = f32. Otherwise the load-time width
-    // check would silently narrow constants from f64 to f32.
+fn wider_float_bytecode_never_reaches_execution() {
+    // Bytecode declaring a float wider than the runtime's must never run. Otherwise the width
+    // check would silently narrow constants, which is a wrong answer rather than a refusal.
+    //
+    // # THIS TEST IS NOT REPAIRED BY DERIVING THE WIDTH, AND THAT IS THE POINT
+    //
+    // Its siblings pin a float width incidentally and are fixed by taking the build's width. Here
+    // the width IS the subject: a target matching the build is not wider than the runtime, so
+    // there would be nothing left to reject and the test would pass by testing nothing. That is
+    // the shape of green this repair exists to avoid.
+    //
+    // # THE GATE MOVED, WHICH IS WHY THE OLD FORM DIED ON ITS OWN FIXTURE
+    //
+    // It asserted a LOAD-time rejection and built its subject with `compile_with_target`. Under
+    // `narrow-float-32` the compiler now refuses the wide target first, so the fixture never
+    // existed and the test failed in `.expect("compile")` -- reported as a failure to reject while
+    // actually being a rejection one gate earlier.
+    //
+    // So the claim is stated at the strength it actually holds: **a wider-float module is refused,
+    // at compile time or at load time, and never executes.** Both gates are real and which one
+    // fires depends on the build. Asserting the disjunction is honest; asserting only the
+    // load-time gate was true of one build and false of the other.
+    // SIX, FIXED, AND NOT `build + 1`. The virtual machine below is explicitly `f32`, so a
+    // 64-bit float is wider than it under EVERY build. Deriving `build + 1` instead would make the
+    // compiler refuse the target on every build too, and the load-time gate -- the thing this test
+    // was originally written for -- would become unreachable. The repair would have kept the test
+    // green while deleting its subject, which is the failure mode this whole exercise is against.
+    //
+    // At six, each build exercises a different gate and both stay live:
+    //   default (`f64` runtime)  -- compile accepts 6, the `f32` machine refuses it at LOAD time
+    //   `narrow-float-32`        -- the compiler refuses 6 against a runtime maximum of 5
+    let wider = 6;
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
-        float_bits_log2: 6,
+        // The word and address take the BUILD's maxima so that the only dimension this target is
+        // wider on is the FLOAT. Hard-coding 6 made the compiler refuse on the WORD under
+        // `narrow-word-16`, and the assertion below -- which demands the refusal name the float
+        // width -- then failed on a correct refusal for the wrong dimension.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+        float_bits_log2: wider,
         has_floats: true,
         has_strings: false,
     };
     let src = "fn main() -> Float { 1.5 }";
     let tokens = tokenize(src).expect("lex");
     let program = parse(&tokens).expect("parse");
-    let module = compile_with_target(&program, &target).expect("compile");
 
+    let module = match compile_with_target(&program, &target) {
+        // Gate one: the compiler refuses to emit for a target wider than the runtime.
+        Err(e) => {
+            assert!(
+                e.message.contains("float_bits_log2"),
+                "compile refused the wider target, but not on the float width: {}",
+                e.message
+            );
+            return;
+        }
+        Ok(m) => m,
+    };
+
+    // Gate two: the module exists, so the safe constructor must refuse it.
     let arena = Arena::with_capacity(4096);
     type F32Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f32>;
     let err = match F32Vm::new(module, &arena) {
-        Ok(_) => panic!("must reject wider float bytecode"),
+        Ok(_) => panic!(
+            "a module declaring float_bits_log2 = {wider} was accepted by a runtime that cannot \
+             represent it. Neither gate fired, so wider-float bytecode can now execute and its \
+             constants are silently narrowed."
+        ),
         Err(e) => e,
     };
     let msg = format!("{:?}", err);
@@ -227,8 +302,8 @@ fn narrow_runtime_rejects_hot_swap_to_wider_bytecode() {
     };
     let msg = format!("{:?}", err);
     assert!(
-        msg.contains("word_bits_log2"),
-        "expected width-mismatch error, got: {}",
+        is_width_mismatch(&msg),
+        "expected a width-mismatch rejection, got: {}",
         msg
     );
 }
@@ -246,7 +321,7 @@ fn narrow_runtime_can_register_audio_library_via_lifted_impl() {
     let target = Target {
         word_bits_log2: 4,
         addr_bits_log2: 4,
-        float_bits_log2: 6,
+        float_bits_log2: build_float_bits_log2(),
         has_floats: true,
         has_strings: false,
     };
@@ -315,8 +390,8 @@ fn narrow_runtime_view_bytes_zero_copy_rejects_wider_bytecode() {
     };
     let msg = format!("{:?}", err);
     assert!(
-        msg.contains("word_bits_log2"),
-        "expected width-mismatch error, got: {}",
+        is_width_mismatch(&msg),
+        "expected a width-mismatch rejection, got: {}",
         msg
     );
 }
@@ -416,8 +491,13 @@ fn f32_narrow_runtime_can_register_math_library_via_lifted_impl() {
     // result (sqrt(9.0) = 3.0) survives the narrowing because 3.0
     // is exactly representable in f32.
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        // **THE BUILD'S WIDTH, NOT A LITERAL 64.** The subject of this test is the FLOAT
+        // dimension; the word and address are incidental. Hard-coding 6 made the compiler refuse
+        // the target outright under `narrow-word-16`, where the runtime maximum is 4, so the test
+        // failed on a dimension it is not about. Taking the build's own maxima keeps the float
+        // claim intact at every width. See `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md`.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 5,
         has_floats: true,
         has_strings: false,
@@ -449,7 +529,7 @@ fn narrow_runtime_can_register_math_library_via_lifted_impl() {
     let target = Target {
         word_bits_log2: 4,
         addr_bits_log2: 4,
-        float_bits_log2: 6,
+        float_bits_log2: build_float_bits_log2(),
         has_floats: true,
         has_strings: false,
     };
@@ -945,5 +1025,116 @@ fn narrow_multiword_shift_arithmetic_vs_logical() {
     assert_eq!(
         run_i16("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m lsl 16; s[1] }"),
         5_i16
+    );
+}
+// --- `for ... limit` bounded-runtime-range loop at the 16-bit word width ---
+//
+// Exercises the limit-loop lowering (compile-time counter, outcome dispatch,
+// the count == cap boundary fixup, and the fail-loud trap) on the i16 runtime,
+// confirming the feature is width-correct and not host-64-bit specific. These
+// programs carry private data, so the arena's persistent region is sized first.
+
+/// Run a private-data program on the i16 runtime, returning the result or the error.
+fn run_i16_data(src: &str) -> Result<i16, keleusma::vm::VmError> {
+    use keleusma::vm::required_persistent_capacity_for;
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_16()).expect("compile");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(4096 + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("new");
+    match vm.call(&[])? {
+        GenericVmState::Finished(GenericValue::Int(n)) => Ok(n),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+// A runtime range under a cap completes and accumulates correctly at i16.
+#[test]
+fn limit_loop_completes_on_16bit() {
+    // `d.n` is a runtime range end (5); capped at 8, so the range is exhausted.
+    // Sum 0 + 1 + 2 + 3 + 4 = 10.
+    let src = "private data d { n: Word, s: Word } \
+        fn main() -> Word { d.n = 5; for i in 0..d.n limit 8 { d.s = d.s + i; } d.s }";
+    assert_eq!(run_i16_data(src).unwrap(), 10_i16);
+}
+
+// The count == cap boundary completes (does not trap) at i16.
+#[test]
+fn limit_loop_count_equals_cap_completes_on_16bit() {
+    // Range length 8 equals the cap 8: all eight iterations run, 0..7 sums to 28.
+    let src = "private data d { n: Word, s: Word } \
+        fn main() -> Word { d.n = 8; for i in 0..d.n limit 8 { d.s = d.s + i; } d.s }";
+    assert_eq!(run_i16_data(src).unwrap(), 28_i16);
+}
+
+// An overrun traps loud at i16, the same fail-loud default as the host runtime.
+#[test]
+fn limit_loop_traps_on_overrun_on_16bit() {
+    let src = "private data d { n: Word, s: Word } \
+        fn main() -> Word { d.n = 100; for i in 0..d.n limit 8 { d.s = d.s + i; } d.s }";
+    assert!(matches!(
+        run_i16_data(src),
+        Err(keleusma::vm::VmError::LoopLimitExceeded)
+    ));
+}
+
+/// Whether an error message reports a declared-width mismatch, on ANY of the three widths.
+///
+/// # Why this does not name the WORD dimension, which it used to
+///
+/// These tests establish that bytecode declaring a wider width is REFUSED. They asserted the
+/// message mentioned `word_bits_log2`, which is not that property — it is which check happened to
+/// catch it first.
+///
+/// **At a narrow build the word dimension no longer differs.** `NarrowVm` is already sixteen bits
+/// wide, so bytecode compiled for the host matches on the word and differs on the ADDRESS, and the
+/// address check fires instead:
+///
+/// ```text
+/// bytecode declares addr_bits_log2 = 6 but this Vm runs at addr_bits_log2 = 4
+/// ```
+///
+/// **The rejection still happens; only the dimension named changes.** Measured as three of the six
+/// failures this file contributes under `narrow-word-16`, and classified there as a test assuming a
+/// wide host rather than a defect. Asserting the property rather than the wording lets these three
+/// keep running at a narrow width instead of being excluded, which is the difference between
+/// preserving a check and hiding it.
+///
+/// It deliberately does NOT accept any error at all: a rejection for an unrelated reason would pass
+/// such a check and the test would stop meaning anything.
+fn is_width_mismatch(msg: &str) -> bool {
+    msg.contains("word_bits_log2")
+        || msg.contains("addr_bits_log2")
+        || msg.contains("float_bits_log2")
+}
+
+/// **THE PARAGRAPH ABOVE WAS A CLAIM UNTIL THIS TEST EXISTED.**
+///
+/// Widening an assertion from a fixed wording to a predicate trades precision for reach, and the
+/// trade is only safe while the predicate still refuses the wrong thing. Nothing checked that.
+/// The doc asserted the property; a later edit relaxing this to "any rejection at all" would have
+/// made three tests in this file pass on any failure whatsoever, and every one of them would still
+/// have reported ok.
+///
+/// The negative cases are real `VmError` wordings from elsewhere in the runtime, not invented
+/// strings, so a message that genuinely changes shape shows up here rather than being assumed.
+#[test]
+fn the_width_mismatch_acceptor_refuses_rejections_for_other_reasons() {
+    for other in [
+        "bytecode version 1 is not supported by this runtime",
+        "flat opaque field read out of bounds",
+        "NewComposite flat operand on non-flat values",
+        "stack underflow",
+        "",
+    ] {
+        assert!(
+            !is_width_mismatch(other),
+            "the acceptor admitted {other:?}, which is not a width mismatch; the three tests              using it would then pass on a rejection for any reason and check nothing"
+        );
+    }
+    assert!(
+        is_width_mismatch("bytecode declares addr_bits_log2 = 6 but this Vm runs at 4"),
+        "the acceptor must still admit the real width rejection, or it has been narrowed into          uselessness rather than widened"
     );
 }

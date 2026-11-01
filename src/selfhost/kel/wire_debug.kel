@@ -1,0 +1,275 @@
+// Canonical debug-pool encoding. The host transports semantic data and retains
+// two index buffers. This stage schedules stable merge sorting and all output.
+require word >= 64;
+
+shared data io {
+    len: Word,
+    bytes: [Byte; 4096],
+    arg: Word,
+    fin: [Word; 1024],
+    bin: [Byte; 4096],
+}
+
+private data sort {
+    mode: Word,
+    n: Word,
+    width: Word,
+    base: Word,
+    middle: Word,
+    end: Word,
+    left: Word,
+    right: Word,
+    out: Word,
+    generation: Word,
+    cmp: Word,
+    left_len: Word,
+    right_len: Word,
+    remaining: Word,
+    bad: Word,
+}
+
+private data emit {
+    phase: Word,
+    index: Word,
+    remaining: Word,
+    total: Word,
+    strings: Word,
+    spans: Word,
+    types: Word,
+    records: Word,
+    bad: Word,
+}
+
+fn dbg_error() -> Word { 0 - 284 }
+fn valid_u32(n: Word) -> bool { n >= 0 andalso n <= 0xFFFFFFFF }
+fn valid_u16(n: Word) -> bool { n >= 0 andalso n <= 65535 }
+fn min(a: Word, b: Word) -> Word { if a < b { a } else { b } }
+fn compare(a: Word, b: Word) -> Word { if a < b { 0 - 1 } else { if a > b { 1 } else { 0 } } }
+
+fn put16(at: Word, value: Word) -> Word {
+    io.bytes[at] = (value band 255) as Byte;
+    io.bytes[at + 1] = ((value lsr 8) band 255) as Byte;
+    2
+}
+
+fn put32(at: Word, value: Word) -> Word {
+    put16(at, value band 65535);
+    put16(at + 2, (value lsr 16) band 65535);
+    4
+}
+
+fn sort_begin() -> Word {
+    if not valid_u32(io.arg) { dbg_error() } else {
+        sort.n = io.arg;
+        sort.width = 1;
+        sort.base = 0;
+        sort.middle = min(sort.width, sort.n);
+        sort.end = min(sort.width * 2, sort.n);
+        sort.left = 0;
+        sort.right = sort.middle;
+        sort.out = 0;
+        sort.generation = 0;
+        sort.mode = 1;
+        emit.phase = 0;
+        0
+    }
+}
+
+// One copy directive. Source and destination positions refer to the host's
+// index buffers, never to reference-encoded debug bytes.
+fn sort_copy(side: Word) -> Word {
+    io.fin[0] = if side == 0 { sort.left } else { sort.right };
+    io.fin[1] = sort.out;
+    io.fin[2] = sort.generation;
+    if side == 0 { sort.left = sort.left + 1; } else { sort.right = sort.right + 1; }
+    sort.out = sort.out + 1;
+    sort.mode = 1;
+    1
+}
+
+fn sort_next() -> Word {
+    if sort.mode != 1 { dbg_error() } else {
+        if sort.out == sort.n andalso sort.n > 1 {
+            sort.width = sort.width * 2;
+            sort.generation = 1 - sort.generation;
+            sort.base = 0;
+            sort.out = 0;
+            sort.middle = min(sort.width, sort.n);
+            sort.end = min(sort.width * 2, sort.n);
+            sort.left = 0;
+            sort.right = sort.middle;
+        }
+        if sort.width >= sort.n {
+            sort.mode = 4;
+            io.fin[2] = sort.generation;
+            0
+        } else {
+            if sort.out == sort.end {
+                sort.base = sort.end;
+                sort.middle = min(sort.base + sort.width, sort.n);
+                sort.end = min(sort.middle + sort.width, sort.n);
+                sort.left = sort.base;
+                sort.right = sort.middle;
+            }
+            if sort.left == sort.middle { sort_copy(1) } else {
+            if sort.right == sort.end { sort_copy(0) } else {
+                io.fin[0] = sort.left;
+                io.fin[1] = sort.right;
+                io.fin[2] = sort.generation;
+                sort.mode = 2;
+                2
+            }}
+        }
+    }
+}
+
+// Both headers are semantic (op index, kind, operand count). Operand order
+// precedes operand length, so equal headers require a bounded prefix scan.
+fn compare_begin() -> Word {
+    if sort.mode != 2 orelse not valid_u32(io.fin[0]) orelse not valid_u32(io.fin[3])
+        orelse io.fin[1] < 0 orelse io.fin[1] > 11 orelse io.fin[4] < 0 orelse io.fin[4] > 11
+        orelse not valid_u16(io.fin[2]) orelse not valid_u16(io.fin[5]) { dbg_error() } else {
+        sort.cmp = compare(io.fin[0], io.fin[3]);
+        if sort.cmp == 0 { sort.cmp = compare(io.fin[1], io.fin[4]); }
+        sort.left_len = io.fin[2];
+        sort.right_len = io.fin[5];
+        sort.remaining = if sort.cmp == 0 { min(sort.left_len, sort.right_len) } else { 0 };
+        sort.mode = 3;
+        sort.remaining
+    }
+}
+
+fn compare_feed() -> Word {
+    let n = io.arg;
+    if sort.mode != 3 orelse n <= 0 orelse n > 512 orelse n > sort.remaining { dbg_error() } else {
+        sort.bad = 0;
+        for i in 0..n limit 512 {
+            if not valid_u16(io.fin[i * 2]) orelse not valid_u16(io.fin[i * 2 + 1]) { sort.bad = 1; }
+        }
+        if sort.bad != 0 { dbg_error() } else {
+            for i in 0..n limit 512 {
+                if sort.cmp == 0 { sort.cmp = compare(io.fin[i * 2], io.fin[i * 2 + 1]); }
+            }
+            sort.remaining = sort.remaining - n;
+            0
+        }
+    }
+}
+
+fn compare_finish() -> Word {
+    if sort.mode != 3 orelse sort.remaining != 0 { dbg_error() } else {
+        if sort.cmp == 0 { sort.cmp = compare(sort.left_len, sort.right_len); }
+        sort_copy(if sort.cmp <= 0 { 0 } else { 1 })
+    }
+}
+
+fn pool_begin() -> Word {
+    if sort.mode != 4 orelse not valid_u32(io.fin[0]) orelse not valid_u32(io.fin[1])
+        orelse not valid_u32(io.fin[2]) orelse io.fin[3] != sort.n { dbg_error() } else {
+        emit.strings = io.fin[0];
+        emit.spans = io.fin[1];
+        emit.types = io.fin[2];
+        emit.records = io.fin[3];
+        emit.phase = 1;
+        emit.index = 0;
+        emit.remaining = 0;
+        emit.total = 0;
+        put32(0, emit.strings)
+    }
+}
+
+fn phase_count() -> Word {
+    if emit.phase == 1 { emit.strings } else {
+    if emit.phase == 2 { emit.spans } else {
+    if emit.phase == 3 { emit.types } else { emit.records }}}
+}
+
+// Requests 1..4 ask for semantic item headers. Requests 5,7,8 ask for
+// continuation data. Request 9 supplies a freshly encoded count prefix.
+fn pool_next() -> Word {
+    if emit.phase < 1 orelse emit.phase > 4 { dbg_error() } else {
+        if emit.remaining > 0 {
+            io.fin[0] = emit.index;
+            io.fin[1] = emit.total - emit.remaining;
+            emit.phase + 4
+        } else {
+            if emit.index == phase_count() {
+                emit.phase = emit.phase + 1;
+                emit.index = 0;
+                if emit.phase == 5 { 0 } else { put32(0, phase_count()); 9 }
+            } else {
+                io.fin[0] = emit.index;
+                emit.phase
+            }
+        }
+    }
+}
+
+fn pool_item() -> Word {
+    if emit.phase < 1 orelse emit.phase > 4 orelse emit.remaining != 0 orelse emit.index >= phase_count() { dbg_error() } else {
+        if emit.phase == 1 orelse emit.phase == 3 {
+            if not valid_u32(io.fin[0]) { dbg_error() } else {
+                emit.total = io.fin[0];
+                emit.remaining = emit.total;
+                if emit.remaining == 0 { emit.index = emit.index + 1; }
+                put32(0, emit.total)
+            }
+        } else { if emit.phase == 2 {
+            if not valid_u16(io.fin[0]) orelse not valid_u32(io.fin[1]) orelse not valid_u32(io.fin[2]) { dbg_error() } else {
+                put16(0, io.fin[0]);
+                put32(2, io.fin[1]);
+                put32(6, io.fin[2]);
+                emit.index = emit.index + 1;
+                10
+            }
+        } else {
+            if not valid_u32(io.fin[0]) orelse io.fin[1] < 0 orelse io.fin[1] > 11 orelse not valid_u16(io.fin[2]) { dbg_error() } else {
+                put32(0, io.fin[0]);
+                io.bytes[4] = io.fin[1] as Byte;
+                put16(5, io.fin[2]);
+                emit.total = io.fin[2];
+                emit.remaining = emit.total;
+                if emit.remaining == 0 { emit.index = emit.index + 1; }
+                7
+            }
+        }}
+    }
+}
+
+fn pool_feed() -> Word {
+    let n = io.arg;
+    if emit.remaining <= 0 orelse n <= 0 orelse n > emit.remaining { dbg_error() } else {
+    if emit.phase == 1 orelse emit.phase == 3 {
+        if n > 4096 { dbg_error() } else {
+            for i in 0..n limit 4096 { io.bytes[i] = io.bin[i]; }
+            emit.remaining = emit.remaining - n;
+            if emit.remaining == 0 { emit.index = emit.index + 1; }
+            n
+        }
+    } else { if emit.phase == 4 {
+        if n > 1024 { dbg_error() } else {
+            emit.bad = 0;
+            for i in 0..n limit 1024 { if not valid_u16(io.fin[i]) { emit.bad = 1; } }
+            if emit.bad != 0 { dbg_error() } else {
+                for i in 0..n limit 1024 { put16(i * 2, io.fin[i]); }
+                emit.remaining = emit.remaining - n;
+                if emit.remaining == 0 { emit.index = emit.index + 1; }
+                n * 2
+            }
+        }
+    } else { dbg_error() }}}
+}
+
+fn dispatch(cmd: Word) -> Word {
+    if cmd == 0 { sort_begin() } else {
+    if cmd == 1 { sort_next() } else {
+    if cmd == 2 { compare_begin() } else {
+    if cmd == 3 { compare_feed() } else {
+    if cmd == 4 { compare_finish() } else {
+    if cmd == 5 { pool_begin() } else {
+    if cmd == 6 { pool_next() } else {
+    if cmd == 7 { pool_item() } else {
+    if cmd == 8 { pool_feed() } else { dbg_error() }}}}}}}}}
+}
+
+loop main(cmd: Word) -> Word { yield dispatch(cmd) }

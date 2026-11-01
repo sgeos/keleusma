@@ -1,0 +1,48 @@
+COMPLETION CONDITION — the oracle's type-surface census
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge only the end state of the tree.
+
+A. The corpus's type surface is a computed figure, not prose.
+   A test derives, from the twelve self-hosted stage sources, the set of types
+   appearing in declared function signatures (parameters and returns), and
+   fails if that set differs from what the tree records. The derivation ignores
+   comments, and it obtains signatures through the project's own lexer or
+   parser rather than by matching source text with a regular expression.
+
+B. The measurement cannot pass vacuously.
+   The test asserts a non-trivial amount of input was actually examined (a
+   floor on stage sources read and on signatures found), and fails if either is
+   zero or implausibly small.
+
+C. The single-case families of the construct-support boundary are identified.
+   A test or tracked document derives, from the boundary table itself, which
+   construct families are represented by exactly one case, and that list is
+   recomputed rather than restated. If a family gains or loses cases so that
+   the set changes, the check fails rather than silently describing the past.
+
+D. The findings are recorded where a resuming reader meets them.
+   A tracked document states that the byte-identity corpus exercises a single
+   type at function boundaries, gives the measured figures, and says explicitly
+   that this bounds what the oracle can detect. It does not claim the pipeline
+   is wrong, only that the oracle is silent outside its corpus.
+
+E. No claim outruns its evidence.
+   Any figure stated in a document added or modified by this work is either
+   recomputed by a test or carries the date it was measured. Where a zero is
+   claimed, it was established by more than one independent method. No document
+   asserts that coverage has been achieved where it has only been measured.
+
+F. The stage sources are not altered to broaden coverage.
+   The twelve stage sources remain a program written for their own purpose. Any
+   widening of coverage is done through synthetic probe or boundary cases, not
+   by editing the corpus to contain types it has no reason to contain.
+
+G. The tree is green under the checks this project already runs, with no new
+   warnings, and the byte-identity agreement of the existing stage sources is
+   unchanged.
+
+Not required for completion: any particular branch, commit, merge, or review
+state; any particular file layout or naming; any particular number of new test
+cases; broadening the boundary table itself; resolution of questions explicitly
+recorded as belonging to the operator.

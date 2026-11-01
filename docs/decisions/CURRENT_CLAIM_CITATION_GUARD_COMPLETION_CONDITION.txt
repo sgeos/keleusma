@@ -1,0 +1,58 @@
+COMPLETION CONDITION — guarding citations in the current-claim documents
+
+Ordering is NOT a completion criterion. Nothing below requires any particular
+sequence, branch, commit shape, or process step. Judge only the end state of the
+tree.
+
+All of the following hold:
+
+1. A DEAD CITATION IN A CURRENT-CLAIM DOCUMENT FAILS A TEST.
+   A document whose content is overwritten each session, and which therefore
+   states only current claims, is scanned for identifiers that exist nowhere in
+   the tree. Adding such a citation makes a test fail, and the failure names both
+   the document and the identifier.
+
+2. THE GUARD HAS BEEN MADE TO FIRE.
+   The tree reflects that a provoking input was constructed and observed to fail,
+   not merely that the guard passes.
+
+3. THE SCAN IS NON-VACUOUS.
+   It fails if it examines nothing, so a scan that matches no citations cannot
+   pass as agreement.
+
+4. APPEND-ONLY DOCUMENTS ARE NOT SCANNED, AND THE REASON IS STATED.
+   Historical records legitimately name things that no longer exist. The tree says
+   which documents are excluded and why, with the measurement that justified the
+   scope rather than an assertion that it is obvious.
+
+5. THE THRESHOLD IS JUSTIFIED BY MEASUREMENT.
+   Whatever filter decides which backticked text counts as an identifier is
+   supported by counts taken from the tree, not chosen and asserted.
+
+6. THE FILTER DOES NOT MANUFACTURE FINDINGS.
+   Text that is not an identifier — filenames, prose, foreign symbols — is not
+   reported as a dangling citation. Any category that was wrongly reported during
+   development is recorded so the next change does not reintroduce it.
+
+7. CROSS-TREE REFERENCES ARE HANDLED HONESTLY AND KEPT SMALL.
+   A name that exists only in another line's tree is distinguishable from a dead
+   one, by an explicit allowlist carrying its evidence. That list is not enlarged
+   to silence a failure, and the tree says so.
+
+8. THE EXISTING EXCUSE REGISTER DID NOT GROW.
+   The recorded backlog of excused citations is no larger than before, and any
+   change to it is accompanied by which citation was resolved.
+
+9. NO NEW OPCODE, AND NO BYTECODE_VERSION CHANGE.
+
+10. THE SUITE IS GREEN ACROSS THE FEATURE SETS CONTINUOUS INTEGRATION BUILDS.
+    Not one feature set. Every test file compiles under every feature set that
+    builds it. The verdict comes from the test runner's own exit status read from
+    its output, not from a filtered pipeline and not from a reported process exit
+    code, and is corroborated by a second independent signal such as a count of
+    completed test binaries. A truncated or killed run is not a pass.
+
+11. THE CHANNELS DESCRIBE THIS STATE.
+    The resume channels and the handoff describe what the tree now does, separate
+    measurement from inference, and retain rather than delete any claim corrected
+    during the work.

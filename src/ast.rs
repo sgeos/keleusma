@@ -698,10 +698,66 @@ pub struct ForStmt {
     pub var: String,
     /// Iterable expression (range or array-shaped expression).
     pub iterable: Iterable,
+    /// Optional compile-time iteration cap introduced by a `limit`
+    /// clause. When present, the loop iterates its range under this
+    /// constant cap, so the worst-case-execution-time bound is the
+    /// cap rather than the range endpoints, which admits a runtime
+    /// range that strict verification would otherwise reject. The
+    /// expression must reduce to a `Word` constant by compile time (a
+    /// literal, a const-data field, or a const parameter, the last two
+    /// erased to a literal by const-data inlining and monomorphization
+    /// respectively). See the `on_arms` outcome block.
+    pub limit: Option<Expr>,
     /// Loop body.
     pub body: Block,
+    /// Outcome arms from an optional `on { ... }` block that captures
+    /// how the loop ended. Empty when no block is written. Only
+    /// admissible together with a `limit` clause. See [`LoopArmKind`].
+    pub on_arms: Vec<LoopArm>,
     /// Span of the for statement.
     pub span: Span,
+}
+
+/// One arm of a `for ... limit ... on { ... }` outcome block. The arm
+/// runs, for effect, when the loop ends for the corresponding reason.
+/// The loop is a statement, so an arm body is a statement block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopArm {
+    /// Outcome class plus an optional binding.
+    pub kind: LoopArmKind,
+    /// Optional `when` guard, mirroring the checked-arithmetic arms.
+    pub guard: Option<Expr>,
+    /// Statement block evaluated when the arm fires.
+    pub body: Block,
+    /// Span of the arm.
+    pub span: Span,
+}
+
+/// The outcome class of a [`LoopArm`]. The four outcomes split into two
+/// tiers. `Ok` and `Break` are intended, non-trapping exits; an absent
+/// `Break` arm falls through to `Ok`, and a break never traps. `Limit`
+/// and `Overflow` are defensive exits; an unhandled one traps. The
+/// optional pattern binds a `Word`, an index for `Break` and `Limit`,
+/// and is admissible on every class.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopArmKind {
+    /// `ok` or `ok(count)`: the range was exhausted, the loop variable
+    /// reached the range end. The mandatory catch-all when a block is
+    /// present. The optional binding is the completed iteration count.
+    Ok(Option<Pattern>),
+    /// `break` or `break(i)`: the body executed a `break`. The optional
+    /// binding is the loop variable's value at the break. Admissible
+    /// only when the body contains a `break`.
+    Break(Option<Pattern>),
+    /// `limit` or `limit(stopped_at)`: the loop stopped at the cap
+    /// before the range was exhausted. The optional binding is the loop
+    /// variable's value at the stop. Unhandled, the loop traps as
+    /// `LoopLimitExceeded`.
+    Limit(Option<Pattern>),
+    /// `overflow`: the induction increment overflowed the index type.
+    /// Admissible only where the index type and bounds permit it.
+    /// Unhandled, the loop traps.
+    Overflow(Option<Pattern>),
 }
 
 /// The iterable in a `for` loop.
@@ -891,6 +947,27 @@ pub enum Expr {
         arms: Vec<CheckedArm>,
         span: Span,
     },
+    /// Handled indexed write into a data-segment array field:
+    /// `data_name.field[i] = value { ok(old, new) => .., invalid_index(j) => .. }`.
+    ///
+    /// The index is evaluated first and bounds-checked before the value is
+    /// evaluated, so an invalid index skips the value. The construct is an
+    /// expression whose type is the common type of its arms. With more than
+    /// one index, a failure at any level reaches `invalid_index`, which binds
+    /// the index that failed. See `docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md`.
+    DataIndexStore {
+        /// Name of the data block being assigned into.
+        data_name: String,
+        /// Field name being written.
+        field: String,
+        /// Index expressions in source order (outermost first).
+        indices: Vec<Expr>,
+        /// Value written when the index is in range.
+        value: Box<Expr>,
+        /// Arms in declaration order: `StoreOk` and `InvalidIndex`.
+        arms: Vec<CheckedArm>,
+        span: Span,
+    },
     /// `saturate_max` literal. Evaluates to the maximum
     /// representable value of the construct's expected type. The
     /// type checker assigns the context type; the compiler emits
@@ -1013,6 +1090,12 @@ pub enum CheckedArmKind {
     /// (B35 P7). Optional; an unhandled native error propagates the
     /// host failure as it would without the construct.
     Error(Pattern),
+    /// `ok(old, new)`: a handled indexed write succeeded. The first
+    /// pattern matches the element value before the write and the
+    /// second the value written. Each is a binder or `_`. Admissible
+    /// only on a handled indexed write, where the element is read
+    /// only when `old` is bound.
+    StoreOk(Pattern, Pattern),
 }
 
 impl Expr {
@@ -1042,6 +1125,7 @@ impl Expr {
             | Expr::Closure { span, .. }
             | Expr::ClosureRef { span, .. }
             | Expr::Checked { span, .. }
+            | Expr::DataIndexStore { span, .. }
             | Expr::SaturateMax { span }
             | Expr::SaturateMin { span }
             | Expr::Classify { span, .. }
@@ -1188,6 +1272,31 @@ pub enum TypeExpr {
     /// nominal type; its runtime representation is a flat array of N
     /// words.
     Multiword(ConstExpr, ConstExpr, Span),
+    /// Capacity-bounded mutable text: `Text<N>`, holding up to `N` content
+    /// bytes with no terminator.
+    ///
+    /// **Distinct from bare `Text`**, which is a pointer to `.rodata` and
+    /// carries no capacity in its type. A literal is static and has the bare
+    /// type; a value that can change has this one. They are two types, not one
+    /// parameterised family, because their residence rules differ: static text
+    /// lives in read-only memory for the module's lifetime, and a `Text<N>` is
+    /// an ordinary value.
+    ///
+    /// The runtime representation is a FLAT composite carrying no pointer,
+    /// handle, or epoch. That is the whole reason the type is admissible: a
+    /// handle implies unbounded lifetime, which is why it would need an epoch,
+    /// which puts worst-case memory beyond static reach and contradicts the
+    /// ecosystem's definitive-WCMU proposition. Because it carries no pointer,
+    /// a value containing one may cross a yield boundary, which bare dynamic
+    /// text may not.
+    ///
+    /// `N` is a const expression resolved to a literal at monomorphization
+    /// (B40), so neither worst-case analysis ever sees a symbolic bound.
+    ///
+    /// The governing analogy is the operator's: this is `for .. limit <const>`
+    /// applied to storage instead of iteration -- a runtime length under a
+    /// static cap.
+    TextN(ConstExpr, Span),
     /// Option type: `Option<T>`.
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
@@ -1275,6 +1384,7 @@ impl TypeExpr {
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Multiword(_, _, span)
+            | TypeExpr::TextN(_, span)
             | TypeExpr::Option(_, span)
             | TypeExpr::Unit(span)
             | TypeExpr::Labelled(_, _, span) => *span,

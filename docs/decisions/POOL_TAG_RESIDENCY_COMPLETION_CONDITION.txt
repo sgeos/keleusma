@@ -1,0 +1,65 @@
+Ordering is NOT a completion criterion. Any sequence, any number of commits, any
+branch layout satisfies this. Judge only the end state of the tree.
+
+All of the following must hold.
+
+1. THE SHIPPING COMPILER'S CONSTANT POOL CARRIES ITS TAGS.
+   The library's self-hosted compile path builds a string constant as a string,
+   not as the integer its stage used to intern it. This holds for every entry
+   point in that path that produces a constant pool, not only one of them.
+
+2. THE STAGE WAS NOT CHANGED TO ACHIEVE IT.
+   No .kel stage source is modified. The fix is host-side. The number of opcodes
+   and the bytecode version are unchanged.
+
+3. A WITNESS EXISTS FOR EACH TAG CLAIMED, OR THE CLAIM IS NOT MADE.
+   For every pool tag the tree asserts is handled, a test compiles a real source
+   program that produces that tag and compares the result against the reference
+   compiler. A tag for which no witnessing program could be constructed is named
+   in the tree as unwitnessed, with what was tried. Asserting a tag is handled
+   without a firing witness fails this item.
+
+4. STRING CONTENT IS COMPARED, NOT JUST STRING-NESS.
+   At least one witness carries an escape sequence, so the comparison would fail
+   if escapes were mishandled rather than merely if the type were wrong.
+
+5. THE RECORD OF THE DIVERGENCE SURVIVES ITS REPAIR.
+   The tree still contains a test about the relationship between the two
+   self-hosted compilers on the construct that diverged. It may assert agreement
+   instead of disagreement, but it is present and it names what was once true.
+   Silent deletion fails this item.
+
+6. THE CONTROL STILL DISCRIMINATES.
+   The comparison's reference side is not adjusted in the same change that fixes
+   the thing being compared. A reader can confirm the oracle was untouched.
+
+7. THE PROPORTIONALITY IS STATED WHERE A READER MEETS IT.
+   The tree records that the CLI path cross-checks against the reference and
+   refuses on divergence, so the defect produced loud errors rather than wrong
+   artifacts for that path, and names which callers were actually exposed.
+
+8. THE CLASS IS SWEPT, NOT JUST THE INSTANCE.
+   The driver has been examined for other places where a value the stage
+   computes is read and discarded. The result is recorded in the tree, including
+   the case where nothing further was found, and states what was searched.
+
+9. NOTHING IS SILENTLY NARROWED.
+   No program the tree accepted before is now rejected, and no public signature
+   changes in a way that breaks a caller, unless a test pins the new boundary
+   from both sides and a document records the reason.
+
+10. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+    The test suite passes under the self-host feature with zero failures,
+    formatting is clean, and clippy is clean at deny-warnings. Any step skipped,
+    any goal abandoned, and any verdict that moved is stated plainly with its
+    reason rather than omitted.
+
+11. THE OPERATOR'S PENDING DECISION IS NOT MISREPORTED.
+    If the tree describes what this work does for the outstanding accessor
+    decision, it states which supporting evidence is closed and which remains,
+    rather than implying the decision is resolved.
+
+12. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If any item proved impossible without an operator decision, the tree names
+    the specific decision required and the evidence establishing it, and the
+    remaining items still hold. A recorded blocker satisfies that item.

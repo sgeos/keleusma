@@ -210,8 +210,18 @@ pub enum Type {
     Bool,
     /// Unit `()`.
     Unit,
-    /// Static string.
+    /// Static string. A pointer into read-only data with no capacity in its
+    /// type; a literal is static text.
     Str,
+    /// Capacity-bounded dynamic text, `Text<N>`. **A DISTINCT NOMINAL TYPE, not a
+    /// parameterised form of [`Type::Str`]**, which is the operator's ruling and
+    /// the reason the two never unify: static text is a `.rodata` pointer and
+    /// dynamic text is a flat length-plus-`N`-bytes composite, so a value of one
+    /// is not a value of the other. `N` counts CONTENT bytes with no terminator.
+    /// The dimension is a [`ConstDim`], concrete after monomorphization and
+    /// possibly symbolic inside a generic body, exactly as for
+    /// [`Type::Multiword`].
+    TextN(ConstDim),
     /// Tuple of types.
     Tuple(Vec<Type>),
     /// Fixed-length array. The dimension is a [`ConstDim`]: a concrete
@@ -317,6 +327,7 @@ impl Type {
                 )),
                 const_dim_from_expr(len),
             ),
+            TypeExpr::TextN(n, _) => Type::TextN(const_dim_from_expr(n)),
             TypeExpr::Multiword(words, frac, _) => {
                 Type::Multiword(const_dim_from_expr(words), const_dim_from_expr(frac))
             }
@@ -419,6 +430,7 @@ impl Type {
                 format!("({})", inner.join(", "))
             }
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
+            Type::TextN(n) => alloc::format!("Text<{}>", n),
             Type::Multiword(n, f) => {
                 if f.known() == Some(0) {
                     format!("Multiword<{}>", n)
@@ -606,6 +618,20 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
                 Err(UnifyError::Mismatch {
                     left: Type::Fixed(a_n),
                     right: Type::Fixed(b_n),
+                })
+            }
+        }
+        // TWO CAPACITIES ARE TWO TYPES, and neither is static text. There is
+        // deliberately no arm pairing `TextN` with `Str`: they have different
+        // representations and different residence rules, so a value of one is
+        // not a value of the other. The absence of that arm is the ruling.
+        (Type::TextN(a_n), Type::TextN(b_n)) => {
+            if const_dims_compatible(&a_n, &b_n) {
+                Ok(())
+            } else {
+                Err(UnifyError::Mismatch {
+                    left: Type::TextN(a_n),
+                    right: Type::TextN(b_n),
                 })
             }
         }
@@ -910,6 +936,213 @@ fn check_multiword_dim_range(
     Ok(())
 }
 
+/// Admit `"..." as Text<N>` and nothing else that targets `Text<N>`.
+///
+/// The operand must be a string literal written at the cast site. That is the
+/// one source of static text whose content the compiler holds, and holding the
+/// content is what makes the refusal below a decision made with full
+/// information. A constant data field of type `Text` is also static, but
+/// admitting it would route the cast through the const-data machinery for no
+/// gain in this increment, so it is refused with the same message as any other
+/// operand.
+///
+/// **REFUSE WHAT IS STATIC.** The operator ruled on 2026-08-31 that a
+/// statically too narrow assignment is a compile error rather than a
+/// truncation, and the ruling of 2026-10-30 applies it to the literal cast. The
+/// length is counted in UTF-8 bytes, because `N` counts content bytes and a
+/// multibyte character occupies several of them.
+///
+/// A symbolic capacity is admitted here and checked again after
+/// monomorphization, when the re-typecheck sees the literal it became. The
+/// compiler repeats the comparison at emission as a backstop, so a skipped
+/// re-typecheck still cannot emit a body longer than its capacity.
+fn check_text_literal_cast(
+    operand: &Expr,
+    cap: &ConstDim,
+    from_ty: &Type,
+    span: Span,
+) -> Result<(), TypeError> {
+    let Expr::Literal {
+        value: Literal::String(text),
+        ..
+    } = operand
+    else {
+        return Err(TypeError::new(
+            format!(
+                "cannot cast {} to Text<{cap}>: only a string literal may be cast to a \
+                 capacity-bounded text, because its length must be known at compile time",
+                from_ty.display()
+            ),
+            span,
+        ));
+    };
+    if let Some(n) = cap.known() {
+        let bytes = text.len();
+        // A capacity that does not fit `usize` exceeds every literal, so the
+        // comparison is made in `i64` and cannot truncate.
+        if i64::try_from(bytes).map_or(true, |b| b > n) {
+            return Err(TypeError::new(
+                format!(
+                    "string literal of {bytes} bytes does not fit in Text<{n}>: a literal \
+                     longer than the capacity is refused rather than truncated"
+                ),
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Type a method call to a bundled text operation.
+///
+/// The receiver has already been typed as a `Text<N>` of capacity
+/// `receiver_cap`, carrying `receiver_labels`, which is how the call was
+/// recognised. Each further `Text<N>` operand must type as a `Text<N>`. A type
+/// variable is accepted in its place, because inside a generic body the
+/// operand is not yet concrete and the mandatory re-typecheck after
+/// monomorphization decides it again with the variable resolved. The compiler
+/// refuses any operand whose capacity it still cannot read, so a variable
+/// never reaches emission unresolved.
+///
+/// The result carries the union of the receiver's and the arguments'
+/// information-flow labels, as the result of an arithmetic operation does.
+#[cfg(feature = "text")]
+fn check_text_method(
+    ctx: &mut Ctx,
+    op: crate::text_intrinsic::TextOp,
+    receiver_cap: ConstDim,
+    receiver_labels: BTreeSet<String>,
+    args: &mut [Expr],
+    span: Span,
+) -> Result<Type, TypeError> {
+    use crate::text_intrinsic::TextOp;
+    let name = op.name();
+    if args.len() != op.arity() {
+        return Err(TypeError::new(
+            format!(
+                "method `{name}` on `Text<N>` expects {} argument(s), got {}",
+                op.arity(),
+                args.len()
+            ),
+            span,
+        ));
+    }
+    let mut labels = receiver_labels;
+    // The capacity of each text operand, the receiver first, `None` for a
+    // still-generic operand.
+    let mut caps: Vec<Option<ConstDim>> = Vec::with_capacity(args.len() + 1);
+    caps.push(Some(receiver_cap));
+    for (i, arg) in args.iter_mut().enumerate() {
+        let raw = type_of_expr(ctx, arg)?;
+        let resolved = raw.apply(&ctx.subst);
+        labels.extend(labels_of(&resolved));
+        let ty = strip_labels(resolved);
+        let wants_text = op != TextOp::Slice;
+        if wants_text {
+            match ty {
+                Type::TextN(cap) => caps.push(Some(cap)),
+                Type::Var(_) => caps.push(None),
+                other => {
+                    return Err(TypeError::new(
+                        format!(
+                            "method `{name}` argument {i} expects a capacity-bounded text `Text<N>`, \
+                             got {}",
+                            other.display()
+                        ),
+                        arg.span(),
+                    ));
+                }
+            }
+        } else if !types_compatible(ctx, &ty, &Type::Word) {
+            return Err(TypeError::new(
+                format!(
+                    "method `{name}` argument {i} expects Word, got {}",
+                    ty.display()
+                ),
+                arg.span(),
+            ));
+        }
+    }
+    let first = caps.first().cloned().flatten();
+    let second = caps.get(1).cloned().flatten();
+    let result = match op {
+        TextOp::Len | TextOp::Capacity => Type::Word,
+        TextOp::Eq => Type::Bool,
+        TextOp::Slice => match first {
+            Some(cap) => Type::TextN(cap),
+            None => ctx.fresh(),
+        },
+        TextOp::Concat => match (first, second) {
+            (Some(ConstDim::Known(a)), Some(ConstDim::Known(b))) => match a.checked_add(b) {
+                Some(sum) => Type::TextN(ConstDim::Known(sum)),
+                None => {
+                    return Err(TypeError::new(
+                        format!("method `{name}` result capacity Text<{a} + {b}> overflows a word"),
+                        span,
+                    ));
+                }
+            },
+            // A symbolic capacity is decided after monomorphization. A fresh
+            // variable unifies with whatever the generic body declares, and the
+            // re-typecheck replaces it with the concrete sum.
+            _ => ctx.fresh(),
+        },
+    };
+    Ok(apply_labels(result, &labels))
+}
+
+/// Whether a value of type `t` carries a `Text<N>` anywhere in its body.
+///
+/// Used to refuse the operations this increment does not build, which today is
+/// comparison. Named types are expanded through the struct, enum and newtype
+/// tables. The walk is an explicit worklist with a visited set of type names,
+/// so it terminates on a recursive type definition and visits each named type
+/// once. A type variable answers `false`, because the comparison it guards is
+/// decided again on the post-monomorphization re-typecheck, where the variable
+/// has become concrete.
+fn type_contains_text_capacity(ctx: &Ctx, t: &Type) -> bool {
+    let mut pending: Vec<&Type> = alloc::vec![t];
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    while let Some(next) = pending.pop() {
+        match next {
+            Type::TextN(_) => return true,
+            Type::Tuple(items) => pending.extend(items.iter()),
+            Type::Array(inner, _) | Type::Option(inner) | Type::Labelled(inner, _) => {
+                pending.push(inner)
+            }
+            Type::Struct(name, args) | Type::Enum(name, args) => {
+                pending.extend(args.iter());
+                if seen.insert(name.as_str()) {
+                    if let Some(fields) = ctx.structs.get(name) {
+                        pending.extend(fields.values());
+                    }
+                    if let Some(variants) = ctx.enums.get(name) {
+                        pending.extend(variants.values().flatten());
+                    }
+                }
+            }
+            Type::Newtype(name) => {
+                if seen.insert(name.as_str())
+                    && let Some(underlying) = ctx.newtypes.get(name)
+                {
+                    pending.push(underlying);
+                }
+            }
+            Type::Byte
+            | Type::Word
+            | Type::Fixed(_)
+            | Type::Float
+            | Type::Bool
+            | Type::Unit
+            | Type::Str
+            | Type::Multiword(_, _)
+            | Type::Opaque(_)
+            | Type::Var(_) => {}
+        }
+    }
+    false
+}
+
 /// Reject a fixed-size array whose length resolves to a non-positive literal
 /// (audit C11). A zero-length array can never be indexed without trapping and
 /// occupies no storage, so it is a degenerate type with no legitimate use; a
@@ -943,6 +1176,27 @@ fn check_array_len_positive(ce: &crate::ast::ConstExpr) -> Result<(), TypeError>
 /// that the signature, parameter, and data-field positions already enforced.
 fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
     match t {
+        // A `Text<N>` capacity follows the array rule, because the capacity IS
+        // the length of the content array in the flat layout. A literal below
+        // one is refused here with a message naming the type. A symbolic
+        // capacity is skipped and re-checked on the post-monomorphization
+        // re-typecheck, where it has become a literal. A symbolic capacity that
+        // survives monomorphization is refused by the compiler, which is the
+        // stage that would otherwise have to guess a size.
+        //
+        // **THE REASON A REFUSAL GIVES DECAYS FASTER THAN THE REFUSAL DOES.**
+        // The blanket refusal that stood here said the type was not built, and
+        // it was retired by the increment that built the value representation
+        // and the literal cast. When an increment lands a capability, grep the
+        // refusals for the name of what was built, and state what remains
+        // MISSING rather than what is absent so far.
+        TypeExpr::TextN(cap, span) => match cap {
+            crate::ast::ConstExpr::Lit(n, _) if *n < 1 => Err(TypeError::new(
+                alloc::format!("Text<{n}> is not a legal type: a text capacity must be positive"),
+                *span,
+            )),
+            _ => Ok(()),
+        },
         TypeExpr::Array(elem, len, _) => {
             check_array_len_positive(len)?;
             check_composite_dimensions(elem)
@@ -993,6 +1247,7 @@ fn validate_no_nested_negative_labels(
     at_top_level_allowed_position: bool,
 ) -> Result<(), TypeError> {
     match t {
+        TypeExpr::TextN(_, _) => Ok(()),
         TypeExpr::NegativeLabelled(inner, _, span) => {
             if !at_top_level_allowed_position {
                 return Err(TypeError {
@@ -1079,6 +1334,9 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::Str => Some("Text".to_string()),
         Type::Tuple(_) => Some("tuple".to_string()),
         Type::Array(_, _) => Some("array".to_string()),
+        // The head is the NAME without its dimension, matching `Multiword` and
+        // `Fixed`: a trait implemented for the family, not for one capacity.
+        Type::TextN(_) => Some("Text".to_string()),
         Type::Multiword(_, _) => Some("Multiword".to_string()),
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
@@ -1280,6 +1538,32 @@ struct Ctx {
     /// function by [`check_function`] and consulted at each call site to
     /// enforce the category-call discipline (see [`FnSig::category`]).
     current_category: crate::ast::FunctionCategory,
+    /// Type of the value a `yield` in the current function resumes with, when
+    /// it is known. `Vm::resume` checks the resume value against the entry
+    /// loop's first parameter type and stores it in that parameter's slot, so
+    /// that type is the yield's type in the loop and in every `yield`
+    /// function. `None` when the program has no loop or its loop has no
+    /// parameter, since then nothing checks the resume value. Seeded per
+    /// function by [`check_function`].
+    current_resume: Option<Type>,
+    /// The fresh variable given to each `yield` in the current function whose
+    /// resume type is not known, with the span of that `yield`.
+    unknown_resumes: Vec<(Type, crate::token::Span)>,
+    /// The type each such `yield` resolved to once its function was checked,
+    /// keyed by function name and then by the `yield`'s span. Only a resolved
+    /// type is entered, and only for a function with no type or const
+    /// parameter. [`check_with_target_resolving_resumes`] hands this table to
+    /// monomorphization, which otherwise sees a resume type only through
+    /// `loop main`'s first parameter (operator ruling of 2026-10-31, option B).
+    resolved_resumes: ResolvedResumes,
+    /// The type and span of each field access and destructuring pattern in
+    /// the current function whose subject's type was still a variable when it
+    /// was checked. The type checker admits both on a variable, and a later
+    /// use may still fix it. [`check_function`] refuses the function when one
+    /// of these subjects is, once the body is checked, an unresolved
+    /// [`Self::unknown_resumes`] variable, since the compiler then has no
+    /// layout to lower the read against.
+    open_projections: Vec<(Type, crate::token::Span)>,
     /// Spans in the current function that received conflicting concrete types
     /// and are therefore excluded from the authoritative table.
     fn_type_conflicts: BTreeSet<crate::token::Span>,
@@ -1318,6 +1602,10 @@ impl Ctx {
             record_types: false,
             current_fn_types: BTreeMap::new(),
             current_category: crate::ast::FunctionCategory::Fn,
+            current_resume: None,
+            unknown_resumes: Vec::new(),
+            resolved_resumes: BTreeMap::new(),
+            open_projections: Vec::new(),
             fn_type_conflicts: BTreeSet::new(),
             fn_tables: BTreeMap::new(),
         }
@@ -1574,6 +1862,9 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
         Type::Array(elem, n) => {
             TypeExpr::array_lit(Box::new(type_to_expr_full(elem, span)?), n.known()?, span)
         }
+        // A symbolic capacity has no literal to write back, so the conversion
+        // fails rather than inventing one; the caller's `Option` carries that.
+        Type::TextN(n) => TypeExpr::TextN(crate::ast::ConstExpr::Lit(n.known()?, span), span),
         Type::Multiword(n, f) => TypeExpr::multiword_lit(
             u16::try_from(n.known()?).ok()?,
             u16::try_from(f.known()?).ok()?,
@@ -1647,6 +1938,27 @@ pub fn check_with_target(
 ) -> Result<(), TypeError> {
     let mut ctx = Ctx::new();
     ctx.fixed_default_frac_bits = target.fixed_default_frac_bits();
+    run_check(program, ctx).map(|_| ())
+}
+
+/// The type each `yield` resolved to in a function where no `loop main`
+/// parameter declares the resume type, keyed by function name and then by the
+/// `yield`'s span.
+pub(crate) type ResolvedResumes = BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>;
+
+/// As [`check_with_target`], additionally returning the type each `yield`
+/// without a declared resume type resolved to once its function was checked.
+///
+/// The compiler's pre-monomorphization check uses this, and hands the table
+/// to [`crate::monomorphize::monomorphize_with_resolved_resumes`], so a
+/// generic call on a resume value whose type a later use fixes specializes as
+/// the annotated form does. A `yield` whose type nothing fixes has no entry.
+pub(crate) fn check_with_target_resolving_resumes(
+    program: &mut Program,
+    target: crate::target::Target,
+) -> Result<ResolvedResumes, TypeError> {
+    let mut ctx = Ctx::new();
+    ctx.fixed_default_frac_bits = target.fixed_default_frac_bits();
     run_check(program, ctx)
 }
 
@@ -1664,7 +1976,7 @@ pub fn check_with_target_recording(
     let mut ctx = Ctx::new();
     ctx.fixed_default_frac_bits = target.fixed_default_frac_bits();
     ctx.record_types = true;
-    run_check(program, ctx)
+    run_check(program, ctx).map(|_| ())
 }
 
 /// Type-check a call to a native function whose declared signature
@@ -1751,10 +2063,10 @@ fn check_native_call_with_signature(
 /// originally unannotated positions.
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
     let ctx = Ctx::new();
-    run_check(program, ctx)
+    run_check(program, ctx).map(|_| ())
 }
 
-fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
+fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<ResolvedResumes, TypeError> {
     // Pass 1a. Collect type kinds (struct, enum, newtype) so name
     // resolution works while reading field signatures and newtype
     // underlying types.
@@ -1842,7 +2154,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // Pass 1b. Build struct field types, enum variant types, and data
     // block field types. Generic types allocate a fresh `Type::Var`
     // per declared type parameter and resolve field/variant type
-    // expressions through `from_expr_with_params` so the recorded
+    // expressions through `Ctx::resolve_type_with_params` so the recorded
     // declarations carry abstract type variables. Construction at use
     // sites instantiates these abstract variables with fresh per-call
     // variables and applies the substitution to declared field types
@@ -1964,6 +2276,35 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 let return_negative_labels = top_level_negative_labels(&sig.return_type);
                 let params: Vec<Type> = sig.params.iter().map(|t| ctx.resolve_type(t)).collect();
                 let return_type = ctx.resolve_type(&sig.return_type);
+                // A native's declaration decides the layout its result is decoded with, so two
+                // declarations of one native must agree, and a declaration of a bundled library
+                // native must agree with the library's own. Either disagreement compiled before
+                // and decoded the result by the wrong layout.
+                if let Some(earlier) = ctx.native_signatures.get(&full)
+                    && (earlier.params != params || earlier.return_type != return_type)
+                {
+                    return Err(TypeError::new(
+                        format!("native `{full}` is declared twice with different signatures"),
+                        use_decl.span,
+                    ));
+                }
+                if let Some((lib_params, lib_return)) = bundled_native_signature(&mut ctx, &full) {
+                    let shape = |t: &Type| strip_labels(t.clone());
+                    let agrees = lib_params.len() == params.len()
+                        && lib_params
+                            .iter()
+                            .zip(&params)
+                            .all(|(a, b)| shape(a) == shape(b))
+                        && shape(&lib_return) == shape(&return_type);
+                    if !agrees {
+                        return Err(TypeError::new(
+                            format!(
+                                "native `{full}` is declared with a signature that differs from its bundled library's declaration"
+                            ),
+                            use_decl.span,
+                        ));
+                    }
+                }
                 ctx.native_signatures.insert(
                     full.clone(),
                     FnSig {
@@ -2159,6 +2500,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
+            Type::TextN(n) => alloc::format!("Text<{}>", n),
             Type::Multiword(n, f) => alloc::format!("Multiword<{}, {}>", n, f),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
@@ -2379,6 +2721,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
+            Type::TextN(n) => alloc::format!("Text<{}>", n),
             Type::Multiword(n, f) => alloc::format!("Multiword<{}, {}>", n, f),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
@@ -2407,7 +2750,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // the recording pass into the program for the compiler to consult (B28 P3
     // item 5). Empty when recording was not requested.
     program.fn_expr_types = core::mem::take(&mut ctx.fn_tables);
-    Ok(())
+    Ok(ctx.resolved_resumes)
 }
 
 /// The category-call discipline: which callee categories a caller of the
@@ -2426,6 +2769,104 @@ fn category_can_call(
         Yield => !matches!(callee, Loop),
         Fn => matches!(callee, Fn),
     }
+}
+
+/// The refusal of a call or pipe whose target name resolves to a local.
+///
+/// A local binding shadows a top-level function or native of the same name,
+/// as any `let` shadows an earlier binding, and V0.2.0 admits no callable
+/// local, so the call names something that cannot be called. The plain call
+/// and the pipe share this message, since the operator ruled on 2026-10-31
+/// that the two resolve a name identically. The compiler states the same
+/// refusal for a program that reaches it by another route.
+fn local_call_error(name: &str, span: crate::token::Span) -> TypeError {
+    TypeError::new(
+        format!(
+            "`{name}` is a local variable, not a callable. V0.2.0 admits only direct calls \
+             to top-level functions, methods, and host natives."
+        ),
+        span,
+    )
+}
+
+/// Refuse a delegation whose callee yields or resumes at a type other than the
+/// entry's.
+///
+/// A `yield` or `loop` callee suspends the whole call stack when it yields, so
+/// the host receives the callee's yielded value as the entry's output and
+/// resumes it with a value checked against the entry's first parameter. The
+/// operator ruled on 2026-10-31 that a delegation whose callee yield type or
+/// resume type differs from the entry's is refused at compile time. The yield
+/// type is the callee's declared return type, instantiated at this call as
+/// `params` and `ret` are. A `loop` callee's first parameter is its declared
+/// resume type, as a stream chunk's signature records it. A `yield` callee
+/// declares none, since each of its `yield` expressions already has the
+/// entry's resume type. The entry is `main` when it is a `loop` or `yield`
+/// function, and with no such entry nothing observes the yields, so nothing is
+/// refused.
+fn check_delegation(
+    ctx: &mut Ctx,
+    name: &str,
+    callee: crate::ast::FunctionCategory,
+    params: &[Type],
+    ret: &Type,
+    span: crate::token::Span,
+) -> Result<(), TypeError> {
+    use crate::ast::FunctionCategory;
+    if callee == FunctionCategory::Fn || name == "main" {
+        return Ok(());
+    }
+    let Some(entry) = ctx
+        .functions
+        .get("main")
+        .filter(|sig| sig.category != FunctionCategory::Fn)
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let entry_yield = strip_labels(entry.return_type.clone());
+    if !types_compatible(ctx, &strip_labels(ret.clone()), &entry_yield) {
+        return Err(TypeError::new(
+            format!(
+                "the delegated `{name}` yields {} but the entry `main` yields {}. The host \
+                 receives every value a delegated callee yields as the entry's output, so the \
+                 callee must yield the entry's type",
+                ret.apply(&ctx.subst).display(),
+                entry_yield.apply(&ctx.subst).display()
+            ),
+            span,
+        ));
+    }
+    if callee == FunctionCategory::Loop
+        && let Some(callee_resume) = params.first()
+    {
+        let agrees = match entry.params.first() {
+            Some(entry_resume) => types_compatible(
+                ctx,
+                &strip_labels(callee_resume.clone()),
+                &strip_labels(entry_resume.clone()),
+            ),
+            None => false,
+        };
+        if !agrees {
+            let entry_resume = entry
+                .params
+                .first()
+                .map(|t| t.apply(&ctx.subst).display())
+                .unwrap_or_else(|| String::from("no resume type"));
+            return Err(TypeError::new(
+                format!(
+                    "the delegated `{name}` resumes with {} but the entry `main` resumes with {}. \
+                     The host resumes a delegated callee with a value checked against the \
+                     entry's first parameter, so the callee must declare the entry's resume type",
+                    callee_resume.apply(&ctx.subst).display(),
+                    entry_resume
+                ),
+                span,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A human-readable noun for a function category, for diagnostics.
@@ -2457,6 +2898,9 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     // are not nested in the surface, so a plain assignment per function is
     // sufficient; there is no caller context to save and restore.
     ctx.current_category = func.category;
+    ctx.current_resume = resume_type_for(ctx, func.category);
+    ctx.unknown_resumes.clear();
+    ctx.open_projections.clear();
     // Snapshot the substitution at function entry so the per-function
     // resolution does not pollute later functions with this function's
     // local type variables. The vargen counter continues monotonically
@@ -2484,6 +2928,8 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
         .map(|s| s.params.clone())
         .unwrap_or_default();
     for (param, param_type) in func.params.iter().zip(sig_params.iter()) {
+        // SPIKE: parameters were only BOUND, never CHECKED.
+        check_pattern_against_type(ctx, &param.pattern, param_type)?;
         bind_pattern(ctx, &param.pattern, param_type.clone());
     }
     // Bind const parameters as `Word` values in the function scope, so a
@@ -2527,7 +2973,24 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     } else {
         (body_type.clone(), return_type.clone())
     };
-    if !types_compatible(ctx, &struct_body, &struct_return) {
+    // A loop discards its body's value at the reset that ends each
+    // iteration. A tail `yield` there evaluates to the resumed input, of the
+    // parameter type rather than the return type, so a loop's tail is also
+    // admitted at the resume type. Before the resume type was inferred, the
+    // tail yield's fresh variable unified with the return type instead, so
+    // this keeps every such loop admitted. A failed unification can leave
+    // part of its bindings behind, so the second attempt starts from the
+    // substitution as it was before the first.
+    let before_tail = ctx.subst.clone();
+    let tail_ok = types_compatible(ctx, &struct_body, &struct_return)
+        || match ctx.current_resume.clone() {
+            Some(resume) if func.category == crate::ast::FunctionCategory::Loop => {
+                ctx.subst = before_tail;
+                types_compatible(ctx, &strip_labels(body_type.clone()), &strip_labels(resume))
+            }
+            _ => false,
+        };
+    if !tail_ok {
         ctx.pop_scope();
         ctx.current_return = None;
         ctx.current_return_negative_labels = prev_return_negatives;
@@ -2558,6 +3021,57 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
         ctx.current_return = None;
         ctx.current_return_negative_labels = prev_return_negatives;
         return Err(e);
+    }
+    // A resume value whose type nothing fixed has no layout the compiler can
+    // lower a field read or a destructuring against, and such a read faulted
+    // at run time. The operator ruled on 2026-10-31 that such a program is
+    // refused here with a request for an annotation. A resume value that is
+    // only passed on, compared or discarded is still admitted.
+    let unknown: Vec<Type> = ctx
+        .unknown_resumes
+        .iter()
+        .map(|(var, _)| var.apply(&ctx.subst))
+        .filter(|ty| matches!(ty, Type::Var(_)))
+        .collect();
+    let unresolved = ctx
+        .open_projections
+        .iter()
+        .find(|(subject, _)| unknown.contains(&subject.apply(&ctx.subst)))
+        .map(|(_, span)| *span);
+    // Record the type each unknown resume value resolved to, now that every
+    // use in the body has been unified. A later use can fix a resume value's
+    // type after a generic call on it was checked, and monomorphization runs
+    // over this program before any second check, so it reads the type here.
+    // A generic function is skipped, since its resolved types may still name
+    // its own type parameters.
+    if func.type_params.is_empty() && func.const_params.is_empty() {
+        let resolved: BTreeMap<crate::token::Span, TypeExpr> = ctx
+            .unknown_resumes
+            .iter()
+            .filter_map(|(var, span)| {
+                type_to_expr_full(&var.apply(&ctx.subst), *span).map(|te| (*span, te))
+            })
+            .collect();
+        if !resolved.is_empty() {
+            ctx.resolved_resumes.insert(func.name.clone(), resolved);
+        }
+    }
+    ctx.unknown_resumes.clear();
+    ctx.open_projections.clear();
+    if let Some(span) = unresolved {
+        ctx.pop_scope();
+        ctx.current_return = None;
+        ctx.current_return_negative_labels = prev_return_negatives;
+        return Err(TypeError::new(
+            format!(
+                "cannot infer the type of the value `yield` resumes with in `{}`, which this \
+                 expression reads into or instantiates a generic function with: no `loop main` \
+                 parameter declares it and no use fixes it; annotate the binding that receives \
+                 it, as in `let r: P = yield v`",
+                func.name
+            ),
+            span,
+        ));
     }
     ctx.pop_scope();
     ctx.current_return = None;
@@ -2593,11 +3107,158 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     Ok(())
 }
 
+/// The operator a checked arithmetic construct guards.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CheckedOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    AShl,
+    Neg,
+}
+
+impl CheckedOp {
+    /// The guarded operator of `op_expr`, or `None` when the expression is
+    /// not one of the seven a checked arithmetic construct admits.
+    pub(crate) fn of(op_expr: &Expr) -> Option<Self> {
+        match op_expr {
+            Expr::BinOp { op, .. } => match op {
+                BinOp::Add => Some(Self::Add),
+                BinOp::Sub => Some(Self::Sub),
+                BinOp::Mul => Some(Self::Mul),
+                BinOp::Div => Some(Self::Div),
+                BinOp::Mod => Some(Self::Mod),
+                BinOp::AShl => Some(Self::AShl),
+                _ => None,
+            },
+            Expr::UnaryOp {
+                op: UnaryOp::Neg, ..
+            } => Some(Self::Neg),
+            _ => None,
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Add => "`+`",
+            Self::Sub => "`-`",
+            Self::Mul => "`*`",
+            Self::Div => "`/`",
+            Self::Mod => "`%`",
+            Self::AShl => "arithmetic left shift `<<<`",
+            Self::Neg => "unary `-`",
+        }
+    }
+}
+
+/// The operand family of a checked arithmetic construct.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CheckedOperand {
+    Word,
+    Byte,
+    Float,
+    Fixed,
+}
+
+/// Whether `overflow` can arise for `op` on `operand`. `Fixed` mirrors `Word`.
+pub(crate) fn checked_overflow_admissible(op: CheckedOp, operand: CheckedOperand) -> bool {
+    use CheckedOp::*;
+    match operand {
+        CheckedOperand::Byte => matches!(op, Add | Mul),
+        // Float `+`, `-`, `*`, `/` can yield +inf.
+        CheckedOperand::Float => matches!(op, Add | Sub | Mul | Div),
+        CheckedOperand::Word | CheckedOperand::Fixed => {
+            matches!(op, Add | Sub | Mul | AShl | Neg | Div)
+        }
+    }
+}
+
+/// Whether `underflow` can arise for `op` on `operand`. `Fixed` mirrors `Word`
+/// except in division, where a `Q`-format quotient can fall below the
+/// representable minimum and `Op::CheckedDiv` sets the underflow flag.
+pub(crate) fn checked_underflow_admissible(op: CheckedOp, operand: CheckedOperand) -> bool {
+    use CheckedOp::*;
+    match operand {
+        CheckedOperand::Byte => op == Sub,
+        // Float `+`, `-`, `*`, `/` can yield -inf.
+        CheckedOperand::Float => matches!(op, Add | Sub | Mul | Div),
+        CheckedOperand::Word => matches!(op, Add | Sub | Mul | AShl),
+        CheckedOperand::Fixed => matches!(op, Add | Sub | Mul | AShl | Div),
+    }
+}
+
+/// Whether some outcome of a checked arithmetic construct can reach the
+/// wrapping default, the operand's own value pushed after the last arm.
+///
+/// `ok` is always covered, because the type checker requires its unguarded
+/// catch-all. An uncovered `zero_divisor` traps before the default. Any other
+/// class that can arise for the operator and operand reaches the default
+/// unless an unguarded variable or wildcard arm covers it. A guarded or
+/// literal arm does not cover its class.
+///
+/// The type checker uses this to require the operand's type when the default
+/// is reachable, and the compiler uses it to omit an unreachable default, so
+/// the two cannot disagree on a program the type checker admitted.
+pub(crate) fn checked_wrap_default_reachable(
+    op: CheckedOp,
+    operand: CheckedOperand,
+    arms: &[crate::ast::CheckedArm],
+) -> bool {
+    use crate::ast::CheckedArmKind;
+    let covered = |class: fn(&CheckedArmKind) -> bool| {
+        arms.iter().any(|arm| {
+            arm.guard.is_none() && class(&arm.kind) && checked_arm_is_catchall(&arm.kind)
+        })
+    };
+    let overflow = covered(|k| matches!(k, CheckedArmKind::Overflow(..)));
+    let underflow = covered(|k| matches!(k, CheckedArmKind::Underflow(..)));
+    let nan = covered(|k| matches!(k, CheckedArmKind::Nan(_)));
+    (checked_overflow_admissible(op, operand) && !overflow)
+        || (checked_underflow_admissible(op, operand) && !underflow)
+        || (operand == CheckedOperand::Float && !nan)
+}
+
+/// The `SIGNATURES` text of the bundled library serving `namespace`, when the build carries it.
+fn bundled_signatures(namespace: &str) -> Option<&'static str> {
+    match namespace {
+        #[cfg(feature = "floats")]
+        "math" => Some(crate::stddsl::Math::SIGNATURES),
+        #[cfg(feature = "floats")]
+        "audio" => Some(crate::stddsl::Audio::SIGNATURES),
+        #[cfg(all(feature = "floats", feature = "shell"))]
+        "shell" => Some(crate::stddsl::Shell::SIGNATURES),
+        _ => None,
+    }
+}
+
+/// The declared parameter and return types of a native in one of the bundled libraries,
+/// `stddsl::Math`, `stddsl::Audio` and `stddsl::Shell`, when the build carries that library. The declarations are the libraries' own `SIGNATURES` text,
+/// parsed here, so a script's declaration is compared with the one the native was written to.
+fn bundled_native_signature(ctx: &mut Ctx, full: &str) -> Option<(Vec<Type>, Type)> {
+    let source = bundled_signatures(full.split("::").next()?)?;
+    let tokens = crate::lexer::tokenize(source).ok()?;
+    let program = crate::parser::parse(&tokens).ok()?;
+    let decl = program.uses.iter().find(|u| {
+        let ImportItem::Name(name) = &u.import else {
+            return false;
+        };
+        let mut path = u.path.join("::");
+        path.push_str("::");
+        path.push_str(name);
+        path == full
+    })?;
+    let sig = decl.signature.as_ref()?;
+    let params = sig.params.iter().map(|t| ctx.resolve_type(t)).collect();
+    Some((params, ctx.resolve_type(&sig.return_type)))
+}
+
 /// Bind a pattern's variables into the current scope at the given type.
 /// Returns true if every pattern in a `CheckedArmKind` is a
 /// catch-all (wildcard or bare variable). A catch-all arm matches
 /// every runtime value for its outcome class.
-fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
+pub(crate) fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     use crate::ast::CheckedArmKind;
     let is_catchall_pat = |p: &Pattern| matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _));
     match kind {
@@ -2609,12 +3270,258 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
         | CheckedArmKind::PayloadDiscriminant(p)
         | CheckedArmKind::InvalidDiscriminant(p)
         | CheckedArmKind::Error(p) => is_catchall_pat(p),
+        CheckedArmKind::StoreOk(old, new) => is_catchall_pat(old) && is_catchall_pat(new),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             // A `None` second pattern (the Byte single-pattern form)
             // covers its slot unconditionally.
             is_catchall_pat(h) && l.as_ref().is_none_or(is_catchall_pat)
         }
     }
+}
+
+/// Type-check the target and value of an indexed data write,
+/// `data_name.field[i]... = value`, and return the element type.
+///
+/// Each index must be a `Word` and peels one array layer; the last layer
+/// must be a scalar, the value must match it, and the value must respect
+/// the field's negative labels. The bare statement and the handled
+/// expression share this rule. The indices are checked before the value,
+/// matching the evaluation order the operator set on 2026-10-21.
+fn check_data_index_write(
+    ctx: &mut Ctx,
+    data_name: &str,
+    field: &str,
+    indices: &mut [Expr],
+    value: &mut Expr,
+    span: Span,
+) -> Result<Type, TypeError> {
+    let data_fields = ctx
+        .data
+        .get(data_name)
+        .ok_or_else(|| TypeError::new(format!("unknown data block `{}`", data_name), span))?;
+    let declared = data_fields
+        .get(field)
+        .ok_or_else(|| {
+            TypeError::new(
+                format!("unknown field `{}` on data block `{}`", field, data_name),
+                span,
+            )
+        })?
+        .clone();
+    // Peel one Array layer per index, validating each index
+    // as a Word and ensuring the final type is a scalar.
+    let mut current = declared;
+    for idx in indices.iter_mut() {
+        let idx_ty = type_of_expr(ctx, idx)?;
+        if !types_compatible(ctx, &idx_ty, &Type::Word) {
+            return Err(TypeError::new(
+                format!("data array index must be Word, got {}", idx_ty.display()),
+                span,
+            ));
+        }
+        current = match current {
+            Type::Array(elem, _) => *elem,
+            other => {
+                return Err(TypeError::new(
+                    format!(
+                        "indexed access on non-array data field `{}.{}` (type {})",
+                        data_name,
+                        field,
+                        other.display()
+                    ),
+                    span,
+                ));
+            }
+        };
+    }
+    if let Type::Array(_, _) = current {
+        return Err(TypeError::new(
+            format!(
+                "indexed assignment to `{}.{}` does not descend to a scalar; \
+                 provide one index per array level",
+                data_name, field
+            ),
+            span,
+        ));
+    }
+    let value_ty = type_of_expr(ctx, value)?;
+    if !types_compatible(ctx, &current, &value_ty) {
+        return Err(TypeError::new(
+            format!(
+                "indexed assignment to `{}.{}` expects {}, got {}",
+                data_name,
+                field,
+                current.display(),
+                value_ty.display()
+            ),
+            span,
+        ));
+    }
+    // Negative-label boundary check at the indexed-write
+    // site. The field's negative-label set is declared on
+    // the outer array type; per the no-nested-negative-
+    // labels rule it cannot appear on inner array element
+    // positions, so the check uses the field-level set.
+    let negatives = ctx
+        .data_negative_labels
+        .get(data_name)
+        .and_then(|m| m.get(field))
+        .cloned()
+        .unwrap_or_default();
+    check_negative_labels_against_data_write(data_name, field, &value_ty, &negatives, span)?;
+    Ok(current)
+}
+
+/// Type-check the handled indexed write `data_name.field[i] = value {
+/// ok(old, new) => ..., invalid_index(j) => ... }`.
+///
+/// The admissible arms are `ok(old, new)`, whose two patterns bind the
+/// element type and are each a binder or `_`, and `invalid_index`, which
+/// binds the offending index `Word` exactly as in the handled read. The
+/// `ok` class must end with an unguarded catch-all. `invalid_index` is
+/// optional, and an unhandled invalid index reaches the compiler's default
+/// trap. The construct's type is the common type of its arms. A multi-index
+/// target is admitted, and a failure at any of its levels binds that level's
+/// index in `invalid_index`. The self-hosted compiler refuses it, as it
+/// refuses every multi-index data access.
+fn check_data_index_store(
+    ctx: &mut Ctx,
+    data_name: &str,
+    field: &str,
+    indices: &mut [Expr],
+    value: &mut Expr,
+    arms: &mut [crate::ast::CheckedArm],
+    span: Span,
+) -> Result<Type, TypeError> {
+    use crate::ast::CheckedArmKind;
+    let elem_ty = check_data_index_write(ctx, data_name, field, indices, value, span)?;
+
+    for arm in arms.iter() {
+        let inadmissible = match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                if let (Pattern::Variable(a, _), Pattern::Variable(b, _)) = (old, new)
+                    && a == b
+                {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "the `ok(old, new)` arm binds `{}` twice; give the old and the new value different names",
+                            a
+                        ),
+                        arm.span,
+                    ));
+                }
+                if [old, new]
+                    .iter()
+                    .any(|p| !matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _)))
+                {
+                    return Err(TypeError::new(
+                        String::from(
+                            "the `ok(old, new)` arm of a handled indexed write binds each value to a name or `_`; a literal pattern is not admissible",
+                        ),
+                        arm.span,
+                    ));
+                }
+                None
+            }
+            CheckedArmKind::InvalidIndex(_) => None,
+            CheckedArmKind::Ok(_) => {
+                return Err(TypeError::new(
+                    String::from(
+                        "the `ok` arm of a handled indexed write binds the old and the new value; write `ok(old, new)`, using `_` for a value that is not needed",
+                    ),
+                    arm.span,
+                ));
+            }
+            CheckedArmKind::Overflow(_, _) => Some("overflow"),
+            CheckedArmKind::Underflow(_, _) => Some("underflow"),
+            CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
+            CheckedArmKind::Nan(_) => Some("nan"),
+            CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
+            CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
+            CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+            CheckedArmKind::Error(_) => Some("error"),
+        };
+        if let Some(name) = inadmissible {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "the `{}` arm is not admissible for a handled indexed write; only `ok(old, new)` and `invalid_index` are admissible",
+                    name
+                ),
+                arm.span,
+            ));
+        }
+    }
+
+    // Unreachable-arm check per outcome class, then exhaustiveness on `ok`.
+    let mut ok_catchall_seen = false;
+    let mut invalid_catchall_seen = false;
+    for arm in arms.iter() {
+        let seen = match &arm.kind {
+            CheckedArmKind::StoreOk(_, _) => ok_catchall_seen,
+            _ => invalid_catchall_seen,
+        };
+        if seen {
+            return Err(TypeError::new(
+                String::from(
+                    "handled-write arm is unreachable: a prior catch-all arm in the same outcome class already covers it",
+                ),
+                arm.span,
+            ));
+        }
+        if arm.guard.is_none() && checked_arm_is_catchall(&arm.kind) {
+            match &arm.kind {
+                CheckedArmKind::StoreOk(_, _) => ok_catchall_seen = true,
+                _ => invalid_catchall_seen = true,
+            }
+        }
+    }
+    if !ok_catchall_seen {
+        return Err(TypeError::new(
+            String::from(
+                "handled indexed write is non-exhaustive on `ok`: the last `ok(old, new)` arm must be unguarded",
+            ),
+            span,
+        ));
+    }
+
+    let result_ty = ctx.fresh();
+    for arm in arms.iter_mut() {
+        ctx.push_scope();
+        match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                bind_checked_pattern(ctx, old, elem_ty.clone());
+                bind_checked_pattern(ctx, new, elem_ty.clone());
+            }
+            CheckedArmKind::InvalidIndex(p) => bind_checked_pattern(ctx, p, Type::Word),
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_mut() {
+            let guard_ty = type_of_expr(ctx, guard)?;
+            if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                ctx.pop_scope();
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "handled-write arm guard must be Bool, got {}",
+                        guard_ty.display()
+                    ),
+                    arm.span,
+                ));
+            }
+        }
+        let body_ty = type_of_expr(ctx, &mut arm.body)?;
+        ctx.pop_scope();
+        if !types_compatible(ctx, &body_ty, &result_ty) {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "handled-write arm produces {} which does not unify with the construct's result type {}",
+                    body_ty.display(),
+                    result_ty.apply(&ctx.subst).display()
+                ),
+                arm.span,
+            ));
+        }
+    }
+    Ok(result_ty.apply(&ctx.subst))
 }
 
 /// Type-check the indexing construct `array[index] { ok(v) => ...,
@@ -2638,6 +3545,7 @@ fn check_checked_index(
     for arm in arms.iter() {
         let inadmissible = match &arm.kind {
             CheckedArmKind::Ok(_) | CheckedArmKind::InvalidIndex(_) => None,
+            CheckedArmKind::StoreOk(_, _) => Some("ok(old, new)"),
             CheckedArmKind::Overflow(_, _) => Some("overflow"),
             CheckedArmKind::Underflow(_, _) => Some("underflow"),
             CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
@@ -2786,6 +3694,7 @@ fn check_checked_newtype(
             CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
             CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
             CheckedArmKind::Error(_) => Some("error"),
+            CheckedArmKind::StoreOk(_, _) => Some("ok(old, new)"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -3136,6 +4045,7 @@ fn check_checked_native(
             CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
             CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
             CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+            CheckedArmKind::StoreOk(_, _) => Some("ok(old, new)"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -3390,6 +4300,11 @@ fn check_pattern_against_type(
     pattern: &Pattern,
     scrutinee_ty: &Type,
 ) -> Result<(), TypeError> {
+    // A label does not change a value's shape, so a labelled element of a
+    // tuple, struct or enum payload is checked by its underlying type.
+    if let Type::Labelled(inner, _) = scrutinee_ty {
+        return check_pattern_against_type(ctx, pattern, inner);
+    }
     match pattern {
         Pattern::Wildcard(_) | Pattern::Variable(_, _) => Ok(()),
         Pattern::Literal(lit, span) => {
@@ -3500,6 +4415,33 @@ fn check_pattern_against_type(
             match scrutinee_ty {
                 Type::Enum(scrutinee_name, _) if scrutinee_name == enum_name => {}
                 Type::Var(_) => return Ok(()),
+                Type::Word => {
+                    // A unit enum-variant pattern against a `Word` scrutinee is a
+                    // discriminant match: it tests the word against the variant's
+                    // discriminant, a zero-cost switch on a tag. The variant must exist
+                    // and carry no payload, since a `Word` has no payload to bind. This
+                    // lets host-fed tagged data (a token stream keyed by an
+                    // `enum TokenKind`) dispatch by variant name without an enum-typed
+                    // value; the compiler folds the pattern to the discriminant literal.
+                    match ctx.enums.get(enum_name).and_then(|vs| vs.get(variant)) {
+                        Some(payload) if payload.is_empty() => return Ok(()),
+                        Some(_) => {
+                            return Err(TypeError::new(
+                                format!(
+                                    "variant `{}::{}` carries a payload and cannot match a `Word` scrutinee",
+                                    enum_name, variant
+                                ),
+                                *span,
+                            ));
+                        }
+                        None => {
+                            return Err(TypeError::new(
+                                format!("enum `{}` has no variant `{}`", enum_name, variant),
+                                *span,
+                            ));
+                        }
+                    }
+                }
                 _ => {
                     return Err(TypeError::new(
                         format!(
@@ -3730,6 +4672,99 @@ fn type_of_block(ctx: &mut Ctx, block: &mut Block) -> Result<Type, TypeError> {
     Ok(ty)
 }
 
+/// Record a destructuring `pattern` over a subject of type `subject`, when
+/// the subject's type is still a variable, for the resume-type check in
+/// [`check_function`]. A variable or wildcard pattern reads nothing, and a
+/// literal pattern compares the whole value without reading into it.
+/// The first part of `pattern` that can fail to match a value of `ty`, with
+/// its span and a description, or `None` when the pattern is irrefutable.
+///
+/// The pattern's shape has already been checked against the type, so this
+/// walk only decides refutability. A name and a wildcard match everything. A
+/// tuple or struct pattern is irrefutable when every part is. A variant
+/// pattern is irrefutable only when its enum declares exactly one variant and
+/// the value is that enum, so `Option` and a discriminant match against a
+/// `Word` are refutable. Every literal pattern is refutable, since the grammar
+/// admits no unit literal pattern. A part whose type is not known is walked
+/// with no type, which only the variant rule consults.
+fn first_refutable_part(ctx: &Ctx, pattern: &Pattern, ty: Option<&Type>) -> Option<(Span, String)> {
+    let ty = match ty {
+        Some(Type::Labelled(inner, _)) => Some(inner.as_ref()),
+        other => other,
+    };
+    match pattern {
+        Pattern::Wildcard(_) | Pattern::Variable(_, _) => None,
+        Pattern::Literal(_, span) => Some((*span, String::from("a literal pattern"))),
+        Pattern::Tuple(parts, _) => {
+            let elems = match ty {
+                Some(Type::Tuple(elems)) if elems.len() == parts.len() => Some(elems),
+                _ => None,
+            };
+            parts
+                .iter()
+                .enumerate()
+                .find_map(|(i, part)| first_refutable_part(ctx, part, elems.and_then(|e| e.get(i))))
+        }
+        Pattern::Struct(name, field_pats, _) => {
+            let fields = ctx.structs.get(name);
+            field_pats.iter().find_map(|field_pat| {
+                let field_ty = fields.and_then(|f| f.get(&field_pat.name));
+                field_pat
+                    .pattern
+                    .as_ref()
+                    .and_then(|p| first_refutable_part(ctx, p, field_ty))
+            })
+        }
+        Pattern::Enum(enum_name, variant, sub_pats, span) => {
+            let single = enum_name != "Option"
+                && !matches!(ty, Some(Type::Word))
+                && ctx.enums.get(enum_name).is_some_and(|vs| vs.len() == 1);
+            if !single {
+                return Some((
+                    *span,
+                    format!("the variant pattern `{enum_name}::{variant}`"),
+                ));
+            }
+            let payload = ctx.enums.get(enum_name).and_then(|vs| vs.get(variant));
+            sub_pats
+                .iter()
+                .enumerate()
+                .find_map(|(i, sub)| first_refutable_part(ctx, sub, payload.and_then(|p| p.get(i))))
+        }
+    }
+}
+
+fn note_open_destructuring(ctx: &mut Ctx, pattern: &Pattern, subject: &Type) {
+    if !matches!(
+        pattern,
+        Pattern::Variable(_, _) | Pattern::Wildcard(_) | Pattern::Literal(_, _)
+    ) && let applied @ Type::Var(_) = subject.apply(&ctx.subst)
+    {
+        ctx.open_projections.push((applied, pattern.span()));
+    }
+}
+
+/// The type a `yield` in a function of `category` resumes with, when it is
+/// known.
+///
+/// `Vm::resume` checks a resume value against the first parameter type of the
+/// entry point and nothing else, and only when the entry point is a `loop`.
+/// The entry point is the function named `main`. Every suspension, whether
+/// from the loop itself or from a function it calls, resumes through that one
+/// check, so its type is the answer for every function that can yield. With
+/// no `loop main`, or one without a parameter, nothing checks the value, and
+/// the answer is `None`.
+fn resume_type_for(ctx: &Ctx, category: crate::ast::FunctionCategory) -> Option<Type> {
+    use crate::ast::FunctionCategory;
+    if category == FunctionCategory::Fn {
+        return None;
+    }
+    ctx.functions
+        .get("main")
+        .filter(|sig| sig.category == FunctionCategory::Loop)
+        .and_then(|sig| sig.params.first().cloned())
+}
+
 fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
     match stmt {
         Stmt::Let(let_stmt) => {
@@ -3785,6 +4820,31 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 }
                 None => value_ty,
             };
+            // The pattern's shape is checked against the value's type before it
+            // is bound. `bind_pattern` alone gives a tuple pattern over a
+            // non-tuple fresh variables and pairs a tuple pattern with a tuple of
+            // another arity by position, so `let (a, b) = 5` compiled and faulted
+            // at run time. The operator ruled on 2026-10-31 that such a pattern
+            // is refused here. Until then the check ran only for a value that
+            // carried a `Text<N>`. A value whose type is still an unresolved
+            // variable passes, as it does for a match arm.
+            let applied = strip_labels(bound_ty.apply(&ctx.subst));
+            check_pattern_against_type(ctx, &let_stmt.pattern, &applied)?;
+            // A `let` has no other arm to take when its pattern fails, so the
+            // pattern must match every value of its type. The operator ruled on
+            // 2026-10-31 that a refutable pattern is refused here. Before the
+            // repair `let 3 = 5` compiled and silently matched nothing.
+            if let Some((span, what)) = first_refutable_part(ctx, &let_stmt.pattern, Some(&applied))
+            {
+                return Err(TypeError::new(
+                    format!(
+                        "refutable pattern in `let`, since {what} does not match every value of type {}. Use `match` to handle the values it does not cover",
+                        applied.display()
+                    ),
+                    span,
+                ));
+            }
+            note_open_destructuring(ctx, &let_stmt.pattern, &bound_ty);
             bind_pattern(ctx, &let_stmt.pattern, bound_ty);
             Ok(())
         }
@@ -3821,6 +4881,133 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             ctx.add_local(for_stmt.var.clone(), elem_ty);
             let _ = type_of_block(ctx, &mut for_stmt.body)?;
             ctx.pop_scope();
+
+            // A `limit` clause caps the iteration count so a runtime range is
+            // admitted; it must be a `Word` on a range loop and reduce to a
+            // constant, the latter checked at compile time.
+            if let Some(limit) = for_stmt.limit.as_mut() {
+                let lt = type_of_expr(ctx, limit)?;
+                if !types_compatible(ctx, &lt, &Type::Word) {
+                    return Err(TypeError::new(
+                        format!("a `for` loop `limit` must be Word, got {}", lt.display()),
+                        for_stmt.span,
+                    ));
+                }
+                if !matches!(for_stmt.iterable, Iterable::Range(_, _)) {
+                    return Err(TypeError::new(
+                        String::from("a `limit` clause requires a range `for` loop"),
+                        for_stmt.span,
+                    ));
+                }
+            }
+            if !for_stmt.on_arms.is_empty() && for_stmt.limit.is_none() {
+                return Err(TypeError::new(
+                    String::from("a `for` outcome `on` block requires a `limit` clause"),
+                    for_stmt.span,
+                ));
+            }
+            // The outcome block follows the same discipline as every other
+            // capture construct: an unguarded `ok` catch-all is mandatory, and
+            // the defensive/optional outcomes may carry a `when` guard. Each
+            // outcome appears at most once (the loop has a fixed, finite set of
+            // outcomes, so a single arm per outcome suffices). The `overflow`
+            // outcome cannot arise: the range test runs before the body, so the
+            // body runs only while the index is below the range end, which is at
+            // most the type maximum, and the cap bounds the counter likewise, so
+            // the increment never overflows. An `overflow` arm is therefore
+            // inadmissible, mirroring the rule that rejects an unreachable arm.
+            let mut has_ok = false;
+            let mut has_break = false;
+            let mut has_limit = false;
+            for arm in for_stmt.on_arms.iter_mut() {
+                use crate::ast::LoopArmKind;
+                let binding = match &arm.kind {
+                    LoopArmKind::Overflow(_) => {
+                        return Err(TypeError::new(
+                            String::from(
+                                "an `overflow` arm is inadmissible on a `limit` loop: the \
+                                 range bound and the cap keep the index below the type \
+                                 maximum, so the increment cannot overflow",
+                            ),
+                            arm.span,
+                        ));
+                    }
+                    LoopArmKind::Ok(p) => {
+                        if has_ok {
+                            return Err(TypeError::new(
+                                String::from("duplicate `ok` arm in a `for` outcome block"),
+                                arm.span,
+                            ));
+                        }
+                        has_ok = true;
+                        if arm.guard.is_some() {
+                            return Err(TypeError::new(
+                                String::from(
+                                    "the `ok` catch-all arm of a `for` outcome block must be \
+                                     unguarded",
+                                ),
+                                arm.span,
+                            ));
+                        }
+                        p.as_ref()
+                    }
+                    LoopArmKind::Break(p) => {
+                        if has_break {
+                            return Err(TypeError::new(
+                                String::from("duplicate `break` arm in a `for` outcome block"),
+                                arm.span,
+                            ));
+                        }
+                        has_break = true;
+                        p.as_ref()
+                    }
+                    LoopArmKind::Limit(p) => {
+                        if has_limit {
+                            return Err(TypeError::new(
+                                String::from("duplicate `limit` arm in a `for` outcome block"),
+                                arm.span,
+                            ));
+                        }
+                        has_limit = true;
+                        p.as_ref()
+                    }
+                };
+                ctx.push_scope();
+                match binding {
+                    Some(Pattern::Variable(name, _)) => {
+                        ctx.add_local(name.clone(), Type::Word);
+                    }
+                    Some(Pattern::Wildcard(_)) | None => {}
+                    Some(_) => {
+                        return Err(TypeError::new(
+                            String::from("a loop outcome binding must be an identifier or `_`"),
+                            arm.span,
+                        ));
+                    }
+                }
+                if let Some(guard) = arm.guard.as_mut() {
+                    let gt = type_of_expr(ctx, guard)?;
+                    if !types_compatible(ctx, &gt, &Type::Bool) {
+                        return Err(TypeError::new(
+                            format!(
+                                "a loop outcome `when` guard must be Bool, got {}",
+                                gt.display()
+                            ),
+                            arm.span,
+                        ));
+                    }
+                }
+                let _ = type_of_block(ctx, &mut arm.body)?;
+                ctx.pop_scope();
+            }
+            if !for_stmt.on_arms.is_empty() && !has_ok {
+                return Err(TypeError::new(
+                    String::from(
+                        "a `for` outcome `on` block must have an unguarded `ok` catch-all arm",
+                    ),
+                    for_stmt.span,
+                ));
+            }
             Ok(())
         }
         Stmt::Break(_) => Ok(()),
@@ -3871,81 +5058,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             value,
             span,
         } => {
-            let data_fields = ctx.data.get(data_name).ok_or_else(|| {
-                TypeError::new(format!("unknown data block `{}`", data_name), *span)
-            })?;
-            let declared = data_fields
-                .get(field)
-                .ok_or_else(|| {
-                    TypeError::new(
-                        format!("unknown field `{}` on data block `{}`", field, data_name),
-                        *span,
-                    )
-                })?
-                .clone();
-            // Peel one Array layer per index, validating each index
-            // as a Word and ensuring the final type is a scalar.
-            let mut current = declared;
-            for idx in indices.iter_mut() {
-                let idx_ty = type_of_expr(ctx, idx)?;
-                if !types_compatible(ctx, &idx_ty, &Type::Word) {
-                    return Err(TypeError::new(
-                        format!("data array index must be Word, got {}", idx_ty.display()),
-                        *span,
-                    ));
-                }
-                current = match current {
-                    Type::Array(elem, _) => *elem,
-                    other => {
-                        return Err(TypeError::new(
-                            format!(
-                                "indexed access on non-array data field `{}.{}` (type {})",
-                                data_name,
-                                field,
-                                other.display()
-                            ),
-                            *span,
-                        ));
-                    }
-                };
-            }
-            if let Type::Array(_, _) = current {
-                return Err(TypeError::new(
-                    format!(
-                        "indexed assignment to `{}.{}` does not descend to a scalar; \
-                         provide one index per array level",
-                        data_name, field
-                    ),
-                    *span,
-                ));
-            }
-            let value_ty = type_of_expr(ctx, value)?;
-            if !types_compatible(ctx, &current, &value_ty) {
-                return Err(TypeError::new(
-                    format!(
-                        "indexed assignment to `{}.{}` expects {}, got {}",
-                        data_name,
-                        field,
-                        current.display(),
-                        value_ty.display()
-                    ),
-                    *span,
-                ));
-            }
-            // Negative-label boundary check at the indexed-write
-            // site. The field's negative-label set is declared on
-            // the outer array type; per the no-nested-negative-
-            // labels rule it cannot appear on inner array element
-            // positions, so the check uses the field-level set.
-            let negatives = ctx
-                .data_negative_labels
-                .get(data_name)
-                .and_then(|m| m.get(field))
-                .cloned()
-                .unwrap_or_default();
-            check_negative_labels_against_data_write(
-                data_name, field, &value_ty, &negatives, *span,
-            )?;
+            check_data_index_write(ctx, data_name, field, indices, value, *span)?;
             Ok(())
         }
         Stmt::Expr(e) => {
@@ -4021,7 +5134,26 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             if ctx.data.contains_key(name) {
                 return Ok(Type::Struct(name.clone(), Vec::new()));
             }
-            // Bare function name reference. Report unknown.
+            // A bare function name in a value position. This USED TO report
+            // "undefined identifier", which is misleading in the one case it most
+            // often arises: the name IS defined, as a function, and what is
+            // unsupported is referring to it without calling it. The compiler
+            // already carries the accurate diagnostic for this shape, and
+            // `book/src/WHY_REJECTED.md` quotes it as the message a reader will
+            // see -- but the compiler never runs, because this check refuses
+            // first. Emitting the same wording here makes the guide's quotation
+            // true and tells the reader what to do instead.
+            if ctx.functions.contains_key(name) {
+                return Err(TypeError::new(
+                    format!(
+                        "first-class function references are not supported in V0.2.0; \
+                         rewrite `{}` as a direct call site or as a trait-bounded \
+                         generic",
+                        name
+                    ),
+                    *span,
+                ));
+            }
             Err(TypeError::new(
                 format!("undefined identifier `{}`", name),
                 *span,
@@ -4072,6 +5204,28 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 .collect();
             let lt = strip_labels(lt_raw);
             let rt = strip_labels(rt_raw);
+            // Comparison of a capacity-bounded text is an operation of the
+            // operations increment and is refused until it lands. Without this
+            // refusal the general composite rule admits `t == t` and `t < t`,
+            // and both then fault at runtime, which is a program that verifies
+            // and cannot run. A composite that merely contains a `Text<N>` is
+            // refused for the same reason.
+            if matches!(
+                op,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+            ) && (type_contains_text_capacity(ctx, &lt.apply(&ctx.subst))
+                || type_contains_text_capacity(ctx, &rt.apply(&ctx.subst)))
+            {
+                return Err(TypeError::new(
+                    format!(
+                        "cannot compare {} and {}: comparison of a capacity-bounded text is not \
+                         available yet",
+                        lt.display(),
+                        rt.display()
+                    ),
+                    *span,
+                ));
+            }
             // Shift operators. The value being shifted is a Word, Byte, or
             // Multiword<N, F>, and the shift amount is a Word, so the two
             // operands are asymmetric and the shift is handled before the
@@ -4160,7 +5314,36 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
-                        Ok(Type::Str)
+                        // TEXT CONCATENATION IS REFUSED, AND THIS ARM USED TO ADMIT IT.
+                        //
+                        // It returned `Type::Str`, so `"ab" + "cd"` type-checked, PASSED THE
+                        // VERIFIER, and then faulted at runtime with "cannot add KStr and KStr".
+                        // V0.2.0 removed the script-side text-composition machinery from the
+                        // virtual machine -- there is no concat opcode and no bundled operation --
+                        // but this arm outlived its execution path by a full minor version.
+                        //
+                        // **A program the compiler accepts and the verifier passes must run.**
+                        // That is the whole of what `verify()` promises, and an expression that
+                        // always faults breaks it. Refusing here restores the promise: the
+                        // rejection is now at the compile boundary, where the conservative
+                        // stance says an unsupported construct belongs.
+                        //
+                        // Bounded composition returned on 2026-10-31 as the intrinsic
+                        // method `a.concat(b)` over `Text<N>`, behind the `text` feature, and not as
+                        // this operator. Static text has no capacity in its type, so `+` on it
+                        // still has nothing to bound a result by, and it stays refused. See
+                        // `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+                        Err(TypeError::new(
+                            alloc::string::String::from(
+                                "text concatenation is not available on static text: `Text + Text` \
+                                 has no runtime implementation, so admitting it here would produce \
+                                 a program that verifies and cannot run. Cast each literal to a \
+                                 capacity-bounded `Text<N>` and use `a.concat(b)`, which the \
+                                 `text` cargo feature provides, or compose text in a \
+                                 host-registered native.",
+                            ),
+                            *span,
+                        ))
                     } else if matches!(lt, Type::Var(_)) || matches!(rt, Type::Var(_)) {
                         Ok(ctx.fresh())
                     } else {
@@ -4340,11 +5523,13 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // call through a function value (closure). Type-check the
             // arguments and return a fresh type for the result. The
             // compiler emits `Op::CallIndirect`.
+            // A local of this name shadows the function or native, and no
+            // local is callable. Until 2026-10-31 this typed the arguments and
+            // returned a fresh variable, the indirect-call path closures used,
+            // and monomorphization then renamed a call to a generic function
+            // past the compiler's own refusal.
             if ctx.lookup_local(name).is_some() {
-                for arg in args {
-                    type_of_expr(ctx, arg)?;
-                }
-                return Ok(ctx.fresh());
+                return Err(local_call_error(name, *span));
             }
             // Native functions are registered at runtime. Names
             // declared in `use` or qualified with `::` are treated as
@@ -4483,6 +5668,20 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     arg.span(),
                 )?;
             }
+            // A type argument that is still an unknown resume type at the end
+            // of the function cannot be specialized, since monomorphization
+            // sees the resume type only through `loop main`'s parameter. Such
+            // a call kept the generic chunk, or failed after monomorphization
+            // as an undefined function once another instance existed. The
+            // operator ruled on 2026-10-31 to infer where possible and refuse
+            // where impossible, so it joins the projections the end of the
+            // function check refuses with a request for an annotation.
+            if !sig.type_params.is_empty() {
+                for var in &fresh_vars {
+                    let applied = var.apply(&ctx.subst);
+                    ctx.open_projections.push((applied, *span));
+                }
+            }
             // Validate trait bounds on type parameters now that the
             // substitution has been recorded by argument unification.
             // For each bounded type parameter, resolve the per-call
@@ -4517,6 +5716,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     }
                 }
             }
+            check_delegation(ctx, name, sig.category, &inst_params, &inst_return, *span)?;
             Ok(inst_return)
         }
         Expr::Pipeline {
@@ -4526,12 +5726,29 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             span,
         } => {
             let left_ty = type_of_expr(ctx, left)?;
+            // The target name resolves as a plain call's does, so a local of
+            // the same name shadows it and is refused, and the category-call
+            // discipline and the delegation check apply.
+            if ctx.lookup_local(func).is_some() {
+                return Err(local_call_error(func, *span));
+            }
             // A pipeline desugars to a call. The piped value is inserted at the
             // sole `_` placeholder if the argument list has one, otherwise it is
             // prepended as the first argument. This mirrors the compiler's
             // desugar (compiler.rs `Expr::Pipeline`), so the type check must
             // account for the placeholder rather than always adding one argument.
             if let Some(sig) = ctx.functions.get(func).cloned() {
+                if !category_can_call(ctx.current_category, sig.category) {
+                    return Err(TypeError::new(
+                        format!(
+                            "{} may not call {} `{}`",
+                            category_noun(ctx.current_category),
+                            category_noun(sig.category),
+                            func
+                        ),
+                        *span,
+                    ));
+                }
                 let placeholder_count = args
                     .iter()
                     .filter(|a| matches!(a, Expr::Placeholder { .. }))
@@ -4612,6 +5829,14 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         }
                     }
                 }
+                check_delegation(
+                    ctx,
+                    func,
+                    sig.category,
+                    &sig.params,
+                    &sig.return_type,
+                    *span,
+                )?;
                 Ok(sig.return_type)
             } else if ctx.natives.contains(func) || func.contains("::") {
                 // Native pipeline target. Accept arguments without
@@ -4635,15 +5860,49 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // value cannot carry a label the function declares it
             // never returns.
             let return_negatives = ctx.current_return_negative_labels.clone();
+            // The yielded value must have the declared return type, as a
+            // body tail must. The host decodes a yielded flat body by that
+            // type, so a same-size body of another shape would have its
+            // scalar words read as a `Text` reference. The label handling
+            // mirrors the tail check in `check_function`.
+            if let Some(return_ty) = ctx.current_return.clone() {
+                let (struct_value, struct_return) = if return_negatives.is_empty() {
+                    (value_ty.clone(), return_ty.clone())
+                } else {
+                    (
+                        strip_labels(value_ty.clone()),
+                        strip_labels(return_ty.clone()),
+                    )
+                };
+                if !types_compatible(ctx, &struct_value, &struct_return) {
+                    return Err(TypeError::new(
+                        format!(
+                            "yielded value has type {} but the function returns {}",
+                            value_ty.apply(&ctx.subst).display(),
+                            return_ty.apply(&ctx.subst).display()
+                        ),
+                        *span,
+                    ));
+                }
+            }
             check_negative_labels_against_return(
                 "yielded value",
                 &value_ty,
                 &return_negatives,
                 *span,
             )?;
-            // Yield's expression value (received from host on resume)
-            // cannot be statically typed without dialogue annotations.
-            Ok(ctx.fresh())
+            // The expression's value is the resume value, of the entry loop's
+            // first parameter type when there is one. Otherwise it is a fresh
+            // variable that a use or an annotation must fix, which
+            // `check_function` verifies once the body is checked.
+            match ctx.current_resume.clone() {
+                Some(resume) => Ok(resume),
+                None => {
+                    let fresh = ctx.fresh();
+                    ctx.unknown_resumes.push((fresh.clone(), *span));
+                    Ok(fresh)
+                }
+            }
         }
         Expr::If {
             condition,
@@ -4710,6 +5969,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             let mut arm_labels: BTreeSet<String> = BTreeSet::new();
             for arm in arms.iter_mut() {
                 check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
+                note_open_destructuring(ctx, &arm.pattern, &scrutinee_ty);
                 ctx.push_scope();
                 bind_pattern(ctx, &arm.pattern, scrutinee_ty.clone());
                 // Guard expression must evaluate to Bool. The guard
@@ -4800,7 +6060,10 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         *span,
                     ))
                 }
-                Type::Var(_) => Ok(ctx.fresh()),
+                Type::Var(_) => {
+                    ctx.open_projections.push((obj_ty.apply(&ctx.subst), *span));
+                    Ok(ctx.fresh())
+                }
                 other => Err(TypeError::new(
                     format!("field access on non-struct type {}", other.display()),
                     *span,
@@ -5110,6 +6373,26 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             let from_labels = labels_of(&from_ty_raw);
             let from_ty = strip_labels(from_ty_raw);
             let to_ty = strip_labels(to_ty_raw);
+            // `Text<N>` admits exactly one cast in this increment, the literal
+            // cast, and it is decided before the general dispatch so that no
+            // later arm can admit another. The identity arm and the type
+            // variable arm below would otherwise accept `t as Text<8>` for a
+            // `t` that is not a literal.
+            if let Type::TextN(cap) = &to_ty {
+                check_text_literal_cast(expr, cap, &from_ty, *span)?;
+                return Ok(apply_labels(to_ty.clone(), &from_labels));
+            }
+            if let Type::TextN(_) = &from_ty {
+                return Err(TypeError::new(
+                    format!(
+                        "cannot cast {} to {}: the only cast involving a capacity-bounded text \
+                         is from a string literal to `Text<N>`",
+                        from_ty.display(),
+                        to_ty.display()
+                    ),
+                    *span,
+                ));
+            }
             // Newtype <-> underlying extraction. A newtype value
             // can be cast to its underlying type (extraction); a
             // value of the underlying type can be cast to the
@@ -5243,6 +6526,42 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // the concrete instantiation.
             let receiver_ty = type_of_expr(ctx, receiver)?;
             let receiver_resolved = receiver_ty.apply(&ctx.subst);
+            // A bundled text operation is decided by the receiver type before
+            // any trait is consulted, so a `Text<N>` receiver calling one of
+            // the five names never reaches a trait impl, and no other receiver
+            // reaches an operation. A build without the `text` feature refuses
+            // the call here. See `text_intrinsic`.
+            if let Type::TextN(cap) = strip_labels(receiver_resolved.clone()) {
+                match crate::text_intrinsic::resolve_method(method) {
+                    Err(message) => return Err(TypeError::new(message, *span)),
+                    Ok(Some(op)) => {
+                        #[cfg(feature = "text")]
+                        return check_text_method(
+                            ctx,
+                            op,
+                            cap,
+                            labels_of(&receiver_resolved),
+                            args,
+                            *span,
+                        );
+                        // `resolve_method` answers an operation only when the
+                        // feature is compiled in, so this arm is not reached
+                        // without it. It still refuses rather than panics.
+                        #[cfg(not(feature = "text"))]
+                        {
+                            let _ = cap;
+                            return Err(TypeError::new(
+                                format!(
+                                    "method `{}` on `Text<N>` requires the `text` cargo feature",
+                                    op.name()
+                                ),
+                                *span,
+                            ));
+                        }
+                    }
+                    Ok(None) => {}
+                }
+            }
             let head = match type_head_name(&receiver_resolved) {
                 Some(h) => h,
                 None => return Ok(ctx.fresh()),
@@ -5317,6 +6636,14 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             }
             Ok(inst_return)
         }
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => check_data_index_store(ctx, data_name, field, indices, value, arms, *span),
         Expr::Checked {
             op_expr,
             arms,
@@ -5445,28 +6772,18 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // literal case.
             use crate::ast::CheckedArmKind;
 
-            // The guarded operator, used for admissibility and arity.
-            #[derive(Clone, Copy, PartialEq)]
-            enum CheckedOp {
-                Add,
-                Sub,
-                Mul,
-                Div,
-                Mod,
-                AShl,
-                Neg,
-            }
-            let (cop, op_desc) = match op_expr.as_ref() {
-                Expr::BinOp { op: BinOp::Add, .. } => (CheckedOp::Add, "`+`"),
-                Expr::BinOp { op: BinOp::Sub, .. } => (CheckedOp::Sub, "`-`"),
-                Expr::BinOp { op: BinOp::Mul, .. } => (CheckedOp::Mul, "`*`"),
-                Expr::BinOp { op: BinOp::Div, .. } => (CheckedOp::Div, "`/`"),
-                Expr::BinOp { op: BinOp::Mod, .. } => (CheckedOp::Mod, "`%`"),
-                Expr::BinOp {
-                    op: BinOp::AShl, ..
-                } => (CheckedOp::AShl, "arithmetic left shift `<<<`"),
-                // The `supported` check above guarantees unary `-`.
-                _ => (CheckedOp::Neg, "unary `-`"),
+            // The guarded operator, used for admissibility and arity. The
+            // `supported` check above guarantees one of the seven.
+            let cop = CheckedOp::of(op_expr).unwrap_or(CheckedOp::Neg);
+            let op_desc = cop.describe();
+            let operand_class = if is_byte {
+                CheckedOperand::Byte
+            } else if is_float {
+                CheckedOperand::Float
+            } else if is_fixed {
+                CheckedOperand::Fixed
+            } else {
+                CheckedOperand::Word
             };
             // The arithmetic left shift is signed-only and Word-only, the
             // same as multiply-by-a-power-of-two, which is how it lowers.
@@ -5507,11 +6824,13 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // `overflow`; `-` admits `underflow`; `/` and `%` admit
             // `zero_divisor`. The signed `Fixed` type mirrors `Word`
             // (it is signed and `Q`-format arithmetic can overflow or
-            // underflow in either direction), differing only in that
-            // its arms bind a single result; it therefore reuses the
-            // `Word` admissibility branch below. `ok` is admissible for
-            // every operator. An arm whose outcome cannot arise is a
-            // compile error.
+            // underflow in either direction), differing in that its
+            // arms bind a single result and that its `/` also admits
+            // `underflow`, because a `Q`-format quotient can fall below
+            // the minimum. `ok` is admissible for every operator. An arm
+            // whose outcome cannot arise is a compile error. The table
+            // is `checked_overflow_admissible` and
+            // `checked_underflow_admissible`.
             let type_name = if is_byte {
                 "Byte"
             } else if is_float {
@@ -5525,44 +6844,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 let (admissible, arm_name) = match &arm.kind {
                     CheckedArmKind::Ok(_) => (true, "ok"),
                     CheckedArmKind::Overflow(_, _) => {
-                        let ok = if is_byte {
-                            matches!(cop, CheckedOp::Add | CheckedOp::Mul)
-                        } else if is_float {
-                            // Float `+`, `-`, `*`, `/` can yield +inf.
-                            matches!(
-                                cop,
-                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
-                            )
-                        } else {
-                            matches!(
-                                cop,
-                                CheckedOp::Add
-                                    | CheckedOp::Sub
-                                    | CheckedOp::Mul
-                                    | CheckedOp::AShl
-                                    | CheckedOp::Neg
-                                    | CheckedOp::Div
-                            )
-                        };
-                        (ok, "overflow")
+                        (checked_overflow_admissible(cop, operand_class), "overflow")
                     }
-                    CheckedArmKind::Underflow(_, _) => {
-                        let ok = if is_byte {
-                            cop == CheckedOp::Sub
-                        } else if is_float {
-                            // Float `+`, `-`, `*`, `/` can yield -inf.
-                            matches!(
-                                cop,
-                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
-                            )
-                        } else {
-                            matches!(
-                                cop,
-                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::AShl
-                            )
-                        };
-                        (ok, "underflow")
-                    }
+                    CheckedArmKind::Underflow(_, _) => (
+                        checked_underflow_admissible(cop, operand_class),
+                        "underflow",
+                    ),
                     CheckedArmKind::ZeroDivisor(_) => (
                         // Integer-only: a float division by zero yields
                         // an infinity or NaN, not a trap.
@@ -5581,6 +6868,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     CheckedArmKind::PayloadDiscriminant(_) => (false, "payload_discriminant"),
                     CheckedArmKind::InvalidDiscriminant(_) => (false, "invalid_discriminant"),
                     CheckedArmKind::Error(_) => (false, "error"),
+                    CheckedArmKind::StoreOk(_, _) => (false, "ok(old, new)"),
                 };
                 if !admissible {
                     return Err(TypeError::new(
@@ -5647,7 +6935,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     | CheckedArmKind::InvalidNewtype(_)
                     | CheckedArmKind::PayloadDiscriminant(_)
                     | CheckedArmKind::InvalidDiscriminant(_)
-                    | CheckedArmKind::Error(_) => false,
+                    | CheckedArmKind::Error(_)
+                    | CheckedArmKind::StoreOk(_, _) => false,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -5669,7 +6958,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         | CheckedArmKind::InvalidNewtype(_)
                         | CheckedArmKind::PayloadDiscriminant(_)
                         | CheckedArmKind::InvalidDiscriminant(_)
-                        | CheckedArmKind::Error(_) => {}
+                        | CheckedArmKind::Error(_)
+                        | CheckedArmKind::StoreOk(_, _) => {}
                     }
                 }
             }
@@ -5718,6 +7008,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                             bind_checked_pattern(ctx, l, operand_ty.clone());
                         }
                     }
+                    // Rejected as inadmissible above; nothing to bind.
+                    CheckedArmKind::StoreOk(_, _) => {}
                 }
                 if let Some(guard) = arm.guard.as_mut() {
                     let guard_ty = type_of_expr(ctx, guard)?;
@@ -5744,6 +7036,23 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         arm.span,
                     ));
                 }
+            }
+            // An outcome class that can arise and has no unguarded catch-all
+            // falls to the wrapping default, which yields the operand's own
+            // value. The construct's type must then be the operand's, or a
+            // `Word` would stand where another type is declared.
+            if checked_wrap_default_reachable(cop, operand_class, arms)
+                && !types_compatible(ctx, &result_ty, &operand_ty)
+            {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "checked-overflow construct produces {} but leaves an outcome to the wrapping default, which yields {}; cover every admissible outcome with an unguarded catch-all arm, or produce {}",
+                        result_ty.apply(&ctx.subst).display(),
+                        operand_ty.display(),
+                        operand_ty.display()
+                    ),
+                    *span,
+                ));
             }
             Ok(result_ty.apply(&ctx.subst))
         }
@@ -7289,6 +8598,63 @@ mod tests {
         assert!(s.is_empty());
     }
 
+    /// **A capacity type unifies only with the SAME capacity, and never with static
+    /// text.** This is the operator's ruling that static and dynamic text are
+    /// different types rather than one parameterised family, and the reason is
+    /// representational: static text is a pointer into read-only data, dynamic text
+    /// is a flat length-plus-bytes composite. A value of one is not a value of the
+    /// other, so unifying them would admit a read of the wrong shape.
+    ///
+    /// # Why this is tested HERE as well as through a source program
+    ///
+    /// It was written while the compiler refused `Text<N>` in every declaration
+    /// position, so no program could drive these arms, and calling `unify`
+    /// directly was the only reachable test. The literal-cast increment made the
+    /// arms reachable from source, and `tests/textn_literal.rs` now drives the
+    /// mismatch through a `let` annotation. This direct test is kept because it
+    /// pins the rule at the unifier, independently of any surface that reaches it.
+    #[test]
+    fn a_capacity_unifies_only_with_the_same_capacity() {
+        let mut s = Subst::new();
+        unify(
+            &Type::TextN(ConstDim::Known(8)),
+            &Type::TextN(ConstDim::Known(8)),
+            &mut s,
+        )
+        .expect("the same capacity unifies with itself");
+        assert!(s.is_empty(), "unifying equal capacities binds no variable");
+
+        let err = unify(
+            &Type::TextN(ConstDim::Known(8)),
+            &Type::TextN(ConstDim::Known(4)),
+            &mut s,
+        )
+        .unwrap_err();
+        match err {
+            UnifyError::Mismatch { left, right } => {
+                assert_eq!(left, Type::TextN(ConstDim::Known(8)));
+                assert_eq!(right, Type::TextN(ConstDim::Known(4)));
+            }
+            other => panic!("expected a mismatch between two capacities, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_capacity_type_never_unifies_with_static_text() {
+        // Checked in BOTH directions. `unify` is not obliged to be symmetric by
+        // construction -- it is a match over an ordered pair -- so a rule verified
+        // one way round is verified one way round.
+        let mut s = Subst::new();
+        assert!(
+            unify(&Type::TextN(ConstDim::Known(8)), &Type::Str, &mut s).is_err(),
+            "a capacity type must not unify with static text"
+        );
+        assert!(
+            unify(&Type::Str, &Type::TextN(ConstDim::Known(8)), &mut s).is_err(),
+            "and not in the other order either"
+        );
+    }
+
     #[test]
     fn unify_distinct_primitives_fails() {
         let mut s = Subst::new();
@@ -7850,7 +9216,7 @@ mod tests {
         // a closure-shaped expression at the call site, which
         // is no longer permitted.
         let err = check_src(
-            "fn apply<F>(f: F, x: Word) -> Word { f(x) }\n\
+            "fn apply<F>(f: F, x: Word) -> Word { x }\n\
              fn main() -> Word {\n\
                 let g = |x: Word| x + 1;\n\
                 apply(g, 41)\n\
@@ -7858,6 +9224,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("closures are not supported"));
+        // The call through the parameter is itself refused since
+        // 2026-10-31, because a parameter is a local and no local is
+        // callable. `apply` is checked before `main`, so that refusal
+        // is the one reported for the full pattern.
+        let err = check_src(
+            "fn apply<F>(f: F, x: Word) -> Word { f(x) }\n\
+             fn main() -> Word {\n\
+                let g = |x: Word| x + 1;\n\
+                apply(g, 41)\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message
+                .contains("`f` is a local variable, not a callable"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

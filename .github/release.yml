@@ -1,0 +1,23 @@
+# Categories for GitHub's automatically generated release notes, chosen by pull request
+# label. A pull request with no matching label falls under Other changes. CHANGELOG.md
+# remains the authoritative record, and these notes are a convenience for a release page.
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+  categories:
+    - title: Breaking changes
+      labels:
+        - breaking
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other changes
+      labels:
+        - "*"

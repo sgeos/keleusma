@@ -1,41 +1,158 @@
 // The self-hosted codegen is a full-width host tool, gated to a 64-bit runtime.
 #![cfg(all(
+    // The record adapter uses the production self-host API. This target runs
+    // in the self-host job and the workspace configuration that enables it.
+    feature = "self-host",
     feature = "compile",
     feature = "verify",
+    // The reference tables below name `ScalarKind::Float`, a variant that does not
+    // exist without the `floats` feature, so this file cannot COMPILE there. It was
+    // invisible because the release gate's no-default step does not add
+    // `compile,verify`, leaving this combination built by nothing. Same family as the
+    // verify-without-floats build failure V0.2.2 repaired.
+    feature = "floats",
     not(feature = "narrow-word-8"),
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
 ))]
+// The self-hosting driver and scaffold-assembly helpers carry composite tuple types that a
+// `type` alias would only scatter; allow the complexity lint for this test file.
+#![allow(clippy::type_complexity)]
 //! Stage 3 codegen (`compiler/kel/codegen.kel`). A throwaway adapter flattens the
 //! reference's block into the shared-data node arrays and statement metadata, the
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 26 adds `const data` field
-//! reads, which inline to the field's literal value (a `Const`), so a `for` loop
-//! bounded by a `const data` field is statically bounded and runs.
+//! against the Rust compiler, and runs it. Increment 27 adds statement-form
+//! expressions: a bare call or a statement-form `if` (both `Stmt::Expr`) lowers to
+//! the expression ops then `PopN(1)`; an `if` without `else` synthesizes a Unit
+//! else so both branches produce a unit value.
+//!
+//! This file also hosts the parse-into-codegen bridge (see `reconstruct_body`),
+//! which replaces the throwaway adapter with the real parser: lexer.kel tokenizes
+//! the source, parse.kel emits the body's postorder node records, the host rebuilds
+//! the codegen forest from that stream, and codegen.kel emits the ops. For the
+//! arithmetic node kinds this whole self-hosted path is byte-identical to the Rust
+//! compiler; later increments extend the reconstruction to the remaining kinds.
 
 use keleusma::Arena;
 use keleusma::ast::{
-    BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, Iterable, Literal,
-    Param, Pattern, Stmt, UnaryOp,
+    BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, FunctionDef, Iterable,
+    Literal, Param, Pattern, Stmt, UnaryOp,
 };
-use keleusma::bytecode::{ConstValue, Module, Op, Value};
+use keleusma::bytecode::{
+    ArrayElem, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
+    Value,
+};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
+use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
+mod common;
+#[path = "common/data_read_kinds.rs"]
+mod data_read_kinds;
+use data_read_kinds::data_read_kinds;
+
+// Complete-key memoization input sets for the whole-stage self-compile tests
+// (process-audit item 3). Each set must be a SUPERSET of the .kel files the test
+// actually reads: under-listing an input is the one unsound mistake, because a
+// stale cache could then mask a real divergence. The four pipeline stages are the
+// compiler that self-hosts every stage, so a byte-identity test's input set is the
+// pipeline plus, only when distinct, the stage under test. See common::selfhost_cache.
+const KEL_PIPELINE: &[&str] = &[
+    "compiler/kel/lexer.kel",
+    "compiler/kel/parse.kel",
+    "compiler/kel/reconstruct.kel",
+    "compiler/kel/codegen.kel",
+];
+const KEL_PIPELINE_WITH_ANALYZE: &[&str] = &[
+    "compiler/kel/lexer.kel",
+    "compiler/kel/parse.kel",
+    "compiler/kel/reconstruct.kel",
+    "compiler/kel/codegen.kel",
+    "compiler/kel/analyze.kel",
+];
+// The atomic-coverage probe drives only codegen.kel: it parses with the Rust front
+// end and never runs the lexer, parse, or reconstruct stages.
+const KEL_CODEGEN_ONLY: &[&str] = &["compiler/kel/codegen.kel"];
+// The synthetic-input analyze tests run analyze.kel over modules compiled from inline
+// source strings (in the binary), so analyze.kel is their only .kel input.
+const KEL_ANALYZE_ONLY: &[&str] = &["compiler/kel/analyze.kel"];
+
+/// Shared body for the parse_into_codegen_*_matches_the_reference tests (item 3 follow-up).
+/// For each `(source, input, expected)` case it drives the self-hosted lexer.kel + parse.kel
+/// then run_codegen (codegen.kel) over the source, asserts the emitted ops and local_count
+/// match the Rust reference, then builds and runs the module and asserts the value. Cached
+/// per case-set: the complete key covers the binary, the pipeline stages, and the cases (the
+/// cases live in the binary, but folding them in keeps the key correct if the helper is later
+/// called with a runtime-built case set). reconstruct_body is pure Rust, so KEL_PIPELINE is a
+/// safe superset (it includes reconstruct.kel, which these cases do not run).
+fn assert_parse_into_codegen_matches(cases: &[(&str, i64, i64)]) {
+    let key = format!("{cases:?}");
+    if common::selfhost_cache::hit_with("assert_parse_into_codegen_matches", KEL_PIPELINE, &key) {
+        return;
+    }
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        // call_with_shared with an empty buffer equals call for no-shared programs, and
+        // handles the shared-data cases uniformly (one body for both test shapes).
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call built")
+        {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+    common::selfhost_cache::record_pass_with(
+        "assert_parse_into_codegen_matches",
+        KEL_PIPELINE,
+        &key,
+    );
+}
+
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
-// (one slot per scalar, arrays contiguous). root=0, then the four length-64 node
-// arrays, then param_count.
+// (one slot per scalar, arrays contiguous). root=0, then the four length-512 node
+// arrays (`kinds`/`args`/`lhs`/`rhs`, sized for the stage's largest own function),
+// then the length-256 `call_args`/`for_parts`/`match_parts` side arrays, then
+// param_count.
 const KINDS: usize = 1;
-const ARGS: usize = 65;
-const LHS: usize = 129;
-const RHS: usize = 193;
-const CALL_ARGS: usize = 257;
-const FOR_PARTS: usize = 321;
-const PARAM_COUNT: usize = 385;
+const ARGS: usize = 1 + 4096;
+const LHS: usize = 1 + 4096 * 2;
+const RHS: usize = 1 + 4096 * 3;
+const CALL_ARGS: usize = 1 + 4096 * 4;
+const FOR_PARTS: usize = 1 + 4096 * 4 + 1024;
+const MATCH_PARTS: usize = 1 + 4096 * 4 + 1024 * 2;
+const LIMIT_PARTS: usize = 1 + 4096 * 4 + 1024 * 3;
+const HEAD_PARTS: usize = 1 + 4096 * 4 + 1024 * 4;
+const PARAM_COUNT: usize = 1 + 4096 * 4 + 1024 * 5;
+const CATEGORY: usize = 1 + 4096 * 4 + 1024 * 5 + 1;
 
 struct Node {
     kind: i64,
@@ -51,8 +168,12 @@ struct Ctx {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
     for_parts: Vec<i64>,
+    match_parts: Vec<i64>,
+    limit_parts: Vec<i64>,
+    head_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     /// `const data` scalar fields by `name.field` -> value. A read of one of these
     /// inlines to a constant, exactly as the reference compiler does, and never
     /// occupies a runtime data slot.
@@ -89,19 +210,26 @@ fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
 }
 
 /// Resolve a `data.field[..]` array reference to its element-0 slot (base) and its
-/// length, from the per-element slot names `data.field[0]`, `data.field[1]`, ...
+/// length.
+///
+/// Every element of an array carries the ARRAY's name rather than a distinct
+/// `field[k]`: a per-element string defeated the name interner's dedup and made
+/// the string pool scale with the element count. The run is therefore found by
+/// EXACT name and its length is the run's own length. The older form keyed off a
+/// `field[` prefix, using the naming convention as a lookup index.
+///
+/// **This is the third copy of this lookup in the test suite** — the others are in
+/// `selfhost_parse.rs` and the data-slot model below. All three encoded the same
+/// convention independently, which is why changing it in `compiler.rs` broke six
+/// tests in three places rather than one.
 fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
-    let prefix = format!("{data_name}.{field}[");
-    let base =
-        ctx.data_slots
-            .iter()
-            .position(|n| n.starts_with(&prefix))
-            .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`")) as i64;
-    let len = ctx
+    let want = format!("{data_name}.{field}");
+    let base = ctx
         .data_slots
         .iter()
-        .filter(|n| n.starts_with(&prefix))
-        .count() as i64;
+        .position(|n| n == &want)
+        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+    let len = ctx.data_slots.iter().filter(|n| *n == &want).count() as i64;
     (base, len)
 }
 
@@ -110,6 +238,10 @@ struct Body {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
     for_parts: Vec<i64>,
+    match_parts: Vec<i64>,
+    limit_parts: Vec<i64>,
+    head_parts: Vec<i64>,
+    category: i64,
     root: i64,
 }
 
@@ -179,8 +311,16 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
                 BinOp::Band => (3, 12),
                 BinOp::Bor => (3, 13),
                 BinOp::Bxor => (3, 14),
+                // Shift operators: `lsl`/`asl` -> Shl (27), `asr` -> Shr (28), `lsr` -> ShrL (29),
+                // matching parse.kel's `opcode_of`. codegen.kel's `push_binop` uses `lsl` to build
+                // the `lsr` mask, so the atomic harness must flatten it.
+                BinOp::Shl => (3, 27),
+                BinOp::AShl => (3, 27),
+                BinOp::ShrA => (3, 28),
+                BinOp::ShrL => (3, 29),
                 other => panic!(
-                    "increment handles arithmetic, comparisons, booleans, bitwise, got {other:?}"
+                    "increment handles arithmetic, comparisons, booleans, bitwise, shifts, got \
+                     {other:?}"
                 ),
             };
             ctx.nodes.push(Node {
@@ -197,17 +337,23 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             else_block,
             ..
         } => {
-            let else_block = else_block
-                .as_ref()
-                .expect("increment requires an else branch");
             // Node layout for an If (kind 4): arg = cond, lhs = then, rhs = else.
-            // Each branch is a full block (it may bind its own locals).
+            // Each branch is a full block (it may bind its own locals). A
+            // statement-form `if` without an `else` synthesizes a Unit else block,
+            // so both branches produce a unit value.
             let cond = flatten(condition, scope, next_slot, ctx);
             let t = flatten_block(then_block, scope, next_slot, ctx);
-            let el = flatten_block(else_block, scope, next_slot, ctx);
+            let el = match else_block {
+                Some(eb) => flatten_block(eb, scope, next_slot, ctx),
+                None => node(ctx, 20, 0, 0, 0),
+            };
             ctx.nodes.push(Node {
                 kind: 4,
-                arg: cond,
+                arg: if else_block.is_none() {
+                    -cond - 1
+                } else {
+                    cond
+                },
                 lhs: t,
                 rhs: el,
             });
@@ -223,6 +369,18 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             let operand = flatten(operand, scope, next_slot, ctx);
             ctx.nodes.push(Node {
                 kind,
+                arg: 0,
+                lhs: operand,
+                rhs: 0,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
+        Expr::Cast { expr, .. } => {
+            // A `Byte as Word` widening: Cast node (kind 26), operand in lhs. The stages
+            // only cast a Byte data-read to Word, which lowers to a single ByteToWord op.
+            let operand = flatten(expr, scope, next_slot, ctx);
+            ctx.nodes.push(Node {
+                kind: 26,
                 arg: 0,
                 lhs: operand,
                 rhs: 0,
@@ -269,7 +427,7 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             }
         }
         Expr::ArrayIndex { object, index, .. } => {
-            // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*65536,
+            // A `d.arr[i]` read. IndexRead (kind 13) packs base, length and fallback kind,
             // lhs = index. The object is a `d.arr` field access.
             let (data_name, field) = match object.as_ref() {
                 Expr::FieldAccess {
@@ -286,11 +444,76 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             let index_node = flatten(index, scope, next_slot, ctx);
             ctx.nodes.push(Node {
                 kind: 13,
-                arg: base + len * 65536,
+                arg: base
+                    + len * 16_777_216
+                    + ctx.data_kinds[&format!("{data_name}.{field}")] * 281_474_976_710_656,
                 lhs: index_node,
                 rhs: 0,
             });
             (ctx.nodes.len() - 1) as i64
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            // The reference lowers a `match` by stashing the scrutinee in a fresh
+            // temp local, so declare it right after the scrutinee (mirroring
+            // `compile_expr`'s `declare_local("__match")`) and before the arm
+            // results. Slots are monotonic, matching the reference's high-water
+            // `local_count`.
+            let scrut = flatten(scrutinee, scope, next_slot, ctx);
+            let temp = *next_slot;
+            *next_slot += 1;
+            // Split the literal arms from the single trailing wildcard.
+            let mut lit_arms: Vec<(i64, i64)> = Vec::new();
+            let mut wildcard: Option<i64> = None;
+            for arm in arms {
+                assert!(
+                    arm.guard.is_none(),
+                    "increment handles unguarded match arms only"
+                );
+                match &arm.pattern {
+                    Pattern::Literal(Literal::Int(v), _) => {
+                        let lit_node = node(ctx, 1, *v, 0, 0);
+                        let res_node = flatten(&arm.expr, scope, next_slot, ctx);
+                        lit_arms.push((lit_node, res_node));
+                    }
+                    Pattern::Wildcard(_) => {
+                        assert!(
+                            wildcard.is_none(),
+                            "increment handles a single wildcard arm"
+                        );
+                        wildcard = Some(flatten(&arm.expr, scope, next_slot, ctx));
+                    }
+                    other => panic!(
+                        "increment handles integer-literal and wildcard match arms, got {other:?}"
+                    ),
+                }
+            }
+            let wc = wildcard.expect("match needs a wildcard arm");
+            // The match_parts entry: temp slot at [0], wildcard result at [1], then
+            // one (literal node, result node) pair per literal arm from [2].
+            let base = ctx.match_parts.len() as i64;
+            ctx.match_parts.push(temp);
+            ctx.match_parts.push(wc);
+            for (lit_node, res_node) in &lit_arms {
+                ctx.match_parts.push(*lit_node);
+                ctx.match_parts.push(*res_node);
+            }
+            let arm_count = lit_arms.len() as i64;
+            // MatchIn (kind 22): arg = match_parts entry start, lhs = scrutinee,
+            // rhs = literal-arm count.
+            ctx.nodes.push(Node {
+                kind: 22,
+                arg: base,
+                lhs: scrut,
+                rhs: arm_count,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
+        Expr::Yield { value, .. } => {
+            // YieldExpr (kind 24): the yielded expression in lhs.
+            let inner = flatten(value, scope, next_slot, ctx);
+            node(ctx, 24, 0, inner, 0)
         }
         other => {
             panic!("increment handles literal/local/binop/if/not/call/data-read, got {other:?}")
@@ -348,19 +571,86 @@ fn flatten_block(
                     1,
                     "increment handles single-dimension array assignment"
                 );
-                let value_node = flatten(value, scope, next_slot, ctx);
+                // Index first, then the offset slot claimed at `=`, then the value, the
+                // order of the index-first write of 2026-10-21.
                 let index_node = flatten(&indices[0], scope, next_slot, ctx);
-                // IndexStore (kind 15): sequences value then index.
+                let offset_slot = *next_slot;
+                *next_slot += 1;
+                let value_node = flatten(value, scope, next_slot, ctx);
+                // IndexStore (kind 15): arg = the offset slot.
                 ctx.nodes.push(Node {
                     kind: 15,
-                    arg: 0,
+                    arg: offset_slot,
                     lhs: value_node,
                     rhs: index_node,
                 });
                 let store_node = (ctx.nodes.len() - 1) as i64;
                 let (base, len) = array_base_len(ctx, data_name, field);
-                // IndexAssignIn (kind 14): arg = base + len*65536, value = store node.
-                stmts.push((14, base + len * 65536, store_node));
+                // IndexAssignIn (kind 14): arg = base + len*2^24 + element kind*2^48,
+                // value = store node.
+                stmts.push((
+                    14,
+                    base + len * 16_777_216
+                        + ctx.data_kinds[&format!("{data_name}.{field}")] * 281_474_976_710_656,
+                    store_node,
+                ));
+            }
+            Stmt::For(fs) if fs.limit.is_some() => {
+                // A `for i in start..end limit CAP { body }` in the bare form.
+                // Mirrors the reference `compile_for_limit` local order: the loop
+                // variable, the end, the counter, the cap, and the outcome are
+                // five consecutive locals (the variable first, allocated after
+                // the start ops and before the end ops).
+                assert!(
+                    fs.on_arms.is_empty(),
+                    "the self-host stage supports the bare `limit` form only"
+                );
+                let (start_expr, end_expr) = match &fs.iterable {
+                    Iterable::Range(s, e) => (s.as_ref(), e.as_ref()),
+                    other => panic!("a `limit` clause requires a range loop, got {other:?}"),
+                };
+                let cap = match &fs.limit {
+                    Some(Expr::Literal {
+                        value: Literal::Int(n),
+                        ..
+                    }) => *n,
+                    Some(Expr::FieldAccess { object, field, .. }) => match object.as_ref() {
+                        Expr::Ident { name, .. } => const_data_value(ctx, name, field)
+                            .unwrap_or_else(|| panic!("`limit` must be a const-data field")),
+                        other => panic!("`limit` must be a constant, got {other:?}"),
+                    },
+                    other => panic!("`limit` must be a compile-time constant, got {other:?}"),
+                };
+                let start_node = flatten(start_expr, scope, next_slot, ctx);
+                let var = *next_slot;
+                *next_slot += 1;
+                let end_node = flatten(end_expr, scope, next_slot, ctx);
+                let end_slot = *next_slot;
+                *next_slot += 1;
+                let ctr = *next_slot;
+                *next_slot += 1;
+                let cap_slot = *next_slot;
+                *next_slot += 1;
+                let oc = *next_slot;
+                *next_slot += 1;
+                scope.push((fs.var.clone(), var));
+                let body_node = flatten_block(&fs.body, scope, next_slot, ctx);
+                scope.pop();
+                let cap_node = node(ctx, 1, cap, 0, 0);
+                let zero_node = node(ctx, 1, 0, 0, 0);
+                let one_node = node(ctx, 1, 1, 0, 0);
+                let two_node = node(ctx, 1, 2, 0, 0);
+                // The 12-word limit_parts entry: the five slots, then the start,
+                // end, and body nodes, then the cap/0/1/2 literal nodes.
+                let lp_start = ctx.limit_parts.len() as i64;
+                for v in [
+                    var, end_slot, ctr, cap_slot, oc, start_node, end_node, body_node, cap_node,
+                    zero_node, one_node, two_node,
+                ] {
+                    ctx.limit_parts.push(v);
+                }
+                // ForLimit (kind 23): arg = limit_parts entry start; lhs unused.
+                stmts.push((23, lp_start, 0));
             }
             Stmt::For(fs) => {
                 let (start_expr, limit_expr) = match &fs.iterable {
@@ -401,7 +691,13 @@ fn flatten_block(
                 // ForIn (kind 16): arg = for_parts entry start; lhs unused.
                 stmts.push((16, fp_start, 0));
             }
-            other => panic!("increment handles let/data-assign/for statements, got {other:?}"),
+            Stmt::Expr(expr) => {
+                // A bare expression statement (a call for effect or a
+                // statement-form `if`): ExprStmtIn (kind 21), lhs = expression.
+                let expr_node = flatten(expr, scope, next_slot, ctx);
+                stmts.push((21, 0, expr_node));
+            }
+            other => panic!("increment handles let/data-assign/for/expr statements, got {other:?}"),
         }
     }
     // A statement-only block (no tail expression) has the unit value, emitted as a
@@ -431,16 +727,22 @@ fn flatten_block(
 fn build_body(
     block: &Block,
     params: &[Param],
+    category: i64,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     const_data: Vec<(String, i64)>,
 ) -> Body {
     let mut ctx = Ctx {
         nodes: Vec::new(),
         call_args: Vec::new(),
         for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
         chunk_names,
         data_slots,
+        data_kinds,
         const_data,
     };
     let mut scope: Vec<(String, i64)> = params
@@ -454,12 +756,80 @@ fn build_body(
         nodes: ctx.nodes,
         call_args: ctx.call_args,
         for_parts: ctx.for_parts,
+        match_parts: ctx.match_parts,
+        limit_parts: ctx.limit_parts,
+        head_parts: ctx.head_parts,
+        category,
+        root,
+    }
+}
+
+/// Flatten each head with relative parameter slots. Guards and bodies have separate
+/// local namespaces. Code generation allocates their physical windows in order.
+/// The entry is (parameter count, guarded flag, guard node, body node).
+fn build_multihead(
+    heads: &[&FunctionDef],
+    params: &[Param],
+    chunk_names: Vec<String>,
+    data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
+    const_data: Vec<(String, i64)>,
+) -> Body {
+    let mut ctx = Ctx {
+        nodes: Vec::new(),
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        chunk_names,
+        data_slots,
+        data_kinds,
+        const_data,
+    };
+    let pc = params.len() as i64;
+    // Each guard and body starts from the same relative parameter namespace.
+
+    let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for head in heads {
+        let mut next_slot = pc;
+        // Physical parameter copies are allocated by code generation.
+        let mut scope: Vec<(String, i64)> = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (param_name(p).to_string(), i as i64))
+            .collect();
+        let (guarded, guard_node) = match &head.guard {
+            Some(g) => (1, flatten(g, &mut scope, &mut next_slot, &mut ctx)),
+            None => (0, 0),
+        };
+        next_slot = pc;
+        let body_node = flatten_block(&head.body, &mut scope, &mut next_slot, &mut ctx);
+        entries.push((pc, guarded, guard_node, body_node));
+    }
+    for (ps, g, gn, bn) in &entries {
+        ctx.head_parts.push(*ps);
+        ctx.head_parts.push(*g);
+        ctx.head_parts.push(*gn);
+        ctx.head_parts.push(*bn);
+    }
+    // MultiHead (kind 25): arg = head_parts base (0), rhs = head count.
+    let root = node(&mut ctx, 25, 0, 0, heads.len() as i64);
+    Body {
+        nodes: ctx.nodes,
+        call_args: ctx.call_args,
+        for_parts: ctx.for_parts,
+        match_parts: ctx.match_parts,
+        limit_parts: ctx.limit_parts,
+        head_parts: ctx.head_parts,
+        category: 3,
         root,
     }
 }
 
 fn decode_op(w: i64) -> Op {
-    let (tag, operand) = (w % 64, w / 64);
+    // P11 Option E: the op-word radix is 8 bits (256); the tag is `w % 256`, the operand `w / 256`.
+    let (tag, operand) = (w % 256, w / 256);
     match tag {
         1 => Op::Const(operand as u16),
         2 => Op::Return,
@@ -487,14 +857,189 @@ fn decode_op(w: i64) -> Op {
         24 => Op::BitAnd,
         25 => Op::BitOr,
         26 => Op::BitXor,
-        27 => Op::GetData(operand as u16),
-        28 => Op::SetData(operand as u16),
-        29 => Op::GetDataIndexed((operand % 65536) as u16, (operand / 65536) as u16),
-        30 => Op::SetDataIndexed((operand % 65536) as u16, (operand / 65536) as u16),
+        27 => Op::GetData(operand as u32),
+        28 => Op::SetData(operand as u32),
+        // Base and length pack with a 2^24 radix so a data slot or length beyond
+        // 65535 (a shared segment over 64 KB) does not spill base into length.
+        29 => Op::GetDataIndexed((operand % 16777216) as u32, (operand / 16777216) as u32),
+        30 => Op::SetDataIndexed((operand % 16777216) as u32, (operand / 16777216) as u32),
         31 => Op::Loop(operand as u16),
         32 => Op::BreakIf(operand as u16),
         33 => Op::EndLoop(operand as u16),
         34 => Op::PushImmediate(operand as u8),
+        // Match control flow. The stage gives these their own op-word tags so
+        // `emit_op` can backpatch a bare `If`/`EndIf` and multiple unconditional
+        // `Break`s, but they decode to the same reference ops as the structured
+        // forms (an `mif` is an `Op::If`, an `mloop` an `Op::Loop`, and so on).
+        35 => Op::Break(operand as u16),
+        36 => Op::Trap(operand as u16),
+        37 => Op::If(operand as u16),
+        38 => Op::EndIf,
+        39 => Op::Loop(operand as u16),
+        40 => Op::EndLoop(operand as u16),
+        // The `for ... limit` counter header is a conditional break to the loop
+        // exit; its own stage tag lets `emit_op` set its exit target while
+        // preserving the `BreakIf` decode.
+        41 => Op::BreakIf(operand as u16),
+        // The `yield`/`loop` machinery.
+        42 => Op::Yield,
+        43 => Op::Stream,
+        44 => Op::Reset,
+        45 => Op::ByteToWord,
+        58 => Op::WordToByte,
+        59 => Op::Add,
+        60 => Op::Sub,
+        61 => Op::Mul,
+        62 => Op::Shl,
+        63 => Op::Shr,
+        64 => Op::CheckedDiv(operand as u8),
+        65 => Op::CheckedMod,
+        66 => Op::BoundsCheck(operand as u16),
+        67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
+        68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
+        69 => Op::Neg,
+        // A flat struct construction: the operand packs count + byte_size*65536.
+        46 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat array literal: same packing, Array composite kind.
+        50 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Array,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat enum construction: same packing, Enum composite kind.
+        51 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat tuple construction: same packing, Tuple composite kind.
+        52 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Tuple,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat struct field read: the operand packs offset + kind_tag*65536.
+        47 => Op::GetField(StructField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: match operand / 65536 {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
+        // A flat-nested struct field read: operand packs offset + size*65536 + variant*2^32.
+        48 => Op::GetField(StructField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: match operand / 4294967296 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
+        // A flat array-element read: operand is the element ScalarKind tag.
+        49 => Op::GetIndex(ArrayElem::Flat {
+            kind: match operand {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
+        // A flat-nested array-element read: operand packs size + variant*65536.
+        56 => Op::GetIndex(ArrayElem::FlatNested {
+            size: (operand % 65536) as u16,
+            variant: match operand / 65536 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
+        // A tuple field read. The flat-nested form (a nested composite tuple element extracted and
+        // re-wrapped) packs offset + size*65536 + variant*2^32, so its operand is >= 2^33 (variant
+        // Struct = 2); the flat form packs offset + kind_tag*65536 (< 2^20) and is disambiguated by
+        // the operand magnitude.
+        53 if operand / 4294967296 == 5 => Op::GetTupleField(TupleField::Boxed {
+            index: (operand % 256) as u8,
+        }),
+        53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: match operand / 4294967296 {
+                0 | 4 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
+        // A flat tuple field read: operand packs offset + kind_tag*65536.
+        53 => Op::GetTupleField(TupleField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: match operand / 65536 {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
+        // An IsEnum test: operand packs ename_pool + vname_pool*1024 + disc_pool*1024*1024.
+        54 => Op::IsEnum(
+            (operand % 1024) as u16,
+            ((operand / 1024) % 1024) as u16,
+            (operand / 1048576) as u16,
+        ),
+        // A flat-nested enum-payload field read: operand packs offset + size*65536 + variant*2^32.
+        57 => Op::GetEnumField(EnumField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: match operand / 4294967296 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
+        // A flat enum-payload field read: operand packs offset + kind_tag*65536.
+        55 => Op::GetEnumField(EnumField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: match operand / 65536 {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -525,11 +1070,38 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
     }
 }
 
+/// Compile a stage `.kel` file on a large-stack thread. The reference recursive-descent compiler's
+/// stack use scales with the deepest expression nesting; the stage files' long `step`/`walk_step`
+/// dispatch chains push a default test-thread stack over its limit, so every stage compile runs here.
+fn compile_kel_file(path: &'static str) -> Module {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path(path)).expect("read stage .kel"),
+            )
+        })
+        .expect("spawn stage compile")
+        .join()
+        .expect("stage compile thread")
+}
+
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
-fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
-    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
-    let m = compile_src(&src);
+fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
+    run_codegen_with(body, param_count, &[])
+}
+
+/// [`run_codegen`] with the private struct slots and sizes the codegen's copy pass needs,
+/// laid out from parse.kel's data records as the shipping driver lays them out.
+fn run_codegen_with(
+    body: &Body,
+    param_count: usize,
+    composites: &[(u16, u32)],
+) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
+    let m = compile_kel_file("compiler/kel/codegen.kel");
+    let copy_inputs = keleusma::selfhost::codegen_copy_pass_inputs(&m, composites);
+    let copy_refuse = keleusma::selfhost::codegen_copy_refuse_slot(&m);
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -556,20 +1128,47 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
         vm.set_shared(&mut shared, FOR_PARTS + k, Value::Int(part))
             .expect("for_part");
     }
+    for (k, &part) in body.match_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, MATCH_PARTS + k, Value::Int(part))
+            .expect("match_part");
+    }
+    for (k, &part) in body.limit_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, LIMIT_PARTS + k, Value::Int(part))
+            .expect("limit_part");
+    }
+    for (k, &part) in body.head_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, HEAD_PARTS + k, Value::Int(part))
+            .expect("head_part");
+    }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
+    vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
+        .expect("category");
+    for (slot, word) in copy_inputs {
+        vm.set_shared(&mut shared, slot, Value::Int(word))
+            .expect("copy pass input");
+    }
 
     // Phase 1: ops until Return.
     let mut ops = Vec::new();
     let mut st = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..4096 {
+    for _ in 0..65536 {
         match st {
             VmState::Yielded(Value::Int(w)) => {
                 if w != 0 {
                     let op = decode_op(w);
-                    let done = op == Op::Return;
+                    // The op stream's terminator depends on the function category:
+                    // an `fn` ends in `Return`, a `loop` in `Reset`, and a
+                    // multiheaded dispatch in `Trap(NoMatchingHead=1)`. A
+                    // multihead's per-head `Return`s are interior ops, so it must
+                    // read past them to the final trap.
+                    let done = match body.category {
+                        2 => op == Op::Reset,
+                        3 => op == Op::Trap(1),
+                        _ => op == Op::Return,
+                    };
                     ops.push(op);
                     if done {
                         break;
@@ -583,15 +1182,287 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             .resume_with_shared(&mut shared, Value::Int(0))
             .expect("resume");
     }
+    assert_eq!(
+        vm.get_shared(&shared, copy_refuse).expect("copy refusal"),
+        Value::Int(0),
+        "the codegen's copy pass refused this function"
+    );
 
-    // Phase 2: the pool the stage built. Size, then that many raw values.
+    // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
+    // tags (0 Int, 1 StaticStr). Each pool entry is returned as (value, tag): an Int carries its
+    // value, a StaticStr its lexer intern id (which the full-pipeline driver resolves to bytes).
     let count = next_word(&mut vm, &mut shared);
-    let pool = (0..count)
+    let values: Vec<i64> = (0..count)
         .map(|_| next_word(&mut vm, &mut shared))
         .collect();
+    let tags: Vec<i64> = (0..count)
+        .map(|_| next_word(&mut vm, &mut shared))
+        .collect();
+    let pool: Vec<(i64, i64)> = values.into_iter().zip(tags).collect();
     // Phase 3: the local-frame size the stage computed.
     let local_count = next_word(&mut vm, &mut shared);
     (ops, pool, local_count)
+}
+
+// The first slice of struct codegen: a flat all-scalar struct construction `P { x: 1, y: 2 }`
+// lowers to its field expressions in declaration order then a NewComposite(Flat{Struct,
+// count, byte_size}), byte-identically to the reference compiler. Driven from a hand-built
+// AST because parse.kel does not yet emit a struct-construction node in a body; the struct's
+// packed byte size (16 = two 8-byte Words) is supplied by the layout, exactly as an earlier
+// stage will supply it once the parser produces the node.
+#[test]
+fn struct_construction_lowers_to_newcomposite() {
+    let m = compile_src("struct P { x: Word, y: Word }\nfn make() -> P { P { x: 1, y: 2 } }");
+    let make = m
+        .chunks
+        .iter()
+        .find(|c| c.name == "make")
+        .expect("make chunk");
+
+    let body = Body {
+        nodes: vec![
+            Node {
+                kind: 1,
+                arg: 1,
+                lhs: 0,
+                rhs: 0,
+            }, // Literal 1 (field x)
+            Node {
+                kind: 1,
+                arg: 2,
+                lhs: 0,
+                rhs: 0,
+            }, // Literal 2 (field y)
+            Node {
+                kind: 27,
+                arg: 16,
+                lhs: 0,
+                rhs: 2,
+            }, // StructInit: byte_size 16, start 0, count 2
+        ],
+        call_args: vec![0, 1],
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: 1, // fn
+        root: 2,
+    };
+    let (ops, _pool, _lc) = run_codegen(&body, 0);
+    assert_eq!(
+        ops, make.ops,
+        "struct construction lowers like the reference"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 16,
+            })
+        )),
+        "emits a flat 2-field 16-byte struct NewComposite"
+    );
+}
+
+// The second struct-codegen slice: a flat struct field read `p.f` lowers to the object ops
+// then `GetField(Flat{offset, kind})`, byte-identically to the reference. Two fields at
+// distinct byte offsets (x at 0, y at 8 on a 64-bit target) confirm the packed offset+kind
+// operand. Driven from a hand-built AST; the baked offset and ScalarKind are supplied on
+// the node by the layout, as an earlier stage will supply them.
+#[test]
+fn struct_field_access_lowers_to_getfield() {
+    let m = compile_src(
+        "struct P { x: Word, y: Word }\n\
+         fn getx(p: P) -> Word { p.x }\n\
+         fn gety(p: P) -> Word { p.y }",
+    );
+    let getx = m.chunks.iter().find(|c| c.name == "getx").expect("getx");
+    let gety = m.chunks.iter().find(|c| c.name == "gety").expect("gety");
+
+    // `p.x`: field at byte offset 0, read as an Int (ScalarKind tag 3).
+    let bx = Body {
+        nodes: vec![
+            Node {
+                kind: 2,
+                arg: 0,
+                lhs: 0,
+                rhs: 0,
+            }, // Local slot 0 (p)
+            Node {
+                kind: 28,
+                arg: 3 * 65536,
+                lhs: 0,
+                rhs: 0,
+            }, // FieldAccess offset 0, kind Int
+        ],
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: 1,
+        root: 1,
+    };
+    let (ops_x, _p, _l) = run_codegen(&bx, 1);
+    assert_eq!(ops_x, getx.ops, "p.x lowers like the reference");
+    assert!(ops_x.iter().any(|op| matches!(
+        op,
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int
+        })
+    )));
+
+    // `p.y`: field at byte offset 8 (after the 8-byte x field).
+    let by = Body {
+        nodes: vec![
+            Node {
+                kind: 2,
+                arg: 0,
+                lhs: 0,
+                rhs: 0,
+            }, // Local slot 0 (p)
+            Node {
+                kind: 28,
+                arg: 8 + 3 * 65536,
+                lhs: 0,
+                rhs: 0,
+            }, // FieldAccess offset 8, kind Int
+        ],
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: 1,
+        root: 1,
+    };
+    let (ops_y, _p, _l) = run_codegen(&by, 1);
+    assert_eq!(ops_y, gety.ops, "p.y lowers like the reference");
+    assert!(ops_y.iter().any(|op| matches!(
+        op,
+        Op::GetField(StructField::Flat {
+            offset: 8,
+            kind: ScalarKind::Int
+        })
+    )));
+}
+
+// -- Struct layout computation ------------------------------------------------
+//
+// The third struct-codegen slice: compute the flat packed layout of an all-scalar struct
+// -- its total byte size (for the NewComposite operand) and per field the byte offset and
+// ScalarKind (for the GetField operand) -- from the field types the parser captures. This
+// is the bridge between the parser's captured struct fields and the codegen operands. It is
+// prototyped host-side (a Rust helper) as the scaffold assembly and analyze driver were,
+// to be ported to a `.kel` layout pass later. Fields pack with no alignment padding, exactly
+// as the reference `value_layout` sums preceding field sizes. Scalar fields only this slice.
+
+/// The ScalarKind and byte size of a scalar field type on the 64-bit host target
+/// (word and float are eight bytes). Mirrors `value_layout::ScalarKind::size_in_bytes`.
+///
+/// **The host-target scope is load-bearing and is not enforced here.** Under
+/// `narrow-float-32` a `Float` is four bytes and these figures are wrong. That is
+/// safe rather than latent: the sizes are compared against the reference
+/// compiler's own layout, so a mismatch fails the comparison loudly instead of
+/// producing a quietly wrong offset. The scope is stated so a future reader does
+/// not take the eight as a fact about floats.
+fn scalar_kind_size(ty: &str) -> (ScalarKind, u16) {
+    match ty {
+        "Word" => (ScalarKind::Int, 8),
+        "Byte" => (ScalarKind::Byte, 1),
+        "Bool" => (ScalarKind::Bool, 1),
+        "Float" => (ScalarKind::Float, 8),
+        other => panic!("struct layout: unsupported scalar field type `{other}`"),
+    }
+}
+
+/// The flat packed layout of an all-scalar struct: its total byte size, and per field in
+/// declaration order the field's byte offset and ScalarKind.
+fn struct_scalar_layout(field_types: &[&str]) -> (u16, Vec<(u16, ScalarKind)>) {
+    let mut offset = 0u16;
+    let mut fields = Vec::with_capacity(field_types.len());
+    for ty in field_types {
+        let (kind, size) = scalar_kind_size(ty);
+        fields.push((offset, kind));
+        offset += size;
+    }
+    (offset, fields) // `offset` is now the total packed byte size
+}
+
+/// The byte size the reference baked into a construction's `NewComposite` op.
+fn ref_struct_byte_size(m: &Module, ctor: &str) -> u16 {
+    let c = m
+        .chunks
+        .iter()
+        .find(|c| c.name == ctor)
+        .expect("ctor chunk");
+    c.ops
+        .iter()
+        .find_map(|op| match op {
+            Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => Some(*byte_size),
+            _ => None,
+        })
+        .expect("a NewComposite op")
+}
+
+/// The (offset, kind) the reference baked into a getter's `GetField` op.
+fn ref_field_offset_kind(m: &Module, getter: &str) -> (u16, ScalarKind) {
+    let c = m
+        .chunks
+        .iter()
+        .find(|c| c.name == getter)
+        .expect("getter chunk");
+    c.ops
+        .iter()
+        .find_map(|op| match op {
+            Op::GetField(StructField::Flat { offset, kind }) => Some((*offset, *kind)),
+            _ => None,
+        })
+        .expect("a GetField op")
+}
+
+// The computed layout matches the offsets and byte size the reference bakes. An all-Word
+// struct validates the byte size (via a construction) and the equal-stride offsets (via
+// getters); a mixed Byte/Word struct validates that offsets accumulate across differing
+// field sizes (a one-byte field then a word).
+#[test]
+fn struct_layout_matches_the_reference_baked_layout() {
+    // All-Word struct: byte size 24, offsets 0/8/16, all Int.
+    let (bytes, fields) = struct_scalar_layout(&["Word", "Word", "Word"]);
+    assert_eq!(bytes, 24);
+    assert_eq!(
+        fields,
+        vec![
+            (0, ScalarKind::Int),
+            (8, ScalarKind::Int),
+            (16, ScalarKind::Int)
+        ]
+    );
+    let m = compile_src(
+        "struct P { x: Word, y: Word, z: Word }\n\
+         fn make() -> P { P { x: 1, y: 2, z: 3 } }\n\
+         fn gx(p: P) -> Word { p.x }\n\
+         fn gy(p: P) -> Word { p.y }\n\
+         fn gz(p: P) -> Word { p.z }",
+    );
+    assert_eq!(bytes, ref_struct_byte_size(&m, "make"));
+    assert_eq!(fields[0], ref_field_offset_kind(&m, "gx"));
+    assert_eq!(fields[1], ref_field_offset_kind(&m, "gy"));
+    assert_eq!(fields[2], ref_field_offset_kind(&m, "gz"));
+
+    // Mixed Byte/Word struct: the word field starts at offset 1, right after the byte.
+    let (_mbytes, mfields) = struct_scalar_layout(&["Byte", "Word"]);
+    assert_eq!(mfields, vec![(0, ScalarKind::Byte), (1, ScalarKind::Int)]);
+    let mm = compile_src(
+        "struct M { b: Byte, w: Word }\n\
+         fn gb(m: M) -> Byte { m.b }\n\
+         fn gw(m: M) -> Word { m.w }",
+    );
+    assert_eq!(mfields[0], ref_field_offset_kind(&mm, "gb"));
+    assert_eq!(mfields[1], ref_field_offset_kind(&mm, "gw"));
 }
 
 /// Expected result of running a built module. Arithmetic bodies return a `Word`;
@@ -599,6 +1470,7 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
 #[derive(Clone, Copy, Debug)]
 enum Expect {
     Int(i64),
+    Byte(u8),
     Bool(bool),
 }
 
@@ -816,6 +1688,101 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             0,
             Int(6),
         ),
+        // bare call statement (expression statement): its value is discarded.
+        (
+            "fn bump(x: Word) -> Word { x + 1 } fn main(v: Word) -> Word { bump(v); bump(v); v + 2 }",
+            40,
+            Int(42),
+        ),
+        // statement-form if without else, for effect.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { if v > 0 { d.s = 42; } d.s }",
+            1,
+            Int(42),
+        ),
+        // statement-form if with else, for effect.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { if v > 0 { d.s = 1; } else { d.s = 2; } d.s }",
+            0,
+            Int(2),
+        ),
+        // match over an integer scrutinee: the reference lowers it to a virtual
+        // loop of GetLocal/Const/CmpEq/If tests, each arm ending in a Break, then a
+        // dead Trap tail. A literal arm hit.
+        (
+            "fn main(input: Word) -> Word { match input { 0 => 10, 1 => 20, 2 => 30, _ => 99 } }",
+            1,
+            Int(20),
+        ),
+        // The same match, falling through every literal arm to the wildcard.
+        (
+            "fn main(input: Word) -> Word { match input { 0 => 10, 1 => 20, 2 => 30, _ => 99 } }",
+            5,
+            Int(99),
+        ),
+        // Arithmetic in an arm result and in the wildcard.
+        (
+            "fn main(a: Word) -> Word { match a { 2 => a * 10, _ => a + 5 } }",
+            2,
+            Int(20),
+        ),
+        (
+            "fn main(a: Word) -> Word { match a { 2 => a * 10, _ => a + 5 } }",
+            3,
+            Int(8),
+        ),
+        // match in value position, bound in a let, then used: the temp local for the
+        // scrutinee sits before the let-bound slot, matching the reference numbering.
+        (
+            "fn main(a: Word) -> Word { let x = match a { 7 => 1, _ => a + 100 }; x + 1 }",
+            7,
+            Int(2),
+        ),
+        (
+            "fn main(a: Word) -> Word { let x = match a { 7 => 1, _ => a + 100 }; x + 1 }",
+            40,
+            Int(141),
+        ),
+        // A repeated literal across pattern and result interns to one pool entry, as
+        // the reference does (the `5` pattern and the `5` addend share a slot).
+        (
+            "fn main(a: Word) -> Word { match a { 5 => a + 5, _ => a } }",
+            5,
+            Int(10),
+        ),
+        // Bare `for ... limit` over a runtime range: the counter header, the range
+        // exit, the two increments, the boundary and break reclassifications, and
+        // the dead limit trap, reproduced byte for byte. Completes within the cap.
+        (
+            "private data d { s: Word } \
+             fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+            3,
+            Int(3),
+        ),
+        // The count == cap boundary completes (does not trap) at exactly the cap.
+        (
+            "private data d { s: Word } \
+             fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+            8,
+            Int(28),
+        ),
+        // A limit loop whose body guards on the loop variable, the codegen idiom.
+        (
+            "private data d { xs: [Word; 8], s: Word } \
+             fn main(n: Word) -> Word { for i in 0..n limit 8 { if i < 3 { d.s = d.s + d.xs[i]; } } d.s }",
+            2,
+            Int(0),
+        ),
+        (
+            "shared data d { xs: [Byte; 2] } fn main(i: Word) -> Byte { d.xs[i] }",
+            1,
+            Expect::Byte(0),
+        ),
+        (
+            "shared data d { xs: [bool; 2] } fn main(i: Word) -> bool { d.xs[i] }",
+            1,
+            Bool(false),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -848,11 +1815,14 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             .iter()
             .find(|f| f.name == "main")
             .expect("main fn");
+        // The conformance cases are all atomic `fn` bodies (category 0).
         let body = build_body(
             &main_fn.body,
             &main_fn.params,
+            0,
             chunk_names,
             data_slots,
+            data_read_kinds(&program),
             const_data,
         );
 
@@ -871,7 +1841,7 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         // Build the module from the stage's own ops, constant pool, and local_count.
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -882,9 +1852,17 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         } else {
             vec![Value::Int(arg)]
         };
-        match (expected, vm.call(&call_args).expect("call built")) {
+        let mut shared = vec![0; vm.shared_data_bytes()];
+        match (
+            expected,
+            vm.call_with_shared(&mut shared, &call_args)
+                .expect("call built"),
+        ) {
             (Expect::Int(e), VmState::Finished(Value::Int(n))) => {
                 assert_eq!(n, e, "wrong for `{src}`")
+            }
+            (Expect::Byte(e), VmState::Finished(Value::Byte(b))) => {
+                assert_eq!(b, e, "wrong for `{src}`")
             }
             (Expect::Bool(e), VmState::Finished(Value::Bool(b))) => {
                 assert_eq!(b, e, "wrong for `{src}`")
@@ -894,6 +1872,49 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
     }
 }
 
+/// Hard-gated multihead conformance. The multiheaded `yield` dispatch (increment
+/// 32) is the newest and historically most fragile path, and its only real subject
+/// so far is `emit_next` through the non-gating self-compile probe. This pins a
+/// hand-written multihead in the byte-identity corpus, and deliberately uses a
+/// parameter-referencing guard (`when r == 0`) rather than the data-field guards
+/// `emit_next` uses, so the head parameter-copy and guard-dispatch fall-through are
+/// exercised on a distinct guard shape.
+#[test]
+fn a_synthetic_multiheaded_function_compiles_byte_identically() {
+    let src = "yield g(r: Word) -> Word when r == 0 { yield r } \
+        yield g(r: Word) -> Word when r > 5 { yield r } \
+        yield g(r: Word) -> Word { yield 0 } \
+        loop main(r: Word) -> Word { g(r) }";
+    let reference = compile_src(src);
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
+
+    // The three `g` heads compile to a single reference chunk; drive the stage over
+    // them and require the emitted ops to match it byte for byte.
+    let heads: Vec<&FunctionDef> = program.functions.iter().filter(|f| f.name == "g").collect();
+    assert_eq!(heads.len(), 3, "the multihead has three heads");
+    let body = build_multihead(
+        &heads,
+        &heads[0].params,
+        chunk_names,
+        Vec::new(),
+        data_read_kinds(&program),
+        Vec::new(),
+    );
+    let (emitted, _pool, _lc) = run_codegen(&body, heads[0].params.len());
+    let ref_ops = reference
+        .chunks
+        .iter()
+        .find(|c| c.name == "g")
+        .expect("g chunk")
+        .ops
+        .clone();
+    assert_eq!(
+        emitted, ref_ops,
+        "synthetic multihead ops diverged from the reference"
+    );
+}
+
 /// Milestone probe: attempt to compile `codegen.kel`'s own atomic `fn`s through the
 /// stage, one function body at a time, and report which compile byte-identically
 /// against the Rust reference and which hit a not-yet-supported construct. This is
@@ -901,9 +1922,13 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
 /// only asserts that the covered functions stay covered.
 #[test]
 fn self_compile_codegen_atomic_functions() {
+    if common::selfhost_cache::hit("self_compile_codegen_atomic_functions", KEL_CODEGEN_ONLY) {
+        return;
+    }
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel"))
+        .expect("read codegen.kel");
     let program = parse(&tokenize(&src).expect("lex codegen.kel")).expect("parse codegen.kel");
     let reference = compile_src(&src);
     let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
@@ -932,48 +1957,90 @@ fn self_compile_codegen_atomic_functions() {
 
     let mut ok: Vec<String> = Vec::new();
     let mut gaps: Vec<(String, String)> = Vec::new();
+    // Group functions by name (order-preserving); a multiheaded function's heads
+    // share a name and are compiled together as one MultiHead dispatch.
+    let mut names_ordered: Vec<String> = Vec::new();
     for f in &program.functions {
-        if f.category != FunctionCategory::Fn {
-            gaps.push((
-                f.name.clone(),
-                "non-atomic (yield/loop) function".to_string(),
-            ));
-            continue;
+        if !names_ordered.contains(&f.name) {
+            names_ordered.push(f.name.clone());
         }
+    }
+    for name in &names_ordered {
+        let heads: Vec<&FunctionDef> = program
+            .functions
+            .iter()
+            .filter(|f| &f.name == name)
+            .collect();
+        let first = heads[0];
         let cn = chunk_names.clone();
         let ds = data_slots.clone();
+        let dk = data_read_kinds(&program);
         let cd = const_data.clone();
+        let name_c = name.clone();
+        let heads_ref = &heads;
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let body = build_body(&f.body, &f.params, cn, ds, cd);
-            if body.nodes.len() > 64 || body.for_parts.len() > 64 || body.call_args.len() > 64 {
+            // Multiheaded (any category) -> MultiHead dispatch (category 3); a
+            // single atomic `fn` -> category 0; a single-headed `loop` -> the
+            // Stream/Reset wrapper (category 2). A lone single-head `yield` is not
+            // exercised by codegen.kel and is not yet lowered.
+            let body = if heads_ref.len() > 1 {
+                build_multihead(heads_ref, &first.params, cn, ds, dk, cd)
+            } else {
+                match first.category {
+                    FunctionCategory::Fn => {
+                        build_body(&first.body, &first.params, 0, cn, ds, dk, cd)
+                    }
+                    FunctionCategory::Loop if first.guard.is_none() => {
+                        build_body(&first.body, &first.params, 2, cn, ds, dk, cd)
+                    }
+                    _ => return Err("non-atomic single-head (yield) function".to_string()),
+                }
+            };
+            if body.nodes.len() > 1024
+                || body.for_parts.len() > 256
+                || body.call_args.len() > 256
+                || body.match_parts.len() > 256
+                || body.head_parts.len() > 256
+                || body.limit_parts.len() > 256
+            {
                 return Err(format!(
-                    "exceeds the 64-slot adapter arrays ({} nodes)",
+                    "exceeds the adapter arrays ({} nodes)",
                     body.nodes.len()
                 ));
             }
-            let (emitted, _pool, _lc) = run_codegen(&body, f.params.len());
+            let (emitted, _pool, _lc) = run_codegen(&body, first.params.len());
             let ref_ops = reference
                 .chunks
                 .iter()
-                .find(|c| c.name == f.name)
+                .find(|c| c.name == name_c)
                 .map(|c| c.ops.clone())
                 .unwrap_or_default();
             if emitted == ref_ops {
                 Ok(())
             } else {
-                Err("op stream differs from the reference".to_string())
+                let diff = (0..emitted.len().max(ref_ops.len()))
+                    .find(|&i| emitted.get(i) != ref_ops.get(i))
+                    .unwrap_or(0);
+                Err(format!(
+                    "op stream differs at {} (emitted {:?} vs ref {:?}); lens {}/{}",
+                    diff,
+                    emitted.get(diff),
+                    ref_ops.get(diff),
+                    emitted.len(),
+                    ref_ops.len()
+                ))
             }
         }));
         match result {
-            Ok(Ok(())) => ok.push(f.name.clone()),
-            Ok(Err(reason)) => gaps.push((f.name.clone(), reason)),
+            Ok(Ok(())) => ok.push(name.clone()),
+            Ok(Err(reason)) => gaps.push((name.clone(), reason)),
             Err(payload) => {
                 let msg = payload
                     .downcast_ref::<String>()
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_else(|| "panic".to_string());
-                gaps.push((f.name.clone(), msg));
+                gaps.push((name.clone(), msg));
             }
         }
     }
@@ -981,7 +2048,7 @@ fn self_compile_codegen_atomic_functions() {
     std::panic::set_hook(prev_hook);
 
     eprintln!(
-        "\n=== self-compile probe: {} atomic fns compile byte-identically ===",
+        "\n=== self-compile probe: {} functions compile byte-identically ===",
         ok.len()
     );
     for n in &ok {
@@ -991,8 +2058,8008 @@ fn self_compile_codegen_atomic_functions() {
     for (n, r) in &gaps {
         eprintln!("  GAP  {n}: {r}");
     }
+    // Regression gate. The codegen stage is fully self-hosting: every one of its
+    // functions round-trips through itself byte-identically. Assert that no
+    // function gaps and pin the count, so a silent partial regression (a function
+    // that stops self-compiling, or one that disappears) fails the test rather than
+    // passing unnoticed once attention moves to the parser. If codegen.kel gains or
+    // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
+    // 37 as of increment 34 (added `push_struct_init` and `push_field_access` for flat
+    // struct construction and field access); 39 with `push_const_value` and `push_break`
+    // for the user-written `break;` statement; 41 with `push_field_access_nested` and
+    // `push_arrindex` for struct array-element access; 42 with `push_array_lit` for array
+    // literals; 43 with `push_enum_init` for enum payload construction; 44 with
+    // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access;
+    // 46 with `drain_tags` for the tagged constant-pool protocol; 47 with `push_strlit` for
+    // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers;
+    // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match; 52 with
+    // `push_arrindex_nested` for array-of-struct parameter element access; 53 with
+    // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate; 54 with
+    // `push_byte_arith` for Byte-operand unchecked arithmetic; 56 with `push_struct_eq` and
+    // `intern_bool` for struct equality; 57 with `push_enum_eq` for all-unit enum equality; 58 with
+    // `push_array_eq` for array equality; 59 with `push_struct_eq_nested` for nested-composite
+    // struct equality; 60 with `push_bool` (the deferred process-time bool Const work item that
+    // lets enum equality intern its result Consts at emission time, for literal-operand enum eq);
+    // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask);
+    // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate); 63 with
+    // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`); 64 with
+    // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`); 65 with `push_bnot`
+    // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`); 66 with `push_byte_bnot` for the
+    // Byte-operand `bnot` (promote-operate-truncate); 67 with `push_array_of_array_eq` for
+    // array-of-array equality (`[[T; N]; M] == [[T; N]; M]`); 68 with `push_andor` for the eager
+    // boolean `and`/`or` operators; 69 with `push_nested_enum_loop`, the variant-dispatch inner loop
+    // for a nested enum field of a struct (factored out of `push_struct_eq_nested` to stay under the
+    // op-table capacity); 70 with `push_enum_struct_payload_loop`, the op-57 nested extract plus inner
+    // struct-eq loop for a STRUCT-payload enum variant field (factored out of `push_enum_eq`).
+    // 71 with `push_struct_eq_subfields`, the inner sub-field emitter factored out of
+    // `push_struct_eq_nested` to admit a DEPTH-2 nested-struct sub-field (`eq/2level_struct`); 72 with
+    // `push_arr_of_struct_inner`, the per-element struct loop for a struct-element ARRAY field (factored
+    // out of `push_struct_eq_nested` to stay under the op-table capacity, `eq/struct_arrayofstruct`).
+    // 75 with the 3-level nesting generalization (`eq/3level_struct`): `push_struct_eq_subfields` became
+    // an explicit-stack reverse-DFS emitter (arbitrary bounded depth), adding three helpers
+    // `struct_forest_end`, `nested_end`, and `es_compute_sfoff` (72 -> 75), all self-compiling.
+    // 76 with `push_arr_scalar_inner`, the per-element GetIndex compare body of a nested scalar-ARRAY
+    // block (`eq/nested_array_subfield`), factored so the depth-1 array field and the nested array
+    // block share one emission form (75 -> 76).
+    // Guarded match results and enum cast dispatch added two helpers, both checked above.
+    // Nested tuple extraction adds an internal operand-packing helper.
+    // Data relocation adds one helper. Head phases, local-slot mapping and shift phases add ten.
+    // Outcome dispatch and arm scheduling add two helpers.
+    // Checked arithmetic adds five helpers.
+    // The index-first and handled indexed writes of 2026-10-21 add `push_write_probe`,
+    // `store_binds` and `push_checked_store` and remove the dead `push_index_store` (100 -> 102).
+    // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103), and
+    // slice 5b `push_floatlit` (103 -> 104).
+    // 105 since `push_refinement`, the refinement check, 2026-10-27.
+    // The private struct read copy pass of 2026-10-31 adds the twelve `dc_` helpers, all
+    // self-compiling (105 -> 117).
+    const EXPECTED_SELF_COMPILE: usize = 117;
     assert!(
-        !ok.is_empty(),
-        "expected at least some atomic fns of codegen.kel to self-compile"
+        gaps.is_empty(),
+        "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
+    );
+    assert_eq!(
+        ok.len(),
+        EXPECTED_SELF_COMPILE,
+        "codegen self-compile count changed (expected {EXPECTED_SELF_COMPILE}); \
+         update the gate deliberately if codegen.kel changed. self-compiled: {ok:?}"
+    );
+    common::selfhost_cache::record_pass("self_compile_codegen_atomic_functions", KEL_CODEGEN_ONLY);
+}
+
+// ---------------------------------------------------------------------------
+// Parse-into-codegen bridge (arithmetic subset).
+//
+// The final composition step: parse.kel emits a function body as a postorder
+// stream of (kind, arg) node records, and codegen.kel consumes a forest of
+// (kind, arg, lhs, rhs) nodes. `reconstruct_body` rebuilds that forest from the
+// postorder stream with a node-index stack -- a leaf pushes itself, an operator
+// pops its children and links them -- exactly the inverse of the reference
+// flatten. Driving lexer.kel then parse.kel then codegen.kel over real source and
+// asserting byte-identity with the Rust compiler proves the whole self-hosted
+// front-to-back path for the arithmetic node kinds; later increments extend the
+// reconstruction to the control-flow, data-access, call, and yield kinds.
+// ---------------------------------------------------------------------------
+
+// Lexer `src` block slots: len(1) + bytes(LEX_SOURCE_CAP) then the intern table.
+const BR_LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
+const BR_LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
+const BR_LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
+// Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
+// word per token), then the scalar and chunk-table inputs.
+const BR_P_LEN: usize = 0;
+const BR_P_PACKED: usize = 1;
+// THE SHARED-SLOT LAYOUT LIVES IN ONE PLACE AND THIS IS NOT IT.
+//
+// These were independent copies of the same arithmetic (`1 + 40960 + 2 + 256 + 3`).
+// Widening `toks.chunks` moved the stage's fields and left every copy seeding the
+// keyword and type ids at the old slots, which failed sixty-eight tests with struct
+// byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
+// one of them naming a slot. Aliased to the driver's constants so the next widening
+// moves them.
+const BR_P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const BR_P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const BR_P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const BR_P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const BR_P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const BR_P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const BR_P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
+// The eager `and`/`or` ids, appended after `bool_id` (see the `toks` block in parse.kel).
+const BR_P_AND_ID: usize = keleusma::selfhost_host::BR_P_AND_ID;
+const BR_P_OR_ID: usize = keleusma::selfhost_host::BR_P_OR_ID;
+const BR_P_TRUE_ID: usize = keleusma::selfhost_host::BR_P_TRUE_ID;
+const BR_P_FALSE_ID: usize = keleusma::selfhost_host::BR_P_FALSE_ID;
+
+fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
+    match vm.get_shared(buf, slot).expect("get_shared") {
+        Value::Int(n) => n,
+        other => panic!("expected Int at slot {slot}, got {other:?}"),
+    }
+}
+
+/// Tokenize `src` with lexer.kel; return its `(tok, payload)` stream (no EOF) and
+/// the id-to-spelling table recovered from the exposed intern table.
+fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
+    let bytes = src.as_bytes();
+    let m = compile_src(
+        &std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel"))
+            .expect("read lexer.kel"),
+    );
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify lexer.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
+        .unwrap();
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b)).unwrap();
+    }
+    let mut toks = Vec::new();
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(bytes.len() * 4 + 16) {
+        if let VmState::Yielded(Value::Int(t)) = st {
+            if t == 63 {
+            } else if t == 62 {
+                break;
+            } else {
+                toks.push((t.rem_euclid(256), t.div_euclid(256)));
+            }
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+    let icount = br_shared_word(&vm, &shared, BR_LEX_ICOUNT) as usize;
+    let mut names = Vec::with_capacity(icount);
+    for id in 0..icount {
+        let start = br_shared_word(&vm, &shared, BR_LEX_ISTART + id) as usize;
+        let len = br_shared_word(&vm, &shared, BR_LEX_ILEN + id) as usize;
+        names.push(String::from_utf8(bytes[start..start + len].to_vec()).unwrap());
+    }
+    (toks, names)
+}
+
+/// Function-name ids in declaration order, from a brace-depth scan of the tokens.
+fn br_chunks(tokens: &[(i64, i64)]) -> Vec<i64> {
+    let (mut chunks, mut depth) = (Vec::new(), 0i64);
+    for w in tokens.windows(2) {
+        match w[0].0 {
+            2 => depth += 1,
+            3 => depth -= 1,
+            0 | 5 | 6 if depth == 0 && w[1].0 == 1 => chunks.push(w[1].1),
+            _ => {}
+        }
+    }
+    chunks
+}
+
+/// Drive lexer.kel then parse.kel over `src`, returning the last function's body
+/// records (the postorder (kind, arg) node stream), its value parameter count, and
+/// its codegen category (0 fn, 2 loop, 3 multihead, mapped from the parser's START
+/// category of 1 fn / 2 yield / 3 loop). All parser inputs come from the lexer.
+fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
+    let (tokens, names) = br_lex(src);
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    let chunks = br_chunks(&tokens);
+
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+                    .expect("read"),
+            )
+        })
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
+    // a slot added there is not added here, and the boundary test drives THIS one.
+    // Omitting them makes `true` resolve as a variable reference again — the exact
+    // miscompile the driver-side fix removes.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
+            .unwrap();
+    }
+
+    // Track each function's records and value-parameter count, keeping the last
+    // one at DONE. Multi-function sources (a callee then `main`) supply the whole
+    // chunk table so parse.kel resolves the call, and `main` is the last function.
+    let mut last: (Vec<(i64, i64)>, usize, i64) = (Vec::new(), 0, 0);
+    let mut records: Vec<(i64, i64)> = Vec::new();
+    let mut params = 0usize;
+    // Codegen category, mapped from the parser's START category: fn 1 -> 0,
+    // yield 2 -> 3 (multihead), loop 3 -> 2.
+    let mut cur_cat = 0i64;
+    let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
+    let mut in_guard = false;
+    // A struct (STRUCTSTART 18), trait (19), or impl (20) declaration is skipped until its
+    // END so its fields/methods are not mistaken for a function's params or body.
+    let mut in_skip_decl = false;
+    let state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    let budget = tokens.len() * 16 + 256;
+    keleusma::selfhost_host::drive_parse_records(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=105) => {}
+                    _ => records.push((code, val)),
+                }
+            } else if in_guard {
+                in_guard = code != 15; // skip the `when` guard forest until its Done
+            } else if in_data {
+                in_data = code != 5;
+            } else if in_enum {
+                in_enum = code != 5;
+            } else if in_use {
+                in_use = code != 5;
+            } else if in_skip_decl {
+                in_skip_decl = code != 5;
+            } else {
+                match code {
+                    1..=3 => {
+                        cur_cat = match code {
+                            3 => 2, // loop
+                            2 => 3, // yield -> multihead
+                            _ => 0, // fn
+                        };
+                        records = Vec::new();
+                        params = 0;
+                    }
+                    4 => params += 1,
+                    9 => in_data = true,
+                    10 => in_use = true,
+                    12 => in_enum = true,
+                    16 => in_body = true,
+                    17 => in_guard = true,
+                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
+                    5 => last = (std::mem::take(&mut records), params, cur_cat),
+                    15 => return std::ops::ControlFlow::Break(()),
+                    _ => {}
+                }
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    last
+}
+
+/// Rebuild the codegen node forest from parse.kel's postorder record stream with a
+/// node-index stack, the inverse of the reference flatten. A leaf (Literal 1,
+/// Local 2, Unit 20) pushes itself. A binary node pops its right then left child:
+/// the operators (BinOp 3, Andalso 8, Orelse 9), and the block-fold statements
+/// LetIn (5, whose `arg` is the local slot) and ExprStmt (21), whose left child is
+/// the value and right child the continuation. A unary operator (Not 6, Neg 10)
+/// pops its single operand into `lhs`. An If (4) pops its else, then, and cond
+/// children and takes the cond node index as its `arg` (the record's `arg` is 0).
+/// The root is the one node left on the stack. The data-access kinds fit the same
+/// groups: a scalar DataRead (11) is a leaf carrying its slot; a DataAssign (12)
+/// folds like a LetIn carrying its slot; and an IndexRead (13) is unary over the
+/// index, carrying `base + len*2^24` in `arg`. A Call (7) packs `chunk + count*RADIX`
+/// in its record `arg`; it pops its `count` argument nodes, reverses them to source
+/// order into the `call_args` side array, and takes that slice's start as `lhs` and
+/// the count as `rhs`. An indexed write pairs an IndexStore signal (36), which
+/// folds the value and index into a kind-15 node (value in lhs, index in rhs),
+/// with an IndexAssign (14) that folds like a LetIn carrying `base + len*2^24`.
+/// A `for .. limit` loop streams its start, end, body, and the four literals cap/
+/// 0/1/2 as nodes, then five SlotRecords (32) carrying its frame slots, then a
+/// ForBuild (33) that assembles the 12-word limit_parts entry (the five slots then
+/// the start, end, body, cap, 0, 1, 2 node indices); the ForLimit statement (23)
+/// folds into the block popping only the continuation. A `match` streams its
+/// scrutinee, a (literal, result) pair per literal arm, and the wildcard result,
+/// then a MatchBuild (34) packing `temp*1024 + lit_count`, which assembles the
+/// match_parts entry (temp, wildcard, then the pairs) and builds the MatchIn node.
+/// A YieldExpr (24) is unary, holding the yielded expression in `lhs`. This
+/// increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
+/// block, if, scalar and indexed data-access, call, for-limit, integer-match, and
+/// yield kinds; a record of any other kind is rejected until a later increment adds
+/// it (the multiheaded dispatch and its head_parts remain).
+fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
+    // THE BINDING-NAME RECORD IS NOT A NODE, and this walker is the third consumer
+    // of the record stream that has to know it.
+    //
+    // `parse.kel` emits it before each `LetIn` so a type-check extraction can join a
+    // forest of SLOTS to a binding table of NAMES. The main driver diverts it into
+    // `ParsedFn::let_names`; the parse harness skips it; and this one, which
+    // reconstructs bodies in Rust to check `reconstruct.kel` against, must drop it
+    // before the walk. **Three decoders now share the protocol and only the tag
+    // itself is shared** -- the skip sets legitimately differ, since this walker
+    // CONSUMES kind 35 where the parse harness skips it.
+    let records: Vec<(i64, i64)> = records
+        .iter()
+        .copied()
+        .filter(|(k, _)| {
+            *k != keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                && *k != keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                && *k != keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                && *k != keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                && *k != keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                && *k != keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                && !matches!(*k, 94..=96 | 99..=105)
+        })
+        .collect();
+    let records: &[(i64, i64)] = &records;
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut call_args: Vec<i64> = Vec::new();
+    let mut limit_parts: Vec<i64> = Vec::new();
+    let mut match_parts: Vec<i64> = Vec::new();
+    let root = reconstruct_into(
+        records,
+        &mut nodes,
+        &mut call_args,
+        &mut limit_parts,
+        &mut match_parts,
+    );
+    Body {
+        nodes,
+        call_args,
+        for_parts: Vec::new(),
+        match_parts,
+        limit_parts,
+        head_parts: Vec::new(),
+        category,
+        root,
+    }
+}
+
+/// Reconstruct one postorder record forest into the shared `nodes` array (and the
+/// shared side arrays), returning the root node index. Node indices are absolute in
+/// `nodes`, so several forests -- a multihead's per-head guards and bodies -- can be
+/// reconstructed into one array and referenced by `head_parts`.
+fn reconstruct_into(
+    records: &[(i64, i64)],
+    nodes: &mut Vec<Node>,
+    call_args: &mut Vec<i64>,
+    limit_parts: &mut Vec<i64>,
+    match_parts: &mut Vec<i64>,
+) -> i64 {
+    let mut stack: Vec<i64> = Vec::new();
+    let mut pending_slots: Vec<i64> = Vec::new();
+    // The construction field-position stack, parallel to `stack`: a FieldPos (35) pushes the
+    // following field value's declaration slot, and StructInit pops one per value to place it
+    // in declaration order (a construction may write fields out of order).
+    let mut pending_fp: Vec<i64> = Vec::new();
+    for &(kind, arg) in records {
+        if kind == 72 {
+            stack.push(-1); // A wildcard is an ordered pattern sentinel, not a value node.
+            continue;
+        }
+        // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
+        // ForBuild (33) assembles the 12-word limit_parts entry from the five
+        // collected slots and the seven loop nodes on the stack. Neither is a node.
+        if kind == 32 {
+            pending_slots.push(arg);
+            continue;
+        }
+        // A FieldPos (35) carries the declaration slot of the field value that follows.
+        if kind == 35 {
+            pending_fp.push(arg);
+            continue;
+        }
+        if kind == 33 {
+            let two = stack.pop().expect("for two");
+            let one = stack.pop().expect("for one");
+            let zero = stack.pop().expect("for zero");
+            let cap = stack.pop().expect("for cap");
+            let body = stack.pop().expect("for body");
+            let end = stack.pop().expect("for end");
+            let start = stack.pop().expect("for start");
+            assert_eq!(pending_slots.len(), 5, "a for loop has five SlotRecords");
+            limit_parts.extend([
+                pending_slots[0],
+                pending_slots[1],
+                pending_slots[2],
+                pending_slots[3],
+                pending_slots[4],
+                start,
+                end,
+                body,
+                cap,
+                zero,
+                one,
+                two,
+            ]);
+            pending_slots.clear();
+            continue;
+        }
+        let idx = match kind {
+            1 | 2 | 11 | 20 | 38 => {
+                nodes.push(Node {
+                    kind,
+                    arg,
+                    lhs: 0,
+                    rhs: 0,
+                });
+                (nodes.len() - 1) as i64
+            }
+            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 | 71 | 83 => {
+                let r = stack.pop().expect("binary rhs");
+                let l = stack.pop().expect("binary lhs");
+                nodes.push(Node {
+                    kind,
+                    arg,
+                    lhs: l,
+                    rhs: r,
+                });
+                (nodes.len() - 1) as i64
+            }
+            36 => {
+                // IndexStore signal: fold the value and index already on the stack
+                // into a kind-15 IndexStore node (value in lhs, index in rhs). The
+                // record kind is 36 because 15 collides with the record DONE marker;
+                // the node it produces is a real kind-15. Its argument is the offset
+                // slot of a bare write, or a handled write's operand, kind and slot.
+                let value = stack.pop().expect("index-store value");
+                let index = stack.pop().expect("index-store index");
+                nodes.push(Node {
+                    kind: 15,
+                    arg,
+                    lhs: value,
+                    rhs: index,
+                });
+                (nodes.len() - 1) as i64
+            }
+            23 => {
+                // ForLimit statement: arg is the limit_parts entry start (already
+                // assembled at the ForBuild). It folds into the block popping only
+                // the continuation; its lhs is unused.
+                let cont = stack.pop().expect("forlimit continuation");
+                nodes.push(Node {
+                    kind: 23,
+                    arg,
+                    lhs: 0,
+                    rhs: cont,
+                });
+                (nodes.len() - 1) as i64
+            }
+            34 => {
+                // Each ordered arm has a pattern/result pair. Compact a final
+                // wildcard into the trailer while retaining earlier wildcard positions.
+                let temp = arg.div_euclid(1024);
+                let total = arg.rem_euclid(1024);
+                let has_wildcard = total > 0 && stack[stack.len() - 2] < 0;
+                let lit_count = total - i64::from(has_wildcard);
+                let wc = if has_wildcard {
+                    let result = stack.pop().expect("wildcard result");
+                    assert_eq!(stack.pop(), Some(-1));
+                    result
+                } else {
+                    -1
+                };
+                let mut pairs: Vec<(i64, i64)> = Vec::new();
+                for _ in 0..lit_count {
+                    let res = stack.pop().expect("match arm result");
+                    let lit = stack.pop().expect("match arm literal");
+                    pairs.push((lit, res));
+                }
+                pairs.reverse();
+                let scrut = stack.pop().expect("match scrutinee");
+                let base = match_parts.len() as i64;
+                match_parts.push(temp);
+                match_parts.push(wc);
+                for (lit, res) in &pairs {
+                    match_parts.push(*lit);
+                    match_parts.push(*res);
+                }
+                nodes.push(Node {
+                    kind: 22,
+                    arg: base,
+                    lhs: scrut,
+                    rhs: lit_count,
+                });
+                (nodes.len() - 1) as i64
+            }
+            6 | 10 | 13 | 24 | 26 | 28 | 29 | 30 | 37 => {
+                let c = stack.pop().expect("unary operand");
+                nodes.push(Node {
+                    kind,
+                    arg,
+                    lhs: c,
+                    rhs: 0,
+                });
+                (nodes.len() - 1) as i64
+            }
+            4 => {
+                let el = stack.pop().expect("if else");
+                let th = stack.pop().expect("if then");
+                let cond = stack.pop().expect("if cond");
+                nodes.push(Node {
+                    kind: 4,
+                    arg: if arg == 1 { -cond - 1 } else { cond },
+                    lhs: th,
+                    rhs: el,
+                });
+                (nodes.len() - 1) as i64
+            }
+            7 => {
+                // Call: arg packs `chunk + count * CALL_CHUNK_RADIX`. Pop the count node
+                // indices (last-pushed is the last argument), reverse them to source
+                // order, and append them to the packed call_args side array. The Call
+                // node's lhs is that slice's start and rhs the argument count.
+                let radix = keleusma::selfhost_host::CALL_CHUNK_RADIX as i64;
+                let chunk = arg.rem_euclid(radix);
+                let count = arg.div_euclid(radix);
+                let mut popped: Vec<i64> =
+                    (0..count).map(|_| stack.pop().expect("call arg")).collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 7,
+                    arg: chunk,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
+            27 => {
+                // StructInit: arg packs byte_size * 1024 + count. The parser summed the
+                // struct's flat byte size per field, so a mixed-scalar struct is sized here.
+                // Pop each field value with its FieldPos slot and place it at its DECLARATION
+                // position (a construction may write fields out of order), then build the
+                // codegen StructInit node whose arg is the byte size, lhs the field-slice
+                // start, rhs the field count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let args_start = call_args.len() as i64;
+                call_args.extend(std::iter::repeat_n(0, count as usize));
+                for _ in 0..count {
+                    let node = stack.pop().expect("struct field value");
+                    let pos = pending_fp.pop().expect("struct field position");
+                    call_args[(args_start + pos) as usize] = node;
+                }
+                nodes.push(Node {
+                    kind: 27,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
+            17 => {
+                // ArrayLit: arg packs byte_size * 1024 + count. Pop the element nodes into
+                // call_args in source order (positional; no FieldPos), and build the codegen
+                // ArrayLit node whose arg is the byte size, lhs the element-slice start, rhs
+                // the count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("array element value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 17,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
+            18 => {
+                // EnumInit: arg packs byte_size * 1024 + count. The children are positional
+                // (the discriminant literal first, then the payload expressions), like an
+                // ArrayLit, so pop them in source order (no FieldPos) and build the codegen
+                // EnumInit node whose arg is the enum's flat byte size, lhs the child-slice
+                // start, rhs the child count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("enum child value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 18,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
+            19 => {
+                // TupleInit: arg packs byte_size * 1024 + count (byte_size = count * word_bytes).
+                // Positional children like an ArrayLit (no FieldPos), popped in source order,
+                // then the codegen TupleInit node whose arg is the byte size, lhs the
+                // element-slice start, rhs the count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("tuple element value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 19,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
+            other => panic!("reconstruct_body: unsupported node kind {other}"),
+        };
+        stack.push(idx);
+    }
+    assert_eq!(stack.len(), 1, "exactly one root node remains");
+    stack[0]
+}
+
+// The whole self-hosted front-to-back path for the arithmetic node kinds: lexer.kel
+// tokenizes real source, parse.kel produces the body's postorder records, the host
+// rebuilds the forest, and codegen.kel emits the ops -- which must be byte-identical
+// to the Rust compiler's, and the built module must compute the right value.
+#[test]
+fn parse_into_codegen_arithmetic_matches_the_reference() {
+    // (source, input, expected) -- all `fn` bodies returning Word.
+    let cases: &[(&str, i64, i64)] = &[
+        ("fn main(x: Word) -> Word { x + 1 }", 41, 42),
+        ("fn main(x: Word) -> Word { x * 2 + 1 }", 20, 41),
+        ("fn main(x: Word) -> Word { x * 2 + 2 }", 20, 42),
+        ("fn main(a: Word) -> Word { a - 1 }", 43, 42),
+        ("fn main(a: Word) -> Word { a / 2 }", 84, 42),
+        ("fn main(a: Word) -> Word { a % 5 }", 47, 2),
+        ("fn main(a: Word) -> Word { (a - 2) / 2 }", 86, 42),
+        ("fn main(a: Word) -> Word { -a }", 5, -5),
+        ("fn main(a: Word) -> Word { 3 - -a }", 4, 7),
+        ("fn main(a: Word) -> Word { a band 6 }", 5, 4),
+        ("fn main(a: Word) -> Word { a bor 1 }", 4, 5),
+        ("fn main(a: Word) -> Word { a bxor 3 }", 5, 6),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The layout bridge, end to end: lexer.kel tokenizes, parse.kel emits the construction
+// records (a StructInit carrying the struct's declaration index), the host layout bridge
+// resolves the flat byte size from that index, and codegen.kel emits the ops -- byte-
+// identical to the reference for a flat all-scalar struct construction. This is the seam
+// that joins the construction PARSER (parse.kel) to the construction CODEGEN (codegen.kel's
+// NewComposite lowering); the byte-size resolution is host-side for now, to be ported to a
+// .kel layout pass in the self-hosted reconstruct stage later.
+#[test]
+fn parse_into_codegen_struct_construction_matches_the_reference() {
+    let src = "struct P { x: Word, y: Word }\n\
+               fn make() -> P { P { x: 1, y: 2 } }";
+    let (records, param_count, category) = parse_function_records(src);
+    // parse.kel emits a FieldPos marker before each field value (position 0 for `x`, 1 for
+    // `y`, in declaration order), then the StructInit packing the flat byte size (two Words =
+    // 16) and count 2. reconstruct consumes the FieldPos markers to reorder.
+    assert_eq!(
+        records,
+        vec![(35, 0), (1, 1), (35, 1), (1, 2), (27, 16 * 1024 + 2)],
+        "make's construction records"
+    );
+
+    let body = reconstruct_body(&records, category);
+    let (ops, _pool, _lc) = run_codegen(&body, param_count);
+
+    let reference = compile_src(src);
+    let make = reference
+        .chunks
+        .iter()
+        .find(|c| c.name == "make")
+        .expect("make chunk");
+    assert_eq!(
+        ops, make.ops,
+        "self-hosted struct construction matches the reference"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 16,
+            })
+        )),
+        "emits a flat 2-field 16-byte struct NewComposite"
+    );
+}
+
+// The layout pass now lives in the .kel reconstruct stage: driving the WHOLE self-hosted
+// pipeline (lexer.kel -> parse.kel -> reconstruct.kel -> codegen.kel) over a struct
+// construction, `reconstruct.kel` resolves the StructInit's field count to the flat byte
+// size (count * word_bytes) with no host layout helper, and the compiled `make` chunk is
+// byte-identical to the reference. This proves the byte-size resolution is self-hosted.
+#[test]
+fn self_host_compiles_a_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn make() -> P { P { x: 1, y: 2 } }",
+    );
+}
+
+// Multiple structs of different field counts: the layout pass computes each construction's
+// byte size from its own field count, so two structs and two constructors all match.
+#[test]
+fn self_host_compiles_multiple_struct_constructions() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         struct Q { a: Word, b: Word, c: Word }\n\
+         fn mp() -> P { P { x: 1, y: 2 } }\n\
+         fn mq() -> Q { Q { a: 3, b: 4, c: 5 } }",
+    );
+}
+
+// A nested construction: a struct-typed field whose value is itself a construction. The
+// construction-context mark stack (`sc_sp`) handles the nesting, and the inner struct here
+// is one Word wide (eight bytes), so `count * word_bytes` gives the right size at both
+// levels. A nested struct wider than one word needs the mixed-field-size layout (later).
+#[test]
+fn self_host_compiles_a_nested_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct Inner { a: Word }\n\
+         struct Outer { i: Inner }\n\
+         fn make() -> Outer { Outer { i: Inner { a: 1 } } }",
+    );
+}
+
+// Mixed-field-size layout, at the record level: a struct whose fields differ in byte width
+// (a one-byte `Byte` then an eight-byte `Word`). parse.kel sums a flat byte size of 9 (one
+// for the Byte, eight for the Word), NOT count * word_bytes (which would give 16 and misplace
+// `w`). The StructInit record it emits therefore carries 9 * 1024 + 2, which the reconstruct
+// layout pass reads directly. Asserted at the record level -- parse.kel does no type checking,
+// so the Byte field takes a plain integer value here -- to isolate the byte-size accumulation
+// from the Byte-cast codegen a full byte-identical construction would additionally exercise.
+#[test]
+fn parse_sums_a_mixed_field_size_struct_layout() {
+    let src = "struct M { b: Byte, w: Word }\n\
+               fn make() -> M { M { b: 1, w: 2 } }";
+    let (records, _param_count, _category) = parse_function_records(src);
+    assert_eq!(
+        records,
+        vec![(35, 0), (1, 1), (35, 1), (1, 2), (27, 9 * 1024 + 2)],
+        "make's construction records size M at 9 bytes (Byte 1 + Word 8), not 16"
+    );
+}
+
+// Fields written OUT OF declaration order. The reference sorts a construction's fields to
+// declaration order before codegen, so `P { y: 2, x: 1 }` packs x (offset 0) = 1 and y
+// (offset 8) = 2. parse.kel emits the field values in SOURCE order but precedes each with a
+// FieldPos marker carrying its declaration position; reconstruct.kel places each value at its
+// declaration slot, so the self-hosted output matches the reference byte-for-byte.
+#[test]
+fn self_host_compiles_out_of_order_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn make() -> P { P { y: 2, x: 1 } }",
+    );
+}
+
+// A three-field struct constructed fully reversed, to exercise a non-trivial permutation of
+// the FieldPos reorder (not just a two-field swap): c,b,a must land at declaration slots 2,1,0.
+#[test]
+fn self_host_compiles_a_fully_reversed_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct T { a: Word, b: Word, c: Word }\n\
+         fn make() -> T { T { c: 3, b: 2, a: 1 } }",
+    );
+}
+
+// Struct field ACCESS on a struct-typed PARAMETER: `p.x` reads field `x` from parameter `p`
+// of type P. parse.kel captures each parameter's struct type and each struct's field offsets
+// and ScalarKinds, so it emits the parameter Local then a FieldAccess (kind 28) packing the
+// field's byte offset and kind. Asserted at the record level: `p.x` (field 0, offset 0, kind
+// Int = 3) is Local(0) then FieldAccess(0 + 3 * 65536).
+#[test]
+fn parse_emits_field_access_on_a_struct_parameter() {
+    let src = "struct P { x: Word, y: Word }\n\
+               fn gx(p: P) -> Word { p.x }";
+    let (records, param_count, _category) = parse_function_records(src);
+    assert_eq!(param_count, 1, "gx has one parameter");
+    assert_eq!(
+        records,
+        vec![(2, 0), (28, 3 * 65536)],
+        "p.x is Local(0) then FieldAccess(offset 0, kind Int 3)"
+    );
+}
+
+// The same field access through the WHOLE self-hosted pipeline: both getters compile byte-
+// identically to the reference (which lowers `p.f` to `GetField(Flat{offset, kind})`), so the
+// reconstruct FieldAccess arm and codegen's `push_field_access` agree end to end.
+#[test]
+fn self_host_compiles_struct_field_access_on_a_parameter() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn gx(p: P) -> Word { p.x }\n\
+         fn gy(p: P) -> Word { p.y }",
+    );
+}
+
+// A mixed-size struct exercises the per-field offset and ScalarKind: `m.b` (a Byte at offset
+// 0, kind Byte = 2) and `m.w` (a Word at offset 1 after the byte, kind Int = 3).
+#[test]
+fn self_host_compiles_mixed_field_access_on_a_parameter() {
+    assert_self_host_byte_identical(
+        "struct M { b: Byte, w: Word }\n\
+         fn gb(m: M) -> Byte { m.b }\n\
+         fn gw(m: M) -> Word { m.w }",
+    );
+}
+
+// A struct-typed parameter used WHOLE (not `.field`) must still read as a plain Local: `id`
+// returns its parameter unchanged, so the postfix field-access arm pushes the non-`.` token
+// back and the parameter compiles to a bare GetLocal, byte-identical to the reference.
+#[test]
+fn self_host_compiles_a_struct_parameter_used_whole() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn id(p: P) -> P { p }",
+    );
+}
+
+// A scalar field AFTER an ARRAY field: `tag` sits at flat byte offset 32 (four Words), so the
+// layout must size the array field as element_size * length (8 * 4), not as one element. The
+// getter `s.tag` compiles byte-identically to the reference through the whole self-hosted
+// pipeline only if the array field is accounted for. (Array-element access `s.xs[i]` needs an
+// indexed flat read and is a later increment; this validates the array field's SIZE in the
+// layout.)
+#[test]
+fn self_host_compiles_field_access_after_an_array_field() {
+    assert_self_host_byte_identical(
+        "struct S { xs: [Word; 4], tag: Word }\n\
+         fn gt(s: S) -> Word { s.tag }",
+    );
+}
+
+// A mixed-width array field: `flags: [Byte; 3]` is three bytes, so `n` lands at offset 3.
+#[test]
+fn self_host_compiles_field_access_after_a_byte_array_field() {
+    assert_self_host_byte_identical(
+        "struct H { flags: [Byte; 3], n: Word }\n\
+         fn gn(h: H) -> Word { h.n }",
+    );
+}
+
+// Array-ELEMENT access `s.xs[i]` on a struct-typed parameter: parse.kel emits a
+// FieldAccessNested (the whole array field extracted as a value, GetField(FlatNested{offset,
+// size, Array})) then an ArrIndex (GetIndex(Flat{element kind})) over it and the index. The
+// getter compiles byte-identically to the reference through the whole self-hosted pipeline for
+// both a Word-element and a Byte-element array. (Construction of an array-field struct needs an
+// array literal and remains later, so these are byte-identity checks, not runs.)
+#[test]
+fn self_host_compiles_array_element_access() {
+    assert_self_host_byte_identical(
+        "struct S { xs: [Word; 4], tag: Word }\n\
+         fn g(s: S, i: Word) -> Word { s.xs[i] }",
+    );
+    assert_self_host_byte_identical(
+        "struct B { bs: [Byte; 5] }\n\
+         fn gb(b: B, i: Word) -> Byte { b.bs[i] }",
+    );
+}
+
+// An ARRAY LITERAL `[a, b, c]`: parse.kel emits the element ops then an ArrayLit
+// (NewComposite(Flat{Array, count, byte_size = count * word_bytes})) -- like a struct
+// construction but the Array composite kind. This completes the array story (layout, element
+// access, and now construction): a standalone literal and a literal constructing an array-field
+// struct both compile byte-identically through the whole self-hosted pipeline. (Byte-identity
+// only, as the value is a composite; Word elements only, as untyped integer literals default to
+// Word -- a Byte array needs element casts, a later increment.)
+#[test]
+fn self_host_compiles_an_array_literal() {
+    assert_self_host_byte_identical("fn g() -> [Word; 3] { [1, 2, 3] }");
+    assert_self_host_byte_identical(
+        "struct Buf { xs: [Word; 3] }\n\
+         fn make() -> Buf { Buf { xs: [1, 2, 3] } }",
+    );
+    // Arithmetic elements, exercising the per-element operator drain at each `,`.
+    assert_self_host_byte_identical("fn g(a: Word) -> [Word; 2] { [a + 1, a * 2] }");
+}
+
+// ENUM PAYLOAD construction `E::V(payload...)`: the declaration parser now records each
+// variant's payload byte sum (`epayload`), so a construction resolves the enum's flat body size
+// (eight for the discriminant plus the largest variant payload) and emits the discriminant
+// literal, the payload expressions, then NewComposite(Flat{Enum, count, byte_size}). Distinct
+// from the pre-existing `E::V() as Word` discriminant fold (unchanged). Byte-identity only, as
+// the result is a composite value. Single- and multi-field payloads, and an arithmetic payload
+// element (exercising the per-element drain), all lower like the reference. Payloads are
+// cast-free (Word/Byte values, not `<int literal> as Word`): the self-host Cast node lowers only
+// `Byte as Word`, and a literal `as Word` (FloatToInt) needs the type inference the pipeline
+// lacks -- an orthogonal, later increment.
+#[test]
+fn self_host_compiles_enum_payload_construction() {
+    // Single Word payload: byte_size = 8 + 8 = 16, count = 2.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn make(x: Word) -> E { E::A(x) }",
+    );
+    // Multi-field payload with a mixed-scalar largest variant: byte_size = 8 + (8 + 1) = 17.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B(Word, Byte), C }\n\
+         fn mb(w: Word, b: Byte) -> E { E::B(w, b) }",
+    );
+    // An arithmetic payload element drains the operator at the `)`.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn m(x: Word) -> E { E::A(x + x) }",
+    );
+    // The discriminant-fold form `E::V() as Word` must still lower to the bare discriminant.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn tag() -> Word { E::B() as Word }",
+    );
+    // A UNIT enum construction as a value `E::V()` (no `as`): lowers to the discriminant literal
+    // then NewComposite(Flat{Enum, count 1, byte_size}), distinct from the `as Word` fold.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn mk() -> E { E::B() }",
+    );
+    // A unit construction bound to a let and matched, exercising the pending-cenum tagging.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn h(x: Word) -> Word { let e = E::B(); match e { E::A(y) => y, E::B() => x } }",
+    );
+}
+
+// TUPLE construction `(a, b, ...)`: a `(` in operand position first pushes a `Paren` marker
+// (grouping and a tuple are indistinguishable until a `,`); the first top-level `,` promotes it
+// to a `TupleMark` and the `)` emits the element ops then NewComposite(Flat{Tuple, count,
+// byte_size = count * word_bytes}) -- like an array literal but the Tuple composite kind, and
+// `(expr)` stays plain grouping. Byte-identity only, as the result is a composite. Word-sized
+// elements only (a mixed-scalar tuple's byte_size needs per-element type inference the pipeline
+// lacks), matching the array-literal limitation.
+#[test]
+fn self_host_compiles_a_tuple_construction() {
+    // A two- and three-element tuple: byte_size = count * 8.
+    assert_self_host_byte_identical("fn mk(a: Word, b: Word) -> (Word, Word) { (a, b) }");
+    assert_self_host_byte_identical(
+        "fn mk3(a: Word, b: Word, c: Word) -> (Word, Word, Word) { (a, b, c) }",
+    );
+    // Arithmetic elements, exercising the per-element operator drain at each `,`.
+    assert_self_host_byte_identical("fn g(a: Word) -> (Word, Word) { (a + 1, a * 2) }");
+    // A single `(expr)` is grouping, not a tuple: the Paren is never promoted.
+    assert_self_host_byte_identical("fn paren(a: Word) -> Word { (a) + 1 }");
+    // A parenthesised sub-expression as a tuple element keeps its grouping Paren distinct from
+    // the outer TupleMark.
+    assert_self_host_byte_identical("fn nest(a: Word, b: Word) -> (Word, Word) { ((a + b), b) }");
+}
+
+// TUPLE FIELD access `t.N` on a tuple-typed PARAMETER: the signature scan parses the `(T, T, ...)`
+// parameter type annotation into a per-parameter element layout (offset + ScalarKind), so `t.N`
+// emits GetTupleField(Flat{offset, kind}) -- the parameter Local then the flat read, like a struct
+// field access but the tuple op. The element offset is the sum of the preceding element sizes, so
+// a mixed-scalar tuple parameter reads each field correctly (unlike CONSTRUCTION, which is Word-
+// sized only). Byte-identical to the reference.
+#[test]
+fn self_host_compiles_tuple_field_access() {
+    // All-Word tuple: element 0 at offset 0, element 1 at offset 8, both Int.
+    assert_self_host_byte_identical("fn g0(t: (Word, Word)) -> Word { t.0 }");
+    assert_self_host_byte_identical("fn g1(t: (Word, Word)) -> Word { t.1 }");
+    // Mixed-scalar tuple parameter: element 1 is a Byte at offset 8.
+    assert_self_host_byte_identical("fn gm(t: (Word, Byte)) -> Byte { t.1 }");
+    // Three elements, reading the middle and last.
+    assert_self_host_byte_identical("fn g(t: (Word, Word, Word)) -> Word { t.1 + t.2 }");
+    // A tuple field used in an arithmetic expression, exercising the postfix-then-operator path.
+    assert_self_host_byte_identical("fn gx(t: (Word, Word)) -> Word { t.0 + t.1 }");
+}
+
+// A TUPLE-TYPED STRUCT FIELD in the flat layout: a `(T, T, ...)` struct field is sized as the sum
+// of its element byte sizes, so a following scalar field gets the correct flat offset -- exactly
+// as an array-typed struct field is sized element*length. `step_struct_tuple_field` scans the
+// field's tuple type in `header_field` and sums it into the struct byte size. A read of the scalar
+// field AFTER the tuple field (`s.tag`) lowers byte-identically to the reference (offset past the
+// whole tuple field). Reading the tuple field itself (`s.p.0`) would use the FlatNested form, a
+// later increment.
+#[test]
+fn self_host_compiles_a_tuple_typed_struct_field() {
+    // The tuple field `p` is 16 bytes, so `tag` sits at flat offset 16.
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word), tag: Word }\n\
+         fn f(s: S) -> Word { s.tag }",
+    );
+    // A mixed-scalar tuple field (Word + Byte = 9 bytes) before a scalar.
+    assert_self_host_byte_identical(
+        "struct M { pair: (Word, Byte), n: Word }\n\
+         fn g(m: M) -> Word { m.n }",
+    );
+    // A scalar before and after the tuple field: `lead` at 0, tuple `p` at 8 (16 bytes), `tag`
+    // at 24.
+    assert_self_host_byte_identical(
+        "struct T { lead: Word, p: (Word, Word), tag: Word }\n\
+         fn gt(s: T) -> Word { s.tag }",
+    );
+}
+
+// LET-BOUND composite field access: a `let` binding whose value's root is a DIRECT composite
+// construction records the binding's type (a fresh all-Word `tupledefs` layout for a tuple, the
+// declaration index for a struct), so a later `x.N`/`x.field` access on the binding arms the same
+// field-access postfix a typed parameter uses, byte-identical to the reference. The pending-type
+// tracking is cleared by any operator or call, so only a bare construction root survives -- a
+// `let x = f((a,b))` or `let x = (a,b) == (c,d)` binding is left untyped, not mistagged.
+#[test]
+fn self_host_compiles_let_bound_composite_field_access() {
+    // A let-bound tuple, read by index.
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { let t = (a, b); t.0 }");
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { let t = (a, b); t.1 }");
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { let t = (a, b); t.0 + t.1 }");
+    // A let-bound struct, read by field.
+    assert_self_host_byte_identical(
+        "struct S { x: Word, y: Word }\n\
+         fn f() -> Word { let s = S { x: 1, y: 2 }; s.x }",
+    );
+    assert_self_host_byte_identical(
+        "struct S { x: Word, y: Word }\n\
+         fn f() -> Word { let s = S { x: 1, y: 2 }; s.x + s.y }",
+    );
+    // A three-element let-bound tuple.
+    assert_self_host_byte_identical(
+        "fn f(a: Word, b: Word, c: Word) -> Word { let t = (a, b, c); t.2 }",
+    );
+    // A tuple with an arithmetic element still tracks as a tuple root (the `+` is inside the
+    // construction, emitted before the TupleInit root).
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { let t = (a + 1, a * 2); t.0 }");
+}
+
+// LET bound to a struct-returning CALL, then field access `let p = mk(); p.field`: the parser
+// records each function's struct return type (`chunkret.ret_struct`), so a `let` bound to such a
+// call tags the binding with the struct and `p.field` resolves -- byte-identical to the reference.
+// This closes the common `let x = constructor(); x.field` case (previously the call cleared the
+// pending composite type, leaving `x` untyped).
+#[test]
+fn self_host_compiles_let_bound_call_field_access() {
+    assert_self_host_byte_identical(
+        "struct P { a: Word, b: Word }\n\
+         fn mk() -> P { P { a: 5, b: 6 } }\n\
+         fn h() -> Word { let p = mk(); p.b }",
+    );
+    // Both fields, combined; and a call with an argument.
+    assert_self_host_byte_identical(
+        "struct P { a: Word, b: Word }\n\
+         fn mk(x: Word) -> P { P { a: x, b: x } }\n\
+         fn h(x: Word) -> Word { let p = mk(x); p.a + p.b }",
+    );
+    // A non-struct-returning call in a let stays untyped (no field access): the binding reads whole.
+    assert_self_host_byte_identical(
+        "fn dbl(x: Word) -> Word { x + x }\n\
+         fn h(x: Word) -> Word { let n = dbl(x); n + 1 }",
+    );
+    // LET bound to a TUPLE-returning call, then index access `let t = mk(); t.N`: the parser records
+    // the function's all-Word tuple return element count (`chunkret.ret_tuple`), so the binding is
+    // tagged and `t.N` resolves through the same postfix a let-bound tuple construction uses.
+    assert_self_host_byte_identical(
+        "fn mk(a: Word, b: Word) -> (Word, Word) { (a, b) }\n\
+         fn h(a: Word, b: Word) -> Word { let t = mk(a, b); t.1 }",
+    );
+    assert_self_host_byte_identical(
+        "fn mk3(a: Word, b: Word, c: Word) -> (Word, Word, Word) { (a, b, c) }\n\
+         fn h3(a: Word, b: Word, c: Word) -> Word { let t = mk3(a, b, c); t.0 + t.2 }",
+    );
+}
+
+// LET-BOUND ARRAY element access `let a = [..]; a[i]`: a `let` whose value root is an array literal
+// records the binding's element kind (all-Word arrays, ScalarKind Int) so a later `a[i]` arms the
+// same ArrIndex/GetIndex postfix the struct array-field read uses, minus the FlatNested extraction
+// (the binding IS the whole array value). Byte-identical to the reference.
+#[test]
+fn self_host_compiles_let_bound_array_access() {
+    // A literal index and a runtime index.
+    assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30]; a[i] }");
+    assert_self_host_byte_identical("fn f() -> Word { let a = [10, 20, 30]; a[1] }");
+    // Two element reads combined.
+    assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30]; a[i] + a[0] }");
+    // An arithmetic index expression.
+    assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30, 40]; a[i + 1] }");
+}
+
+// NESTED TUPLE-FIELD read `s.p.N`: a struct field that is itself a tuple. The struct declaration
+// records the tuple field's element layout (a `tupledefs` entry via `sd_ftuple`), so `s.p`
+// extracts the whole tuple field (GetField(FlatNested{Tuple})) and `.N` reads element N
+// (GetTupleField(Flat{offset, kind})), byte-identical to the reference -- the tuple analogue of
+// the nested-struct field read `s.inner.x`.
+#[test]
+fn self_host_compiles_a_nested_tuple_field_read() {
+    // The tuple field `p` at offset 0; read element 0 and element 1.
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word), tag: Word }\n\
+         fn g0(s: S) -> Word { s.p.0 }",
+    );
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word), tag: Word }\n\
+         fn g1(s: S) -> Word { s.p.1 }",
+    );
+    // A scalar before the tuple field: `p` sits at offset 8, so the FlatNested offset is 8.
+    assert_self_host_byte_identical(
+        "struct T { lead: Word, p: (Word, Word) }\n\
+         fn g(s: T) -> Word { s.p.1 }",
+    );
+    // A mixed-scalar tuple field: element 1 is a Byte at intra-tuple offset 8.
+    assert_self_host_byte_identical(
+        "struct M { pair: (Word, Byte), n: Word }\n\
+         fn gm(m: M) -> Byte { m.pair.1 }",
+    );
+    // Both elements combined in an expression.
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word) }\n\
+         fn gs(s: S) -> Word { s.p.0 + s.p.1 }",
+    );
+}
+
+// STRING LITERALS `"..."`: the StaticStr foundation end to end. lexer.kel tokenizes a quoted run,
+// interning the content bytes and emitting a Str token; parse.kel emits a StrLit node carrying the
+// intern id; codegen.kel interns it as a tag-1 (StaticStr) constant-pool entry; and the host
+// resolves the id to the string bytes through the lexer name table, building ConstValue::StaticStr
+// -- byte-identical to the reference. This also exercises the tagged constant-pool protocol
+// (values then tags) with a genuine non-Int entry.
+#[test]
+fn self_host_compiles_string_literals() {
+    // A bare string literal returned as Text.
+    assert_self_host_byte_identical("fn f() -> Text { \"hi\" }");
+    // A longer string.
+    assert_self_host_byte_identical("fn f() -> Text { \"hello world\" }");
+    // Two distinct string literals in one function: two StaticStr pool entries.
+    assert_self_host_byte_identical(
+        "fn f(b: Word) -> Text { if b > 0 { \"yes\" } else { \"no\" } }",
+    );
+    // A repeated string literal dedups to one pool entry (like a repeated Int).
+    assert_self_host_byte_identical(
+        "fn f(b: Word) -> Text { if b > 0 { \"same\" } else { \"same\" } }",
+    );
+}
+
+// STRING ESCAPE sequences: the lexer skips a backslash-escape pair as raw content (so `\"` does
+// not terminate the string and `\\` is one unit), interning the raw bytes; the host unescapes them
+// (`\n` newline, `\t` tab, `\"` quote, `\\` backslash) when building the StaticStr, matching the
+// reference. Byte-identical to the reference for each escape.
+#[test]
+fn self_host_compiles_string_escapes() {
+    assert_self_host_byte_identical("fn f() -> Text { \"a\\nb\" }"); // newline
+    assert_self_host_byte_identical("fn f() -> Text { \"tab\\there\" }"); // tab
+    assert_self_host_byte_identical("fn f() -> Text { \"q\\\"q\" }"); // escaped quote
+    assert_self_host_byte_identical("fn f() -> Text { \"back\\\\slash\" }"); // escaped backslash
+    // Multiple escapes in one string, and an escaped quote that must not terminate early.
+    assert_self_host_byte_identical("fn f() -> Text { \"line1\\nline2\\ttabbed\" }");
+}
+
+// ENUM-VALUE MATCH (Part A, unit variants): `match e { E::A() => .., E::B() => .. }` over an
+// enum-typed scrutinee lowers to the IsEnum virtual loop (GetLocal(temp), SetLocal(temp), Loop,
+// then per arm GetLocal(temp), IsEnum(ename, vname, disc), SetLocal(test), PopN(1),
+// GetLocal(test), If, <result>, Break, EndIf, then Trap, EndLoop), byte-identical to the
+// reference. The enum/variant names intern as StaticStr and the discriminant as Int; the IsEnum
+// interning is a process-time work item so the constant pool interleaves per arm exactly like the
+// reference. All-variant arms only (no wildcard); payload binding is Part B.
+#[test]
+fn self_host_compiles_an_enum_value_match() {
+    // Two variant arms with literal results (distinct Int constants per arm, interleaved pool).
+    let m = assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(e: E) -> Word { match e { E::A() => 100, E::B() => 200 } }",
+    );
+    let _ = m;
+    // Three variants.
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn g(e: E) -> Word { match e { E::A() => 1, E::B() => 2, E::C() => 3 } }",
+    );
+    // Explicit discriminants.
+    assert_self_host_byte_identical(
+        "enum K { Lo = 10, Hi = 20 }\n\
+         fn h(k: K) -> Word { match k { K::Lo() => 1, K::Hi() => 2 } }",
+    );
+    // An arm result that is the scrutinee-independent parameter (a Local, no new constant).
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn p(e: E, x: Word) -> Word { match e { E::A() => x, E::B() => x } }",
+    );
+    // A `_` wildcard catch-all arm: emitted after the variant arms, before the Trap, with no test.
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn w(e: E) -> Word { match e { E::A() => 1, _ => 9 } }",
+    );
+    // Two variant arms then a wildcard.
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn w2(e: E) -> Word { match e { E::A() => 1, E::B() => 2, _ => 0 } }",
+    );
+    // PAYLOAD binding: `E::A(x) => x` extracts the payload (GetEnumField) and binds it to a slot
+    // after the arm's test slot; the arm result resolves the bound variable.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn pb(e: E) -> Word { match e { E::A(x) => x, E::B() => 0 } }",
+    );
+    // The bound payload used in an arithmetic expression.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn pa(e: E) -> Word { match e { E::A(x) => x + 1, E::B() => 0 } }",
+    );
+    // A multi-field payload `E::B(w, b)`: two GetEnumField reads (offsets 8 and 16), binding both.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B(Word, Byte), C }\n\
+         fn mb(e: E) -> Word { match e { E::A(x) => x, E::B(w, b) => w, E::C() => 0 } }",
+    );
+    // A payload match with a wildcard.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B, C }\n\
+         fn pw(e: E) -> Word { match e { E::A(x) => x, _ => 0 } }",
+    );
+    // A LET bound to an enum-returning CALL, then matched: `let e = mk(x); match e { ... }`. The
+    // parser records the enum return type (`chunkret.ret_enum`) so the binding is tagged
+    // enum-typed (`let_enum`) and the match over it lowers to the IsEnum loop like a parameter.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn mk(x: Word) -> E { E::A(x) }\n\
+         fn h(x: Word) -> Word { let e = mk(x); match e { E::A(y) => y, E::B() => 0 } }",
+    );
+    // A LET bound to an enum CONSTRUCTION, then matched: `let e = E::A(x); match e { ... }`. The
+    // EnumInit tags the binding enum-typed (via the construction's enum name), so the match lowers
+    // to the IsEnum loop.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn h(x: Word) -> Word { let e = E::A(x); match e { E::A(y) => y, E::B() => 0 } }",
+    );
+    // NESTED match: a match in a prior arm's result allocates slots between the outer arms, so the
+    // outer arm tests must account for the inner match's slots. Parse allocates the test slots in
+    // emission order and carries each in its EnumArm marker (rather than reconstruct recomputing a
+    // forward counter that cannot see the inner match's allocation), and the EnumArm/EnumBind
+    // pending buffers are drained with stack discipline so the inner match (built first) pops only
+    // its own arms. Unit-variant nesting:
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A() => match g { E::A() => 1, E::B() => 2 }, E::B() => 3 } }",
+    );
+    // Payload-variant nesting: the inner match binds its own payload slots, and the outer arm B's
+    // test slot lands past every slot the inner match consumed.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A(x) => match g { E::A(y) => x + y, E::B() => x }, E::B() => 0 } }",
+    );
+    // Nesting in DIFFERENT positions, confirming the stack-discipline drain composes: an inner
+    // match inside a WILDCARD arm result (the wildcard result path, not a variant arm).
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A() => 1, _ => match g { E::A() => 2, _ => 3 } } }",
+    );
+    // An inner match whose arm result references the OUTER match's payload binding (cross-scope
+    // slot resolution: the outer bind slot stays live through the inner match).
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A(x) => match g { E::A(y) => x, E::B() => x }, E::B() => 0 } }",
+    );
+    // A match EXPRESSION as a `let` value and as a call argument (the EnumMatch node in operand
+    // positions other than a bare statement or arm result).
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(e: E) -> Word { let r = match e { E::A() => 1, E::B() => 2 }; r + 1 }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn id(x: Word) -> Word { x }\n\
+         fn f(e: E) -> Word { id(match e { E::A() => 1, E::B() => 2 }) }",
+    );
+    // Triple-nested match: the stack-discipline drain generalizes to arbitrary nesting depth.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(a: E, b: E, c: E) -> Word { match a { E::A() => match b { E::A() => match c { E::A() => 1, E::B() => 2 }, E::B() => 3 }, E::B() => 4 } }",
+    );
+}
+
+#[test]
+fn self_host_compiles_a_struct_enum_payload_match() {
+    // A STRUCT-typed enum payload matched (`enum E { A(P) }`, `match e { E::A(p) => .. }`). The
+    // payload is a whole nested struct, so its extraction is `GetEnumField(FlatNested{size, Struct})`
+    // (a new getenumfieldnested op, tag 57) rather than the scalar `GetEnumField(Flat{kind})`. The
+    // enum declaration marks a struct payload field with the sentinel kind `100 + struct byte size`
+    // (widening the EnumBind kind field from 3 to 8 bits) and records the payload struct index
+    // (`enums.evfstruct`), so the bound `p` is struct-typed and `p.field` resolves. Byte-identical.
+    // Payload bound but not field-accessed:
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         enum E { A(P), B }\n\
+         fn f(e: E) -> Word { match e { E::A(p) => 1, E::B() => 0 } }",
+    );
+    // The bound struct's field read (`p.y`), a multi-field element struct.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         enum E { A(P), B }\n\
+         fn f(e: E) -> Word { match e { E::A(p) => p.y, E::B() => 0 } }",
+    );
+    // A mixed payload: a scalar field then a struct field, both bound and used.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         enum E { A(Word, P), B }\n\
+         fn f(e: E) -> Word { match e { E::A(w, p) => w + p.x, E::B() => 0 } }",
+    );
+    // A scalar payload still emits the plain GetEnumField(Flat{kind}) (regression guard).
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn f(e: E) -> Word { match e { E::A(x) => x, E::B() => 0 } }",
+    );
+}
+
+#[test]
+fn self_host_compiles_tuple_and_array_enum_payloads() {
+    // TUPLE- and ARRAY-typed enum payloads, matched and accessed. The enum-payload scan (mode 14)
+    // handles a `(T, ...)` field (building a tuple layout, `epf` sub-state 1) and a `[T; N]` field
+    // (recording the element kind, `epf` sub-state 2), each as ONE composite payload field with a
+    // nested-composite sentinel kind (tuple `30000 + size`, array `40000 + size`). The extraction is
+    // `GetEnumField(FlatNested{size, Tuple|Array})` (the getenumfieldnested op, variant decoded from
+    // the sentinel range), and the bound variable is tuple-/array-typed (`evftuple` -> `let_tuple`,
+    // `evfarrkind` -> `let_array`) so `t.N` / `a[j]` resolves. This required widening the EnumBind
+    // marker kind field to 16 bits (slot multiplier 16777216 -> 4294967296). Byte-identical; the
+    // struct-payload and scalar-payload cases still self-compile under the generalized encoding.
+    assert_self_host_byte_identical(
+        "enum E { A((Word, Word)), B }\n\
+         fn f(e: E) -> Word { match e { E::A(t) => t.0, E::B() => 0 } }",
+    );
+    // The second tuple element (offset 8 within the extracted tuple).
+    assert_self_host_byte_identical(
+        "enum E { A((Word, Word)), B }\n\
+         fn f(e: E) -> Word { match e { E::A(t) => t.1, E::B() => 0 } }",
+    );
+    // An array payload, element read at a constant and (below) a runtime index.
+    assert_self_host_byte_identical(
+        "enum E { A([Word; 2]), B }\n\
+         fn f(e: E) -> Word { match e { E::A(a) => a[1], E::B() => 0 } }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A([Word; 3]), B }\n\
+         fn f(e: E, i: Word) -> Word { match e { E::A(a) => a[i], E::B() => 0 } }",
+    );
+}
+
+#[test]
+fn self_host_compiles_a_scalar_array_parameter() {
+    // A scalar array PARAMETER `xs: [Word; N]` indexed in the body. Previously the array-type
+    // parse in `header_sig` gated its `[` on a dead token class (11, which no token emits), so an
+    // array parameter was silently read as a scalar and its `xs[i]` dropped. `header_sig` now
+    // opens the array on the real `LBracket` (41) and records the element ScalarKind in `ps.parray`
+    // (plus one), so a body `xs[i]` arms the array-index postfix and emits GetIndex(Flat{kind}),
+    // reusing the let-bound-array path. Byte-identical to the reference.
+    assert_self_host_byte_identical("fn f(xs: [Word; 3]) -> Word { xs[1] }");
+    // A runtime index and multiple accesses in an expression.
+    assert_self_host_byte_identical("fn f(xs: [Word; 3], i: Word) -> Word { xs[i] + xs[0] }");
+    // An array parameter used whole (not indexed) still reads as a plain Local.
+    assert_self_host_byte_identical("fn f(xs: [Word; 3]) -> Word { 7 }");
+    // A second array parameter alongside a scalar, each indexed.
+    assert_self_host_byte_identical(
+        "fn f(a: [Word; 2], b: [Word; 2], i: Word) -> Word { a[i] + b[0] }",
+    );
+    // A `let` bound to a scalar-array-RETURNING call, then indexed (`let a = mk(); a[i]`). The
+    // parser records the scalar array return element kind (`chunkret.ret_array`) so the call sets
+    // `pending_carray` and the binding tags `let_array`, arming `a[i]` like a let-bound array
+    // literal. Completes the "let bound to a returning call" family (struct/tuple/enum already).
+    assert_self_host_byte_identical(
+        "fn mk() -> [Word; 3] { [1, 2, 3] }\n\
+         fn f() -> Word { let a = mk(); a[1] }",
+    );
+    assert_self_host_byte_identical(
+        "fn mk() -> [Word; 4] { [1, 2, 3, 4] }\n\
+         fn f(i: Word) -> Word { let a = mk(); a[i] + a[0] }",
+    );
+}
+
+#[test]
+fn self_host_compiles_an_enum_typed_struct_field() {
+    // A struct with an ENUM-typed field sizes that field as the enum's whole flat body (8 + largest
+    // payload), not the 1-byte default -- so a following field's flat offset is correct.
+    // `field_size_and_kind` previously handled only struct-named field types; it now also recognizes
+    // an enum name and returns `enum_bytesize`. A unit enum (8 bytes):
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         struct S { e: E, n: Word }\n\
+         fn f(s: S) -> Word { s.n }",
+    );
+    // A payload enum (still 8 for a single-Word payload, but via the payload-aware path).
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         struct S { e: E, n: Word }\n\
+         fn f(s: S) -> Word { s.n }",
+    );
+    // An enum-element ARRAY field is sized element_bytesize * length.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         struct S { es: [E; 3], n: Word }\n\
+         fn f(s: S) -> Word { s.n }",
+    );
+}
+
+#[test]
+fn self_host_compiles_a_struct_field_array_of_structs() {
+    // A struct FIELD that is an array-of-struct (`H { ps: [P; N] }`), element-then-field accessed
+    // (`h.ps[i].x`). `h.ps` extracts the whole array field (GetField(FlatNested{Array})); because
+    // the element type is a struct (`field_size_and_kind` already records `sd_fstruct` for the
+    // array element), the `]` emits GetIndex(FlatNested{element-struct size, Struct}) and arms the
+    // field-access postfix for the trailing `.field` -- reusing the `ArrIndexNested` / fa_index_nested
+    // path from the array-of-struct PARAMETER case. Byte-identical to the reference.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         struct H { ps: [P; 2] }\n\
+         fn f(h: H) -> Word { h.ps[1].x }",
+    );
+    // A scalar field before the array field (so the array sits at a nonzero flat offset), a
+    // multi-field element struct, and a runtime index.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         struct H { n: Word, ps: [P; 3] }\n\
+         fn f(h: H, i: Word) -> Word { h.ps[i].y + h.n }",
+    );
+    // A scalar-element array field still emits the scalar ArrIndex (regression guard).
+    assert_self_host_byte_identical(
+        "struct H { xs: [Word; 3] }\n\
+         fn f(h: H) -> Word { h.xs[1] }",
+    );
+}
+
+#[test]
+fn self_host_compiles_a_let_bound_array_of_structs() {
+    // An array-of-struct LITERAL bound to a `let`, then element-then-field accessed
+    // (`let a = [P{..}, ..]; a[i].field`). Two parts. (1) The array-literal close now sizes a
+    // struct-element array as count * element-struct-size (was count * 8, correct only for a
+    // single-Word-field element by coincidence), detected by the last element being a struct
+    // construction (`pending_cstruct` at the close). (2) The `let` records the element struct
+    // (`stmt.let_array_struct`/`let_array_size` via a new `pending_carray_struct`), so
+    // `resolve_plain_ident` arms the struct-array postfix (`sa_phase`) -- the let-binding analogue
+    // of an array-of-struct parameter, indexing the array Local directly (no FlatNested field
+    // extraction). Byte-identical to the reference.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         fn f() -> Word { let a = [P { x: 1 }, P { x: 2 }]; a[0].x }",
+    );
+    // A multi-field element struct (16 bytes): the construction sizes the array 32 (2 * 16), and
+    // the access reads field `y` at flat offset 8 within the extracted element under a runtime index.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn f(i: Word) -> Word { let a = [P { x: 1, y: 2 }, P { x: 3, y: 4 }]; a[i].y }",
+    );
+    // A multi-field struct-element array returned directly (construction byte_size fix, no access).
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn f() -> [P; 2] { [P { x: 1, y: 2 }, P { x: 3, y: 4 }] }",
+    );
+    // A scalar array literal still sizes count * 8 and arms the scalar index (regression guard).
+    assert_self_host_byte_identical("fn f() -> Word { let a = [10, 20, 30]; a[1] }");
+    // A `let` bound to a STRUCT-element-array-RETURNING call, then element-then-field accessed
+    // (`let a = mk(); a[i].field` where `mk` returns `[P; N]`). The parser records the return
+    // array's element struct index and byte size (`chunkret.ret_array_struct`/`ret_array_size`),
+    // so the call sets `pending_carray_struct` and the binding arms the struct-array postfix -- the
+    // return analogue of the let-bound array-of-struct literal. Completes the array-of-structs
+    // surface across parameters, struct fields, literals, and returns.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         fn mk() -> [P; 2] { [P { x: 1 }, P { x: 2 }] }\n\
+         fn f() -> Word { let a = mk(); a[0].x }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn mk() -> [P; 3] { [P { x: 1, y: 2 }, P { x: 3, y: 4 }, P { x: 5, y: 6 }] }\n\
+         fn f(i: Word) -> Word { let a = mk(); a[i].y }",
+    );
+}
+
+#[test]
+fn self_host_compiles_an_array_of_struct_parameter() {
+    // An array-of-STRUCT parameter `ps: [P; N]`, element-then-field accessed (`ps[i].x`). The
+    // element is a nested composite, so `ps[i]` emits GetIndex(FlatNested{size, Struct}) (extracting
+    // element i's bytes as a struct value, op tag 56, operand size + variant*65536) and the trailing
+    // `.field` reads into it via the ordinary struct field-access postfix (GetField(Flat{..})).
+    // `header_sig`'s array branch detects the struct element type and records the struct's decl
+    // index and byte size in `ps.parray_struct`/`ps.parray_size`; `resolve_plain_ident` arms a
+    // struct-array postfix (`ps.sa_phase`). Byte-identical to the reference.
+    assert_self_host_byte_identical("struct P { x: Word }\nfn f(ps: [P; 3]) -> Word { ps[1].x }");
+    // A multi-field element struct, a runtime index, and two accesses in an expression: the second
+    // field (`y`) sits at flat offset 8 within the extracted element.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn f(ps: [P; 3], i: Word) -> Word { ps[i].x + ps[0].y }",
+    );
+}
+
+#[test]
+fn self_host_compiles_an_array_of_tuple_parameter() {
+    // An array-of-TUPLE parameter `ts: [(T, T, ...); N]`, element-then-field accessed (`ts[i].N`).
+    // The element is a nested tuple, so `ts[i]` emits GetIndex(FlatNested{size, Tuple}) and the
+    // trailing `.N` reads element N via the tuple-field postfix (GetTupleField). `header_sig` parses
+    // the `(...)` element type into a tuple layout bound to the parameter (`parray_tuple`, via a new
+    // `arr == 3` scan state); `resolve_plain_ident` arms the composite-array postfix with variant
+    // Tuple. The array-of-struct and array-of-tuple paths share `ArrIndexNested`, distinguished by a
+    // variant carried through the `]` close. Byte-identical to the reference.
+    assert_self_host_byte_identical("fn f(ts: [(Word, Word); 2]) -> Word { ts[0].0 }");
+    // A runtime index and two accesses (element 1 and element 0) in an expression.
+    assert_self_host_byte_identical(
+        "fn f(ts: [(Word, Word); 3], i: Word) -> Word { ts[i].1 + ts[0].0 }",
+    );
+}
+
+#[test]
+fn self_host_compiles_an_array_of_array_parameter() {
+    // An array-of-ARRAY parameter `m: [[T; N]; M]`, doubly indexed (`m[i][j]`). The outer index
+    // extracts inner array i as a nested array (GetIndex(FlatNested{inner-array size, Array})) and
+    // the inner index reads element j scalar (GetIndex(Flat{inner element kind})). `header_sig`
+    // scans the nested `[T; N]` element type via new `arr` states (8 element type, 9 inner size, 10
+    // inner close), recording the inner element kind (`ps.parray_arr`) and inner array byte size;
+    // `resolve_plain_ident` arms the composite-array postfix with variant Array, and the `]` close
+    // arms the scalar array-index postfix (`aa_phase`) for the second `[j]`. Byte-identical.
+    assert_self_host_byte_identical("fn f(m: [[Word; 2]; 2]) -> Word { m[0][1] }");
+    // Runtime indices, a non-square shape, and two double-indexed reads in an expression.
+    assert_self_host_byte_identical(
+        "fn f(m: [[Word; 3]; 2], i: Word, j: Word) -> Word { m[i][j] + m[0][0] }",
+    );
+}
+
+// NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
+// GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
+// {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
+// kind})) into it. Each `.` in a chain of struct-typed fields extends the FlatNested chain; the
+// final scalar field is the ordinary flat read. Byte-identical to the reference for the second
+// and first inner fields, and for a two-deep nesting.
+#[test]
+fn self_host_compiles_nested_struct_field_access() {
+    assert_self_host_byte_identical(
+        "struct Inner { a: Word, b: Word }\n\
+         struct Outer { i: Inner, tag: Word }\n\
+         fn gb(s: Outer) -> Word { s.i.b }\n\
+         fn ga(s: Outer) -> Word { s.i.a }",
+    );
+    // Two-deep nesting: s.mid.inner.b.
+    assert_self_host_byte_identical(
+        "struct Inner { a: Word, b: Word }\n\
+         struct Mid { inner: Inner, m: Word }\n\
+         struct Top { mid: Mid, t: Word }\n\
+         fn g(s: Top) -> Word { s.mid.inner.b }",
+    );
+}
+
+// An indexed-data-field ASSIGNMENT whose right side contains a CALL, as the sole body of a
+// nested block-form `if` (`d.arr[i] = dbl(x);`). parse.kel's own `header_field` now uses this
+// shape (a data assignment with a `field_size_and_kind` call), so this exercises it in a
+// user program too; it compiles through the whole self-hosted pipeline byte-identically and
+// runs. This shape had appeared to be a parser bug, but was a token-buffer capacity limit.
+#[test]
+fn self_host_compiles_an_indexed_assign_with_a_call() {
+    let m = assert_self_host_byte_identical(
+        "private data d { arr: [Word; 8] } \
+         fn dbl(x: Word) -> Word { x + x } \
+         fn store(i: Word, x: Word) -> Word { if i < 8 { d.arr[i] = dbl(x); } d.arr[0] } \
+         loop main(x: Word) -> Word { yield store(0, x) }",
+    );
+    assert_self_host_yields(m, 5, 10); // d.arr[0] = dbl(5) = 10
+}
+
+// The bridge over the block and control-flow node kinds: `let` bindings (LetIn),
+// bare expression statements (ExprStmt), the statement-only-block Unit, and
+// `if`/`else` including an else-less form and nesting. Same self-hosted path and
+// byte-identity check as the arithmetic bridge.
+#[test]
+fn parse_into_codegen_blocks_and_control_flow_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // let bindings: value ops then SetLocal, tail reads the slot.
+        (
+            "fn main(input: Word) -> Word { let x = input + 1; x * 2 }",
+            20,
+            42,
+        ),
+        (
+            "fn main(input: Word) -> Word { let x = input + 1; let y = x + x; y }",
+            20,
+            42,
+        ),
+        // if/else as the tail, both branches taken across inputs.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 2 } else { 3 } }",
+            3,
+            2,
+        ),
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 2 } else { 3 } }",
+            10,
+            3,
+        ),
+        // arithmetic in the branches.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { a + 1 } else { a - 1 } }",
+            10,
+            9,
+        ),
+        // nested if in the else branch.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 1 } else { if a < 10 { 2 } else { 3 } } }",
+            7,
+            2,
+        ),
+        // a let bound inside each branch (monotonic slots).
+        (
+            "fn main(a: Word) -> Word { if a < 5 { let y = a + 1; y } else { let z = a - 1; z } }",
+            3,
+            4,
+        ),
+        // a let outside, then an if whose branches each bind a local.
+        (
+            "fn main(a: Word) -> Word { let x = a + 1; if x < 5 { let y = x + 1; y } else { let z = x - 1; z } }",
+            10,
+            10,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The bridge over the scalar and indexed-read data-access kinds: a scalar DataRead
+// (11) and DataAssign (12), and an indexed IndexRead (13) with a constant or
+// runtime index. parse.kel resolves each field to its data-layout slot and bakes it
+// into the record, so the reconstruction needs no slot table. Same self-hosted path
+// and byte-identity check. (Indexed writes -- the IndexStore signal and IndexAssign
+// -- are a later increment.)
+#[test]
+fn parse_into_codegen_data_access_reads_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // scalar write then read.
+        (
+            "private data d { x: Word } fn main(v: Word) -> Word { d.x = v; d.x }",
+            42,
+            42,
+        ),
+        // two scalar fields, written then read and combined.
+        (
+            "private data d { a: Word, b: Word } fn main(v: Word) -> Word { d.a = v; d.b = v + 1; d.a + d.b }",
+            20,
+            41,
+        ),
+        // a scalar write interleaved with a let, read in the tail.
+        (
+            "private data d { x: Word } fn main(v: Word) -> Word { let y = v * 2; d.x = y; d.x + 1 }",
+            20,
+            41,
+        ),
+        // indexed read with a runtime index; the array is zero-initialized, so the
+        // read yields 0 and the result is the scalar field's value. The scalar write
+        // satisfies the rule that a `private data` block must be mutated somewhere.
+        (
+            "private data d { xs: [Word; 4], n: Word } fn main(i: Word) -> Word { d.n = i; d.xs[i] + d.n }",
+            3,
+            3,
+        ),
+        // indexed read with a constant index.
+        (
+            "private data d { xs: [Word; 4], n: Word } fn main(v: Word) -> Word { d.n = v; d.xs[2] + d.n }",
+            9,
+            9,
+        ),
+        // an indexed read used in arithmetic in the tail.
+        (
+            "private data d { xs: [Word; 4], n: Word } fn main(i: Word) -> Word { d.n = 7; d.xs[i] + d.n }",
+            1,
+            7,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The bridge over function calls: `main` calls a callee, so parse.kel resolves the
+// call target against the chunk table (recovered from the token stream) and packs
+// the chunk index and argument count into the Call record; the host rebuilds the
+// call_args side array. Same self-hosted path and byte-identity check, now over a
+// multi-function source where `main` is the last function.
+#[test]
+fn parse_into_codegen_calls_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // single-argument call.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { inc(a) }",
+            41,
+            42,
+        ),
+        // two-argument call, arguments pushed left to right.
+        (
+            "fn add(x: Word, y: Word) -> Word { x + y } fn main(a: Word) -> Word { add(a, 2) }",
+            40,
+            42,
+        ),
+        // nested call: the inner result is the outer argument.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { inc(inc(a)) }",
+            40,
+            42,
+        ),
+        // a call whose argument is an expression, plus arithmetic around it.
+        (
+            "fn dbl(x: Word) -> Word { x * 2 } fn main(a: Word) -> Word { dbl(a + 1) + 1 }",
+            20,
+            43,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// A CONDITIONAL used as a CALL ARGUMENT (`f(if c { a } else { b })`). This is a reconstruct
+// gap the roadmap names: the shunting-yard resolution of a default-precedence operator inside
+// a call argument (a comparison, `c > 0`) used to pop the CallMark -- which carried the
+// default precedence 3, the same as a comparison -- and mis-emit it as a spurious BinOp,
+// dropping the Call. Giving CallMark/StructMark precedence 0 (like the other grouping markers)
+// fixes it. Exercised as a sole argument, a trailing argument (after a plain argument), and a
+// leading argument, each byte-identical to the reference through the whole self-hosted
+// pipeline, and each runs.
+#[test]
+fn self_host_compiles_a_conditional_as_a_call_argument() {
+    let m1 = assert_self_host_byte_identical(
+        "fn one(a: Word) -> Word { a } \
+         fn g(c: Word) -> Word { one(if c > 0 { 10 } else { 20 }) } \
+         loop main(c: Word) -> Word { yield g(c) }",
+    );
+    assert_self_host_yields(m1, 5, 10); // c=5 > 0 -> 10
+
+    let m2 = assert_self_host_byte_identical(
+        "fn add(a: Word, b: Word) -> Word { a + b } \
+         fn g(c: Word) -> Word { add(3, if c > 0 { 10 } else { 20 }) } \
+         loop main(c: Word) -> Word { yield g(c) }",
+    );
+    assert_self_host_yields(m2, 5, 13); // 3 + 10
+
+    let m3 = assert_self_host_byte_identical(
+        "fn add(a: Word, b: Word) -> Word { a + b } \
+         fn g(c: Word) -> Word { add(if c > 0 { 10 } else { 20 }, 3) } \
+         loop main(c: Word) -> Word { yield g(c) }",
+    );
+    assert_self_host_yields(m3, 0, 23); // c=0, not > 0 -> 20 + 3
+}
+
+// A user-written `break;` statement inside a `for .. limit` loop -- the second roadmap-named
+// "reconstruct gap the subset needs." lexer.kel gains the `break` keyword; parse.kel records a
+// Break node (kind 29) carrying the enclosing loop's outcome slot (`for_oc`); reconstruct
+// treats it as a unary statement wrapping the continuation; and codegen emits
+// `Const(LOOP_OUTCOME_BREAK=2), SetLocal(oc), Break`, the Break patched to the loop exit by the
+// enclosing `mendloop` exactly like the loop's own range exit. Byte-identical to the reference
+// through the whole self-hosted pipeline, and it runs: the loop accumulates 0+1+2+3 and breaks
+// at i == 4.
+#[test]
+fn self_host_compiles_a_user_break() {
+    let m = assert_self_host_byte_identical(
+        "private data d { sum: Word } \
+         fn accumulate(n: Word) -> Word { d.sum = 0; for i in 0..n limit 8 { if i > 3 { break; } d.sum = d.sum + i; } d.sum } \
+         loop main(n: Word) -> Word { yield accumulate(n) }",
+    );
+    assert_self_host_yields(m, 10, 6); // breaks at i=4, so 0+1+2+3 = 6
+}
+
+// The bridge over the indexed write, completing the data-access family: an
+// IndexStore signal folds the value and index into a kind-15 node, and IndexAssign
+// folds it into the block. Same self-hosted path and byte-identity check.
+#[test]
+fn parse_into_codegen_indexed_writes_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // constant index write then read.
+        (
+            "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[2] = v; d.xs[2] }",
+            42,
+            42,
+        ),
+        // runtime index write (value an expression) then read.
+        (
+            "private data d { xs: [Word; 4] } fn main(i: Word) -> Word { d.xs[i] = i + 10; d.xs[i] }",
+            3,
+            13,
+        ),
+        // two element writes then a combined read.
+        (
+            "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[0] = v; d.xs[1] = v + 1; d.xs[0] + d.xs[1] }",
+            20,
+            41,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The bridge over the bounded `for .. limit` loop: the first construct whose
+// reconstruction consumes SlotRecords and a build signal to assemble a fixed-size
+// side-array entry (limit_parts). Same self-hosted path and byte-identity check.
+#[test]
+fn parse_into_codegen_for_limit_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // runtime range with a static cap, accumulating into a scalar field.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+            4,
+            6,
+        ),
+        // writing each array element by its index in the loop.
+        (
+            "private data d { xs: [Word; 8] } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.xs[i] = i * 2; } d.xs[3] }",
+            4,
+            6,
+        ),
+        // a let before the loop, the loop accumulating a constant.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { let base = v; for i in 0..3 limit 8 { d.s = d.s + base; } d.s }",
+            10,
+            30,
+        ),
+        // A TRAILING SEMICOLON AFTER THE LOOP, which the reference parser began
+        // accepting when the empty statement was admitted. `for` is a statement
+        // and consumes no terminator, so this form used to reach the expression
+        // parser and be rejected; `if`, `match` and `loop` never were.
+        //
+        // The self-hosted parser is a token-stream state machine rather than a
+        // recursive-descent block parser, so whether it agrees is not something
+        // that can be read off either grammar. This case is here because a
+        // language widening has two consumers, and a widening only one of them
+        // honours is a divergence rather than a feature. The byte identity is
+        // what settles it: the two compilers must agree, not merely both accept.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; }; d.s }",
+            4,
+            6,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The bridge over the integer `match` expression: the MatchBuild signal assembles
+// the match_parts entry (temp slot, wildcard, then the literal/result pairs) and
+// builds the MatchIn node. Same self-hosted path and byte-identity check.
+#[test]
+fn parse_into_codegen_match_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // two literal arms and a wildcard; the matched arm is taken.
+        (
+            "fn main(n: Word) -> Word { match n { 0 => 10, 1 => 20, _ => 30 } }",
+            1,
+            20,
+        ),
+        // the wildcard arm is taken and reads the scrutinee.
+        (
+            "fn main(n: Word) -> Word { match n { 0 => 100, _ => n + 1 } }",
+            5,
+            6,
+        ),
+        // a match as a let value, its result used in the tail.
+        (
+            "fn main(n: Word) -> Word { let r = match n { 1 => 100, _ => n }; r + 1 }",
+            1,
+            101,
+        ),
+        // arithmetic in an arm result.
+        (
+            "fn main(n: Word) -> Word { match n { 2 => n * 10, _ => 0 } }",
+            2,
+            20,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The bridge over `yield` in a `loop` function: YieldExpr is unary, and the loop
+// category (2) makes run_codegen read to the terminating Reset. The whole
+// self-hosted path over a coroutine, byte-identical to the Rust compiler; a loop
+// yields rather than finishing, so the yielded value is checked.
+#[test]
+fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_yield_in_a_loop_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let cases: &[(&str, i64, i64)] = &[
+        ("loop main(r: Word) -> Word { yield r + 1 }", 41, 42),
+        ("loop main(r: Word) -> Word { yield r * 2 }", 21, 42),
+        // a yield of a larger arithmetic expression.
+        ("loop main(r: Word) -> Word { yield r * 2 + r }", 14, 42),
+        // a let before the yield.
+        (
+            "loop main(r: Word) -> Word { let x = r + 1; yield x * 2 }",
+            20,
+            42,
+        ),
+        // `yield` of a block-form if: the yield marker must span the whole if, so the
+        // Yield op follows the branch. Regression for the fixed marker-drain bug.
+        (
+            "loop main(r: Word) -> Word { yield if r < 5 { 1 } else { 2 } }",
+            3,
+            1,
+        ),
+        (
+            "loop main(r: Word) -> Word { yield if r < 5 { 1 } else { 2 } }",
+            9,
+            2,
+        ),
+        // `yield` of a match: the match's scrutinee and arm drains must stop at the
+        // yield marker, which the block-tail drain then emits as the YieldExpr.
+        (
+            "loop main(r: Word) -> Word { yield match r { 0 => 100, _ => r + 1 } }",
+            5,
+            6,
+        ),
+        // `yield` of a call: the call closes on its `)`, then the yield spans it.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } loop main(r: Word) -> Word { yield inc(r) }",
+            41,
+            42,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        assert_eq!(category, 2, "loop maps to codegen category 2");
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Yielded(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_yield_in_a_loop_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+// Harden the bridge on combined and nested constructs: the individual kinds each
+// pass, but their compositions exercise the reconstruction's stack discipline under
+// interaction. All compose cleanly and are byte-identical to the reference -- an if
+// inside a for body, a call in a for body, a match over a let value, a call whose
+// argument is a match, a call inside an if branch, and a data read as a match arm
+// result. The match-as-call-argument case (`f(match x { .. })`) is a regression for
+// the fixed marker-drain bug in parse.kel: a sub-expression drain used to pop the
+// enclosing call marker as a spurious BinOp, so the Call was never emitted; it now
+// stops at the marker, which the closing `)` consumes into the Call.
+#[test]
+fn parse_into_codegen_combined_constructs_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // an if inside a for-limit body, accumulating conditionally.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { if i > 1 { d.s = d.s + i; } } d.s }",
+            4,
+            5,
+        ),
+        // a call in a for-limit body.
+        (
+            "fn add1(x: Word) -> Word { x + 1 } private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = add1(d.s); } d.s }",
+            4,
+            4,
+        ),
+        // a match over a let value with a wildcard reading it.
+        (
+            "fn main(n: Word) -> Word { let c = n + 1; match c { 3 => 100, _ => c * 2 } }",
+            1,
+            4,
+        ),
+        // a call whose argument is a match expression. Regression for the fixed
+        // marker-drain bug: the call marker must survive the match's scrutinee and
+        // arm drains so the Call node is emitted after the match.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(n: Word) -> Word { inc(match n { 0 => 10, _ => 20 }) }",
+            5,
+            21,
+        ),
+        // a call inside an if branch.
+        (
+            "fn dbl(x: Word) -> Word { x * 2 } fn main(n: Word) -> Word { if n < 10 { dbl(n) } else { n } }",
+            5,
+            10,
+        ),
+        // a data read as a match arm result.
+        (
+            "private data d { k: Word } fn main(n: Word) -> Word { d.k = 7; match n { 0 => d.k, _ => d.k + n } }",
+            3,
+            10,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+/// A parsed function from the record stream: parser category (1 fn, 2 yield, 3 loop),
+/// name id, value-parameter count, and the postorder records of its `when` guard (empty
+/// when unguarded) and its body.
+struct ParsedFn {
+    cat: i64,
+    name: i64,
+    params: usize,
+    // The type-name id of each value parameter (from the header PTYPE records) and of
+    // the return (the RETTYPE record), for the driver's own chunk-signature assembly.
+    param_types: Vec<i64>,
+    return_type: i64,
+    guard: Vec<(i64, i64)>,
+    body: Vec<(i64, i64)>,
+}
+
+/// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
+///
+/// This mirrors `keleusma::selfhost::is_multihead_group`, which it cannot call because
+/// this harness carries its own `ParsedFn`. **That duplication is the reason the same
+/// defect had to be fixed in three places**, and it is recorded here rather than left
+/// for the next reader to rediscover: `self_host_compile` below is a copy of the
+/// shipping driver, so a fix to one is not a fix to the other.
+///
+/// The predicate is a property of the heads, not of the declaration keyword. See the
+/// library copy for the two silent miscompiles the keyword form produced and for why
+/// the corpus could not reach either.
+fn is_multihead_group(group: &[&ParsedFn]) -> bool {
+    debug_assert!(!group.is_empty(), "a head group is never empty");
+    group.len() > 1 || group.first().is_some_and(|h| !h.guard.is_empty())
+}
+
+/// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
+/// with its guard and body records, plus the interned-name table. Multiheaded functions
+/// appear as several same-named entries in declaration order.
+fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    // Keep the independent record collector while using bounded token transport.
+    let (names, traced) = keleusma::selfhost::parse_record_trace_fused(src);
+    let mut fns: Vec<ParsedFn> = Vec::new();
+    let mut cur: Option<ParsedFn> = None;
+    // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
+    // END), concatenated in declaration order, for the driver's own data-layout assembly.
+    let mut data_records: Vec<(i64, i64)> = Vec::new();
+    // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
+    // for the driver's own enum-layout assembly.
+    let mut enum_records: Vec<(i64, i64)> = Vec::new();
+    let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
+        (false, false, false, false, false);
+    // A struct/trait/impl declaration (STRUCTSTART 18, TRAITSTART 19, IMPLSTART 20) is
+    // skipped until its END; it contributes no chunk or scaffold record here.
+    let mut in_skip_decl = false;
+    let mut consume = |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                    || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                    || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                    || matches!(c, 94..=96 | 99..=105) => {}
+                _ => cur.as_mut().unwrap().body.push((code, val)),
+            }
+        } else if in_guard {
+            match code {
+                0 => {}
+                15 => in_guard = false,
+                c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                    || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                    || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                    || matches!(c, 94..=96 | 99..=105) => {}
+                _ => cur.as_mut().unwrap().guard.push((code, val)),
+            }
+        } else if in_data {
+            if code == 5 {
+                data_records.push((5, 0));
+                in_data = false;
+            } else if code != 0 {
+                data_records.push((code, val));
+            }
+        } else if in_enum {
+            if code == 5 {
+                enum_records.push((5, 0));
+                in_enum = false;
+            } else if code != 0 {
+                enum_records.push((code, val));
+            }
+        } else if in_use {
+            in_use = code != 5;
+        } else if in_skip_decl {
+            in_skip_decl = code != 5;
+        } else {
+            match code {
+                1..=3 => {
+                    cur = Some(ParsedFn {
+                        cat: code,
+                        name: val,
+                        params: 0,
+                        param_types: Vec::new(),
+                        return_type: 0,
+                        guard: Vec::new(),
+                        body: Vec::new(),
+                    })
+                }
+                4 => cur.as_mut().unwrap().params += 1,
+                // A literal parameter head, lowered only by the shipping driver's head mode 2.
+                // This scaffold refuses it rather than compile the head without its test,
+                // which is the miscompile Order 6 slice 1 closed in the driver.
+                130 => panic!("a literal parameter head is lowered only by the shipping driver"),
+                // `signed` sets a module flag only the shipping driver assembles.
+                131 => panic!("a `signed` head is lowered only by the shipping driver"),
+                // An impl's head record, which only the shipping driver composes names from.
+                132 => panic!("an impl method is lowered only by the shipping driver"),
+                6 => cur.as_mut().unwrap().param_types.push(val),
+                7 => cur.as_mut().unwrap().return_type = val,
+                // This historical scaffold keeps only scalar signature names.
+                // Composite signature metadata belongs to the shipping driver.
+                8 => {}
+                94 => {}
+                95 => {}
+                96 => {}
+                9 => {
+                    in_data = true;
+                    data_records.push((9, val));
+                }
+                10 => in_use = true,
+                12 => {
+                    in_enum = true;
+                    enum_records.push((12, val));
+                }
+                16 => in_body = true,
+                17 => in_guard = true,
+                18..=20 => in_skip_decl = true, // struct/trait/impl declaration
+                5 => fns.push(cur.take().unwrap()),
+                15 => return std::ops::ControlFlow::Break(()),
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    };
+    for (code, val, _) in traced {
+        if consume(code, val).is_break() {
+            break;
+        }
+    }
+    (fns, names, data_records, enum_records)
+}
+
+/// Reconstruct each guard and body with relative slots. Code generation allocates
+/// parameter-copy windows and rebases the ranges after earlier heads and guards.
+/// Each head contributes (parameter count, guarded flag, guard node, body node).
+fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut call_args: Vec<i64> = Vec::new();
+    let mut limit_parts: Vec<i64> = Vec::new();
+    let mut match_parts: Vec<i64> = Vec::new();
+    let mut head_parts: Vec<i64> = Vec::new();
+    let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for h in heads {
+        let base = pc as i64;
+        let (guarded, guard_node) = if h.guard.is_empty() {
+            (0i64, 0i64)
+        } else {
+            let root = reconstruct_into(
+                &h.guard,
+                &mut nodes,
+                &mut call_args,
+                &mut limit_parts,
+                &mut match_parts,
+            );
+            (1i64, root)
+        };
+        let body_node = reconstruct_into(
+            &h.body,
+            &mut nodes,
+            &mut call_args,
+            &mut limit_parts,
+            &mut match_parts,
+        );
+        entries.push((base, guarded, guard_node, body_node));
+    }
+    for (ps, g, gn, bn) in &entries {
+        head_parts.push(*ps);
+        head_parts.push(*g);
+        head_parts.push(*gn);
+        head_parts.push(*bn);
+    }
+    nodes.push(Node {
+        kind: 25,
+        arg: 0,
+        lhs: 0,
+        rhs: heads.len() as i64,
+    });
+    let root = (nodes.len() - 1) as i64;
+    Body {
+        nodes,
+        call_args,
+        for_parts: Vec::new(),
+        match_parts,
+        limit_parts,
+        head_parts,
+        category: 3,
+        root,
+    }
+}
+
+/// Reconstruct the multiheaded function named `head_name` in `src` from the record stream
+/// and assert its emitted ops are byte-identical to the Rust compiler's single chunk.
+fn assert_multihead_matches(src: &str, head_name: &str) {
+    let (fns, names, _, _) = parse_functions(src);
+    let heads: Vec<&ParsedFn> = fns
+        .iter()
+        .filter(|f| names[f.name as usize] == head_name)
+        .collect();
+    assert!(heads.len() >= 2, "a multihead has at least two heads");
+    let pc = heads[0].params;
+    let body = build_multihead_bridge(&heads, pc);
+    let (emitted, _pool, _lc) = run_codegen(&body, pc);
+    let reference = compile_src(src);
+    let ops = reference
+        .chunks
+        .iter()
+        .find(|c| c.name == head_name)
+        .expect("head chunk")
+        .ops
+        .clone();
+    assert_eq!(emitted, ops, "multihead ops for `{src}`");
+}
+
+// The final reconstruction kind: the multiheaded dispatch. parse.kel emits each head as a
+// separate declaration with its guard and body forests; the host groups the same-named
+// heads, reconstructs them into one node array with per-head slot remapping, and assembles
+// the head_parts side array with a MultiHead root. The emitted ops must be byte-identical
+// to the Rust compiler's single chunk.
+#[test]
+fn parse_into_codegen_multihead_matches_the_reference() {
+    // Parameter-referencing guards and simple yield bodies.
+    assert_multihead_matches(
+        "yield g(r: Word) -> Word when r == 0 { yield r } \
+         yield g(r: Word) -> Word when r > 5 { yield r } \
+         yield g(r: Word) -> Word { yield 0 } \
+         loop main(r: Word) -> Word { g(r) }",
+        "g",
+    );
+    // Data-field guards and data-read bodies, the shape codegen.kel's own `emit_next`
+    // dispatch uses: the data reads resolve to shared data slots (not frame slots), so
+    // they pass through the per-head slot remapping untouched.
+    assert_multihead_matches(
+        "shared data st { pos: Word, len: Word } \
+         yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+         yield emit(r: Word) -> Word { yield 0 } \
+         loop main(r: Word) -> Word { emit(r) }",
+        "emit",
+    );
+}
+
+/// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
+/// each into its codegen Body (grouping same-named heads into one multihead), run
+/// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
+/// reference module chunk of that name. Native chunks (absent from the source) keep the
+/// reference's ops. The result is a runnable module whose every source-defined chunk was
+/// emitted by the self-hosted pipeline.
+/// Unescape a raw string-literal body (the bytes between the quotes, backslashes intact) into the
+/// StaticStr content the reference bakes. All SIX escapes the reference handles are handled here:
+/// `\n` newline, `\t` tab, `\r` carriage return, `\"` quote, `\\` backslash, and `\0` NUL. The
+/// self-host lexer interns the raw bytes (it only skips the escape pair so a `\"` does not
+/// terminate), so the host performs the unescape here.
+///
+/// **This handled four and was missing `\r` and `\0`**, so a literal carrying either compiled to
+/// different bytes under the two pipelines. No stage source uses any escape at all, so the
+/// byte-identity corpus could not witness it. The passthrough arm is an unreachable default, not a
+/// match for the reference's behaviour: the reference REJECTS an unknown escape with a lex error,
+/// so no literal carrying one ever reaches codegen.
+fn unescape_string(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            out.push(match bytes[i + 1] {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'r' => b'\r',
+                b'"' => b'"',
+                b'\\' => b'\\',
+                b'0' => 0,
+                other => other,
+            });
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("unescaped string is valid UTF-8")
+}
+
+#[test]
+fn the_host_unescape_agrees_with_the_reference_on_every_accepted_escape() {
+    // The self-hosted lexer interns a literal's RAW bytes and the host unescapes them, so the
+    // two pipelines agree on a literal only if this routine reproduces the reference lexer
+    // exactly. Nothing checked that: no stage source uses any escape, so the byte-identity
+    // corpus is silent here, and the routine had been missing `\r` and `\0` for as long as it
+    // has existed.
+    //
+    // The escape set is derived from the reference rather than restated. Every byte the
+    // reference ACCEPTS after a backslash must round-trip; every byte it REJECTS must be a lex
+    // error, which is what makes the passthrough arm unreachable rather than wrong.
+    let mut accepted = 0usize;
+    let mut rejected = 0usize;
+    for b in 0u8..=127 {
+        let esc = b as char;
+        let src = format!("fn main() -> Text {{ \"x\\{esc}y\" }}");
+        let raw = format!("x\\{esc}y");
+        match tokenize(&src) {
+            Ok(tokens) => {
+                let baked = tokens
+                    .iter()
+                    .find_map(|t| match &t.kind {
+                        keleusma::token::TokenKind::StringLit(v) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .expect("the reference lexed a string literal");
+                assert_eq!(
+                    unescape_string(&raw),
+                    baked,
+                    "the host unescape and the reference disagree on the escape {esc:?}"
+                );
+                accepted += 1;
+            }
+            Err(_) => rejected += 1,
+        }
+    }
+    // NON-VACUITY, in both directions. A loop that accepted nothing would compare nothing, and
+    // one that rejected nothing would mean the reference had stopped refusing unknown escapes
+    // and the passthrough arm had become reachable.
+    assert_eq!(
+        accepted, 6,
+        "the reference accepts {accepted} escapes, not the six this routine implements; the \
+         unescape must be extended to match before the count is relaxed"
+    );
+    assert!(
+        rejected > 0,
+        "the reference rejected no escape, so the passthrough arm is reachable and the \
+         disagreement it hides is real"
+    );
+}
+
+fn self_host_compile(src: &str) -> Module {
+    let (fns, names, data_records, _) = parse_functions(src);
+    let composites = keleusma::selfhost::private_composite_sizes(&data_records);
+    let mut module = compile_src(src);
+    let parsed_names: std::collections::BTreeSet<_> = fns
+        .iter()
+        .map(|f| names[f.name as usize].as_str())
+        .collect();
+    let expected_names: std::collections::BTreeSet<_> =
+        module.chunks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        parsed_names, expected_names,
+        "parser must reach every source chunk"
+    );
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        // Group consecutive same-named heads (a multiheaded function is one chunk).
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        // More than one head, or one guarded head, compiles as a multihead dispatch;
+        // anything else as a single body. See `is_multihead_group` above.
+        // The reconstruction runs through the self-hosted reconstruct.kel stage rather
+        // than the Rust `reconstruct_into`, so the whole self-host compile path is
+        // Keleusma from lexing through code generation and the host only moves data
+        // between stages.
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &name)
+        } else {
+            let category = reconstruct_category_copy(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &name)
+        };
+        let (ops, pool, lc) = run_codegen_with(&body, pc, &composites);
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+        module.chunks[idx].ops = ops;
+        // A tag-1 pool entry is a StaticStr: its value is the lexer intern id, resolved to the
+        // string bytes through the name table. A tag-0 entry is an Int.
+        module.chunks[idx].constants = pool
+            .iter()
+            .map(|&(v, t)| {
+                if t == 1 {
+                    ConstValue::StaticStr(unescape_string(&names[v as usize]))
+                } else if t == 2 {
+                    ConstValue::Bool(v != 0)
+                } else if t == 3 {
+                    // A Float literal's interned text, as the shipping driver converts it.
+                    ConstValue::Float(names[v as usize].parse().expect("float literal text"))
+                } else {
+                    ConstValue::Int(v)
+                }
+            })
+            .collect();
+        module.chunks[idx].local_count = lc as u16;
+    }
+    module
+}
+
+/// Self-host-compile `src` and assert every chunk's ops, constant pool, and local_count
+/// are byte-identical to the Rust-hosted compiler's, returning the self-hosted module.
+fn assert_self_host_byte_identical(src: &str) -> Module {
+    // Cached per source snippet (item 3 follow-up). On a byte-identical PASS,
+    // self_host_compile only replaces each source chunk's ops/constants/local_count
+    // with values this function proves equal to the reference, so the self-hosted
+    // module equals compile_src(src) exactly. A hit therefore returns the fast
+    // reference build as an exact substitute for the callers that inspect the result,
+    // while skipping the four-stage self-host compile. The complete key covers the
+    // binary (hence the whole Rust compiler, VM, and wire format), the pipeline .kel
+    // stages, and `src`.
+    if common::selfhost_cache::hit_with("assert_self_host_byte_identical", KEL_PIPELINE, src) {
+        return compile_src(src);
+    }
+    let module = self_host_compile(src);
+    let reference = compile_src(src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass_with("assert_self_host_byte_identical", KEL_PIPELINE, src);
+    module
+}
+
+/// Run a self-hosted module through `call_with_shared` (it may have shared data) and
+/// assert its first yielded value.
+fn assert_self_host_yields(module: Module, arg: i64, expected: i64) {
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify self-hosted module");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(arg)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, expected, "self-hosted result"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+// The bootstrap's first increment: whole multi-declaration programs self-compiled. Every
+// source-defined chunk is emitted by the self-hosted pipeline (lexer.kel, parse.kel, the
+// forest reconstruction, and codegen.kel) and assembled into one module byte-identical to
+// the Rust-hosted compiler's, and the module runs.
+#[test]
+fn self_host_compiles_a_whole_program_byte_identically() {
+    // A shared data block, a plain `fn` with an if, a two-headed data-guarded `yield`, and
+    // a `loop main` yielding a call.
+    let m1 = assert_self_host_byte_identical(
+        "shared data st { pos: Word, len: Word } \
+         fn clamp(x: Word) -> Word { if x > 8 { 8 } else { x } } \
+         yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+         yield emit(r: Word) -> Word { yield 0 } \
+         loop main(r: Word) -> Word { yield clamp(r) }",
+    );
+    assert_self_host_yields(m1, 10, 8); // clamp(10) = 8
+
+    // A richer program: private-data accumulation over a `for` loop that calls another
+    // function, a `match` function, and a `loop main` yielding the total. Exercises module
+    // assembly over chunks with a for-limit loop, calls, a match, and private data.
+    let m2 = assert_self_host_byte_identical(
+        "private data acc { sum: Word } \
+         fn add(x: Word, y: Word) -> Word { x + y } \
+         fn total(n: Word) -> Word { acc.sum = 0; for i in 0..n limit 8 { acc.sum = add(acc.sum, i); } acc.sum } \
+         fn pick(k: Word) -> Word { match k { 0 => 100, _ => k * 2 } } \
+         loop main(n: Word) -> Word { yield total(n) }",
+    );
+    assert_self_host_yields(m2, 4, 6); // total(4) = 0+1+2+3 = 6
+
+    // An enum program: enum-variant casts (`Kind::Lo() as Word`), a match over the cast
+    // result, and calls. parse.kel accumulates the enum table and folds each cast to its
+    // discriminant literal, so the whole program self-compiles at module scope.
+    let m3 = assert_self_host_byte_identical(
+        "enum Kind { Lo = 0, Hi = 1 } \
+         fn classify(n: Word) -> Word { if n < 10 { Kind::Lo() as Word } else { Kind::Hi() as Word } } \
+         fn pick(k: Word) -> Word { match k { 0 => 100, _ => 200 } } \
+         loop main(n: Word) -> Word { yield pick(classify(n)) }",
+    );
+    assert_self_host_yields(m3, 5, 100); // classify(5)=Lo=0 -> pick(0)=100
+
+    // A const-data program: a `const data` block whose scalar fields inline to their
+    // integer-literal values when read (`cfg.base`, `cfg.step`), exactly as the reference
+    // compiler folds them to `Const`. This is the shape codegen.kel's own `const data wire`
+    // opcode table uses throughout, and is required to self-compile the codegen stage.
+    let m4 = assert_self_host_byte_identical(
+        "const data cfg { base: Word = 10, step: Word = 2 } \
+         fn bump(x: Word) -> Word { x + cfg.base } \
+         fn stride(x: Word) -> Word { x * cfg.step + cfg.base } \
+         loop main(x: Word) -> Word { yield stride(bump(x)) }",
+    );
+    assert_self_host_yields(m4, 5, 40); // bump(5)=15; stride(15)=15*2+10=40
+
+    // A composite/enum integration program combining the features landed across this line of work:
+    // a struct constructor, a `let` bound to that struct-returning call with field access, a
+    // `let` bound to an enum construction, a `let` bound to a tuple construction with index
+    // access, and an enum-value `match` with a payload binding and a wildcard over the let-bound
+    // enum. All self-compile byte-identically at module scope and run.
+    let m5 = assert_self_host_byte_identical(
+        "enum Shape { Circle(Word), Empty } \
+         struct Point { x: Word, y: Word } \
+         fn mk(a: Word, b: Word) -> Point { Point { x: a, y: b } } \
+         fn compute(n: Word) -> Word { \
+             let p = mk(n, n); \
+             let s = Shape::Circle(p.x); \
+             let t = (p.x, p.y); \
+             match s { Shape::Circle(r) => r + t.0, Shape::Empty() => t.1 } \
+         } \
+         loop main(n: Word) -> Word { yield compute(n) }",
+    );
+    assert_self_host_yields(m5, 5, 10); // p=(5,5); s=Circle(5); t=(5,5); Circle(r=5) => 5 + t.0=5 = 10
+}
+
+// Exercises the raised per-function side-array capacity: a function with SEVEN `for .. limit`
+// loops needs 7 * 12 = 84 words in reconstruct.kel's / codegen.kel's `limit_parts` side array,
+// which overflowed the former 64-word size (it held at most five loops) and now fits the
+// 256-word arrays. The whole self-hosted pipeline reconstructs and codegens it byte-identically
+// to the reference, and the built module runs, proving the capacity raise end to end.
+#[test]
+fn self_host_compiles_a_function_with_many_for_loops() {
+    let m = assert_self_host_byte_identical(
+        "private data d { acc: Word } \
+         fn many(n: Word) -> Word { \
+             d.acc = 0; \
+             for a in 0..n limit 8 { d.acc = d.acc + a; } \
+             for b in 0..n limit 8 { d.acc = d.acc + b; } \
+             for c in 0..n limit 8 { d.acc = d.acc + c; } \
+             for e in 0..n limit 8 { d.acc = d.acc + e; } \
+             for f in 0..n limit 8 { d.acc = d.acc + f; } \
+             for g in 0..n limit 8 { d.acc = d.acc + g; } \
+             for h in 0..n limit 8 { d.acc = d.acc + h; } \
+             d.acc \
+         } \
+         loop main(n: Word) -> Word { yield many(n) }",
+    );
+    // Each loop sums 0+1+2+3 = 6 for n=4; seven loops give 42.
+    assert_self_host_yields(m, 4, 42);
+}
+
+// Nested `for .. limit`: the loop-context stack lets an inner loop nest in an outer
+// loop's body without displacing it. Byte-identical to the reference, and the built
+// module computes the doubly-nested accumulation.
+#[test]
+fn parse_into_codegen_nested_for_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // inner loop accumulates a scalar; n*n increments.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } } d.s }",
+            3,
+            9,
+        ),
+        // the inner loop's bound and body use the outer variable.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 4 { for j in 0..i limit 4 { d.s = d.s + i; } } d.s }",
+            3,
+            5,
+        ),
+        // a statement before the nested loops, and a scalar write after the inner loop.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { d.s = 1; for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } d.s = d.s + 10; } d.s }",
+            2,
+            25,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The bridge over a `Byte as Word` cast, the last construct blocking lexer.kel: a Byte
+// data-read widened to Word lowers to a single ByteToWord op. parse.kel emits a Cast node
+// (26) on `as`, codegen.kel emits ByteToWord, and both match the Rust compiler.
+#[test]
+fn parse_into_codegen_byte_cast_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // a Byte element read, widened and used in arithmetic (the peek_at shape).
+        (
+            "shared data d { bs: [Byte; 8], n: Word } fn main(p: Word) -> Word { d.n = p; d.bs[0] as Word + 1 }",
+            0,
+            1,
+        ),
+        // a runtime index, and the cast under a comparison.
+        (
+            "shared data d { bs: [Byte; 8], n: Word } fn main(p: Word) -> Word { d.n = p; if d.bs[p] as Word < 5 { 1 } else { 0 } }",
+            0,
+            1,
+        ),
+    ];
+    assert_parse_into_codegen_matches(cases);
+}
+
+// The whole of lexer.kel, the tokenizer stage, self-compiled: every one of its chunks is
+// emitted by the self-hosted pipeline (lexer.kel tokenizing, parse.kel parsing, the forest
+// reconstruction, and codegen.kel) byte-identically to the Rust-hosted compiler. This is
+// the first whole stage-file self-compile, and it exercises the full body grammar the
+// tokenizer uses: yields inside if branches, `for .. limit` loops nested inside `if`
+// branches inside outer loops, Byte-as-Word casts, private and shared data, and calls.
+#[test]
+fn self_host_compiles_lexer_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_lexer_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel"))
+        .expect("read lexer.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_lexer_kel_byte_identically",
+        KEL_PIPELINE,
+    );
+}
+
+/// The byte-identity assertion the five `verify_*.kel` stage tests below share.
+///
+/// Written once rather than copied five times. The five stage tests above it
+/// each inline this block, which is five copies of one assertion and exactly the
+/// duplication that lets one copy drift.
+fn assert_stage_byte_identical(cache_id: &str, stage_file: &str) {
+    if common::selfhost_cache::hit(cache_id, KEL_PIPELINE) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path(stage_file))
+        .unwrap_or_else(|e| panic!("read {stage_file}: {e}"));
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+
+    // MUST-FIRE. A stage that produced no chunks would satisfy the zip loop
+    // below vacuously, and every one of these tests would pass while comparing
+    // nothing at all.
+    assert!(
+        !reference.chunks.is_empty(),
+        "{stage_file}: the reference compiler produced no chunks, so the \
+         comparison below is vacuous"
+    );
+
+    assert_eq!(
+        module.chunks.len(),
+        reference.chunks.len(),
+        "{stage_file}: chunk count"
+    );
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "{stage_file}: chunk order");
+        assert_eq!(m.ops, r.ops, "{stage_file}: ops for chunk `{}`", r.name);
+        assert_eq!(
+            m.constants, r.constants,
+            "{stage_file}: pool for chunk `{}`",
+            r.name
+        );
+        assert_eq!(
+            m.local_count, r.local_count,
+            "{stage_file}: local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(cache_id, KEL_PIPELINE);
+}
+
+// THE FIVE `verify_*.kel` STAGES, WHICH HAD NO SELF-HOSTED COVERAGE AT ALL.
+//
+// Until now exactly five of the ten stages had a byte-identity test: `lexer`,
+// `parse`, `reconstruct`, `codegen` and `analyze`. The five verifiers appeared
+// only in `tests/wire_corpus.rs` and `tests/selfhost_wire.rs`, and only as
+// REFERENCE-compiled inputs to wire-format tests, which never run the
+// self-hosted compiler over them.
+//
+// **That was a gap in the tests, not in the compiler**, and the distinction was
+// settled by a probe before any work was planned around it: all five already
+// self-compile byte-identically, so this is five test functions rather than the
+// frontier expansion "no coverage" could equally have meant. The probe carried
+// `codegen` as a control, since a probe that reports a stage WITH a passing test
+// as divergent is broken rather than informative.
+//
+// Cost: about 61 seconds for all five, against `selfhost_codegen`'s ~520.
+
+#[test]
+fn self_host_compiles_verify_structural_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_structural_kel_byte_identically",
+        "verify_structural.kel",
+    );
+}
+
+/// **`wire.kel` JOINS THE CORPUS, 2026-08-27.** The largest stage at 492 chunks (486 when
+/// it joined), and the
+/// last one outside this oracle.
+///
+/// # Why it took three sessions
+///
+/// Four causes, and two of the four were first diagnosed WRONGLY -- both times by reading a
+/// number in a failure message as if it named a cause:
+///
+/// | recorded cause | verdict |
+/// |---|---|
+/// | a capacity bound, read off the `1024` in `IndexOutOfBounds(-1, 1024)` | **wrong** |
+/// | the lexer having no hexadecimal or binary literal support | correct |
+/// | a cap of 256 on the declaration count | **wrong** |
+/// | a `Call` record whose chunk field overflowed at index 256 | correct |
+/// | `forin_count` not reset between functions | correct |
+///
+/// The last was a one-line symmetry gap: the bare `for` form's program-order counter was
+/// never added to the per-function reset that already cleared its own documented analogue,
+/// `forlimit_count`. It indexes a record as `7 * forin_count`, so the SECOND and every later
+/// function containing a bare `for` emitted a record pointing past its own parts -- which is
+/// why the stage emitted FEWER operations rather than different ones.
+///
+/// # The claim this test replaces was once invented
+///
+/// "`wire.kel` self-compiles byte-identically" was written into a doc comment, a pull-request
+/// body and all three resume channels while the compile still panicked. **This test is why
+/// the sentence is now safe to write**: it is the measurement, not a recollection of one.
+#[test]
+fn self_host_compiles_wire_kel_byte_identically() {
+    assert_stage_byte_identical("self_host_compiles_wire_kel_byte_identically", "wire.kel");
+}
+
+#[test]
+fn self_host_compiles_verify_typed_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_typed_kel_byte_identically",
+        "verify_typed.kel",
+    );
+}
+
+/// The type-rejection stage must compile through the pipeline with the same
+/// artifact as the reference. With `self-host`, also check the production driver
+/// that assembles every module field from pipeline output without a reference
+/// scaffold, including the shared and private data layout.
+#[test]
+fn self_host_compiles_verify_types_kel_byte_identically() {
+    let src = include_str!("../src/selfhost/kel/verify_types.kel");
+    let module = assert_self_host_byte_identical(src);
+    let reference = compile_src(src);
+    assert!(
+        module.to_bytes().expect("self-hosted artifact")
+            == reference.to_bytes().expect("reference artifact"),
+        "verify_types.kel artifacts differ beyond the checked chunk bodies"
+    );
+    #[cfg(feature = "self-host")]
+    {
+        let scratch = keleusma::selfhost::self_host_compile_scratch(src);
+        assert!(
+            scratch
+                .to_bytes()
+                .expect("artifact assembled from pipeline output")
+                == reference.to_bytes().expect("reference artifact"),
+            "verify_types.kel artifact assembled without the reference scaffold differs"
+        );
+    }
+}
+
+#[test]
+fn self_host_compiles_template_scan_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_template_scan_kel_byte_identically",
+        "template_scan.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_yield_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_yield_kel_byte_identically",
+        "verify_yield.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_depth_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_depth_kel_byte_identically",
+        "verify_depth.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_datalayout_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_datalayout_kel_byte_identically",
+        "verify_datalayout.kel",
+    );
+}
+
+// A `yield` written as the tail of an if branch (`if c { yield a } else { yield b }`) folds
+// its YieldExpr into that branch, not around the whole conditional. parse.kel captures the
+// operator-stack depth at each branch open and drains the YieldMark at the branch fold only
+// when the `yield` was pushed inside the branch, distinguishing this from the outer form
+// `yield if c { a } else { b }` (covered elsewhere) where the whole If is the yield operand.
+// This was the lexer.kel `main` blocker.
+#[test]
+fn parse_into_codegen_yield_in_if_branch_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_yield_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let cases: &[(&str, i64, i64)] = &[
+        (
+            "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { yield 63 } }",
+            0,
+            62,
+        ),
+        (
+            "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { yield 63 } }",
+            1,
+            63,
+        ),
+        // nested: a yield in each branch of an if nested in the else branch.
+        (
+            "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { if r == 1 { yield 63 } else { yield 64 } } }",
+            2,
+            64,
+        ),
+        // a yield tail preceded by a let and a data-assign statement, inside a branch.
+        (
+            "shared data st { k: Word, v: Word } loop main(r: Word) -> Word { if r == 0 { let x = st.v; st.k = 0; yield 12 + x * 64 } else { yield 62 } }",
+            0,
+            12,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = main_index(&reference);
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call")
+        {
+            VmState::Yielded(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_yield_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+// A `for .. limit` loop written inside an `if` branch closes as a for body, not the branch,
+// so its parts and ForLimit statement stream inside the branch. parse.kel stamps each block
+// open with a monotonic sequence and closes the innermost (largest-stamp) block at each `}`.
+// This was the lexer.kel `intern_id` blocker, whose outer-loop body is an `if` guarding a
+// nested `for`.
+#[test]
+fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_for_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let cases: &[(&str, i64, i64)] = &[
+        // a for as the sole content of an if-then branch (no else).
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { if n > 0 { for j in 0..n limit 8 { d.s = d.s + 1; } } d.s }",
+            3,
+            3,
+        ),
+        // a for as an if-then branch with an explicit else.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { if n > 0 { for j in 0..n limit 8 { d.s = d.s + 1; } } else { d.s = 9; } d.s }",
+            0,
+            9,
+        ),
+        // an if (no else) holding a nested for, inside an outer for -- the intern_id shape.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { d.s = 0; for i in 0..n limit 4 { if i > 0 { for j in 0..n limit 4 { d.s = d.s + 1; } } } d.s }",
+            3,
+            6,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = main_index(&reference);
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call")
+        {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_for_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+// A `match` whose arm results are function calls (`k => f(x)`), and matches with many
+// arms. codegen.kel's `walk_step` dispatch is a 23-arm match of exactly this shape; the
+// earlier whole-program tests only exercised literal-valued arms, so this pins the
+// call-valued and high-arity forms independently.
+#[test]
+fn parse_into_codegen_match_call_arms_match_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_match_call_arms_match_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let cases: &[(&str, i64, i64)] = &[
+        (
+            "fn g(x: Word) -> Word { x + 1 } fn h(x: Word) -> Word { x + 2 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => h(k), _ => g(k) } }",
+            1,
+            3, // h(1) = 3
+        ),
+        (
+            "fn main(k: Word) -> Word { match k { 0 => 10, 1 => 11, 2 => 12, 3 => 13, 4 => 14, 5 => 15, 6 => 16, 7 => 17, 8 => 18, 9 => 19, _ => 99 } }",
+            7,
+            17,
+        ),
+        (
+            "fn g(x: Word) -> Word { x + 1 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => g(k), 2 => g(k), 3 => g(k), 4 => g(k), 5 => g(k), 6 => g(k), 7 => g(k), 8 => g(k), 9 => g(k), _ => g(k) } }",
+            5,
+            6, // g(5) = 6
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = main_index(&reference);
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(built, &arena).expect("verify");
+        match vm.call(&[Value::Int(input)]).expect("call") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_match_call_arms_match_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+// The whole of codegen.kel, the code-generator stage, self-compiled: every one of its 35
+// chunks is emitted by the self-hosted pipeline byte-identically to the Rust-hosted
+// compiler. This is the second whole stage-file self-compile (after lexer.kel) and the
+// first that is itself a code generator, so the self-hosted codegen reproduces its own
+// bytecode. It exercises the full body grammar at scale: a 23-arm dispatch `match` with
+// call-valued arms, `for .. limit` emitters with ~78-statement bodies, nested data-array
+// reads and writes, and the multiheaded `emit_next` phase machine. Reaching it required
+// packing the parser token stream (codegen.kel is 4404 tokens), raising the lexer source
+// and intern buffers (42KB, ~900 identifiers), raising parse.kel's per-block statement
+// table past 64, and rewriting codegen.kel's one `|>` pipe to the `match` it desugars to.
+#[test]
+fn self_host_compiles_codegen_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_codegen_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel"))
+        .expect("read codegen.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_codegen_kel_byte_identically",
+        KEL_PIPELINE,
+    );
+}
+
+// The whole of parse.kel, the parser stage, self-compiled: every one of its 42 chunks is
+// emitted by the self-hosted pipeline byte-identically to the Rust-hosted compiler. This
+// is the THIRD and last whole stage-file self-compile, so all three self-hosted stages
+// (lexer.kel, codegen.kel, parse.kel) now reproduce their own bytecode -- the precondition
+// for the self-compiling fixed point. parse.kel is the largest stage (68 KB source, ~10040
+// tokens, functions up to ~440 nodes and ~540 ops); reaching it required the wire-format V2
+// 24-bit data operands (its shared segment exceeds 64 KB), the widened base+length pack in
+// the parse-to-codegen bridge (a data slot or array length past 65535 no longer spills its
+// base into the length field), and the enlarged lexer source, parser token, and codegen
+// ast/op buffers.
+#[test]
+fn self_host_compiles_parse_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_parse_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+        .expect("read parse.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_parse_kel_byte_identically",
+        KEL_PIPELINE,
+    );
+}
+
+// reconstruct.kel, the reconstruction stage, self-compiled: every chunk is emitted by
+// the self-hosted pipeline (which itself now runs through reconstruct.kel) byte-
+// identically to the Rust-hosted compiler. reconstruct.kel reconstructing its own
+// source is the fourth stage-file self-compile, so every Keleusma source in the
+// compiler self-compiles. It stays within the bridged grammar (fn/loop, if/else,
+// `orelse`, nested `for .. limit`, shared and private data with indexed access, and
+// helper calls -- no match, enum, struct, or generic), and is the smallest stage.
+#[test]
+fn self_host_compiles_reconstruct_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_reconstruct_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/reconstruct.kel"))
+        .expect("read reconstruct.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_reconstruct_kel_byte_identically",
+        KEL_PIPELINE,
+    );
+}
+
+// -- reconstruct.kel: the self-hosted reconstruction stage --------------------
+//
+// parse.kel emits postorder (kind, arg) records; codegen.kel consumes a
+// random-access (kind, arg, lhs, rhs) forest. `reconstruct.kel` is the Keleusma
+// stage that bridges them, replacing the host-side Rust `reconstruct_into`. These
+// tests drive it and assert its `ast` output equals the Rust `reconstruct_body` for
+// the same records, grown construct by construct.
+
+// Flat shared-slot offsets of reconstruct.kel's `rin` then `ast` blocks (declaration
+// order). `rin` = rec_count(1) + in_category(1) + in_param_count(1) + rec_kind[1024]
+// + rec_arg[1024]; `ast` mirrors codegen.kel's block.
+const RC_REC_COUNT: usize = 0;
+const RC_IN_CATEGORY: usize = 1;
+const RC_IN_PARAM: usize = 2;
+const RC_REC_KIND: usize = 3;
+const RC_REC_ARG: usize = 3 + 4096;
+const RC_AST_BASE: usize = 3 + 4096 * 2;
+const RC_AST_ROOT: usize = RC_AST_BASE;
+const RC_AST_KINDS: usize = RC_AST_BASE + 1;
+const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 4096;
+const RC_AST_LHS: usize = RC_AST_BASE + 1 + 4096 * 2;
+const RC_AST_RHS: usize = RC_AST_BASE + 1 + 4096 * 3;
+const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 4096 * 4;
+// `for_parts`, one 256-slot stride after `call_args`. **THE COPY HAD THE SAME OMISSION AS THE
+// SHIPPING DRIVER**: neither read it back from `reconstruct.kel`, so `push_forin` received
+// seven zeros and the bare loop form classified `Diverges` here while the shipping compiler
+// was byte-identical. A copy is correct until the thing it copies changes, and this one was
+// wrong in the same way and found second.
+const RC_AST_FOR_PARTS: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024 * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024 * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024 * 4;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024 * 5 + 1;
+// Multiheaded-dispatch input, appended after out_category.
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024 * 5 + 2;
+const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
+const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 128;
+const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 128 * 2;
+const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 128 * 3;
+
+/// The diagnostic pair `reconstruct.kel` appends after its multihead input.
+const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + 128 * 4;
+const RC_ERR_DETAIL: usize = RC_HEAD_COUNT + 1 + 128 * 4 + 1;
+
+/// Decode `reconstruct.kel`'s yielded word into a node count, or panic naming the cause.
+///
+/// The code table lives in [`keleusma::selfhost_host::describe_reconstruct_diagnostic`], which
+/// is its single definition: a second copy is the copy-drift class that once cost five
+/// defects with one cause.
+fn reconstruct_node_count(yielded: i64, slot_code: i64, detail: i64, chunk: &str) -> usize {
+    // TWO INDEPENDENT SIGNALS. The cause travels both as the yielded tag and in the
+    // appended slot; a disagreement means the stage and this driver have drifted.
+    let code = if yielded >= 0 {
+        0
+    } else {
+        keleusma::selfhost_host::RECONSTRUCT_DIAG_TAG_BASE - yielded
+    };
+    assert_eq!(
+        code, slot_code,
+        "reconstruct.kel's yielded cause and its published cause disagree"
+    );
+    if yielded >= 0 {
+        return yielded as usize;
+    }
+    panic!(
+        "reconstruct.kel refused on chunk `{chunk}`: {}",
+        keleusma::selfhost_host::describe_reconstruct_diagnostic(yielded, detail)
+    );
+}
+
+/// Drive reconstruct.kel over one function's postorder records and read back the
+/// reconstructed forest as a `Body`. This increment reads only the node arrays and
+/// the root/category; the side arrays (call/for/match) arrive with those kinds.
+// Compile reconstruct.kel once and clone the module per call: `self_host_compile`
+// drives it for every function, so recompiling each time dominates the runtime.
+fn reconstruct_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_kel_file("compiler/kel/reconstruct.kel"))
+        .clone()
+}
+
+fn reconstruct_via_kel(
+    records: &[(i64, i64)],
+    category: i64,
+    param_count: usize,
+    chunk: &str,
+) -> Body {
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, RC_REC_COUNT, Value::Int(records.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_CATEGORY, Value::Int(category))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_PARAM, Value::Int(param_count as i64))
+        .unwrap();
+    for (i, &(k, a)) in records.iter().enumerate() {
+        vm.set_shared(&mut shared, RC_REC_KIND + i, Value::Int(k))
+            .unwrap();
+        vm.set_shared(&mut shared, RC_REC_ARG + i, Value::Int(a))
+            .unwrap();
+    }
+    let yielded = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
+        Value::Int(n) => n,
+        _ => 0,
+    };
+    let node_count =
+        reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
+    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    // Read each 64-entry side array in full; the caller compares only the prefix the
+    // Rust reconstruction populated.
+    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..1024).map(|k| rd(vm, shared, base + k)).collect()
+    };
+    let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
+    let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
+    let for_parts = read_side(&vm, &shared, RC_AST_FOR_PARTS);
+    let limit_parts = read_side(&vm, &shared, RC_AST_LIMIT_PARTS);
+    Body {
+        nodes,
+        call_args,
+        for_parts,
+        match_parts,
+        limit_parts,
+        head_parts: Vec::new(),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+/// Assert reconstruct.kel and the Rust reconstruction agree for `src`'s body.
+fn assert_reconstruct_kel_matches(src: &str) {
+    let (records, pc, cat) = parse_function_records(src);
+    let via_kel = reconstruct_via_kel(&records, cat, pc, "<parity probe>");
+    let via_rust = reconstruct_body(&records, cat);
+    assert_eq!(
+        via_kel.nodes.len(),
+        via_rust.nodes.len(),
+        "node count for `{src}`"
+    );
+    for (i, (a, b)) in via_kel.nodes.iter().zip(via_rust.nodes.iter()).enumerate() {
+        assert_eq!(
+            (a.kind, a.arg, a.lhs, a.rhs),
+            (b.kind, b.arg, b.lhs, b.rhs),
+            "node {i} for `{src}`"
+        );
+    }
+    assert_eq!(via_kel.root, via_rust.root, "root for `{src}`");
+    assert_eq!(via_kel.category, via_rust.category, "category for `{src}`");
+    // The reconstruct.kel side arrays are read at full width; compare the prefix the
+    // Rust reconstruction populated (the rest is zero-fill).
+    assert_eq!(
+        via_kel.call_args[..via_rust.call_args.len()],
+        via_rust.call_args[..],
+        "call_args for `{src}`"
+    );
+    assert_eq!(
+        via_kel.match_parts[..via_rust.match_parts.len()],
+        via_rust.match_parts[..],
+        "match_parts for `{src}`"
+    );
+    assert_eq!(
+        via_kel.limit_parts[..via_rust.limit_parts.len()],
+        via_rust.limit_parts[..],
+        "limit_parts for `{src}`"
+    );
+}
+
+// reconstruct.kel increment 1: the atomic, operator, block, and `if` node kinds --
+// leaves (Literal/Local/DataRead/Unit), binaries (BinOp/LetIn/Andalso/Orelse/
+// DataAssignIn/ExprStmt), unaries (Not/Neg/Cast), and If -- reconstruct to the same
+// forest the Rust bridge builds.
+#[test]
+fn reconstruct_kel_matches_rust_for_atomic_and_if_bodies() {
+    let cases: &[&str] = &[
+        "fn main(x: Word) -> Word { x + 1 }",
+        "fn main(x: Word) -> Word { let y = x + 1; y * 2 }",
+        "fn main(x: Word) -> Word { if x > 2 { x } else { 0 } }",
+        "fn main(x: Word) -> Word { let y = x + 1; if y > 2 { y } else { 0 } }",
+        "fn main(x: Word) -> Word { if not (x > 0) { 0 - x } else { x } }",
+        "fn main(x: Word) -> Word { (x > 0) andalso (x < 10) }",
+        "fn main(x: Word) -> Word { (x < 0) orelse (x > 10) }",
+        "fn main(x: Word) -> Word { if x > 0 { if x > 10 { 2 } else { 1 } } else { 0 } }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+    }
+}
+
+// Else presence must survive reconstruction without changing executable bytecode.
+#[test]
+fn explicit_and_implicit_else_compile_byte_identically() {
+    let cases = [
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } else {} d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { if c { d.q = 1; } } else { d.q = 2; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } if c { 2 } else { 3 } }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+        assert_self_host_byte_identical(src);
+    }
+}
+
+// reconstruct.kel increment 2: function calls (the call_args side array, argument
+// nodes stored in source order) and indexed data writes (the IndexStore signal
+// folding value and index into a kind-15 node).
+#[test]
+fn reconstruct_kel_matches_rust_for_calls_and_indexed_writes() {
+    let cases: &[&str] = &[
+        "fn g(x: Word) -> Word { x + 1 } fn main(x: Word) -> Word { g(x) }",
+        "fn add(a: Word, b: Word) -> Word { a + b } fn main(x: Word) -> Word { add(x, 1) }",
+        "fn g(x: Word) -> Word { x } fn main(x: Word) -> Word { g(g(x)) }",
+        "fn g(a: Word, b: Word, c: Word) -> Word { a } fn main(x: Word) -> Word { g(x, x + 1, x + 2) }",
+        "shared data d { a: [Word; 8] } fn main(i: Word) -> Word { d.a[i] = 3; d.a[i] }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+    }
+}
+
+// reconstruct.kel increment 3: bounded `for .. limit` loops (the SlotRecord/ForBuild
+// signals assembling the twelve-word limit_parts entry, and the ForLimit statement)
+// and integer `match` (the MatchBuild signal assembling the match_parts entry and the
+// MatchIn node). With these the whole single-headed body grammar reconstructs.
+#[test]
+fn reconstruct_kel_matches_rust_for_loops_and_matches() {
+    let cases: &[&str] = &[
+        "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+        "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } } d.s }",
+        "fn main(k: Word) -> Word { match k { 0 => 100, 1 => 200, _ => k * 2 } }",
+        "fn g(x: Word) -> Word { x + 1 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => g(k), _ => g(k) } }",
+        "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { if i > 0 { d.s = d.s + i; } } d.s }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+    }
+}
+
+/// Drive reconstruct.kel over a group of same-named heads (a multiheaded function),
+/// feeding each head's guard and body record ranges, and read back the reconstructed
+/// multihead `Body`.
+fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) -> Body {
+    // Concatenate every head's guard then body records, tracking the per-head offsets.
+    let mut recs: Vec<(i64, i64)> = Vec::new();
+    let mut gs = Vec::new();
+    let mut gl = Vec::new();
+    let mut bs = Vec::new();
+    let mut bl = Vec::new();
+    for h in heads {
+        gs.push(recs.len());
+        gl.push(h.guard.len());
+        recs.extend_from_slice(&h.guard);
+        bs.push(recs.len());
+        bl.push(h.body.len());
+        recs.extend_from_slice(&h.body);
+    }
+
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &mut Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&mut vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
+    set(&mut vm, &mut shared, RC_IN_CATEGORY, 3);
+    set(&mut vm, &mut shared, RC_IN_PARAM, pc as i64);
+    for (i, &(k, a)) in recs.iter().enumerate() {
+        set(&mut vm, &mut shared, RC_REC_KIND + i, k);
+        set(&mut vm, &mut shared, RC_REC_ARG + i, a);
+    }
+    set(&mut vm, &mut shared, RC_HEAD_COUNT, heads.len() as i64);
+    for h in 0..heads.len() {
+        set(&mut vm, &mut shared, RC_HEAD_GUARD_START + h, gs[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_GUARD_LEN + h, gl[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
+    }
+    let yielded = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
+        Value::Int(n) => n,
+        _ => 0,
+    };
+    let node_count =
+        reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
+    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..1024).map(|k| rd(vm, shared, base + k)).collect()
+    };
+    Body {
+        nodes,
+        call_args: read_side(&vm, &shared, RC_AST_CALL_ARGS),
+        for_parts: read_side(&vm, &shared, RC_AST_FOR_PARTS),
+        match_parts: read_side(&vm, &shared, RC_AST_MATCH_PARTS),
+        limit_parts: read_side(&vm, &shared, RC_AST_LIMIT_PARTS),
+        head_parts: read_side(&vm, &shared, RC_AST_HEAD_PARTS),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+// reconstruct.kel increment 4: the multiheaded dispatch. A group of same-named
+// `yield` heads reconstructs to the same forest, head_parts entries, and MultiHead
+// root the Rust `build_multihead_bridge` builds, retaining relative frame slots
+// and reconstructing guards when present. With this
+// reconstruct.kel covers the whole grammar the bridge does.
+#[test]
+fn reconstruct_kel_matches_rust_for_multihead() {
+    let cases: &[&str] = &[
+        "yield emit(r: Word) -> Word when r > 0 { yield r } yield emit(r: Word) -> Word { yield 0 }",
+        "shared data st { pos: Word, len: Word } \
+         yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+         yield emit(r: Word) -> Word { yield 62 }",
+        "yield pick(k: Word) -> Word when k > 5 { yield k * 2 } \
+         yield pick(k: Word) -> Word when k > 0 { yield k } \
+         yield pick(k: Word) -> Word { yield 0 }",
+    ];
+    for src in cases {
+        let (fns, names, _, _) = parse_functions(src);
+        // Group the last run of same-named heads (the multiheaded function).
+        let last_name = names[fns.last().unwrap().name as usize].clone();
+        let group: Vec<&ParsedFn> = fns
+            .iter()
+            .filter(|f| names[f.name as usize] == last_name)
+            .collect();
+        let pc = group[0].params;
+        let via_kel = reconstruct_via_kel_multihead(&group, pc, "<parity probe>");
+        let via_rust = build_multihead_bridge(&group, pc);
+        assert_eq!(
+            via_kel.nodes.len(),
+            via_rust.nodes.len(),
+            "node count for `{src}`"
+        );
+        for (i, (a, b)) in via_kel.nodes.iter().zip(via_rust.nodes.iter()).enumerate() {
+            assert_eq!(
+                (a.kind, a.arg, a.lhs, a.rhs),
+                (b.kind, b.arg, b.lhs, b.rhs),
+                "node {i} for `{src}`"
+            );
+        }
+        assert_eq!(via_kel.root, via_rust.root, "root for `{src}`");
+        assert_eq!(
+            via_kel.head_parts[..via_rust.head_parts.len()],
+            via_rust.head_parts[..],
+            "head_parts for `{src}`"
+        );
+        assert_eq!(
+            via_kel.match_parts[..via_rust.match_parts.len()],
+            via_rust.match_parts[..],
+            "match_parts for `{src}`"
+        );
+    }
+}
+
+// -- data-layout assembly from parse.kel's data-block records -----------------
+//
+// The self-host compile still borrows the module's data layout from the reference.
+// The first step to assembling it from the stages: parse.kel already emits each data
+// block's header (DSTART packing name and visibility, a PARAM per field name, a PTYPE
+// per type, an ASIZE per array field, END), so the driver can build the slot table
+// itself. This is the same two-pass expansion the Rust compiler does -- shared blocks
+// first, then private, const blocks producing no runtime slots, array fields expanding
+// to one `block.field[k]` slot per element.
+
+/// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
+/// interned block, field, and (unused here) type ids through the name table.
+fn assemble_data_slots(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::DataSlot> {
+    use keleusma::bytecode::{DataSlot, SlotVisibility};
+    struct Blk {
+        name_id: i64,
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (field name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                name_id: val / 4,
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((val, 1)),
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            // 6 (PTYPE) is not needed for the slot names; 5 (END) is a boundary.
+            _ => {}
+        }
+    }
+    let mut slots = Vec::new();
+    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
+    for pass_vis in [0i64, 1i64] {
+        let visibility = if pass_vis == 0 {
+            SlotVisibility::Shared
+        } else {
+            SlotVisibility::Private
+        };
+        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
+            let bname = &names[b.name_id as usize];
+            for &(fid, count) in &b.fields {
+                let fname = &names[fid as usize];
+                if count == 1 {
+                    slots.push(DataSlot {
+                        name: format!("{bname}.{fname}"),
+                        visibility,
+                    });
+                } else {
+                    // ONE NAME FOR THE WHOLE ARRAY, mirroring the reference
+                    // compiler. A distinct `field[k]` per element defeated the
+                    // name interner's dedup and made the string pool and name
+                    // table scale with the ELEMENT COUNT. This model exists to
+                    // agree with `compiler.rs` byte for byte, so it tracks that
+                    // change rather than encoding the older convention.
+                    let array_name = format!("{bname}.{fname}");
+                    for _ in 0..count {
+                        slots.push(DataSlot {
+                            name: array_name.clone(),
+                            visibility,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    slots
+}
+
+// The data-slot table the driver assembles from parse.kel's data-block records is
+// byte-identical (name and visibility, in order) to the one the Rust-hosted compiler
+// bakes, for every stage source: shared-then-private ordering, array expansion, and
+// const blocks producing no slots.
+#[test]
+fn assembled_data_slots_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_data_slots_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (_fns, names, data_records, _) = parse_functions(&src);
+        let slots = assemble_data_slots(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_slots = &reference.data_layout.as_ref().expect("data layout").slots;
+        assert_eq!(slots.len(), ref_slots.len(), "slot count for {path}");
+        for (i, (a, b)) in slots.iter().zip(ref_slots.iter()).enumerate() {
+            assert_eq!(a.name, b.name, "slot {i} name for {path}");
+            assert_eq!(a.visibility, b.visibility, "slot {i} visibility for {path}");
+        }
+    }
+    common::selfhost_cache::record_pass("assembled_data_slots_match_the_reference", KEL_PIPELINE);
+}
+
+/// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
+/// data-block records. The shared segment is the single shared block's fields expanded
+/// to one entry per element at consecutive byte offsets; the stage data fields are all
+/// `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
+/// (tag 2, one byte), and each is a scalar (len 0).
+fn assemble_shared_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::SharedSlotLayout> {
+    use keleusma::bytecode::SharedSlotLayout;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let scalar = |type_id: i64| -> (u8, u32) {
+        match names[type_id as usize].as_str() {
+            "Word" => (3, 8),
+            "Byte" => (2, 1),
+            other => panic!("unhandled shared field type `{other}`"),
+        }
+    };
+    let mut layout = Vec::new();
+    let mut offset: u32 = 0;
+    for b in blocks.iter().filter(|b| b.vis == 0) {
+        for &(tid, count) in &b.fields {
+            let (tag, size) = scalar(tid);
+            for _ in 0..count {
+                layout.push(SharedSlotLayout {
+                    offset,
+                    kind: tag,
+                    len: 0,
+                });
+                offset += size;
+            }
+        }
+    }
+    layout
+}
+
+// The per-shared-slot byte layout the driver assembles from parse.kel's records equals
+// the reference compiler's, offset/kind/len for every element slot, for all four stage
+// sources (including lexer.kel's source buffer whose later fields sit past 64 KB).
+#[test]
+fn assembled_shared_layout_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "assembled_shared_layout_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (_fns, names, data_records, _) = parse_functions(&src);
+        let layout = assemble_shared_layout(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_layout = &reference
+            .data_layout
+            .as_ref()
+            .expect("data layout")
+            .shared_layout;
+        assert_eq!(
+            layout.len(),
+            ref_layout.len(),
+            "shared_layout len for {path}"
+        );
+        for (i, (a, b)) in layout.iter().zip(ref_layout.iter()).enumerate() {
+            assert_eq!(
+                (a.offset, a.kind, a.len),
+                (b.offset, b.kind, b.len),
+                "shared_layout entry {i} for {path}"
+            );
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "assembled_shared_layout_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+/// Assemble the per-private-slot load-time initial values from parse.kel's records:
+/// one entry per private slot (arrays expanded), the type's zero -- `Int(0)` for a
+/// `Word` slot, `Byte(0)` for a `Byte` slot. The stage private fields carry no
+/// `= literal` initializer, so every entry is a zero.
+fn assemble_private_init(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::ConstValue> {
+    use keleusma::bytecode::ConstValue;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let mut init = Vec::new();
+    for b in blocks.iter().filter(|b| b.vis == 1) {
+        for &(tid, count) in &b.fields {
+            let zero = match names[tid as usize].as_str() {
+                "Word" => ConstValue::Int(0),
+                "Byte" => ConstValue::Byte(0),
+                other => panic!("unhandled private field type `{other}`"),
+            };
+            for _ in 0..count {
+                init.push(zero.clone());
+            }
+        }
+    }
+    init
+}
+
+/// Assemble a whole `DataLayout` from parse.kel's data-block records. The stages have
+/// no private composite fields, so `private_composite_layout` is empty.
+fn assemble_data_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> keleusma::bytecode::DataLayout {
+    keleusma::bytecode::DataLayout {
+        slots: assemble_data_slots(data_records, names),
+        shared_layout: assemble_shared_layout(data_records, names),
+        private_composite_layout: Vec::new(),
+        private_init: assemble_private_init(data_records, names),
+    }
+}
+
+// The whole DataLayout the driver assembles from parse.kel's records -- slot table,
+// per-shared-slot byte layout, and per-private-slot initial values -- is byte-identical
+// to the reference compiler's for every stage source, so the driver no longer needs the
+// reference for the module's data layout.
+#[test]
+fn assembled_data_layout_matches_the_reference() {
+    if common::selfhost_cache::hit("assembled_data_layout_matches_the_reference", KEL_PIPELINE) {
+        return;
+    }
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (_fns, names, data_records, _) = parse_functions(&src);
+        let dl = assemble_data_layout(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_dl = reference.data_layout.as_ref().expect("data layout");
+        assert_eq!(dl.slots.len(), ref_dl.slots.len(), "slot count for {path}");
+        for (i, (a, b)) in dl.slots.iter().zip(ref_dl.slots.iter()).enumerate() {
+            assert_eq!(
+                (&a.name, a.visibility),
+                (&b.name, b.visibility),
+                "slot {i} for {path}"
+            );
+        }
+        assert_eq!(
+            dl.shared_layout.len(),
+            ref_dl.shared_layout.len(),
+            "shared_layout len for {path}"
+        );
+        for (i, (a, b)) in dl
+            .shared_layout
+            .iter()
+            .zip(ref_dl.shared_layout.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                (a.offset, a.kind, a.len),
+                (b.offset, b.kind, b.len),
+                "shared_layout {i} for {path}"
+            );
+        }
+        assert_eq!(
+            dl.private_composite_layout.len(),
+            ref_dl.private_composite_layout.len(),
+            "private_composite_layout for {path}"
+        );
+        assert_eq!(
+            dl.private_init, ref_dl.private_init,
+            "private_init for {path}"
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "assembled_data_layout_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+// -- enum-layout assembly from parse.kel's enum records -----------------------
+//
+// parse.kel emits each enum as ENUMSTART (the type name), then EVARIANT per variant
+// (the running implicit discriminant, from 0, is used) and an optional EDISC that
+// overrides it and reseeds the running value, then END. The stage enums are unit enums
+// (no payload), so `min_payload` is zero. The driver assembles the enum-layout table
+// itself, matching the reference's `build_enum_layouts`.
+
+/// Assemble the enum-layout table from parse.kel's enum record stream.
+fn assemble_enum_layouts(
+    enum_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::EnumLayout> {
+    use keleusma::bytecode::{EnumLayout, EnumVariantDisc};
+    let mut layouts: Vec<EnumLayout> = Vec::new();
+    let mut running = 0i64;
+    for &(code, val) in enum_records {
+        match code {
+            12 => {
+                layouts.push(EnumLayout {
+                    type_name: names[val as usize].clone(),
+                    variants: Vec::new(),
+                    min_payload: 0,
+                });
+                running = 0;
+            }
+            13 => {
+                layouts.last_mut().unwrap().variants.push(EnumVariantDisc {
+                    name: names[val as usize].clone(),
+                    disc: running,
+                });
+                running += 1;
+            }
+            14 => {
+                let vs = &mut layouts.last_mut().unwrap().variants;
+                vs.last_mut().unwrap().disc = val;
+                running = val + 1;
+            }
+            _ => {}
+        }
+    }
+    // The reference orders the enum-layout table by type name, not declaration order.
+    layouts.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+    layouts
+}
+
+// The enum-layout table the driver assembles from parse.kel's records equals the
+// reference compiler's -- type name, each variant's name and discriminant (implicit and
+// explicit), and the zero min_payload -- for the stages that declare enums.
+#[test]
+fn assembled_enum_layouts_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_enum_layouts_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
+    // parse.kel declares enums (Tok, OpCode, Node); the other stages declare none, so
+    // the assembled table is empty and still matches.
+    let cases = [
+        "compiler/kel/parse.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/lexer.kel",
+        "compiler/kel/codegen.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (_fns, names, _data, enum_records) = parse_functions(&src);
+        let layouts = assemble_enum_layouts(&enum_records, &names);
+        let reference = compile_src(&src);
+        assert_eq!(
+            layouts.len(),
+            reference.enum_layouts.len(),
+            "enum count for {path}"
+        );
+        for (a, b) in layouts.iter().zip(reference.enum_layouts.iter()) {
+            assert_eq!(a.type_name, b.type_name, "enum name for {path}");
+            assert_eq!(a.min_payload, b.min_payload, "min_payload for {path}");
+            assert_eq!(
+                a.variants.len(),
+                b.variants.len(),
+                "variant count for {path}"
+            );
+            for (va, vb) in a.variants.iter().zip(b.variants.iter()) {
+                assert_eq!(
+                    (&va.name, va.disc),
+                    (&vb.name, vb.disc),
+                    "variant for {path}"
+                );
+            }
+        }
+    }
+    common::selfhost_cache::record_pass("assembled_enum_layouts_match_the_reference", KEL_PIPELINE);
+}
+
+// -- chunk-signature assembly from parse.kel's header records -----------------
+//
+// The typed-verifier per-chunk signature is the flat shape of each parameter, the
+// return, and (for a Stream chunk) the resume value. For the stages every boundary
+// value is a scalar `Word` or `Byte`, so the shapes are the corresponding ScalarKind
+// tags; only a `loop` (Stream) chunk resumes with its first parameter's shape, an `fn`
+// or `yield` records `Top`. Signatures are parallel to the module chunks, ordered by
+// chunk name; a multiheaded function is one chunk described by its first head.
+
+/// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
+/// Byte scalar (tag 2), anything else the conservative `Top` the reference records for
+/// an unresolvable type.
+fn wire_shape_of(type_id: i64, names: &[String]) -> keleusma::bytecode::WireShape {
+    use keleusma::bytecode::WireShape;
+    match names.get(type_id as usize).map(String::as_str) {
+        Some("Word") => WireShape::Scalar { kind: 3 },
+        Some("Byte") => WireShape::Scalar { kind: 2 },
+        _ => WireShape::Top,
+    }
+}
+
+/// Assemble the per-chunk signature table from the parsed functions, grouping
+/// same-named heads into one chunk and ordering by chunk name to match the module.
+fn assemble_signatures(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<keleusma::bytecode::ChunkSignature> {
+    use keleusma::bytecode::{ChunkSignature, WireShape};
+    let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let first = &fns[i];
+        // Skip the rest of this head group.
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            j += 1;
+        }
+        i = j;
+        let params: Vec<WireShape> = first
+            .param_types
+            .iter()
+            .map(|&t| wire_shape_of(t, names))
+            .collect();
+        let ret = wire_shape_of(first.return_type, names);
+        // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
+        let resume = if first.cat == 3 {
+            params.first().copied().unwrap_or(WireShape::Top)
+        } else {
+            WireShape::Top
+        };
+        chunks.push((
+            name,
+            ChunkSignature {
+                params,
+                ret,
+                resume,
+            },
+        ));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks.into_iter().map(|(_, s)| s).collect()
+}
+
+// The per-chunk signature table the driver assembles equals the reference compiler's --
+// parameter shapes, return shape, and resume shape, in chunk-name order -- for every
+// stage source.
+#[test]
+fn assembled_signatures_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_signatures_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (fns, names, _data, _enums) = parse_functions(&src);
+        let sigs = assemble_signatures(&fns, &names);
+        let reference = compile_src(&src);
+        assert_eq!(
+            sigs.len(),
+            reference.signatures.len(),
+            "signature count for {path}"
+        );
+        for (i, (a, b)) in sigs.iter().zip(reference.signatures.iter()).enumerate() {
+            assert_eq!(a.params, b.params, "params of chunk {i} for {path}");
+            assert_eq!(a.ret, b.ret, "ret of chunk {i} for {path}");
+            assert_eq!(a.resume, b.resume, "resume of chunk {i} for {path}");
+        }
+    }
+    common::selfhost_cache::record_pass("assembled_signatures_match_the_reference", KEL_PIPELINE);
+}
+
+// The schema hash is a pure function of the DataLayout, which the driver assembles
+// itself, so the driver computes the module's schema hash from its own assembled layout
+// -- matching the reference for every stage source.
+#[test]
+fn assembled_schema_hash_matches_the_reference() {
+    if common::selfhost_cache::hit("assembled_schema_hash_matches_the_reference", KEL_PIPELINE) {
+        return;
+    }
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        // The driver's own computation, slot types included, against the reference's.
+        let hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
+        let reference = compile_src(&src);
+        assert_eq!(hash, reference.schema_hash, "schema hash for {path}");
+    }
+    common::selfhost_cache::record_pass(
+        "assembled_schema_hash_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+/// Set a module's declared WCET/WCMU header from the self-hosted analyze.kel stage: the
+/// per-iteration maximum across the module's Stream chunks, mirroring the reference
+/// compiler's fold (`compiler.rs` sets `wcet_cycles`/`wcmu_bytes` to that maximum).
+fn assemble_resource_bounds(module: &mut Module) {
+    let mut max_wcet = 0i64;
+    let mut max_wcmu = 0i64;
+    for c in &module.chunks {
+        if c.block_type != keleusma::bytecode::BlockType::Stream {
+            continue;
+        }
+        let (wcet, stack, heap, reject) = analyze_via_kel(c);
+        assert!(!reject, "analyze.kel rejected a stage Stream chunk");
+        max_wcet = max_wcet.max(wcet);
+        max_wcmu = max_wcmu.max(stack + heap);
+    }
+    module.wcet_cycles = max_wcet as u32;
+    module.wcmu_bytes = max_wcmu as u32;
+}
+
+// -- integration: the self-assembled scaffold serializes byte-identically ------
+//
+// Each analytical scaffold component (DataLayout, enum-layout table, typed-verifier
+// signatures, schema hash, chunk-table metadata, and now the WCET/WCMU declared-bound
+// numbers) was proved byte-identical to the reference as a struct. This splices all of them,
+// together with the self-hosted chunk ops, into a module and serializes it, asserting the
+// wire bytes equal the reference compiler's -- so the assembled components agree not only
+// field by field but through the wire encoding. With `assemble_resource_bounds` computing
+// the header WCET/WCMU from analyze.kel, no field of the serialized module is borrowed from
+// the reference for these loop-free stages; the reference module is used only as the
+// comparison oracle.
+#[test]
+fn self_assembled_scaffold_serializes_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_assembled_scaffold_serializes_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (fns, names, data_records, enum_records) = parse_functions(&src);
+        // The self-hosted chunk ops, with the reference scaffold; then splice in the
+        // driver-assembled components.
+        let mut module = self_host_compile(&src);
+        let dl = assemble_data_layout(&data_records, &names);
+        // The driver's own hash, slot types included.
+        module.schema_hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
+        module.data_layout = Some(dl);
+        module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
+        module.signatures = assemble_signatures(&fns, &names);
+        assemble_resource_bounds(&mut module);
+
+        let self_bytes = module.to_bytes().expect("serialize self-assembled module");
+        let ref_bytes = compile_src(&src)
+            .to_bytes()
+            .expect("serialize reference module");
+        assert_eq!(self_bytes, ref_bytes, "serialized module for {path}");
+    }
+    common::selfhost_cache::record_pass(
+        "self_assembled_scaffold_serializes_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
+}
+
+// -- chunk-table metadata assembly --------------------------------------------
+//
+// The last driver-borrowed chunk fields (beyond the self-hosted ops/constants/
+// local_count) are the parameter count, block type, and parameter type tags. All three
+// come from parse.kel: the count and types from the header PARAM/PTYPE records, and the
+// block type from the category (fn -> Func, yield -> Reentrant, loop -> Stream). A
+// multiheaded function is one chunk described by its first head; the table is ordered by
+// chunk name.
+
+/// Assemble each chunk's (name, param_count, block_type, param_type tags) from the
+/// parsed functions, in chunk-name order.
+#[allow(clippy::type_complexity)]
+fn assemble_chunk_metadata(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<(
+    String,
+    u8,
+    keleusma::bytecode::BlockType,
+    Vec<keleusma::bytecode::TypeTag>,
+)> {
+    use keleusma::bytecode::{BlockType, TypeTag};
+    let tag_of = |type_id: i64| -> TypeTag {
+        match names.get(type_id as usize).map(String::as_str) {
+            Some("Word") => TypeTag::Word,
+            Some("Byte") => TypeTag::Byte,
+            _ => TypeTag::Composite,
+        }
+    };
+    let mut chunks = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let first = &fns[i];
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            j += 1;
+        }
+        i = j;
+        let block_type = match first.cat {
+            1 => BlockType::Func,
+            2 => BlockType::Reentrant,
+            _ => BlockType::Stream,
+        };
+        let param_types: Vec<TypeTag> = first.param_types.iter().map(|&t| tag_of(t)).collect();
+        chunks.push((name, first.params as u8, block_type, param_types));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks
+}
+
+// The chunk-table metadata the driver assembles equals the reference compiler's --
+// parameter count, block type, and parameter type tags, in chunk-name order -- for every
+// stage source. With this, only the two WCET/WCMU declared-bound numbers remain borrowed.
+#[test]
+fn assembled_chunk_metadata_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "assembled_chunk_metadata_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (fns, names, _data, _enums) = parse_functions(&src);
+        let meta = assemble_chunk_metadata(&fns, &names);
+        let reference = compile_src(&src);
+        assert_eq!(meta.len(), reference.chunks.len(), "chunk count for {path}");
+        for (i, (m, c)) in meta.iter().zip(reference.chunks.iter()).enumerate() {
+            assert_eq!(m.0, c.name, "chunk {i} name for {path}");
+            assert_eq!(m.1, c.param_count, "param_count of `{}` for {path}", c.name);
+            assert_eq!(m.2, c.block_type, "block_type of `{}` for {path}", c.name);
+            assert_eq!(m.3, c.param_types, "param_types of `{}` for {path}", c.name);
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "assembled_chunk_metadata_matches_the_reference",
+        KEL_PIPELINE,
+    );
+}
+
+// -- self-hosted WCET/WCMU analysis (analyze.kel) -----------------------------
+//
+// analyze.kel reformulates the reference verifier's recursive `wcet_region`/`wcmu_region`
+// max traversals as one explicit region-frame stack, computing a Stream chunk's
+// per-iteration WCET and WCMU from a marshalled op table. Each per-op quantity is the
+// authoritative `Op::cost()`/`stack_growth()`/`stack_shrink()`/`heap_alloc()`; the stage
+// self-hosts only the control-flow algorithm. This increment covers the loop-free structured
+// forms (straight-line, `if`/`else`, bare `if`, `break`/`trap`), exact for the four stages'
+// loop-free Stream bodies; `loop` regions land in a later increment.
+const WA_OP_COUNT: usize = 0;
+const WA_STREAM_POS: usize = 1;
+const WA_RESET_POS: usize = 2;
+const WA_LOCAL_COUNT: usize = 3;
+const WA_VSB: usize = 4;
+const WA_ARENA_CAPACITY: usize = 5;
+const WA_REGION_START: usize = 6;
+const WA_REGION_END: usize = 7;
+const WA_COST: usize = 8;
+const WA_CLASS: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP;
+const WA_ARG: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 2;
+const WA_GROWTH: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 3;
+const WA_SHRINK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 4;
+const WA_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 5;
+const WA_OPK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 6;
+const WA_SLOT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 7;
+const WA_CVAL: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 8;
+const WA_CINT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 9;
+const WA_CALLEE_SLOTS: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 10;
+const WA_CALLEE_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 11;
+const WA_OUT_WCET: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12;
+const WA_OUT_STACK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 3;
+const WA_OUT_VALID: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 4;
+
+fn analyze_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path("compiler/kel/analyze.kel"))
+                    .expect("read analyze.kel"),
+            )
+        })
+        .clone()
+}
+
+/// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
+/// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap, 9 Call);
+/// `arg` carries the branch target for If and Loop, and the matching EndIf position for Else.
+use keleusma::selfhost_host::{analyze_class, analyze_opk};
+
+/// The operand-stack `(growth, shrink)` analyze.kel accounts for `op` under the empty
+/// resolver. Identical to `Op::stack_growth()`/`stack_shrink()` except for a native call: the
+/// reference WCMU native arm uses `during_peak = offset + 1` and `offset += 1 - n` with `n`
+/// the whole argument-count byte (the error-reify high bit included), which the generic
+/// accounting reproduces exactly as `growth = 1, shrink = n_full_byte`.
+fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
+    // Mirrors the driver's transport. A native call once read its raw count
+    // byte, reify flag included, as the argument count, and this copy carried
+    // the same reading, so the reified case below agreed on an understated
+    // bound until 2026-10-24.
+    (op.stack_growth() as i64, op.stack_shrink() as i64)
+}
+
+/// The per-op arena-heap bytes analyze.kel accounts for `op`: the op's own construction
+/// allocation (`Op::heap_alloc`) plus the copy-out a `GetData`/`GetDataIndexed` performs when
+/// it reads a flat-composite shared slot (`shared_composite_copyout_bytes`). `shared_layout`
+/// is empty for the shallow empty-resolver form (copy-out zero, matching
+/// `wcmu_stream_iteration`) and the module's real layout for the transitive validator.
+fn analyze_op_heap(
+    op: &keleusma::bytecode::Op,
+    chunk: &keleusma::bytecode::Chunk,
+    shared_layout: &[keleusma::bytecode::SharedSlotLayout],
+) -> i64 {
+    use keleusma::bytecode::{Op, SHARED_SLOT_COMPOSITE_FLAG};
+    let slot_copyout = |slot: usize| -> i64 {
+        shared_layout
+            .get(slot)
+            .filter(|e| e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .map_or(0, |e| e.len as i64)
+    };
+    let copyout = match op {
+        Op::GetData(s) => slot_copyout(*s as usize),
+        Op::GetDataIndexed(base, len) => (0..*len as usize)
+            .map(|i| slot_copyout(*base as usize + i))
+            .max()
+            .unwrap_or(0),
+        _ => 0,
+    };
+    op.heap_alloc(chunk) as i64 + copyout
+}
+
+/// Run analyze.kel over one chunk against `arena_capacity`, returning `(wcet, stack_bytes,
+/// heap_bytes, reject, valid)`. The region is the Stream-to-Reset body for a Stream chunk and
+/// the whole op range for a Func/Reentrant chunk, matching `compute_chunk_wcmu`. `chunk_wcmu`
+/// resolves each `Op::Call` to the callee chunk's already-computed `(stack_bytes, heap_bytes)`
+/// (indexed by chunk index); pass `&[]` for the shallow empty-resolver form, where every
+/// callee folds in as zero. `shared_layout` sizes composite-shared-read copy-out (empty for
+/// the shallow form).
+fn run_analyze_kel(
+    chunk: &keleusma::bytecode::Chunk,
+    arena_capacity: i64,
+    chunk_wcmu: &[(i64, i64)],
+    shared_layout: &[keleusma::bytecode::SharedSlotLayout],
+) -> (i64, i64, i64, bool, bool) {
+    use keleusma::bytecode::{BlockType, Op};
+    let vsb = keleusma::bytecode::VALUE_SLOT_SIZE_BYTES as i64;
+    // The analysed region and the Stream/Reset positions (used only for a Stream chunk's WCET
+    // overhead term; a Func/Reentrant chunk analyses its whole op range).
+    let (region_start, region_end, sp, rp) = match chunk.block_type {
+        BlockType::Stream => {
+            let sp = chunk
+                .ops
+                .iter()
+                .position(|o| matches!(o, Op::Stream))
+                .expect("Stream op");
+            let rp = chunk
+                .ops
+                .iter()
+                .position(|o| matches!(o, Op::Reset))
+                .expect("Reset op");
+            (sp + 1, rp, sp, rp)
+        }
+        BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
+    };
+    assert!(
+        chunk.ops.len() <= keleusma::selfhost_host::VERIFY_OP_CAP,
+        "analyze.kel op-table capacity: chunk `{}` has {} ops",
+        chunk.name,
+        chunk.ops.len()
+    );
+    let m = analyze_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify analyze.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, WA_OP_COUNT, chunk.ops.len() as i64);
+    set(&vm, &mut shared, WA_STREAM_POS, sp as i64);
+    set(&vm, &mut shared, WA_RESET_POS, rp as i64);
+    set(&vm, &mut shared, WA_LOCAL_COUNT, chunk.local_count as i64);
+    set(&vm, &mut shared, WA_VSB, vsb);
+    set(&vm, &mut shared, WA_ARENA_CAPACITY, arena_capacity);
+    set(&vm, &mut shared, WA_REGION_START, region_start as i64);
+    set(&vm, &mut shared, WA_REGION_END, region_end as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        let (opk, slot, cval, cint) = analyze_opk(op, chunk);
+        let (growth, shrink) = analyze_stack_effect(op);
+        set(&vm, &mut shared, WA_COST + i, op.cost() as i64);
+        set(&vm, &mut shared, WA_CLASS + i, class);
+        set(&vm, &mut shared, WA_ARG + i, arg);
+        set(&vm, &mut shared, WA_GROWTH + i, growth);
+        set(&vm, &mut shared, WA_SHRINK + i, shrink);
+        set(
+            &vm,
+            &mut shared,
+            WA_HEAP + i,
+            analyze_op_heap(op, chunk, shared_layout),
+        );
+        set(&vm, &mut shared, WA_OPK + i, opk);
+        set(&vm, &mut shared, WA_SLOT + i, slot);
+        set(&vm, &mut shared, WA_CVAL + i, cval);
+        set(&vm, &mut shared, WA_CINT + i, cint);
+        // A Call folds in the callee's transitive WCMU (in slots for the stack term, bytes
+        // for the heap term). An unresolved callee (shallow mode) contributes zero.
+        if let Op::Call(callee, _) = op {
+            let (cs, ch) = chunk_wcmu.get(*callee as usize).copied().unwrap_or((0, 0));
+            set(&vm, &mut shared, WA_CALLEE_SLOTS + i, cs / vsb);
+            set(&vm, &mut shared, WA_CALLEE_HEAP + i, ch);
+        }
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call analyze.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected analyze.kel state: {other:?}"),
+    }
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    (
+        rd(WA_OUT_WCET),
+        rd(WA_OUT_STACK),
+        rd(WA_OUT_HEAP),
+        rd(WA_OUT_REJECT) != 0,
+        rd(WA_OUT_VALID) != 0,
+    )
+}
+
+/// The analysis view: the per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)` for a
+/// Stream chunk. Shallow (empty resolver) and against an unbounded capacity.
+fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
+    let (wcet, stack, heap, reject, _valid) = run_analyze_kel(chunk, i64::MAX, &[], &[]);
+    (wcet, stack, heap, reject)
+}
+
+/// The self-hosted validator verdict for a Stream chunk against `arena_capacity` (shallow):
+/// true iff analyze.kel proves a finite per-iteration bound whose stack-plus-heap budget fits.
+fn validate_via_kel(chunk: &keleusma::bytecode::Chunk, arena_capacity: i64) -> bool {
+    run_analyze_kel(chunk, arena_capacity, &[], &[]).4
+}
+
+/// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
+/// chunk's WCMU transitively (callee bodies folded at every `Op::Call`, resolved in
+/// topological order so callees precede callers), and the module is admitted iff no chunk has
+/// an inextractable bound and every Stream chunk's budget fits `arena_capacity`.
+fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
+    use keleusma::bytecode::{BlockType, Op};
+    let n = module.chunks.len();
+    // Topological order over the call graph (callees before callers), rejecting recursion --
+    // the same DFS postorder `topological_call_order` computes.
+    let mut visited = vec![0u8; n]; // 0 unseen, 1 on-stack, 2 done
+    let mut order = Vec::new();
+    fn visit(module: &Module, i: usize, visited: &mut [u8], order: &mut Vec<usize>) -> bool {
+        if visited[i] == 1 {
+            return false; // cycle
+        }
+        if visited[i] == 2 {
+            return true;
+        }
+        visited[i] = 1;
+        for op in &module.chunks[i].ops {
+            if let Op::Call(callee, _) = op {
+                let c = *callee as usize;
+                if c < module.chunks.len() && !visit(module, c, visited, order) {
+                    return false;
+                }
+            }
+        }
+        visited[i] = 2;
+        order.push(i);
+        true
+    }
+    for i in 0..n {
+        if visited[i] != 2 && !visit(module, i, &mut visited, &mut order) {
+            return false; // a recursive call graph is inadmissible
+        }
+    }
+    // Resolve each chunk's transitive WCMU in topological order, then admit.
+    let shared_layout = module
+        .data_layout
+        .as_ref()
+        .map_or(&[][..], |dl| &dl.shared_layout);
+    let mut chunk_wcmu = vec![(0i64, 0i64); n];
+    let mut valid = true;
+    for &idx in &order {
+        let chunk = &module.chunks[idx];
+        let (_wcet, stack, heap, reject, chunk_valid) =
+            run_analyze_kel(chunk, arena_capacity, &chunk_wcmu, shared_layout);
+        if reject {
+            valid = false; // an inextractable bound anywhere fails module_wcmu
+        }
+        if chunk.block_type == BlockType::Stream && !chunk_valid {
+            valid = false; // a Stream chunk whose transitive budget exceeds the capacity
+        }
+        chunk_wcmu[idx] = (stack, heap);
+    }
+    valid
+}
+
+// analyze.kel reproduces both `wcet_stream_iteration` and `wcmu_stream_iteration` exactly for
+// every stage's loop-free Stream chunk. Reference WCET is 154/43/14/14 and WCMU stack bytes
+// 288/128/96/64 (heap 0) for lexer/reconstruct/codegen/parse.
+#[test]
+fn analyze_via_kel_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_matches_the_reference",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let m = compile_src(&src);
+        for c in &m.chunks {
+            if c.block_type != keleusma::bytecode::BlockType::Stream {
+                continue;
+            }
+            let (wcet, stack, heap, reject) = analyze_via_kel(c);
+            assert!(!reject, "unexpected reject for {path} `{}`", c.name);
+            let ref_wcet =
+                keleusma::verify::wcet_stream_iteration(c).expect("reference wcet") as i64;
+            let (ref_stack, ref_heap) =
+                keleusma::verify::wcmu_stream_iteration(c).expect("reference wcmu");
+            assert_eq!(wcet, ref_wcet, "wcet for {path} chunk `{}`", c.name);
+            assert_eq!(
+                stack, ref_stack as i64,
+                "wcmu stack for {path} `{}`",
+                c.name
+            );
+            assert_eq!(heap, ref_heap as i64, "wcmu heap for {path} `{}`", c.name);
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_matches_the_reference",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
+}
+
+// analyze.kel handles `loop` regions with a self-hosted iteration-bound extraction. These
+// synthetic Stream programs carry a `for .. limit` loop in the loop body (the compiler emits
+// the canonical for-range header analyze.kel recognizes), and analyze.kel must reproduce
+// `wcet_stream_iteration`/`wcmu_stream_iteration` exactly for each -- exercising the loop
+// multiply, the runtime-range `break` inside the loop, and nested control flow.
+#[test]
+fn analyze_via_kel_matches_the_reference_for_loops() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_matches_the_reference_for_loops",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
+    let cases: &[&str] = &[
+        // A division, whose zero-divisor guard puts an `Op::Trap` inside a bare `if` -- a
+        // child that leaves without falling through.
+        //
+        // ADDED TO DISCRIMINATE A DIVERGENCE, AND IT DOES NOT. Kept, with that said
+        // plainly, because a case that cannot fail is worth less than the record of why.
+        //
+        // THE DIVERGENCE IT WAS AIMED AT WAS REAL. When `wcmu_region` and `wcet_region`
+        // stopped discarding the resources consumed before a path exit (2026-08-16),
+        // analyze.kel diverged in three ways at once: it zeroed a region's cost, peak and
+        // heap whenever no path fell through, it gave `Op::Return` no control-flow class,
+        // and the copy of the class table that used to live in THIS FILE had drifted from
+        // the driver's. None of that is visible from here, because a Stream chunk's body
+        // carries no `Op::Trap` and no `Op::Return` -- the divergence lives on the `Func`
+        // chunks that `validate_module_via_kel` also drives analyze.kel over, and that is
+        // the test which caught it.
+        //
+        // Kept as a reminder that this test's domain is narrower than analyze.kel's.
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, a: Word, b: Word, c: Word, d: Word }
+loop main(resume: Word) -> Word {
+    d.s = (io.a + io.b) / (io.c - io.d);
+    io.out = d.s;
+    yield d.s
+}"#,
+        // A plain accumulation loop.
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 16] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..10 limit 16 { d.s = d.s + io.arr[i]; }
+    io.out = d.s;
+    yield d.s
+}"#,
+        // A loop whose body carries a conditional (nested if inside the loop).
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 32] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..20 limit 32 {
+        if io.arr[i] > 0 { d.s = d.s + io.arr[i]; } else { d.s = d.s + 1; }
+    }
+    io.out = d.s;
+    yield d.s
+}"#,
+        // Straight-line code before and after the loop, and a different cap.
+        r#"require word >= 32;
+private data d { s: Word, t: Word }
+shared data io { out: Word, arr: [Word; 8] }
+loop main(resume: Word) -> Word {
+    d.t = 7;
+    d.s = d.t;
+    for i in 0..5 limit 8 { d.s = d.s + io.arr[i] * 2; }
+    io.out = d.s + d.t;
+    yield d.s
+}"#,
+        // A nested loop: the inner loop is consumed within the outer loop body (each loop
+        // frame consumes only its own body's breaks), exercising frame-stack recursion.
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..3 limit 4 {
+        for j in 0..3 limit 4 { d.s = d.s + 1; }
+    }
+    io.out = d.s;
+    yield d.s
+}"#,
+        // A for-in over a literal array: the compiler bakes the length as a constant (the
+        // range end), so the same pattern-1 header applies; the array's NewComposite
+        // exercises the heap term (a non-zero WCMU heap).
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    let a = [1, 2, 3, 4];
+    for x in a { d.s = d.s + x; }
+    io.out = d.s;
+    yield d.s
+}"#,
+    ];
+    for src in cases {
+        let m = compile_src(src);
+        for c in &m.chunks {
+            if c.block_type != keleusma::bytecode::BlockType::Stream {
+                continue;
+            }
+            let (wcet, stack, heap, reject) = analyze_via_kel(c);
+            assert!(!reject, "unexpected reject for `{src}`");
+            let ref_wcet =
+                keleusma::verify::wcet_stream_iteration(c).expect("reference wcet") as i64;
+            let (ref_stack, ref_heap) =
+                keleusma::verify::wcmu_stream_iteration(c).expect("reference wcmu");
+            assert_eq!(wcet, ref_wcet, "wcet for `{src}`");
+            assert_eq!(stack, ref_stack as i64, "wcmu stack for `{src}`");
+            assert_eq!(heap, ref_heap as i64, "wcmu heap for `{src}`");
+        }
+    }
+}
+
+// analyze.kel is itself compiled byte-identically by the self-hosted pipeline -- the same
+// fixed-point property the other four stages have. This makes the resource-bound analysis a
+// fifth self-compiling Keleusma stage, not merely Keleusma code the reference compiles.
+#[test]
+fn self_host_compiles_analyze_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_analyze_kel_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/analyze.kel"))
+        .expect("read analyze.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_analyze_kel_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_matches_the_reference_for_loops",
+        KEL_ANALYZE_ONLY,
+    );
+}
+
+// The fail-closed reject path: a loop whose bound cannot be statically extracted must be
+// rejected, not silently under-bounded. Every compilable Keleusma Stream loop emits the
+// canonical for-range header, so no source program reaches the reject path; this constructs
+// it by mutating a compiled loop's header (replacing the induction `GetLocal` with a
+// non-canonical op) and asserts analyze.kel rejects exactly when the reference does.
+#[test]
+fn analyze_via_kel_rejects_an_inextractable_loop_like_the_reference() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_rejects_an_inextractable_loop_like_the_reference",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
+    use keleusma::bytecode::Op;
+    let src = r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 16] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..10 limit 16 { d.s = d.s + io.arr[i]; }
+    io.out = d.s;
+    yield d.s
+}"#;
+    let m = compile_src(src);
+    let mut chunk = m
+        .chunks
+        .iter()
+        .find(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
+        .expect("stream chunk")
+        .clone();
+    // Sanity: the unmutated loop extracts a bound (reference and analyze both succeed).
+    assert!(keleusma::verify::wcet_stream_iteration(&chunk).is_ok());
+    assert!(
+        !analyze_via_kel(&chunk).3,
+        "unmutated loop should not reject"
+    );
+
+    // Break the canonical header: the op after Loop is the induction `GetLocal`. Replace it
+    // with a non-GetLocal so the bound is inextractable while the body still falls through.
+    let loop_ip = chunk
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Loop(_)))
+        .expect("loop op");
+    assert!(matches!(chunk.ops[loop_ip + 1], Op::GetLocal(_)));
+    chunk.ops[loop_ip + 1] = Op::Const(0);
+
+    // The reference now rejects (no statically extractable iteration bound); so must analyze.
+    assert!(
+        keleusma::verify::wcet_stream_iteration(&chunk).is_err(),
+        "reference should reject the mutated loop"
+    );
+    let (_, _, _, reject) = analyze_via_kel(&chunk);
+    assert!(reject, "analyze.kel should reject the mutated loop");
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_rejects_an_inextractable_loop_like_the_reference",
+        KEL_ANALYZE_ONLY,
+    );
+}
+
+// Native-call stack effects. No compiler stage calls a host native, so this injects a
+// CallVerifiedNative op (with the empty resolver both analyze and the reference use, no
+// registration is needed) and asserts analyze.kel reproduces the reference's WCET and WCMU
+// on the same mutated chunk -- for a plain native (n = 2) and an error-reify native (n =
+// 0x82), whose high bit the reference's native WCMU arm folds into the pop count.
+#[test]
+fn analyze_via_kel_matches_the_reference_for_native_calls() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_matches_the_reference_for_native_calls",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
+    use keleusma::bytecode::Op;
+    let src = r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 5;
+    io.out = d.s;
+    yield d.s
+}"#;
+    for n_args in [2u8, 0x82u8] {
+        let m = compile_src(src);
+        let mut chunk = m
+            .chunks
+            .iter()
+            .find(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
+            .expect("stream chunk")
+            .clone();
+        // Replace the first Const in the body with a native call.
+        let at = chunk
+            .ops
+            .iter()
+            .position(|o| matches!(o, Op::Const(_)))
+            .expect("a Const to mutate");
+        chunk.ops[at] = Op::CallVerifiedNative(0, n_args);
+
+        let (wcet, stack, heap, reject) = analyze_via_kel(&chunk);
+        assert!(!reject, "native chunk should not reject (n={n_args:#x})");
+        let ref_wcet =
+            keleusma::verify::wcet_stream_iteration(&chunk).expect("reference wcet") as i64;
+        let (ref_stack, ref_heap) =
+            keleusma::verify::wcmu_stream_iteration(&chunk).expect("reference wcmu");
+        assert_eq!(wcet, ref_wcet, "wcet with native n={n_args:#x}");
+        assert_eq!(
+            stack, ref_stack as i64,
+            "wcmu stack with native n={n_args:#x}"
+        );
+        assert_eq!(heap, ref_heap as i64, "wcmu heap with native n={n_args:#x}");
+    }
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_matches_the_reference_for_native_calls",
+        KEL_ANALYZE_ONLY,
+    );
+}
+
+// The self-hosted validator: analyze.kel's `out_valid` verdict for a Stream chunk against an
+// arena capacity must agree with the reference `verify_resource_bounds`, which admits a
+// module iff every Stream chunk has a provable finite bound whose stack-plus-heap budget
+// fits. The programs are call-free (no `Op::Call`), so the shallow per-iteration WCMU the
+// validator uses equals the transitive `module_wcmu` the reference uses, and the two verdicts
+// must match exactly -- at capacities just below, at, and above the budget, and for an
+// inextractable (mutated) loop that both must reject.
+#[test]
+fn validate_via_kel_matches_verify_resource_bounds() {
+    use keleusma::bytecode::{BlockType, Op};
+    // Call-free single-Stream programs: one straight-line, one with a bounded loop.
+    let srcs: &[&str] = &[
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 5;
+    io.out = d.s;
+    yield d.s
+}"#,
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 16] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..10 limit 16 { d.s = d.s + io.arr[i]; }
+    io.out = d.s;
+    yield d.s
+}"#,
+    ];
+    for src in srcs {
+        let m = compile_src(src);
+        let main = m
+            .chunks
+            .iter()
+            .find(|c| c.block_type == BlockType::Stream)
+            .expect("stream chunk");
+        assert!(
+            !main.ops.iter().any(|o| matches!(o, Op::Call(..))),
+            "test program must be call-free for the shallow validator to match the reference"
+        );
+        let (stack, heap) = keleusma::verify::wcmu_stream_iteration(main).expect("wcmu");
+        let total = (stack + heap) as i64;
+        // Below, at, and above the exact budget.
+        for cap in [total - 1, total, total + 4096] {
+            let self_valid = validate_via_kel(main, cap);
+            let ref_valid = keleusma::verify::verify_resource_bounds(&m, cap as usize).is_ok();
+            assert_eq!(self_valid, ref_valid, "validity at cap={cap} for `{src}`");
+        }
+    }
+
+    // An inextractable loop: both the validator and the reference must reject it (invalid)
+    // regardless of capacity.
+    let src = srcs[1];
+    let m = compile_src(src);
+    let mut broken = m.clone();
+    let ci = broken
+        .chunks
+        .iter()
+        .position(|c| c.block_type == BlockType::Stream)
+        .unwrap();
+    let loop_ip = broken.chunks[ci]
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Loop(_)))
+        .unwrap();
+    broken.chunks[ci].ops[loop_ip + 1] = Op::Const(0);
+    let big = 1i64 << 30;
+    assert!(
+        !validate_via_kel(&broken.chunks[ci], big),
+        "validator must reject an inextractable loop"
+    );
+    assert!(
+        keleusma::verify::verify_resource_bounds(&broken, big as usize).is_err(),
+        "reference must reject an inextractable loop"
+    );
+}
+
+// The self-hosted validator as a drop-in replacement for `verify_resource_bounds` on
+// CALL-BEARING modules. analyze.kel folds each callee's transitive WCMU at every Op::Call
+// (resolved in topological order), so the module verdict must match the reference for the
+// four self-hosted stage modules (whose `main` calls many helpers, some with loops) and for
+// synthetic call programs -- at capacities below, at, and above the module's Stream budget.
+#[test]
+fn validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds() {
+    if common::selfhost_cache::hit(
+        "validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
+    use keleusma::bytecode::BlockType;
+    let mut modules: Vec<Module> = Vec::new();
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        modules.push(compile_src(
+            &std::fs::read_to_string(common::stage_path(path)).expect("read stage"),
+        ));
+    }
+    let synth: &[&str] = &[
+        // main -> a plain Func helper.
+        r#"require word >= 32;
+shared data io { out: Word }
+fn add3(a: Word, b: Word, c: Word) -> Word { a + b + c }
+loop main(resume: Word) -> Word { io.out = add3(1, 2, 3); yield io.out }"#,
+        // main -> a helper that itself contains a bounded loop.
+        r#"require word >= 32;
+shared data io { out: Word }
+fn work(n: Word) -> Word {
+    for i in 0..n limit 16 { let z = i + i; }
+    n + 1
+}
+loop main(resume: Word) -> Word { io.out = work(10); yield io.out }"#,
+        // A two-level call chain (main -> f -> g).
+        r#"require word >= 32;
+shared data io { out: Word }
+fn g(x: Word) -> Word { x + 1 }
+fn f(x: Word) -> Word { g(x) + g(x + 1) }
+loop main(resume: Word) -> Word { io.out = f(3); yield io.out }"#,
+    ];
+    for s in synth {
+        modules.push(compile_src(s));
+    }
+    for m in &modules {
+        // Confirm the module actually exercises calls, then find its max Stream budget.
+        assert!(
+            m.chunks.iter().any(|c| c
+                .ops
+                .iter()
+                .any(|o| matches!(o, keleusma::bytecode::Op::Call(..)))),
+            "test module must contain at least one Op::Call"
+        );
+        let per = keleusma::verify::module_wcmu(m, &[]).expect("reference module_wcmu");
+        let mut max_total = 0i64;
+        for (i, c) in m.chunks.iter().enumerate() {
+            if c.block_type == BlockType::Stream {
+                max_total = max_total.max((per[i].0 + per[i].1) as i64);
+            }
+        }
+        for cap in [max_total - 1, max_total, max_total + 4096] {
+            let self_valid = validate_module_via_kel(m, cap);
+            let ref_valid = keleusma::verify::verify_resource_bounds(m, cap as usize).is_ok();
+            assert_eq!(self_valid, ref_valid, "validity at cap={cap}");
+        }
+    }
+    common::selfhost_cache::record_pass(
+        "validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
+}
+
+// The composite-shared-read copy-out heap term: reading a whole flat-composite shared slot
+// (`GetData` on a struct/array slot) copies its bytes to the arena, which `module_wcmu`
+// counts and `wcmu_stream_iteration` (empty resolver) does not. analyze.kel's transitive
+// validator folds the same term, so it must still match `verify_resource_bounds` for a
+// program whose shared read is composite -- where the shallow bound would under-count.
+#[test]
+fn validate_module_via_kel_folds_composite_shared_copyout() {
+    if common::selfhost_cache::hit(
+        "validate_module_via_kel_folds_composite_shared_copyout",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
+    use keleusma::bytecode::BlockType;
+    let src = r#"require word >= 32;
+struct P { x: Word, y: Word }
+shared data io { p: P, out: Word }
+loop main(resume: Word) -> Word {
+    let q = io.p;
+    io.out = q.x + q.y;
+    yield io.out
+}"#;
+    let m = compile_src(src);
+    // Confirm this program actually exercises a non-zero composite copy-out: the transitive
+    // module_wcmu heap for the Stream chunk must exceed the shallow wcmu_stream_iteration heap.
+    let per = keleusma::verify::module_wcmu(&m, &[]).expect("module_wcmu");
+    let mut max_total = 0i64;
+    for (i, c) in m.chunks.iter().enumerate() {
+        if c.block_type == BlockType::Stream {
+            let (_s, shallow_heap) = keleusma::verify::wcmu_stream_iteration(c).expect("shallow");
+            assert!(
+                per[i].1 > shallow_heap,
+                "expected a composite copy-out to make transitive heap exceed the shallow heap"
+            );
+            max_total = max_total.max((per[i].0 + per[i].1) as i64);
+        }
+    }
+    for cap in [max_total - 1, max_total, max_total + 4096] {
+        let self_valid = validate_module_via_kel(&m, cap);
+        let ref_valid = keleusma::verify::verify_resource_bounds(&m, cap as usize).is_ok();
+        assert_eq!(
+            self_valid, ref_valid,
+            "composite-shared validity at cap={cap}"
+        );
+    }
+    common::selfhost_cache::record_pass(
+        "validate_module_via_kel_folds_composite_shared_copyout",
+        KEL_ANALYZE_ONLY,
+    );
+}
+
+#[test]
+fn self_host_compiles_byte_bitwise_ops() {
+    // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate: each
+    // operand is widened (ByteToWord), the op runs on words (BitAnd/BitOr/BitXor), the result is
+    // truncated (WordToByte). This is the first use of operand-type detection at an operator: a
+    // parameter's `Byte` type is recorded (`ps.pbyte`), `last_byte` tracks the last operand's
+    // Byte-ness through the precedence machinery (captured with each operator in `op_lbyte`), and
+    // `emit_op` emits a ByteBinOp node (kind 44) when both operands are Byte. Byte-identical.
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a bor b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a bxor b }");
+    // A Word-operand bitwise op stays a plain BinOp (BitAnd), no promote-operate-truncate
+    // (regression guard: the detection must fire only for Byte operands).
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { a band b }");
+    // A chain of Word-operand bitwise ops.
+    assert_self_host_byte_identical("fn f(a: Word, b: Word, c: Word) -> Word { a band b bor c }");
+}
+
+#[test]
+fn self_host_compiles_byte_arithmetic_ops() {
+    // An arithmetic op (+/-/*) on two BYTE operands lowers to the UNCHECKED op (Add/Sub/Mul), with
+    // no overflow guard and no PopN, since a Byte sum/product cannot overflow the word it is computed
+    // in -- unlike a Word `+`, which stays a CheckedAdd (+ PopN). `emit_op` emits a ByteArith node
+    // (kind 45) when both operands are Byte and the op is add/mul/sub (`byte_op_kind` returns 2).
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a + b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a - b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a * b }");
+    // Word arithmetic stays checked (regression guard).
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { a + b - a }");
+    // Byte bitwise still promote-operate-truncates (the two Byte-op classes coexist).
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
+}
+
+#[test]
+fn self_host_compiles_byte_ops_with_literal_operands() {
+    // A Byte op against a LITERAL constant (the very common `mask` idiom, `a band 15`). The literal
+    // is a Word constant, so it is coerced to a Byte (WordToByte) before the Byte op sees it:
+    // bitwise emits `Const, WordToByte, ByteToWord` (coerce then widen), arithmetic emits
+    // `Const, WordToByte` (coerce, no widen). A Byte VARIABLE operand skips the coercion (it is
+    // already a Byte). `push_byte_binop`/`push_byte_arith` check each operand's node kind (Literal)
+    // and prepend the coercion. Byte-identical.
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a band 15 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a bor 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a + 5 }");
+    // A Byte VARIABLE operand (no literal) still skips the coercion (regression guard).
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
+    // A Word op against a literal stays a plain Word op (the left operand is not Byte, so the Byte
+    // lowering never fires).
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a band 255 }");
+}
+
+#[test]
+fn self_host_compiles_struct_equality() {
+    // `struct == struct` lowers to a field-wise comparison loop, byte-identical. Both operands are
+    // stored in two temps; a `Loop` compares each field `a.f == b.f` and, on the first mismatch,
+    // breaks `false`, else after all fields breaks `true`. The two operands are detected as whole
+    // structs at the `==` fold (`op_lstruct`/`last_struct`); the per-field layout is drained as
+    // StructEqField records into a StructEqBuild that reconstruct turns into a StructEq node; codegen
+    // `push_struct_eq` emits the loop with false/true as Bool pool constants (a new tag-2 pool entry).
+    assert_self_host_byte_identical("struct P { x: Word }\nfn f(a: P, b: P) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word, z: Byte }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
+
+/// `enum == enum` for an all-unit enum self-compiles byte-identically: the self-hosted parser
+/// detects both operands as whole enum values, drains a per-variant marker stream, and codegen
+/// lowers the variant-iterating comparison loop, reproducing the reference `emit_enum_fieldwise_eq`
+/// discriminant comparison exactly (two, three, and single-variant enums).
+#[test]
+fn self_host_compiles_enum_equality() {
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(a: Color, b: Color) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical("enum One { Only }\nfn f(a: One, b: One) -> bool { a == b }");
+}
+
+/// Composite `!=` self-compiles byte-identically: `struct != struct` and (all-unit) `enum != enum`
+/// lower to the same field-wise / variant-iterating comparison loop as `==`, followed by a `Not`,
+/// reproducing the reference (which appends `Op::Not` for `BinOp::NotEq` over a fieldwise compare).
+/// Interleaved `==` cases confirm the shared loop is unaffected.
+#[test]
+fn self_host_compiles_composite_inequality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical("struct P { x: Word }\nfn f(a: P, b: P) -> bool { a == b }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a != b }");
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(a: Color, b: Color) -> bool { a == b }",
+    );
+}
+
+/// Payload-variant enum equality self-compiles byte-identically: an enum whose variants carry scalar
+/// payload lowers the reference `emit_enum_fieldwise_eq` per-field comparison (GetEnumField/CmpEq,
+/// first mismatch breaks false) inside the "both same variant" block, over the variable-stride
+/// match_parts layout. Covers a single payload field, multiple payload fields across multiple
+/// variants, and the `!=` form (whose true/false pool order flips because the first variant's first
+/// emitted Const is the in-field-loop false rather than the post-loop true).
+#[test]
+fn self_host_compiles_enum_payload_equality() {
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(a: E, b: E) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "enum E { A(Word, Word), B(Word) }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(a: E, b: E) -> bool { a != b }");
+}
+
+/// Enum equality with a literal enum construction as EITHER operand self-compiles byte-identically:
+/// `e == E::A()`, `E::A() == e`, payload `e == E::A(1)`/`E::A(1) == e`, and the `!=` forms. Two
+/// fixes cooperate. (1) codegen: the reference emits a construction operand's discriminant `Const`
+/// before the comparison loop, so that discriminant must intern into the pool ahead of the loop's
+/// own `IsEnum` discriminant; codegen.kel's `push_enum_eq` therefore DEFERS all its pool interning to
+/// emission time (its `IsEnum`s through `push_enum_isenum`, its result `Const`s through the
+/// `push_bool` process-time work item) rather than pre-interning at node-visit time. The both-locals
+/// `a == b`/`a != b` cases stay byte-identical because with no operand constants the deferred order
+/// equals the old pre-interned one. (2) parser: a bare enum construction now marks its whole-value
+/// enum type (`ps.last_enum`), so a `==`/`!=` with the construction on the LEFT captures it as the
+/// left operand's enum type (`op_lenum`) and the detection fires; `Enum::V() as Word` casts fold to a
+/// Literal earlier and are unaffected, so a cast result stays scalar.
+#[test]
+fn self_host_compiles_literal_operand_enum_equality() {
+    // Regression: both-locals enum eq stays byte-identical after the deferred-interning refactor.
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a == b }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a != b }");
+    // Target: a literal enum construction as the right operand (unit and payload variants, == and !=).
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { e == E::A() }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { e == E::B() }");
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(e: E) -> bool { e == E::A(1) }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { e != E::B() }");
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(c: Color) -> bool { c == Color::Green() }",
+    );
+    // A literal construction as the LEFT operand (`E::V() == e`): the parser now marks a bare enum
+    // construction's whole-value enum type so `op_lenum` captures it, enabling the same variant loop.
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { E::A() == e }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { E::B() != e }");
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(e: E) -> bool { E::A(1) == e }");
+}
+
+/// Enum equality with a LET-BOUND enum value self-compiles byte-identically:
+/// `let x = E::A(); x == e` (either side, `==`/`!=`). A `let` binding tracks its value's enum type in
+/// `let_enum` (already consumed for `match x`); `resolve_plain_ident` now restores `ps.last_enum` from
+/// it after `step_local` (which clears it), the let-binding analogue of an enum parameter, so the
+/// `==`/`!=` operand-type capture fires the variant comparison loop. Without this the binding read as a
+/// bare `Local` with no enum type and the comparison fell back to a scalar `CmpEq`.
+#[test]
+fn self_host_compiles_let_bound_enum_equality() {
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(e: E) -> bool { let x = E::A(); x == e }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(e: E) -> bool { let x = E::B(); e == x }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(e: E) -> bool { let x = E::A(); x != e }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\nfn f(e: E) -> bool { let x = E::A(1); x == e }",
+    );
+}
+
+/// The `lsr` (logical, zero-fill right shift) operator with a CONSTANT amount self-compiles
+/// byte-identically, completing the shift family (the 79th increment did `lsl`/`asl`/`asr`). Unlike
+/// `asr` (a single `Shr`), `lsr` lowers to `Shr` then `band ((1 << (64 - k)) - 1)` to clear the
+/// sign-extended high bits, where k is the literal amount. Three cooperating pieces: (1) the lexer
+/// tokenizes `lsr` to a FREE low Tok slot (20) -- not 62/63, the EOF/PENDING sentinels, since tokens
+/// pack as `tok + payload*64` and must be < 64; (2) the parser maps it to a new `ShrL` opcode (29) at
+/// shift precedence; (3) codegen's `push_binop` emits the multi-op sequence, reading the rhs Literal's
+/// value to compute the mask via `((1 << (63 - k)) - 1) * 2 + 1` (overflow-free, no 19-digit literal
+/// the self-host lexer could not parse) and interning it as a DEFERRED int Const (`push_int_const`,
+/// reusing the kind-0 work item with payload >= 2) so it lands after the operand's own constants.
+/// A VARIABLE `lsr` amount (e.g. `a lsr k` or `a lsr 1 + 3`, whose amount is not a bare Literal) uses
+/// a runtime-mask branch in the reference and is NOT lowered here.
+#[test]
+fn self_host_compiles_const_lsr() {
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 1 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 7 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 31 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 63 }");
+    // `band` (precedence 6) binds looser than `lsr` (7), so the amount stays the literal `2`.
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 2 band 7 }");
+    // Regression: the other shifts still lower to single ops.
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a asr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 3 }");
+}
+
+/// Byte-operand shifts with a CONSTANT amount self-compile byte-identically (mirroring the Word
+/// shifts, the byte analogue of `push_byte_binop`): the value widens (`ByteToWord`), shifts at word
+/// width, and the result truncates (`WordToByte`); the shift amount stays a plain `Const`, not
+/// widened. `lsl`/`asl` -> `Shl`, `asr` -> `Shr`, `lsr` -> `Shr` + the sign-bit mask. Detection keys
+/// on the LEFT operand's Byte flag alone (the amount is not a Byte, so the both-Byte `byte_op_kind`
+/// does not apply); parse emits a `ByteShift` node (kind 60) that codegen `push_byte_shift` lowers.
+#[test]
+fn self_host_compiles_byte_shifts() {
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsl 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a asl 2 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a asr 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsr 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsr 3 }");
+    // The result is a Byte, so it chains with a following Byte bitwise op.
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsr 1 band 7 }");
+}
+
+/// Word shift operators self-compile byte-identically: `lsl`/`asl` lower to `Shl`, `asr` to `Shr`
+/// (ordinary single-op binops), with a constant or runtime-variable shift amount. Precedence sits
+/// between the additive and bitwise operators (the reference `parse_shift_expr` convention), verified
+/// by the mixed cases `a lsl 2 band 7` = `(a lsl 2) band 7` and `a lsl 1 + 3` = `a lsl (1 + 3)`.
+/// (`lsr` logical right, which needs a word-width mask, is not yet lowered.)
+#[test]
+fn self_host_compiles_word_shifts() {
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 2 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a asl 3 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a asr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsl k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a asr k }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 2 band 7 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 1 + 3 }");
+}
+
+/// Tuple equality self-compiles byte-identically: `tuple == tuple` (and `!=`) reuses the struct-eq
+/// field-wise comparison loop with a GetTupleField accessor (the reference lowers both through the
+/// same `emit_composite_fieldwise_eq` field loop). Covers two- and three-element tuples, the `!=`
+/// form, and a struct `==` regression to confirm the shared lowering still selects GetField.
+#[test]
+fn self_host_compiles_tuple_equality() {
+    assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "fn f(a: (Word, Word, Word), b: (Word, Word, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a != b }");
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
+
+/// Array equality self-compiles byte-identically: `array == array` (and `!=`) lowers to a
+/// per-element comparison loop that reads each element with `GetIndex` (the reference lowers it
+/// through `composite_field_accessors`). The pool is pre-interned in the reference's order -- the
+/// element index constants 0..count-1 first, then false then true -- distinct from struct/tuple-eq.
+#[test]
+fn self_host_compiles_array_equality() {
+    assert_self_host_byte_identical("fn f(a: [Word; 3], b: [Word; 3]) -> bool { a == b }");
+    assert_self_host_byte_identical("fn f(a: [Word; 2], b: [Word; 2]) -> bool { a != b }");
+    assert_self_host_byte_identical("fn f(a: [Word; 4], b: [Word; 4]) -> bool { a == b }");
+}
+
+/// Nested-composite struct equality self-compiles byte-identically: a struct with a nested-struct
+/// field lowers to the reference's recursive fieldwise comparison -- each nested field is extracted
+/// (GetFieldNested) into two fresh temps and compared by an inner loop whose result negates to break
+/// the outer loop. Covers nested-then-scalar, scalar-then-nested, two nested fields, and the `!=`
+/// form; a flat struct `==` regression confirms the isolated nested path leaves the flat path intact.
+#[test]
+fn self_host_compiles_nested_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { x: Word, q: Q }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word }\nstruct R { b: Word, c: Word }\nstruct P { q: Q, r: R }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, x: Word }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
+
+/// Nested-TUPLE-field struct equality self-compiles byte-identically: a struct containing a tuple
+/// field reuses the nested path, extracting the tuple (FlatNested variant Tuple) into fresh temps and
+/// comparing its elements with GetTupleField in the inner loop. Covers a tuple field beside a scalar,
+/// a tuple-only struct `!=`, and a struct mixing nested struct and nested tuple fields.
+#[test]
+fn self_host_compiles_nested_tuple_field_equality() {
+    assert_self_host_byte_identical(
+        "struct P { t: (Word, Word), x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { t: (Word, Word, Word) }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, t: (Word, Word) }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
+
+/// Tuple-of-struct equality self-compiles byte-identically: a tuple whose element is a struct
+/// (`(P, Word) == (P, Word)`) reuses the nested drain with the top-level container flagged as a
+/// tuple. The top-level accessors become GetTupleField (op 53): a scalar element reads a flat
+/// tuple field, the struct element extracts as GetTupleField(FlatNested Struct) into fresh temps
+/// whose scalar sub-fields compare with the inner GetField loop. Covers struct-then-scalar,
+/// scalar-then-struct, the `!=` form, and a 2-field struct element; a flat `(Word, Word)` case
+/// guards that the all-scalar tuple path is left intact.
+#[test]
+fn self_host_compiles_tuple_of_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: (Word, P), b: (Word, P)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+    );
+    // Flat-tuple regression guard: an all-scalar tuple must still take the flat tuple-eq path.
+    assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a == b }");
+}
+
+/// Enum-in-struct nested equality self-compiles byte-identically: a struct with an enum-typed field
+/// extracts it (FlatNested variant Enum, op 48) into fresh temps and compares them with a
+/// variant-dispatch inner loop (mirroring the standalone enum-eq), then negates to break the outer
+/// loop on inequality. The enum sub-stream rides EnumEqVariant/EnumEqField records routed into the
+/// `seb` layout under a variant-3 nested context, and the enum inner loop's constants are interned
+/// eagerly (replaying `push_enum_eq`'s order) so they compose with the struct-eq pre-interned
+/// false/true. Covers `==`/`!=`, unit-only and scalar-payload variants, a nonzero enum-field offset,
+/// and an enum field beside a nested struct.
+#[test]
+fn self_host_compiles_enum_in_struct_equality() {
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B(Word) }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B(Word) }\nstruct S { w: Word, e: E }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct Q { a: Word }\nstruct S { q: Q, e: E }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+}
+
+/// Enum-with-STRUCT-payload equality (`a == b` where an enum variant carries a struct payload)
+/// self-compiles byte-identically. The structural mirror of enum-in-struct on the standalone
+/// `enum == enum` path (`push_enum_eq`): the reference `emit_enum_fieldwise_eq` composed with
+/// `emit_composite_fieldwise_eq` extracts the struct payload of both operands with the op-57 nested
+/// extract into two fresh temps, runs an inner struct-eq loop over their scalar sub-fields, and
+/// negates the result to break the outer variant loop on inequality. Reuses the already-tracked
+/// `evfstruct` payload-struct index; no new opcode, record, or node kind. The inner loop's false/true
+/// consts stay DEFERRED (`push_bool`) like the rest of `push_enum_eq`, so the pool follows forward
+/// emission order without an eager pre-pass. Covers single- and multi-field struct payloads, `==` and
+/// `!=`, a struct payload beside a scalar payload in one variant, and a `A(Word, P)` field ordering.
+#[test]
+fn self_host_compiles_enum_struct_payload_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(P, Word), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(Word, P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+}
+
+/// Two-level struct nesting equality (`struct O { m: M }`, `struct M { i: I }`, `struct I { v: Word }`,
+/// `a == b`) self-compiles byte-identically. The nested drain now carries a DEPTH-2 stack: a
+/// nested-struct field whose OWN sub-field is itself a struct (with scalar leaves) extracts the deeper
+/// struct with a second GetFieldNested (op 48) into a fresh temp pair and runs an inner struct-eq loop,
+/// negated to break the middle loop on inequality. The deeper temps allocate monotonically after the
+/// outer pair (matching the reference's non-rewinding `next_slot`). Reuses records 55/56/57/58, no new
+/// opcode/record/node kind. Covers `==`, `!=`, a 2-level struct beside a scalar top-level field, a
+/// multi-field deepest struct, and a three-in-a-row chain.
+#[test]
+fn self_host_compiles_2level_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M, w: Word }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word, w: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I, j: Word }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+}
+
+/// THIRD-level (and deeper) struct-nesting equality self-compiles byte-identically. A struct field
+/// whose field is a struct whose field is a struct (`struct A{x} B{a:A} C{b:B} D{c:C}`, `p == q`)
+/// requires three nested struct extractions. The `push_struct_eq_subfields` explicit-stack reverse-DFS
+/// emitter (which unrolls the reference's recursive `emit_composite_fieldwise_eq` onto the `es_*`
+/// frame stack, R4 forbidding recursion) handles arbitrary bounded depth. No new opcode/record/node
+/// kind. Covers a 3-deep chain, `!=`, a multi-field deepest struct, a deep field beside a scalar top
+/// field, and a 4-deep chain (exercising the bounded stack past depth 3).
+#[test]
+fn self_host_compiles_3level_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p == q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p != q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word, y: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p == q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C, w: Word }\nfn f(p: D, q: D) -> bool { p == q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nstruct E { d: D }\nfn f(p: E, q: E) -> bool { p == q }",
+    );
+}
+
+/// A TUPLE whose struct element nests deeper than one level self-compiles byte-identically. The tuple
+/// container's struct-element sub-fields already drain through the arbitrary-depth frame-stack code; the
+/// admission `tuple_eq_kind` now uses `struct_subtree_pure` to admit an arbitrarily-deep pure
+/// struct/scalar element (a tuple/array/enum in the element's subtree still defers). Covers a tuple of a
+/// 2-level struct, a 3-level struct, `!=`, and a deep struct element beside a scalar element.
+#[test]
+fn self_host_compiles_tuple_of_deep_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nfn f(a: (C, Word), b: (C, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (Word, M), b: (Word, M)) -> bool { a == b }",
+    );
+}
+
+/// A struct field that is a TUPLE whose element is itself a STRUCT (`struct S { t: (P, Word) }`)
+/// self-compiles byte-identically.
+///
+/// This was previously MIS-COMPILED rather than unsupported: the admission admitted it and the drain
+/// then compared the whole struct element as a single scalar (`GetTupleField(Flat { kind: Unit })`
+/// plus `CmpEq`), because a struct element carries `tup_ekind` 0 (Unit) and rides `tup_estruct`,
+/// which neither the admission scan nor the tuple sub-field drain consulted. Only the byte-identical
+/// oracle could see it — the program compiled, verified, and ran while comparing the wrong bytes.
+///
+/// Three things were needed. `step_struct_tuple_field` now records `tup_estruct` for a struct-typed
+/// element (it previously only did so for a tuple PARAMETER type, so the element's struct identity
+/// was lost for a struct FIELD). The `se_subistuple` sub-field drain pushes a frame for such an
+/// element instead of emitting a scalar record. And the codegen `es_*` suffix extract now takes its
+/// accessor from the PARENT frame's kind — a tuple parent extracts with `GetTupleField`, a struct
+/// parent with `GetFieldNested` — since the extract reads the child out of its parent container.
+///
+/// Coverage spans the element in first and last position, two struct elements, a multi-field
+/// element, an arbitrarily-deep pure-struct element (the frame machinery already handled depth), a
+/// trailing scalar field after the tuple, and `!=`.
+#[test]
+fn self_host_compiles_struct_tuple_of_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, P) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, Word), w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct R { y: Word }\nstruct S { t: (P, R) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // The element struct may itself nest arbitrarily deep, so long as the subtree stays pure
+    // struct/scalar: the existing frame stack already handles depth once the descent happens.
+    assert_self_host_byte_identical(
+        "struct Q { z: Word }\nstruct P { q: Q }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
+/// An ARRAY whose element type contains a composite must DEFER rather than be compared flat.
+///
+/// The array-of-struct and array-of-tuple equality paths are FLAT: they emit one `StructEqField`
+/// (offset, kind) record per element field and close with `ArrayOfStructEqBuild`, and neither the
+/// drain nor `push_arr_of_struct_inner` has a nested form. They were also the only two dispatch arms
+/// with no admission guard (the array-of-enum arm has always had `enum_eq_supported`), so a composite
+/// element field was emitted as a scalar record and compared with a single `CmpEq` over its whole
+/// flat body — admitted, then SILENTLY MIS-COMPILED.
+///
+/// These cases retain the explicit unsupported boundary. Boolean scalar array fields have a
+/// separate positive artifact comparison below, since they now compile through this path.
+///
+/// These are Gaps by design. Full support means giving the flat array family a nested form, or
+/// routing array-of-composite elements through the `StructEqNested` frame machinery — see
+/// `docs/decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`.
+#[test]
+fn array_of_composite_element_defers() {
+    for src in [
+        // A struct FIELD that is an array-of-tuple. The parameter form is now supported, but a
+        // struct field routes through the `StructEqNested` family, which still has no nested form
+        // for an array element.
+        "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
+        // An element whose struct subtree is IMPURE: descending would mis-lower the inner composite.
+        // Tuples, arrays and plain enums inside are now supported, so this uses an enum with a
+        // COMPOSITE payload, which still has no nested form.
+        "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+    ] {
+        let reference = compile_src(src);
+        let module = self_host_compile(src);
+        let f = module
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("chunk f");
+        let r = reference
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("ref f");
+        // Require the short primitive fallback, so a longer but incorrect lowering cannot
+        // satisfy this unsupported-boundary control merely by differing from the reference.
+        assert!(
+            f.ops.len() < r.ops.len() / 2,
+            "expected a short deferral for `{src}`, got {} ops against the reference's {}",
+            f.ops.len(),
+            r.ops.len()
+        );
+    }
+}
+
+/// Boolean array fields use scalar element comparisons and preserve the complete artifact.
+#[test]
+fn self_host_compiles_struct_boolean_array_equality() {
+    let source = "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }";
+    assert_self_host_byte_identical(source);
+    let actual = keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+        .expect("independent boolean array equality compilation");
+    assert_eq!(
+        keleusma::selfhost::wire_module_artifact_via_kel(&actual).unwrap(),
+        compile_src(source).to_bytes().unwrap()
+    );
+}
+
+/// An ARRAY whose element contains a nested struct self-compiles byte-identically.
+///
+/// The array-equality family was FLAT: one `StructEqField` (offset, kind) record per element field,
+/// and a codegen loop that could only emit scalar compares. It now shares the `StructEqNested`
+/// machinery — parse descends with a frame stack emitting a sentinel header plus a packing record,
+/// reconstruct expands that stream into the recursive `seb` grammar, and codegen routes the element
+/// body through the same reverse-DFS emitter the struct/tuple cases use.
+///
+/// The byte-identity pivot was the TEMP LAYOUT. The reference allocates each element's temps
+/// INTERLEAVED (element pair, then that element's nested pairs, then the next element), not grouped,
+/// so the per-element stride grows with nesting. Because one shared field list serves every element,
+/// the seb holds element 0's temps and the emitter shifts them by `e * stride`.
+///
+/// Depth comes free once the descent exists: `[C; 2]` with `C -> B -> A` works without extra code.
+#[test]
+fn self_host_compiles_array_of_nested_element_equality() {
+    // Array-of-tuple whose element is a struct: both positions, two structs, `!=`, and array
+    // lengths 1 and 3 (the per-element unroll is length-sensitive).
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(Word, P); 2], b: [(Word, P); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct R { y: Word }\nfn f(a: [(P, R); 2], b: [(P, R); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 1], b: [(P, Word); 1]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 3], b: [(P, Word); 3]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a != b }",
+    );
+    // Array-of-struct whose element nests further: one level, three levels, a nested field beside a
+    // scalar, and two nested siblings (which exercises the per-element temp stride most directly).
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nfn f(a: [C; 2], b: [C; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I, w: Word }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I, j: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+    );
+}
+
+/// A TUPLE sub-field nested at depth >= 2 self-compiles byte-identically.
+///
+/// A tuple field directly on the compared struct already worked (it rides `se_subistuple`), but a
+/// tuple reached through a nested struct, a tuple element, or an array element did not: the frame
+/// stack could only carry STRUCT frames, so it had no way to read `tupledefs` or to select the
+/// tuple accessor. Frames now carry an is-tuple flag, and a tuple block is marked with the 30000+size
+/// sentinel (the convention the enum-payload records already use) so codegen picks FlatNested variant
+/// Tuple with GetTupleField rather than Struct with GetField.
+///
+/// This is the first slice of the general MIXED-SUBTREE problem: a composite subtree whose node kinds
+/// vary. Arrays and enums at depth remain deliberate Gaps.
+#[test]
+fn self_host_compiles_nested_tuple_subfield_equality() {
+    // Reached through a nested struct, at two and three levels.
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct Q { p: P }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // Reached through a TUPLE element and through an ARRAY element.
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+    );
+    // A sibling scalar beside the tuple, a narrow element (which moves the following offset), and `!=`.
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word), w: Word }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Byte) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
+/// A scalar ARRAY sub-field nested at depth >= 2 self-compiles byte-identically.
+///
+/// The second mixed-subtree slice, after tuples. An array block is unlike a struct or tuple block in
+/// that it has NO sub-field forest: it is a fixed six-word seb block
+/// `[off, 40000+size, acount, r2, l2, akind]`, and its body is a per-element `GetIndex` compare
+/// rather than a field walk. It is pushed as a zero-child frame so the shared machinery still emits
+/// its packing record and pops, keeping it on the same path as the other block kinds.
+///
+/// Two things had to line up for byte-identity. The reference PRE-INTERNS an array's element index
+/// constants ahead of false/true, so the eager intern pass walks a nested field's forest for array
+/// blocks. And the packing record's first field is the ELEMENT count, not a sub-field count, so the
+/// block must pop immediately — treating it as a sub-field count made the frame swallow the
+/// following sibling field, which showed up as exactly one missing scalar compare.
+#[test]
+fn self_host_compiles_nested_array_subfield_equality() {
+    // Reached through a nested struct, at two and three levels.
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2] }\nstruct Q { i: I }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // Reached through a TUPLE element.
+    assert_self_host_byte_identical(
+        "struct P { xs: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // A sibling scalar AFTER the array: this is the case that caught the pop bug, since the array
+    // frame was consuming the following field as one of its own.
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2], w: Word }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { xs: [Byte;4] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
+/// An ENUM sub-field nested at depth >= 2 self-compiles byte-identically.
+///
+/// The third and last mixed-subtree slice. Enums are unlike tuple and array blocks: the body is a
+/// VARIANT DISPATCH (`IsEnum` per variant, then that variant's payload compares), not a field or
+/// element walk. The block frame therefore has no sub-field list at all — after its packing record it
+/// drives the same `se_e*` variant drain the depth-1 enum field uses, then pops. Its seb form is
+/// `[off, 50000+size, vcount, r2, l2, ename, per variant (vname, disc, fcount, fcount*(off, kind))]`,
+/// and codegen reuses `push_nested_enum_loop`, which was parameterised for exactly this.
+///
+/// One asymmetry worth knowing: unlike the struct, tuple, and array blocks, the enum emitter emits
+/// its OWN loop-open, so the block must not add another. That showed up as exactly one extra `Loop`.
+#[test]
+fn self_host_compiles_nested_enum_subfield_equality() {
+    // Reached through a nested struct, at two and three levels.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E }\nstruct Q { i: I }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // Reached through a TUPLE element.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // A sibling scalar after the enum, a variant with a scalar payload, and `!=`.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E, w: Word }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
+/// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
+/// DEFER, not descend.
+///
+/// This pins the admission guard, and it is the point of the guard rather than an edge case. Once
+/// the drain learned to descend into a struct element, an impure element would be descended into and
+/// then mis-lowered — the same silent-wrong-comparison class the fix above removes. Deferring yields
+/// a plain primitive compare that DIVERGES from the reference, so the construct reports as an
+/// ordinary unsupported Gap (loudly, via the CLI's reference cross-check) instead of silently
+/// comparing the wrong bytes.
+#[test]
+fn struct_tuple_of_impure_struct_element_defers() {
+    for src in [
+        // All three composite kinds now nest, so the impure cases are enums with a COMPOSITE
+        // payload: a struct payload and an array payload, neither of which has a nested form.
+        "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        "enum E { A([Word;2]), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    ] {
+        let reference = compile_src(src);
+        let module = self_host_compile(src);
+        let f = module
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("chunk f");
+        let r = reference
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("ref f");
+        // The deferral is a short primitive compare; the reference emits the full structural one.
+        // Asserting the SHAPE (a deferral, much shorter) rather than merely "not equal" keeps this
+        // from silently passing if the drain regressed into emitting a wrong-but-long stream.
+        assert!(
+            f.ops.len() < r.ops.len() / 2,
+            "expected a short deferral for `{src}`, got {} ops against the reference's {}",
+            f.ops.len(),
+            r.ops.len()
+        );
+    }
+}
+
+/// A tuple element that is itself a TUPLE self-compiles byte-identically.
+///
+/// This case needed no stage change: the pipeline already lowers a nested tuple element to
+/// `GetTupleField(FlatNested { variant: Tuple })` followed by a nested compare loop, matching the
+/// reference's recursive `emit_composite_fieldwise_eq`. The support was nevertheless UNPINNED, so
+/// these assertions (and the `eq/tuple_in_tuple*` boundary cases) exist to catch a regression rather
+/// than to record newly written code.
+///
+/// Coverage is chosen so each case exercises a distinct offset or emission path: the nested element
+/// in first and last position (the outer element offsets differ), both elements nested, three levels
+/// of nesting, a narrow `Byte` leaf (which shifts the following outer element's flat offset), a
+/// struct beside a nested tuple (a MIXED subtree), and `!=` (the negated lowering).
+#[test]
+fn self_host_compiles_tuple_in_tuple_equality() {
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: (Word, (Word, Word)), b: (Word, (Word, Word))) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Word), (Word, Word)), b: ((Word, Word), (Word, Word))) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: (((Word, Word), Word), Word), b: (((Word, Word), Word), Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Byte), Word), b: ((Word, Byte), Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: ((Word, Word), P), b: ((Word, Word), P)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a == b }",
+    );
+    // The nested element's own layout: `a.1` must resolve past the whole nested element (flat
+    // offset 16, not 8), so this pins the tuple layout and not merely the equality lowering.
+    assert_self_host_byte_identical("fn f(a: ((Word, Word), Word)) -> Word { a.1 }");
+    assert_self_host_byte_identical("fn f(a: (Word, (Word, Word))) -> Word { a.0 }");
+}
+
+/// Struct-of-array-of-struct equality (`struct Q { ps: [P; 2] }`, `a == b`) self-compiles
+/// byte-identically. A struct field that is an array whose element is itself a struct with scalar
+/// leaves extracts the whole array (GetFieldNested variant Array) into a temp pair, then per element
+/// extracts `a[e]`/`b[e]` as structs (getindexnested FlatNested Struct) into an inner temp pair and
+/// runs an inner struct-eq field loop, breaking the element loop false on a mismatch. It composes
+/// `push_array_of_struct_eq`'s per-element unroll under a struct-field array extraction; the element
+/// index constants intern before false/true (per `composite_field_accessors`). Reuses op 48 and the
+/// getindexnested op, records 55/56/57/58, node 59 — no new opcode/record/node kind. Covers `[P;2]`,
+/// `[P;3]`, a multi-field element, `!=`, and an array-of-struct beside a scalar top-level field.
+#[test]
+fn self_host_compiles_struct_arrayofstruct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 3] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nstruct Q { ps: [P; 2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 2] }\nfn f(a: Q, b: Q) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 2], w: Word }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+}
+
+/// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
+/// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
+/// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
+/// in field-declaration order (verified by both array-first and scalar-first cases). Covers array `!=`
+/// and a struct mixing a nested struct and an array field.
+#[test]
+fn self_host_compiles_array_in_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { xs: [Word; 3], x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, xs: [Word; 3] }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { xs: [Word; 2] }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, xs: [Word; 2] }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
+
+/// Array-of-struct equality (`[P; N] == [P; N]`, and `!=`) self-compiles byte-identically. The
+/// reference unrolls per element: extract `a[e]`/`b[e]` as structs (GetIndex(FlatNested Struct)) into a
+/// fresh inner temp pair, run an inner struct-eq field loop (break false on the first field mismatch,
+/// true if all fields match), and if the element compared unequal break the OUTER loop false; after all
+/// elements break true. It composes `push_array_eq`'s outer loop with `push_struct_eq`'s inner field
+/// loop. Reaching it needed a parse prerequisite: a whole `[P; N]` value now sets `last_array` plus a
+/// new `last_array_struct` marker (the `sa_` postfix whole-value branch), captured into
+/// `op_larray_struct` at operator push, so `emit_op` routes to `array_of_struct_eq_start`; that reuses
+/// the struct-eq field drain, flagged `sq_arr`, to close with an ArrayOfStructEqBuild (node 61) that
+/// reconstruct assembles into an ArrayOfStructEq (node 62). Covers single- and multi-field elements, a
+/// Byte field, the `!=` form, and multiple element counts.
+#[test]
+fn self_host_compiles_array_of_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [P; 3], b: [P; 3]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn g(a: [P; 2], b: [P; 2]) -> bool { a == b }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+}
+
+/// Array-of-enum equality (`[E; N] == [E; N]`, and `!=`) self-compiles byte-identically. Composes the
+/// array-of-struct outer per-element unroll with the enum-eq variant-dispatch inner loop: extract
+/// `a[e]`/`b[e]` as enums (GetIndex(FlatNested Enum)) into an inner pair, run the enum-eq loop (deferred
+/// interning) over it, break outer false on element inequality; break true after all. Needed a
+/// from-scratch enum-array param prerequisite (`parray_enum`, the `sa_` variant-3 whole-value path,
+/// `last_array_enum`/`op_larray_enum`), a new ArrayOfEnumEqBuild record (63) reusing the enum-eq drain,
+/// and an ArrayOfEnumEq node whose kind is 64 (the 6-bit record space is full, but node kinds live in
+/// the un-packed forest array so may exceed 63).
+#[test]
+fn self_host_compiles_array_of_enum_equality() {
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 3], b: [E; 3]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(a: [Color; 2], b: [Color; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a == b }\nfn g(a: [E; 2], b: [E; 2]) -> bool { a != b }",
+    );
+}
+
+/// Variable-amount `lsr` (a runtime shift count) self-compiles byte-identically, completing the shift
+/// family (the 88th did the constant amount). Unlike a constant amount, the mask `(1 << (64 - k)) - 1`
+/// is computed at run time, so the value and amount spill to two fresh temps (allocated at
+/// `param_count + let_count`) and the lowering branches on `k == 0` (identity) else emits the runtime
+/// mask. Codegen-only: `push_binop`'s ShrL arm branches on whether the rhs is a Literal (constant) or
+/// not (variable). The mask constants (0, 1, 64) defer through `push_int_const` so they intern in
+/// emission order, matching the reference even when the amount is a compound expression (`a lsr (k + 1)`,
+/// whose `1` interns before the k==0 test's `0`).
+#[test]
+fn self_host_compiles_variable_lsr() {
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsr k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { let x = a + 1; x lsr k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsr (k + 1) }");
+    // Regression: the constant amount still takes the mask-fold path; the other variable shifts stay
+    // single ops.
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsl k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a asr k }");
+}
+
+/// The eager boolean `xor` self-compiles byte-identically. Its reference lowering is exactly `CmpNe`
+/// -- the same as `!=` (`NotEq`) -- so the lexer tokenizes `xor` to a free low Tok slot (18) and
+/// `opcode_of` maps it straight to `OpCode::NotEq`; no new opcode, node, or codegen path is needed
+/// (which matters because the 6-bit record-kind space is full). `bnot` and eager `and`/`or` are NOT
+/// added here: they need their own multi-op lowerings and hence new node kinds, blocked by the full
+/// record space.
+#[test]
+fn self_host_compiles_boolean_xor() {
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a xor b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a xor b xor c }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { not (a xor b) }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a != b }");
+}
+
+/// The unary bitwise-NOT operator `bnot` (Word) self-compiles byte-identically. `bnot a` lowers to
+/// `a bxor -1` (GetLocal, Const(-1), BitXor). It is the first operator added past the FULL 6-bit
+/// record-kind space, using the split record/node-kind pattern (the reconstruct `k == 36` precedent):
+/// the lexer tokenizes `bnot` to the last free low Tok (11); parse pushes it as a unary prefix
+/// (OpCode::Bnot = 30) and `emit_op` yields its NATIVE RECORD kind 65 via the two-word transport
+/// (P11 Option E; record kinds may now exceed 63, matching the node kind); reconstruct dispatches
+/// record 65 directly; codegen `push_bnot` emits the lowering with
+/// the `-1` DEFERRED via push_int_const. Byte `bnot` (promote-operate-truncate) is a follow-up.
+#[test]
+fn self_host_compiles_word_bnot() {
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot a }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot (a + 1) }");
+    // Precedence: `bnot` (10) binds tighter than `band` (6), so this is `(bnot a) band b`.
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { bnot a band b }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot bnot a }");
+}
+
+/// Byte-operand `bnot` self-compiles byte-identically, completing the bitwise-NOT operator (Word done
+/// in the 94th). A Byte `bnot` is promote-operate-truncate: ByteToWord, Const(-1), BitXor, WordToByte.
+/// Detection keys on the operand's Byte flag (`last_byte`, still set at emit_op before the reset,
+/// since `bnot` is unary), yielding RECORD kind 51 -> NODE kind 66 (`push_byte_bnot`), reusing the
+/// split record/node-kind pattern.
+#[test]
+fn self_host_compiles_byte_bnot() {
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { bnot a }");
+    // Precedence: `bnot` (10) binds tighter than `band` (6): `(bnot a) band b`, both Byte.
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { bnot a band b }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { bnot bnot a }");
+    // Word regression (still record 48 -> node 65).
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot a }");
+}
+
+/// Array-of-tuple equality (`[(..); N] == [(..); N]`, and `!=`) self-compiles byte-identically. It is
+/// the array-of-struct lowering (90th) with a TUPLE element: the per-element extract is
+/// GetIndex(FlatNested Tuple) and the inner field loop uses GetTupleField over the `tupledefs` layout.
+/// Reuses the whole array-of-struct machinery via an `is_tuple` bit: parse tracks a whole `[(..); N]`
+/// value (`last_array_tuple`, the tuple byte size packed into the marker), `array_of_tuple_eq_start`
+/// runs the struct-eq drain with `sq_istuple = 1`, that flag rides the ArrayOfStructEqBuild as its
+/// is_tuple bit (bit 43), and codegen `push_array_of_struct_eq` picks the accessor/variant from it.
+#[test]
+fn self_host_compiles_array_of_tuple_equality() {
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word, Word); 2], b: [(Word, Word, Word); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Byte); 2], b: [(Word, Byte); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 3], b: [(Word, Word); 3]) -> bool { a == b }",
+    );
+    // array-of-struct regression (shared build node + codegen function).
+    assert_self_host_byte_identical(
+        "struct P { x: Word }
+fn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }
+fn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+}
+
+/// Array-of-array equality (`[[T; N]; M] == [[T; N]; M]`, and `!=`) self-compiles byte-identically,
+/// completing the array-of-X family (X = struct/enum/tuple/array). It is the array-of-struct per-element
+/// outer unroll (extract a[e]/b[e] as inner arrays via GetIndex(FlatNested Array)) with an inner SCALAR
+/// array-eq loop (per element j: GetLocal, Const(j), GetIndex(Flat innerkind), CmpEq). Unlike the
+/// struct/tuple cases the inner needs no field drain, so it emits its build record directly, using the
+/// proven split-kind reuse: record kind 54 (the ArrayEq node value, free as a record) -> node 67. The
+/// inner element count is derived as inner_byte_size / element_size, where the GetIndex ScalarKind
+/// numbering has Word = 3 (8 bytes) and Byte/Bool = 2/1 (1 byte).
+#[test]
+fn self_host_compiles_array_of_array_equality() {
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 2]; 2], b: [[Word; 2]; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 2]; 2], b: [[Word; 2]; 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 3]; 2], b: [[Word; 3]; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Byte; 2]; 2], b: [[Byte; 2]; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 2]; 3], b: [[Word; 2]; 3]) -> bool { a == b }",
+    );
+    // scalar array-eq + array-of-struct regression (shared machinery).
+    assert_self_host_byte_identical("fn f(a: [Word; 3], b: [Word; 3]) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "struct P { x: Word }
+fn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+}
+
+/// The eager boolean operators `and`/`or` self-compile byte-identically. Unlike the short-circuit
+/// `andalso`/`orelse`, they are EAGER (`a and b` = `if a then b else false`, `a or b` = `if a then
+/// true else b`, b always evaluated). The Tok space (0..61) is full, so -- like `limit`/`require`/
+/// `word` -- they are lexed as IDENTIFIERS and recognized by interned id in OPERATOR position (the
+/// host supplies `and_id`/`or_id`, appended to the `toks` block; the parser guards on `> 0`). Codegen
+/// `push_andor` spills the left operand to a temp, evaluates the right, then a value-If (condition =
+/// left for `and`, Not(left) for `or`; else-value false / true). Precedence caveat: the self-host
+/// integer scale is coarser than the reference logical binding powers, so only non-mixed (or
+/// parenthesized) cases are faithfully ordered -- as with the `xor`-as-NotEq approximation.
+#[test]
+fn self_host_compiles_eager_and_or() {
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a and b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a or b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { (a xor b) and b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a or b or c }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a and b and c }");
+    // regression: xor and the short-circuit andalso/orelse still work.
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a xor b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a andalso b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a orelse b }");
+}
+
+// ============================================================================
+// Self-hosted construct-support boundary (characterization / inventory test).
+//
+// This test is the single, diffable source of truth for which language constructs
+// the self-hosted `.kel` pipeline (lexer -> parse -> reconstruct -> codegen, run on
+// the stack VM) reproduces BYTE-IDENTICALLY versus which still fall back to (diverge
+// from) the Rust reference compiler. Each case is classified empirically and asserted
+// against its expected classification:
+//
+//   Ok         the self-hosted pipeline emits byte-identical bytecode to the reference.
+//   Gap        the reference compiles it but the self-hosted pipeline diverges/does not
+//              handle it. A DELIBERATELY pinned non-support, not a bug to silence.
+//   RefRejects the Rust reference itself rejects the program (not valid input).
+//
+// The test fails on ANY mismatch, in BOTH directions:
+//   * Ok -> Gap  is a regression (a supported construct broke). Fix the code.
+//   * Gap -> Ok  means a gap was CLOSED (someone implemented it). That is good work,
+//                but you MUST move the case from Gap to Ok here in the same change, so
+//                the boundary stays accurate and the diff records exactly what moved.
+//
+// Keep this table in sync as the self-hosted subset grows toward full self-hosting.
+// ============================================================================
+
+/// How the self-hosted compiler handles a construct.
+///
+/// **`Gap` USED TO MEAN TWO THINGS AND THEY ARE NOT THE SAME THING.** A construct
+/// the stage REFUSES loudly is an honest gap: the caller learns it is unsupported.
+/// A construct the stage compiles to DIFFERENT BYTES is a silent miscompile, and
+/// only a cross-check stands between it and a wrong artifact.
+///
+/// Both were `Gap`, so the table could not tell them apart — the same
+/// shared-message defect this tree has recorded against four guards in the stage
+/// sources, here in the instrument that measures them. Three silent miscompiles
+/// were found by hand on 2026-08-20 precisely because the table could not report
+/// the distinction.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Support {
+    /// Byte-identical to the reference.
+    Ok,
+    /// The stage refuses to compile it, loudly. An honest gap.
+    Refuses,
+    /// The stage compiles it and produces DIFFERENT BYTES. A silent miscompile,
+    /// caught on the shipping path only by the reference cross-check.
+    Diverges,
+    /// The reference compiler itself rejects the source.
+    RefRejects,
+}
+
+/// **THE SHIPPING COMPILER IS MEASURED AGAINST THE SAME TABLE, AND IT NOW AGREES.**
+///
+/// # Why this test exists
+///
+/// [`self_hosted_construct_support_boundary`] classifies THIS FILE's copy of the driver. The
+/// crate ships a different one, and for as long as only the copy was measured, four separate
+/// silent defects in the shipping compiler were invisible to the project's own record of what
+/// self-hosting supports:
+///
+/// | defect | symptom |
+/// |---|---|
+/// | the constant-pool tag was discarded | a string constant became the integer of its intern id |
+/// | struct/trait/impl declarations had no skip state | the driver faulted on 29 cases |
+/// | the eager `and`/`or` ids were never seeded | `a and b` compiled to `a` |
+/// | tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding |
+///
+/// Every one was something the copy handled and the shipping driver did not. Measured over this
+/// table, the shipping compiler went from 43 byte-identical to 88 of 95.
+///
+/// # What it pins, which is stronger than a count
+///
+/// Not "N cases pass" but **the two compilers reach the same verdict on every case**. A count can
+/// be satisfied by one construct regressing while another is repaired; per-case agreement cannot.
+/// The day the driver and the copy drift again, this names the construct.
+///
+/// # This does not make the duplicate safe, it makes the drift visible
+///
+/// The copy is still a second implementation and this test is a smoke alarm, not a repair. The
+/// accessor decision that would let it be deleted is still open.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_shipping_compiler_matches_the_boundary_it_is_recorded_against() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut reached = [0usize; 4];
+    for (label, expected, src) in boundary_cases() {
+        let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
+            Support::RefRejects
+        } else {
+            // The SHIPPING entry point, which is the whole point of this test.
+            match catch_unwind(AssertUnwindSafe(|| {
+                keleusma::selfhost::self_host_compile(src)
+            })) {
+                Err(_) => Support::Refuses,
+                Ok(lib) => {
+                    let reference = compile_src(src);
+                    // Ops, constant pool and local count -- the same three fields
+                    // `self_hosted_compile` cross-checks before it will emit a module.
+                    let same = lib.chunks.len() == reference.chunks.len()
+                        && lib
+                            .chunks
+                            .iter()
+                            .zip(reference.chunks.iter())
+                            .all(|(a, b)| {
+                                a.name == b.name
+                                    && a.ops == b.ops
+                                    && a.constants == b.constants
+                                    && a.local_count == b.local_count
+                            });
+                    if same { Support::Ok } else { Support::Diverges }
+                }
+            }
+        };
+        reached[match actual {
+            Support::Ok => 0,
+            Support::Refuses => 1,
+            Support::Diverges => 2,
+            Support::RefRejects => 3,
+        }] += 1;
+        if actual != *expected {
+            mismatches.push(format!(
+                "{label}: boundary records {expected:?}, shipping compiler gives {actual:?}"
+            ));
+        }
+    }
+    std::panic::set_hook(prev);
+
+    assert!(
+        mismatches.is_empty(),
+        "the SHIPPING compiler no longer matches the boundary this table records. Each line is a \
+         construct where the crate's own record of self-hosting support is wrong about what \
+         ships. If a case improved, update its verdict here; if it regressed, the driver and \
+         `tests/selfhost_codegen.rs`'s copy of it have drifted again:\n  {}",
+        mismatches.join("\n  ")
+    );
+
+    // Non-vacuity, in both directions. A table of one case, or one where every verdict were the
+    // same, would satisfy the loop above while establishing nothing.
+    assert!(
+        boundary_cases().len() >= 90,
+        "the case table shrank to {}; this test's reach is a property of the table",
+        boundary_cases().len()
+    );
+    assert!(
+        reached[0] >= 80,
+        "only {} cases are byte-identical through the shipping compiler; this test was written \
+         when 88 of 95 were",
+        reached[0]
+    );
+    assert!(
+        reached.iter().filter(|&&n| n > 0).count() >= 3,
+        "the shipping compiler reached fewer than three distinct verdicts, so the classifier is \
+         not discriminating"
+    );
+}
+
+/// The construct-support case table, hoisted so **two** compilers can be measured against it.
+///
+/// It lived inside [`self_hosted_construct_support_boundary`] and therefore described only the
+/// compiler that test classifies, which is THIS FILE's copy of the driver. Four silent
+/// miscompiles in the shipping compiler sat unreported behind that, because nothing ever ran the
+/// table against `keleusma::selfhost::self_host_compile`. Copying the table into a second file
+/// would have been the nine-copies defect again, so it is hoisted instead.
+/// **A FAMILY WITH ONE CASE LOOKS COVERED AND IS NOT.**
+///
+/// The construct-support boundary is the principal non-`Word` coverage the self-hosted pipeline
+/// has, because the byte-identity corpus exercises `Word` and nothing else at a function boundary
+/// (`tests/corpus_type_surface.rs`). That makes the SHAPE of this table load-bearing, and its shape
+/// has never been examined.
+///
+/// Measured 2026-08-31 over the 101 cases: **43 equality cases**, then 11 scalar, 10 bool, 8 op,
+/// 8 comp, 5 prec, 5 ctrl, 3 nested, 3 cast, 2 scope, and **exactly one each for `literal`,
+/// `tuple` and `removed`**.
+///
+/// The single `literal` case is `let s = "hi"` — ASCII, no escape, three bytes. **That is the
+/// degenerate case which let both string defects of 2026-08-30 through.** The family existed, so
+/// the surface looked covered; the case was too thin to exercise anything the defects touched.
+///
+/// A distribution like this measures where attention has been, not where risk is. It is not
+/// evidence that anything is wrong — it is evidence about what this table can find.
+///
+/// # What this test does and does not enforce
+///
+/// It does NOT require every family to have many cases. Some constructs genuinely have one shape
+/// worth testing, and a rule demanding more would produce padding, which is worse than a thin
+/// family honestly recorded.
+///
+/// It enforces a RATCHET: the set of single-case families is derived from the table and compared
+/// against the acknowledged set. A NEW thin family fails, so it is noticed while someone is
+/// looking at it, rather than years later through a defect. Widening a family also fails, which is
+/// the good direction and asks only that the record be updated.
+///
+/// The derivation calls `boundary_cases()` rather than reading this file's text. A regular
+/// expression over this same table already produced a false 99-against-101 reading once; when the
+/// data is reachable AS DATA, parsing its source is choosing an instrument that can be wrong.
+#[test]
+fn the_boundary_tables_thin_families_are_the_ones_on_record() {
+    use std::collections::BTreeMap;
+
+    let mut per_family: BTreeMap<&str, usize> = BTreeMap::new();
+    for (label, _, _) in boundary_cases() {
+        let family = label.split('/').next().unwrap_or(label);
+        *per_family.entry(family).or_default() += 1;
+    }
+
+    // NON-VACUITY. An empty or tiny table would satisfy every comparison below by having no
+    // families to compare.
+    let total: usize = per_family.values().sum();
+    assert!(
+        total >= 90 && per_family.len() >= 10,
+        "the table has {total} cases across {} families, which is far below its size; this \
+         derivation has broken rather than the table having shrunk",
+        per_family.len()
+    );
+
+    let thin: Vec<&str> = per_family
+        .iter()
+        .filter(|(_, n)| **n == 1)
+        .map(|(f, _)| *f)
+        .collect();
+
+    // The acknowledged thin families. `literal` is the one that cost something: its single case is
+    // `let s = "hi"`, and the string defects of 2026-08-30 lived exactly where that case does not
+    // reach.
+    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it.
+    let acknowledged = ["literal", "tuple"];
+    assert_eq!(
+        thin.as_slice(),
+        acknowledged.as_slice(),
+        "the families represented by a SINGLE case are now {thin:?}, not {acknowledged:?}.\n\
+         A family that just became thin is worth a look now rather than after a defect.\n\
+         A family that just stopped being thin is good news; update the list and the measured \
+         distribution in this comment."
+    );
+}
+
+fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
+    use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
+    &[
+        (
+            "scalar/unit_literal",
+            SOk,
+            "fn f() -> Word { let x = (); 7 }",
+        ),
+        // --- scalars -------------------------------------------------------------
+        //
+        // RADIX-PREFIXED LITERALS. Absent from this table until 2026-08-26, which is why
+        // the self-hosted lexer's total lack of support for them went unmeasured: it
+        // consumed the leading `0`, stopped, and interned the prefix and digits as an
+        // IDENTIFIER. Fourth construct found this way, after the boolean literal, the
+        // `Byte` cast and the bare `for` form.
+        (
+            "scalar/hex_literal",
+            SOk,
+            "fn f() -> Word { 0xFF + 0xdeadBEEF }",
+        ),
+        (
+            "scalar/hex_literal_upper_prefix",
+            SOk,
+            "fn f() -> Word { 0XAB }",
+        ),
+        (
+            "scalar/binary_literal",
+            SOk,
+            "fn f() -> Word { 0b1010 + 0B1101 }",
+        ),
+        (
+            "scalar/word_arith",
+            SOk,
+            "fn f(a: Word, b: Word) -> Word { a + b - a * b }",
+        ),
+        (
+            "scalar/word_divmod",
+            SOk,
+            "fn f(a: Word, b: Word) -> Word { a / b + a % b }",
+        ),
+        (
+            "scalar/word_cmp",
+            SOk,
+            "fn f(a: Word, b: Word) -> bool { a < b }",
+        ),
+        ("scalar/word_neg", SOk, "fn f(a: Word) -> Word { 0 - a }"),
+        (
+            "scalar/byte_arith",
+            SOk,
+            "fn f(a: Byte, b: Byte) -> Byte { a + b }",
+        ),
+        // THE TWO CASES BELOW EXIST TO CLOSE AN OP-TAG GAP, NOT TO WIDEN THE LANGUAGE. The
+        // op-tag census recorded `subop`, `mulop` and `checkedneg` as reached by no corpus this
+        // project runs. `byte_arith` above is `a + b` and NOTHING MORE, which is exactly why
+        // subtraction and multiplication escaped every oracle while addition did not. Both
+        // compile byte-identically, so neither buys its coverage with a divergence.
+        (
+            "scalar/byte_sub_mul",
+            SOk,
+            "fn f(a: Byte, b: Byte) -> Byte { a - b * a }",
+        ),
+        ("scalar/word_unary_neg", SOk, "fn f(a: Word) -> Word { -a }"),
+        (
+            "scalar/byte_cmp",
+            SOk,
+            "fn f(a: Byte, b: Byte) -> bool { a < b }",
+        ),
+        // --- shifts / bitwise ----------------------------------------------------
+        ("op/shift_lsl", SOk, "fn f(a: Word) -> Word { a lsl 2 }"),
+        ("op/shift_asr", SOk, "fn f(a: Word) -> Word { a asr 2 }"),
+        (
+            "op/shift_lsr_const",
+            SOk,
+            "fn f(a: Word) -> Word { a lsr 2 }",
+        ),
+        (
+            "op/shift_lsr_var",
+            SOk,
+            "fn f(a: Word, k: Word) -> Word { a lsr k }",
+        ),
+        ("op/byte_shift", SOk, "fn f(a: Byte) -> Byte { a lsr 1 }"),
+        (
+            "op/bitwise_band",
+            SOk,
+            "fn f(a: Word, b: Word) -> Word { a band b }",
+        ),
+        ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
+        ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
+        // --- booleans ------------------------------------------------------------
+        // --- string literals, measured 2026-08-20 -------------------------------
+        //
+        // The ops match; the CONSTANT POOL does not. The reference emits
+        // `StaticStr("hi")` and the stage emits `Int(3)`, the lexer's intern id as
+        // a plain integer, because the string path reaches `intern_int` rather than
+        // `intern_str`.
+        //
+        // `CLAUDE.md` lists `Text` among the divergence classes the command-line
+        // path refuses, so this is plausibly a known exclusion rather than a new
+        // defect — but a `StaticStr` literal is ADJACENT to that class, not plainly
+        // the same thing, and the table had no string case either way. Recorded as
+        // measured rather than argued.
+        //
+        // **AN OPS-ONLY COMPARISON WOULD HAVE CALLED THIS CLEAN.** It is why the
+        // sweep that found it compares bytes.
+        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE DIVERGENCE IS CLOSED.**
+        //
+        // The two once differed: the reference and this file's
+        // `self_host_compile` emitted `StaticStr("hi")` while
+        // `keleusma::selfhost::self_host_compile` emitted `Int(3)`, the lexer's
+        // intern id as a plain integer — identical ops, a different constant
+        // pool. `the_two_self_hosted_compilers_agree_on_a_string_literal` now
+        // checks three-way agreement, so the next drift is caught rather than
+        // assumed absent.
+        //
+        // **THE COMMENT HERE ASSERTED THE DIVERGENCE AS A PRESENT FACT LONG
+        // AFTER IT WAS FIXED**, and cited a test named for the disagreement that
+        // was never written under that name. Both the claim and the pointer were
+        // stale, which is why repointing the name alone would not have been the
+        // repair.
+        //
+        // The standing caveat is unchanged and separate: this table measures a
+        // COPY of the compiler, so `Ok` remains a statement about this file
+        // rather than about the shipping one.
+        (
+            "literal/string",
+            SOk,
+            "fn f() -> Word { let s = \"hi\"; 1 }",
+        ),
+        // --- nested composites, measured 2026-08-20 and NOT yet fixed ------------
+        //
+        // **TWO DEFECTS, AND ONLY ONE IS CLOSED.** The literal's outer composite used
+        // to be sized 16 where the reference computes 32 -- two 16-byte inner arrays
+        // -- because the element size was not propagated: the close handled a struct
+        // element and otherwise assumed `Word`, so an ARRAY element fell through to
+        // `count * 8`. Fixed 2026-08-20; the element size is now carried per NESTING
+        // LEVEL rather than per moment, which a flat flag got wrong by leaking across
+        // siblings.
+        //
+        // The chained INDEX is a separate defect and remains below.
+        (
+            "nested/array_of_array_literal",
+            SOk,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
+        ),
+        // **DIAGNOSED 2026-08-20, AND IT IS NOT WHAT THE FIRST REPORT SAID.**
+        //
+        // The first record of this called it a truncated BODY, implying codegen
+        // dropped ops. It does not. `parse.kel` emits records, and they are the
+        // WRONG records:
+        //
+        //   a[1]      ->  Local(0), Literal(1), Index          -- correct
+        //   a[0][1]   ->  Local(0), Literal(0), Index,
+        //                 Literal(1), **ArrayLit**             -- the second
+        //                 `[1]` parses as an ARRAY LITERAL, not an index
+        //
+        // **CHAINED INDEXING IS NOT SUPPORTED BY THE PARSER AT ALL.** The postfix
+        // index phase (`ps.aa_phase`) is armed only after a let-bound array `Local`
+        // is emitted, and nothing re-arms it once an index completes, so the next
+        // `[` falls through to the array-literal branch. `let b = a[0]; b[1]`
+        // diverges too, which rules out the chain being the trigger: it is indexing
+        // a nested array at all.
+        //
+        // What a fix needs, so the next attempt starts from the specification
+        // rather than the symptom: a binding record saying the element is an ARRAY
+        // of byte size N (there is `let_array` for a scalar kind and
+        // `let_array_struct`/`let_array_size` for a struct, and nothing for an
+        // array); a nested-variant postfix phase, for which the machinery already
+        // exists as `step_structarrayaccess` with `da.fa_index_variant`; and
+        // re-arming after an index so a chain continues.
+        //
+        // Recorded rather than attempted: three coordinated pieces of parser state
+        // machinery is a FEATURE, not the defect fix its sibling was.
+        (
+            "nested/array_of_array_index",
+            SOk,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] }",
+        ),
+        // The SPLIT form, which proves the chain is not the trigger.
+        (
+            "nested/array_of_array_split_index",
+            SOk,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; let b = a[0]; b[1] }",
+        ),
+        // --- casts, a family this table had NO cases for at all ------------------
+        //
+        // `parse.kel` discarded the target type name and `codegen.kel` emitted
+        // `ByteToWord` unconditionally, on the stated assumption that the stages
+        // only cast `Byte as Word`. True of the corpus, false of the language:
+        // `7 as Byte` lowered to a WIDENING. A silent miscompile, and no case here
+        // could have caught it because the family was absent.
+        ("cast/word_to_byte", SOk, "fn f() -> Byte { 7 as Byte }"),
+        (
+            "cast/byte_to_word",
+            SOk,
+            "fn f(a: Byte) -> Word { a as Word }",
+        ),
+        (
+            "cast/round_trip",
+            SOk,
+            "fn f() -> Word { let b = 7 as Byte; b as Word }",
+        ),
+        // A CAST DECIDES WHETHER THE OPERATOR CONSUMING IT IS BYTE ARITHMETIC. Until
+        // 2026-10-21 the cast left the parser's last-operand Byte flag as its operand had set
+        // it, so each of the following diverged: widened Byte operands lowered to the
+        // unchecked Byte operation, and narrowed Word operands to checked Word arithmetic.
+        // Measured before the fix, the first seven of these diverged.
+        (
+            "cast/widened_bytes_add",
+            SOk,
+            "fn f(o: Byte, n: Byte) -> Word { (o as Word) + (n as Word) }",
+        ),
+        (
+            "cast/widened_bytes_mul",
+            SOk,
+            "fn f(o: Byte, n: Byte) -> Word { (o as Word) * (n as Word) }",
+        ),
+        (
+            "cast/widened_bytes_unparenthesized",
+            SOk,
+            "fn f(o: Byte, n: Byte) -> Word { o as Word + n as Word }",
+        ),
+        (
+            "cast/widened_byte_plus_literal",
+            SOk,
+            "fn f(o: Byte) -> Word { (o as Word) + 1 }",
+        ),
+        (
+            "cast/widened_byte_shift",
+            SOk,
+            "fn f(o: Byte) -> Word { (o as Word) lsl 1 }",
+        ),
+        (
+            "cast/narrowed_words_add",
+            SOk,
+            "fn f(a: Word, b: Word) -> Byte { (a as Byte) + (b as Byte) }",
+        ),
+        (
+            "cast/narrowed_words_band",
+            SOk,
+            "fn f(a: Word, b: Word) -> Byte { (a as Byte) band (b as Byte) }",
+        ),
+        // Controls that agreed before the fix and must keep agreeing.
+        (
+            "cast/literal_plus_widened_byte",
+            SOk,
+            "fn f(o: Byte) -> Word { 1 + (o as Word) }",
+        ),
+        (
+            "cast/narrowed_word_shift",
+            SOk,
+            "fn f(a: Word) -> Byte { (a as Byte) lsl 1 }",
+        ),
+        // THE LITERALS, WHICH THIS TABLE DID NOT COVER UNTIL 2026-08-20.
+        //
+        // Every other boolean case here takes a bool PARAMETER. Not one supplied a
+        // literal, and the stage MIS-LOWERED both: `true` arrived as an ordinary
+        // identifier, resolved as a variable reference, and emitted `GetLocal(0)`
+        // where the reference emits `PushImmediate(1)`. A silent miscompile, and
+        // the table overstated support by omission.
+        //
+        // The self-compilation oracle could not see it: NONE of the twelve stage
+        // sources then contained a `true` or `false` literal, so the corpus could not
+        // reach the construct at all. Re-measured on 2026-10-24 over all fourteen,
+        // wire_schema.kel now contains one `true`.
+        ("bool/true_literal", SOk, "fn f() -> bool { true }"),
+        ("bool/false_literal", SOk, "fn f() -> bool { false }"),
+        (
+            "bool/literal_bound",
+            SOk,
+            "fn f() -> bool { let b = true; b }",
+        ),
+        (
+            "bool/literal_condition",
+            SOk,
+            "fn f() -> Word { if true { 1 } else { 2 } }",
+        ),
+        ("bool/not", SOk, "fn f(a: bool) -> bool { not a }"),
+        (
+            "bool/andalso",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a andalso b }",
+        ),
+        (
+            "bool/orelse",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a orelse b }",
+        ),
+        (
+            "bool/xor",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a xor b }",
+        ),
+        (
+            "bool/and_eager",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a and b }",
+        ),
+        (
+            "bool/or_eager",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a or b }",
+        ),
+        // --- precedence boundary (the one in-set faithfulness defect) ------------
+        // `and`/`or` relative order and their order vs comparison ARE faithful; the
+        // defect is `xor`: it sits at comparison precedence in the self-host instead
+        // of below it, and `and` sits below `xor` instead of above it. So any grouping
+        // that depends on those two orderings diverges; everything else matches.
+        (
+            "prec/or_vs_and",
+            SOk,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a or b and c }",
+        ),
+        (
+            "prec/or_vs_xor",
+            SOk,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a or b xor c }",
+        ),
+        (
+            "prec/and_vs_cmp",
+            SOk,
+            "fn f(x: bool, y: Word, z: Word) -> bool { x and y < z }",
+        ),
+        (
+            // P11 precedence P1 closed this: xor now sits in the logical band below comparison.
+            "prec/xor_vs_eq",
+            SOk,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a xor b == c }",
+        ),
+        (
+            // P11 precedence P1 closed this: and binds tighter than xor (both in the logical band).
+            "prec/and_vs_xor",
+            SOk,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a and b xor c }",
+        ),
+        // --- control flow --------------------------------------------------------
+        (
+            "ctrl/if_else",
+            SOk,
+            "fn f(a: Word) -> Word { if a > 0 { 1 } else { 2 } }",
+        ),
+        (
+            "ctrl/match_int",
+            SOk,
+            "fn f(k: Word) -> Word { match k { 0 => 10, _ => 20 } }",
+        ),
+        (
+            "ctrl/for_limit",
+            SOk,
+            "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n limit 8 { acc.s = acc.s + i; } acc.s }",
+        ),
+        // **THE BARE LOOP FORM, WHICH THIS TABLE DID NOT CONTAIN UNTIL
+        // 2026-08-25.** Identical to the case above but for the missing `limit
+        // 8`, so the pair isolates the counted form's cap and nothing else.
+        //
+        // Its absence was the reason the gap went unmeasured: a construct not in
+        // this table is unverified by construction, and a reader consulting it to
+        // learn whether loops are supported saw one `for` case, marked `SOk`.
+        //
+        // `Refuses` is now the TRUTHFUL classification rather than a lucky one.
+        // The classifier catches a panic and files it here, so before the stage
+        // named the construct this would have been counted correctly for the
+        // wrong reason -- an honest gap by accident of a misleading abort about a
+        // missing chunk name. `parse.kel` phase 4 now reports it, so the entry
+        // and the user's message say the same thing.
+        //
+        // It is a SECOND LOWERING and not a relaxation. The size difference is
+        // asserted rather than restated here:
+        // `the_bare_and_limit_forms_have_different_lowerings` in
+        // `tests/selfhost_bare_for.rs` pins the RATIO. A figure quoted here
+        // would be a second unenforced number for one claim, and the two would
+        // differ anyway -- the counts depend on whether the bound is a literal
+        // or a parameter.
+        (
+            "ctrl/for_bare",
+            SOk,
+            "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n { acc.s = acc.s + i; } acc.s }",
+        ),
+        (
+            "ctrl/loop_yield",
+            SOk,
+            "loop main(r: Word) -> Word { yield r }",
+        ),
+        // --- data-segment indexed writes ------------------------------------------
+        //
+        // Index first, then the bound probe, then the value, on bare and handled writes
+        // alike (operator ruling 2026-10-21). Absent from this table before that ruling,
+        // although every stage contains bare writes.
+        (
+            "data/indexed_write_bare",
+            SOk,
+            "private data d { x: [Word; 4] }\nfn f(i: Word) -> Word { d.x[i] = 7; d.x[0] }",
+        ),
+        (
+            "data/indexed_write_handled",
+            SOk,
+            "private data d { x: [Word; 4] }\nfn f(i: Word) -> Word { d.x[i] = 7 { ok(o, n) => o + n, invalid_index(j) => j } }",
+        ),
+        (
+            "data/indexed_write_default_trap",
+            SOk,
+            "private data d { x: [Byte; 4] }\nfn f(i: Word) -> Byte { d.x[i] = 7 as Byte { ok(_, n) => n } }",
+        ),
+        // --- composites: construction / access -----------------------------------
+        (
+            "comp/struct_ctor",
+            SOk,
+            "struct P { x: Word }\nfn f() -> P { P { x: 1 } }",
+        ),
+        (
+            "comp/struct_field",
+            SOk,
+            "struct P { x: Word }\nfn f(p: P) -> Word { p.x }",
+        ),
+        ("comp/tuple_ctor", SOk, "fn f() -> (Word, Word) { (1, 2) }"),
+        (
+            "comp/tuple_field",
+            SOk,
+            "fn f(t: (Word, Word)) -> Word { t.0 }",
+        ),
+        ("comp/array_lit", SOk, "fn f() -> [Word; 3] { [1, 2, 3] }"),
+        (
+            "comp/array_index",
+            SOk,
+            "fn f(a: [Word; 3], i: Word) -> Word { a[i] }",
+        ),
+        (
+            "comp/enum_ctor",
+            SOk,
+            "enum E { A, B }\nfn f() -> E { E::A() }",
+        ),
+        (
+            "comp/enum_match",
+            SOk,
+            "enum E { A, B }\nfn f(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }",
+        ),
+        // --- composite equality: supported ---------------------------------------
+        (
+            "eq/struct",
+            SOk,
+            "struct P { x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple",
+            SOk,
+            "fn f(a: (Word,Word), b: (Word,Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/enum",
+            SOk,
+            "enum E { A, B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_literal",
+            SOk,
+            "enum E { A, B }\nfn f(e: E) -> bool { e == E::A() }",
+        ),
+        (
+            "eq/array",
+            SOk,
+            "fn f(a: [Word;3], b: [Word;3]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_struct",
+            SOk,
+            "struct P { x: Word }\nfn f(a: [P;2], b: [P;2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_enum",
+            SOk,
+            "enum E { A, B }\nfn f(a: [E;2], b: [E;2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_tuple",
+            SOk,
+            "fn f(a: [(Word,Word);2], b: [(Word,Word);2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_array",
+            SOk,
+            "fn f(a: [[Word;2];2], b: [[Word;2];2]) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_struct_in_struct",
+            SOk,
+            "struct I { v: Word }\nstruct S { i: I, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_struct",
+            SOk,
+            "struct S { t: (Word,Word), w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/array_in_struct",
+            SOk,
+            "struct S { a: [Word;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_in_struct",
+            SOk,
+            "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_of_struct",
+            SOk,
+            "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_of_deep_struct",
+            SOk,
+            "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a == b }",
+        ),
+        // Tuple-IN-tuple: a tuple element that is itself a tuple. Verified byte-identical
+        // (`GetTupleField(FlatNested { variant: Tuple })` plus a nested compare loop), so this
+        // needed no stage change; the cases below PIN that support against regression, which was
+        // previously unguarded. Both element positions, three levels, a narrow element (which moves
+        // the following element's flat offset), and `!=` are covered because each exercises a
+        // distinct offset/emission path.
+        (
+            "eq/tuple_in_tuple",
+            SOk,
+            "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_last",
+            SOk,
+            "fn f(a: (Word, (Word, Word)), b: (Word, (Word, Word))) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_both",
+            SOk,
+            "fn f(a: ((Word, Word), (Word, Word)), b: ((Word, Word), (Word, Word))) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_3level",
+            SOk,
+            "fn f(a: (((Word, Word), Word), Word), b: (((Word, Word), Word), Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_byte",
+            SOk,
+            "fn f(a: ((Word, Byte), Word), b: ((Word, Byte), Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_neq",
+            SOk,
+            "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a != b }",
+        ),
+        (
+            "eq/struct_in_nested_tuple",
+            SOk,
+            "struct P { x: Word }\nfn f(a: ((Word, Word), P), b: ((Word, Word), P)) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_tuple",
+            SOk,
+            "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a == b }",
+        ),
+        // A nested-tuple element ACCESS: `a.1` must resolve past the nested element's whole flat
+        // size (offset 16, not 8), so this pins the layout itself, not just the equality lowering.
+        (
+            "tuple/nested_elem_access",
+            SOk,
+            "fn f(a: ((Word, Word), Word)) -> Word { a.1 }",
+        ),
+        // Two further constructs measured as already supported but previously UNPINNED. Like the
+        // tuple-in-tuple family above, these record existing behavior rather than new code. Note the
+        // asymmetry they document: array-of-array is supported, but an array-of-array nested INSIDE a
+        // struct is not, and an enum TUPLE payload is supported while an enum ARRAY payload is not --
+        // so neither case generalizes to its enclosing-composite form.
+        (
+            "eq/array_of_array",
+            SOk,
+            "fn f(a: [[Word; 2]; 2], b: [[Word; 2]; 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_tuple_payload",
+            SOk,
+            "enum E { A(Word, Word), B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        // A struct field that is a tuple containing a struct. Previously MIS-COMPILED (admitted, then
+        // the struct element compared as one scalar); now descends correctly. The deep variant pins
+        // that the element's own subtree may nest arbitrarily far.
+        (
+            "eq/struct_tuple_of_struct",
+            SOk,
+            "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/struct_tuple_of_deep_struct",
+            SOk,
+            "struct Q { z: Word }\nstruct P { q: Q }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // The admission guard: an IMPURE element subtree must defer rather than descend and
+        // mis-lower. This is a Gap by design, not a missing feature.
+        (
+            "eq/nested_tuple_subfield",
+            SOk,
+            "struct P { u: (Word, Word) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_tuple_subfield_3level",
+            SOk,
+            "struct P { u: (Word, Word) }\nstruct Q { p: P }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_elem_struct_with_tuple",
+            SOk,
+            "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // An ARRAY inside the element subtree still has no nested form, so it defers.
+        (
+            "eq/nested_array_subfield",
+            SOk,
+            "struct I { xs: [Word;2] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_array_subfield_sibling",
+            SOk,
+            "struct I { xs: [Word;2], w: Word }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // An ENUM inside the element subtree still has no nested form, so it defers.
+        (
+            "eq/nested_enum_subfield",
+            SOk,
+            "enum E { A, B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_enum_subfield_payload",
+            SOk,
+            "enum E { A(Word), B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // All three composite kinds now nest, so the impure case is an enum with a COMPOSITE payload.
+        (
+            "eq/struct_tuple_of_impure_struct__GAP",
+            Diverges,
+            "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
+        // composite defers. Each of these was previously admitted and silently mis-compiled; the
+        // last diverged at the same op count as the reference, differing only in content.
+        (
+            "eq/array_of_tuple_of_struct",
+            SOk,
+            "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_deep_struct",
+            SOk,
+            "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_3level_struct",
+            SOk,
+            "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nfn f(a: [C; 2], b: [C; 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/struct_field_array_of_tuple__GAP",
+            Diverges,
+            "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_struct_payload",
+            SOk,
+            "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        (
+            "eq/2level_struct",
+            SOk,
+            "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+        ),
+        (
+            "eq/3level_struct",
+            SOk,
+            "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p == q }",
+        ),
+        (
+            "eq/struct_arrayofstruct",
+            SOk,
+            "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+        ),
+        // Float arithmetic on typed operands, a divergence until Order 6 slice 5 lowered it
+        // to the reference's unchecked ops, and a float literal, refused until slice 5b.
+        (
+            "scalar/float_arith",
+            SOk,
+            "fn f(a: Float, b: Float) -> Float { a + b }",
+        ),
+        ("scalar/float_literal", SOk, "fn f() -> Float { 1.5 }"),
+        // Float negation, `Neg` in the reference, a divergence until slice 5c.
+        ("scalar/float_neg", SOk, "fn f(a: Float) -> Float { -a }"),
+        // --- out of scope for the self-hosted subset -----------------------------
+        // A float literal with a type suffix, which the self-hosted lexer refuses.
+        (
+            "scope/float_suffix__GAP",
+            Refuses,
+            "fn f() -> Float { 1.5Float }",
+        ),
+        // A generic function over a scalar type argument, instantiated in the parser stage
+        // since Order 6 slice 7.
+        (
+            "scope/generic_fn",
+            SOk,
+            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
+        ),
+        // A pipe into a template, which both compilers instantiate as the plain call since
+        // 2026-10-31. It was `scope/generic_pipe__GAP`, refused, before that.
+        (
+            "scope/generic_pipe",
+            SOk,
+            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { 1 |> id() }",
+        ),
+        // A struct pattern in a `let`, which the lexer's destructuring filter rewrites to the
+        // reference's lowering, 2026-10-31.
+        (
+            "let/struct_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { x, y: b } = p; x + b }",
+        ),
+        (
+            "let/struct_destructure_wildcard_field",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { y, x: _ } = p; y }",
+        ),
+        // Nested destructuring patterns and a single-variant enum pattern, which the filter
+        // rewrites to the reference's lowering with a hidden binding per nested pattern since
+        // the operator's ruling of 2026-10-31. The first was `scope/nested_let_pattern__GAP`,
+        // refused, before that.
+        (
+            "let/nested_tuple_destructure",
+            SOk,
+            "fn f() -> Word { let (a, (b, c)) = (1, (2, 3)); a + b + c }",
+        ),
+        (
+            "let/nested_struct_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nstruct Q { p: P, z: Word }\nfn f(q: Q) -> Word { let Q { p: P { x, y }, z } = q; x + y + z }",
+        ),
+        (
+            "let/struct_in_tuple_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let (P { x, y: _ }, c) = (p, 3); x + c }",
+        ),
+        (
+            "let/tuple_in_struct_destructure",
+            SOk,
+            "struct S { t: (Word, Word), z: Word }\nfn f(s: S) -> Word { let S { t: (a, b), z } = s; a + b + z }",
+        ),
+        (
+            "let/enum_variant_destructure",
+            SOk,
+            "enum W { A(Word, Word) }\nfn f(w: W) -> Word { let W::A(x, y) = w; x * 10 + y }",
+        ),
+        // A typed destructuring pattern, which the reference compiles and the filter
+        // refuses rather than rewriting.
+        (
+            "let/typed_pattern__GAP",
+            Refuses,
+            "fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
+        ),
+        // --- removed V0.1.x surface (reference rejects) --------------------------
+        (
+            "removed/closure__REJECT",
+            RefRejects,
+            "fn f() -> Word { let g = |x| x; g(1) }",
+        ),
+        // A refutable `let` pattern, refused by the reference since 2026-10-31.
+        (
+            "removed/refutable_let__REJECT",
+            RefRejects,
+            "fn f() -> Word { let 3 = 5; 7 }",
+        ),
+    ]
+}
+
+#[test]
+fn self_hosted_construct_support_boundary() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    // (construct label, expected support, source). Labels are stable identifiers for the
+    // boundary; keep them descriptive. Grouped by category.
+    let cases = boundary_cases();
+
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut mismatches: Vec<String> = Vec::new();
+    let (mut n_ok, mut n_refuse, mut n_diverge, mut n_rej) = (0usize, 0usize, 0usize, 0usize);
+    for (label, expected, src) in cases {
+        // THREE OUTCOMES, NOT TWO. Refusing and diverging were one bucket, which
+        // is how three silent miscompiles sat here unreported: a construct that
+        // compiles to the wrong bytes looked exactly like one that says no.
+        let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
+            Support::RefRejects
+        } else if catch_unwind(AssertUnwindSafe(|| {
+            // THIS FILE'S OWN `self_host_compile`, deliberately, because
+            // `assert_self_host_byte_identical` below uses it too and the two must
+            // agree about which compiler is being classified.
+            //
+            // **THE LIBRARY'S `self_host_compile` IS A DIFFERENT COMPILER.** This
+            // file carries a copy of the driver, as its own comment records, and
+            // calling the library one here reported `Refuses` for a dozen
+            // constructs this table has always classified `Ok` — struct
+            // construction, struct field reads, and most of the struct equality
+            // family. Caught immediately, and only because the expectations were
+            // already written down.
+            self_host_compile(src);
+        }))
+        .is_err()
+        {
+            Support::Refuses
+        } else if catch_unwind(AssertUnwindSafe(|| {
+            assert_self_host_byte_identical(src);
+        }))
+        .is_ok()
+        {
+            Support::Ok
+        } else {
+            Support::Diverges
+        };
+        match actual {
+            Support::Ok => n_ok += 1,
+            Support::Refuses => n_refuse += 1,
+            Support::Diverges => n_diverge += 1,
+            Support::RefRejects => n_rej += 1,
+        }
+        if actual != *expected {
+            mismatches.push(format!("{label}: expected {expected:?}, got {actual:?}"));
+        }
+    }
+    std::panic::set_hook(prev);
+
+    assert!(
+        mismatches.is_empty(),
+        "self-hosted construct-support boundary changed. If a Gap became Ok, a gap was \
+         CLOSED -- move that case to Support::Ok here in the same change. If an Ok became \
+         Gap, a supported construct REGRESSED -- fix the code. Changes:\n  {}",
+        mismatches.join("\n  ")
+    );
+    // Sanity: the boundary keeps a non-trivial supported set and reaches every
+    // outcome. A classifier that never produces one of its four verdicts is not
+    // classifying, and each of these has been degenerate at some point.
+    assert!(n_ok >= 40, "supported set shrank unexpectedly (ok={n_ok})");
+    assert!(
+        n_refuse >= 1 && n_diverge >= 1 && n_rej >= 1,
+        "classifier degenerate (refuses={n_refuse}, diverges={n_diverge}, rejects={n_rej})"
+    );
+}
+
+/// **THE `parse` -> `reconstruct` BOUNDARY, CUT AT FUNCTION GRANULARITY.**
+///
+/// `self_host_compile` calls `parse_functions` first, so every function's postorder
+/// records for the whole program are live before the first one is reconstructed.
+/// `self_host_compile_fused` holds one GROUP -- consecutive same-named heads, which are
+/// one chunk -- and drops it as soon as that group is compiled.
+///
+/// This checks the two produce the SAME MODULE, chunk for chunk, on real stage sources.
+/// A residency change that also changed the output would not be a fusion, it would be a
+/// second compiler.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_fused_compile_agrees_with_the_collecting_one() {
+    // Sources chosen for shape rather than size: a multiheaded group, a data block, an
+    // enum, and a `for` loop all cross the boundary differently.
+    const SOURCES: &[(&str, &str)] = &[
+        (
+            "multihead",
+            "fn f(a: Word) -> Word when a > 0 { a }\nfn f(a: Word) -> Word { 0 - a }\n\
+             fn g() -> Word { f(3) + f(0 - 3) }\n",
+        ),
+        (
+            "data and loop",
+            "private data d { a: Word = 0, b: Word = 1 }\n\
+             fn g() -> Word { for i in 0..4 limit 8 { d.a = d.a + i; } d.a + d.b }\n",
+        ),
+        (
+            "several chunks",
+            "fn a(x: Word) -> Word { x + 1 }\nfn b(x: Word) -> Word { a(x) * 2 }\n\
+             fn c(x: Word) -> Word { b(x) - a(x) }\nfn main() -> Word { c(5) }\n",
+        ),
+        (
+            "a real stage",
+            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+        ),
+    ];
+
+    for (label, src) in SOURCES {
+        let collected = keleusma::selfhost::self_host_compile(src);
+        let fused = keleusma::selfhost::self_host_compile_fused(src);
+        assert_eq!(
+            collected.chunks.len(),
+            fused.chunks.len(),
+            "{label}: chunk counts differ"
+        );
+        for (c, f) in collected.chunks.iter().zip(fused.chunks.iter()) {
+            assert_eq!(c.name, f.name, "{label}: chunk order differs");
+            assert_eq!(c.ops, f.ops, "{label}: ops differ for chunk `{}`", c.name);
+            assert_eq!(
+                c.constants, f.constants,
+                "{label}: constant pool differs for chunk `{}`",
+                c.name
+            );
+            assert_eq!(
+                c.local_count, f.local_count,
+                "{label}: local_count differs for chunk `{}`",
+                c.name
+            );
+        }
+    }
+}
+
+/// **THE RESIDENCY THE FUSION BUYS, MEASURED RATHER THAN CLAIMED.**
+///
+/// Pinned per stage so a change is visible. The ratio is total records over the largest
+/// group, and the largest stage benefits most, which is the direction that matters.
+///
+/// # What this does NOT establish
+///
+/// `max group == max single function` in every one of these stages, so grouping costs no
+/// residency here at all. **That is what the corpus contains, not a bound on what the
+/// language admits.** A program whose multiheaded group is far larger than any single
+/// head would raise the peak, and nothing rejects one.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_fused_compile_holds_one_group_not_the_program() {
+    // (stage, total records, largest group). Pinned; a stage that grows moves these.
+    const EXPECT: &[(&str, &str, usize, usize)] = &[
+        (
+            // Measured 2026-10-15 after bounded full-width integer transport.
+            // Total records grew from 1598 to 1650, while extracting integer
+            // helpers reduced peak residency from 423 to 403. The ratio exceeds four.
+            // Re-measured 2026-10-25 after Order 6 slice 3 moved the main loop into
+            // `lex_raw` and added the destructuring filter: 1650 and 403 became 1953
+            // and 377, since the old loop body no longer sits in `main`'s group. The
+            // pipe token's compound code took it to 1968, the shebang skip to 1991, and
+            // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168. The float
+            // literal state took it to 2230 and the peak to 421. The label punctuation,
+            // `punct_label`, took it to 2242 on 2026-10-27. The struct pattern states of
+            // the destructuring filter, `dq_struct`, took it to 2403 on 2026-10-31 with the
+            // peak unchanged. Nested and variant patterns, which replaced `dq_struct` with
+            // the item and frame tables and their helpers, took it to 2744 on 2026-10-31,
+            // with the peak unchanged.
+            "lexer",
+            include_str!("../src/selfhost/kel/lexer.kel"),
+            2744,
+            421,
+        ),
+        (
+            // Order 2 adds text bounds and module resource protocols. Measured
+            // after those sources and the typed loop fallback were finalized.
+            // Re-measured 2026-10-24 after the native reify-count repair and the
+            // Trap kind in both text walks: 3215 and 367 became 3229 and 374.
+            // Re-measured 2026-10-25 after the time walk began charging Else,
+            // EndIf, EndLoop and a counted loop's final header: 3229 became 3272.
+            // Re-measured 2026-10-26 after a single-pass loop began charging the larger of
+            // its pass and its costliest break, as the reference does: 3272 became 3279.
+            "analyze",
+            include_str!("../src/selfhost/kel/analyze.kel"),
+            3279,
+            374,
+        ),
+        (
+            // Re-measured 2026-10-24 after nested composite reads gained their
+            // six-Word outcome suffix: 1532 and 486 became 1551 and 505.
+            // Re-measured 2026-10-30 after the flat Text layout proof, with its
+            // transfers moved into helpers so `apply_typed` stays the largest
+            // group: 1551 and 505 became 2142 and 557.
+            "verify_typed",
+            include_str!("../src/selfhost/kel/verify_typed.kel"),
+            2142,
+            557,
+        ),
+    ];
+    for &(name, src, total, peak) in EXPECT {
+        let (got_peak, got_total) = keleusma::selfhost::fused_compile_residency(src);
+        eprintln!("{name}: total {got_total}, peak {got_peak}");
+        assert_eq!(got_total, total, "{name}: total record count moved");
+        assert_eq!(got_peak, peak, "{name}: peak group residency moved");
+        assert!(
+            got_total >= got_peak * 3,
+            "{name}: the fusion saves only {:.1}x, so the boundary is no longer worth \
+             cutting here and this test should say so rather than pass quietly",
+            got_total as f64 / got_peak as f64
+        );
+    }
+}
+
+/// **THE STAGE MIS-LOWERED BOOLEAN LITERALS, AND THE CORPUS COULD NOT SEE IT.**
+///
+/// Measured 2026-08-20, before the fix:
+///
+/// ```text
+///   fn main() -> bool { true }   reference: PushImmediate(1), Return
+///                                self-hosted: GetLocal(0), Return
+/// ```
+///
+/// A **silent miscompile**, not a refusal. The token space is full, so `true` and
+/// `false` are lexed as ordinary identifiers — the same hole the eager `and`/`or`
+/// fall through, which were given interned-id recognition and these were not. The
+/// stage resolved them as variable references and read whatever occupied the
+/// matching slot.
+///
+/// # Why nothing caught it, which is the part worth keeping
+///
+/// **NOT ONE of the twelve stage sources contained a `true` or `false` literal** when
+/// this was written. Re-measured on 2026-10-24 over all fourteen, wire_schema.kel now
+/// contains one `true`. The
+/// self-hosted compiler's correctness claim rests on compiling its own sources
+/// byte-identically, so the oracle is silent on any construct those sources do not
+/// use. The construct-support table covered booleans — and every case took a bool
+/// PARAMETER, never a literal, so it overstated support by omission.
+///
+/// That is this line's recorded meta-defect in its most consequential form: a
+/// suite whose coverage is a property of its case list rather than of the thing
+/// under test, where the case list is the corpus the self-hosting claim rests on.
+///
+/// # What bounded the damage
+///
+/// `self_hosted_compile`, the shipping command-line path, cross-checks every chunk's
+/// ops, constant pool and local count against the reference and refuses on
+/// divergence. A user got a loud error, never a wrong artifact. The exposure was to
+/// direct callers that skip that check.
+///
+/// # The fix carries no new node kind
+///
+/// `PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and `Unit`
+/// is a leaf whose payload was unused and always zero. One kind expresses all three,
+/// so nothing had to be taught to the leaf table or to the three decoders of the
+/// parse record stream — the hazard that failed eight tests the last time a kind was
+/// added.
+#[cfg(feature = "self-host")]
+#[test]
+fn boolean_literals_lower_to_the_immediate_and_not_to_a_local_read() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    // The control first, and it is the load-bearing one: `Unit` shares this node
+    // kind, so a change that broke the zero payload would break every
+    // statement-only block. If this regresses, the generalisation is wrong.
+    const CASES: &[&str] = &[
+        "fn main() -> bool { true }",
+        "fn main() -> bool { false }",
+        "fn main() -> bool { let b = true; b }",
+        "fn main() -> Word { if true { 1 } else { 2 } }",
+        // Unit, i.e. the payload-zero case the generalisation must leave alone.
+        "shared data d { n: Word }\nfn main() -> Word { d.n = 1; d.n }",
+    ];
+
+    let mut checked = 0;
+    for src in CASES {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        let a = keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference bytes");
+        let b = keleusma::wire_format::module_to_wire_bytes(&mine).expect("self-hosted bytes");
+        assert_eq!(
+            a, b,
+            "{src}\n  reference:   {:?}\n  self-hosted: {:?}",
+            reference.chunks[0].ops, mine.chunks[0].ops
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was compared");
+
+    // MUST-FIRE on the corpus fact that hid this. If a stage source ever gains a
+    // boolean literal in CODE, the self-compilation oracle starts covering this
+    // construct and the reasoning above stops being the explanation.
+    //
+    // **COMMENTS ARE STRIPPED, AND THE FIRST VERSION OF THIS GUARD DID NOT STRIP
+    // THEM.** It fired immediately — on the word `true` inside the very comment
+    // explaining the fix, and on sixty-nine occurrences in `codegen.kel`'s prose.
+    // A guard that fires on its own documentation measures the wrong thing just as
+    // surely as one that cannot fire at all.
+    const STAGES: &[(&str, &str)] = &[
+        ("parse.kel", include_str!("../src/selfhost/kel/parse.kel")),
+        (
+            "codegen.kel",
+            include_str!("../src/selfhost/kel/codegen.kel"),
+        ),
+        ("wire.kel", include_str!("../src/selfhost/kel/wire.kel")),
+        ("lexer.kel", include_str!("../src/selfhost/kel/lexer.kel")),
+        (
+            "reconstruct.kel",
+            include_str!("../src/selfhost/kel/reconstruct.kel"),
+        ),
+    ];
+    let offenders: Vec<&str> = STAGES
+        .iter()
+        .filter(|(_, body)| {
+            body.lines()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .flat_map(|code| code.split(|c: char| !c.is_alphanumeric() && c != '_'))
+                .any(|w| w == "true" || w == "false")
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} now contain a boolean literal in code, so the \
+         self-compilation oracle covers this construct and the explanation \
+         recorded above is stale"
+    );
+    assert!(
+        STAGES.len() >= 5,
+        "the stage list shrank, so the check above walks too little to mean anything"
+    );
+}
+
+/// **THE CAST DIRECTION WAS INVERTED, AND THE TARGET TYPE NEVER REACHED CODEGEN.**
+///
+/// Measured 2026-08-20, before the fix:
+///
+/// ```text
+///   fn main() -> Byte { 7 as Byte }
+///     reference:   Const(0), WordToByte, Return
+///     self-hosted: Const(0), ByteToWord, Return
+/// ```
+///
+/// `push_cast` emitted `ByteToWord` unconditionally and said why in its own
+/// comment — "a `Byte as Word` widening" — which is true of the stage corpus and
+/// false of the language. It could not do better: `parse.kel` emitted the `Cast`
+/// node when the `as` token was seen and then **discarded the target type name**,
+/// so the direction never reached the node. Every cast lowered identically and one
+/// direction was always wrong.
+///
+/// # How it was found, which generalises
+///
+/// Not by reading the code. By compiling twenty small programs through both
+/// compilers and comparing BYTES — the same sweep that had just found the boolean
+/// literals. Two silent mis-lowerings in the first twenty cases.
+///
+/// **The construct-support table had no cast family at all.** Forty-one of its
+/// eighty-eight cases were equality lowering. A table that thorough in one area and
+/// absent in another describes how well one feature was tested, not where support
+/// ends.
+///
+/// # Why the fix cannot regress existing programs
+///
+/// The payload is the target: 1 for `Byte`, 0 for anything else — and 0 selects the
+/// widening this always emitted. A program that compiled before compiles to the same
+/// bytes. Only the record's producing TOKEN moved, from `as` to the type name; its
+/// position in the stream is unchanged because nothing is emitted between them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_cast_lowers_in_the_direction_it_was_written() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const CASES: &[&str] = &[
+        // The narrowing, which was the broken direction.
+        "fn main() -> Byte { 7 as Byte }",
+        // The widening, which always worked — and is the control. If this breaks,
+        // the payload defaulting is wrong rather than the new branch.
+        "fn f(a: Byte) -> Word { a as Word }\nfn main() -> Word { 1 }",
+        // Both directions in one body, which is what exposed the asymmetry: the
+        // first cast was wrong and the second right, in the same chunk.
+        "fn main() -> Word { let b = 7 as Byte; b as Word }",
+    ];
+
+    let mut checked = 0;
+    for src in CASES {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        assert_eq!(
+            keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference bytes"),
+            keleusma::wire_format::module_to_wire_bytes(&mine).expect("self-hosted bytes"),
+            "{src}\n  reference:   {:?}\n  self-hosted: {:?}",
+            reference.chunks[0].ops,
+            mine.chunks[0].ops
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was compared");
+
+    // MUST-FIRE on the two directions actually differing. If `WordToByte` and
+    // `ByteToWord` ever lowered the same way, every assertion above would pass
+    // while measuring nothing at all — which is precisely the state this test was
+    // written to end.
+    let narrow = keleusma::selfhost::self_host_compile("fn main() -> Byte { 7 as Byte }");
+    let widen = keleusma::selfhost::self_host_compile(
+        "fn f(a: Byte) -> Word { a as Word }\nfn main() -> Word { 1 }",
+    );
+    assert_ne!(
+        narrow.chunks[0].ops, widen.chunks[0].ops,
+        "both cast directions emit the same ops, so the direction is being ignored \
+         again and the cases above prove nothing"
+    );
+}
+
+/// **THE TWO SELF-HOSTED COMPILERS AGREED, THEN DIVERGED, AND NOW AGREE AGAIN.**
+///
+/// This test asserted the DISAGREEMENT when it was written on 2026-08-20. It is inverted
+/// rather than deleted, because the fact it recorded is worth keeping: for a period the
+/// construct-support boundary below reported `Ok` for a construct the SHIPPING compiler got
+/// wrong, and a deleted test loses both halves of that.
+///
+/// Measured 2026-08-20, before the repair:
+///
+/// ```text
+///   reference:      constants [StaticStr("hi"), Int(1)]
+///   this file's:    constants [StaticStr("hi"), Int(1)]   — agreed
+///   the library's:  constants [Int(3),          Int(1)]   — the intern id, as an Int
+/// ```
+///
+/// The ops were identical in all three. Only the constant pool differed, which is why an
+/// ops-only comparison called it clean.
+///
+/// # The cause, and why it is not a stage defect
+///
+/// `codegen.kel` emits the pool as values then TAGS, and the shipping driver read the tags
+/// into a discard binding on the stated grounds that the stage sources are all-`Int`. True of
+/// the corpus, false of the contract. Repaired host-side in `src/selfhost/mod.rs`; the stage
+/// was not touched. See `tests/selfhost_pool_tags.rs` and
+/// `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+///
+/// # What this does NOT settle
+///
+/// **The boundary below still measures THIS file's compiler, not the shipping one**, and the
+/// census in `tests/selfhost_pool_tags.rs` records eleven cases where they still differ and
+/// seven where the shipping compiler faults. The duplicate remains the reason those go
+/// unreported here. This test now checks three-way agreement so the next drift is caught
+/// rather than assumed absent.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_two_self_hosted_compilers_agree_on_a_string_literal() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const SRC: &str = "fn f() -> Word { let s = \"hi\"; 1 }";
+    let reference =
+        compile(&parse(&tokenize(SRC).expect("lex")).expect("parse")).expect("reference");
+
+    // Non-vacuity: the construct must actually produce a StaticStr, or three empty pools
+    // would satisfy every assertion below.
+    assert!(
+        reference.chunks[0]
+            .constants
+            .iter()
+            .any(|c| matches!(c, keleusma::bytecode::ConstValue::StaticStr(_))),
+        "the reference no longer bakes a StaticStr here, so this test measures nothing"
+    );
+
+    let local = self_host_compile(SRC);
+    assert_eq!(
+        local.chunks[0].constants, reference.chunks[0].constants,
+        "this file's compiler diverged from the reference"
+    );
+
+    let library = keleusma::selfhost::self_host_compile(SRC);
+    assert_eq!(
+        library.chunks[0].constants, reference.chunks[0].constants,
+        "the SHIPPING compiler diverged from the reference on a string literal again. The \
+         previous cause was the constant-pool tag being discarded in the driver"
+    );
+    assert_eq!(
+        library.chunks[0].ops, reference.chunks[0].ops,
+        "ops diverged, which is a wider divergence than the pool"
+    );
+}
+
+/// **A NESTED ARRAY LITERAL SIZES ITS OUTER COMPOSITE BY ITS ELEMENTS.**
+///
+/// The close handled two element kinds — a struct, whose byte size it looked up,
+/// and everything else, which it assumed was a `Word` at eight bytes. **An array
+/// element is neither**, so `[[1, 2], [3, 4]]` sized its outer composite as 16
+/// where the reference computes 32. A silent miscompile, not a refusal.
+///
+/// # The wrong fix, recorded because it is the instructive one
+///
+/// My first attempt carried "the byte size of the most recently closed array" in a
+/// single flag. **It leaks across SIBLINGS.** In `[[1, 2], [3, 4]]` the second
+/// inner array read the first one's size and doubled to 32, then the outer doubled
+/// again to 64 — a worse answer than the bug it replaced.
+///
+/// The size belongs to a **nesting level**, not to a moment in time. It is now
+/// carried in a per-level array parallel to the element counter, written by a
+/// closing inner array into its parent's slot.
+///
+/// The second attempt then faulted immediately with an index of -1, because the
+/// nesting pointer is decremented before the slot is read. **An off-by-one that
+/// faults on its first run is the good outcome**; the flat flag's version returned
+/// a plausible wrong number instead.
+///
+/// # What this does NOT close
+///
+/// The chained index `a[0][1]` still truncates the body and stays recorded as
+/// `Diverges` in the support table. Two defects, and this is one of them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_nested_array_literal_sizes_its_outer_composite_by_its_elements() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    // Depth two, depth three, and a non-square inner length, so a fix that merely
+    // squared the count would fail here.
+    const NESTED: &[&str] = &[
+        "fn main() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
+        "fn main() -> Word { let a = [[1, 2, 3], [4, 5, 6]]; 1 }",
+        "fn main() -> Word { let a = [[[1, 2]], [[3, 4]]]; 1 }",
+    ];
+    // THE CONTROL. A flat array was always byte-identical, so if this regresses the
+    // change broke the ordinary path rather than fixing the nested one.
+    const FLAT: &str = "fn main() -> Word { let a = [1, 2]; 1 }";
+
+    let identical = |src: &str| -> bool {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        keleusma::wire_format::module_to_wire_bytes(&reference).expect("a")
+            == keleusma::wire_format::module_to_wire_bytes(&mine).expect("b")
+    };
+
+    assert!(identical(FLAT), "a FLAT array literal regressed");
+    let mut checked = 0;
+    for src in NESTED {
+        assert!(
+            identical(src),
+            "{src}: the nested literal is not byte-identical"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked,
+        NESTED.len(),
+        "not every nesting depth was compared"
+    );
+}
+
+/// This driver's OWN parse-to-reconstruct category mapping.
+///
+/// **A DELIBERATE SECOND IMPLEMENTATION, NOT AN OVERSIGHT.** This file is the
+/// copy of the driver that `tests/selfhost_driver_parity.rs` compares the
+/// shipping one against, and the five-defects-one-cause finding of 2026-08-21
+/// was entirely "the copy had a slot, tag or arm the driver did not". Calling
+/// `keleusma::selfhost::reconstruct_category` here would remove the drift and
+/// the check together.
+///
+/// It was an inline expression until 2026-08-23, which made it uncheckable from
+/// anywhere. `the_test_drivers_category_mapping_agrees_with_the_library` now
+/// pins it against the library's over the whole category domain, so the two stay
+/// independent and any divergence still fails.
+fn reconstruct_category_copy(cat: i64) -> i64 {
+    if cat == 3 { 2 } else { 0 }
+}
+
+/// The two implementations must agree everywhere, not merely on the categories
+/// the corpus happens to contain.
+///
+/// The domain is small and total, so it is swept rather than sampled: a mapping
+/// checked only at the values a corpus produces is a property of the corpus.
+///
+/// # Why this one test carries its own feature gate
+///
+/// This file is NOT gated on `self-host` — it is the standalone copy of the
+/// driver and reaches none of the library's self-hosting surface. Only this
+/// check does, because the whole point is to compare against the library's
+/// definition. Continuous integration runs a `self-host` job, so it does run
+/// there; under a feature set without it, the copy is still compiled and used
+/// and only the agreement goes unchecked.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_test_drivers_category_mapping_agrees_with_the_library() {
+    for cat in -2..=6 {
+        assert_eq!(
+            reconstruct_category_copy(cat),
+            keleusma::selfhost::reconstruct_category(cat),
+            "the driver copy and the library disagree at parse category {cat}. \
+             The copy is intentionally independent; it is not intentionally \
+             different."
+        );
+    }
+    // Non-vacuity: the mapping must actually DO something, or two constant
+    // functions would agree perfectly and prove nothing.
+    assert_ne!(
+        keleusma::selfhost::reconstruct_category(3),
+        keleusma::selfhost::reconstruct_category(1),
+        "`loop` and `fn` must not map to the same reconstruct category, or this \
+         agreement is between two constant functions"
+    );
+}
+
+/// The boundary corpus covers the three Byte arithmetic gaps left by the
+/// current stage and named-example corpora. It also retains its checked-negation
+/// witness, even though the stage corpus now covers that operation too.
+/// Byte negation remains distinct because the reference emits Op::Neg for it.
+///
+/// # A refusal is REPORTED, not skipped
+///
+/// A case the reference cannot compile is counted and bounded rather than dropped, because
+/// silently discarding inputs is how a census comes to describe a smaller population than it
+/// names. `RefRejects` cases are expected to refuse and are excluded by their own label.
+#[test]
+fn the_boundary_table_reaches_byte_arithmetic_gaps_and_checked_negation() {
+    use std::collections::BTreeSet;
+
+    // The `Op` variants the three residual stage tags decode to. Named here rather than derived,
+    // and kept honest by `the_residue_named_here_matches_the_census_file` below.
+    const RESIDUE_OPS: &[&str] = &["Add", "Sub", "Mul"];
+
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    let mut compiled = 0usize;
+    let mut refused: Vec<&str> = Vec::new();
+
+    for (name, support, src) in boundary_cases() {
+        if matches!(support, Support::RefRejects) {
+            continue;
+        }
+        match tokenize(src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        {
+            Some(module) => {
+                compiled += 1;
+                for chunk in &module.chunks {
+                    for op in &chunk.ops {
+                        present.insert(
+                            format!("{op:?}")
+                                .chars()
+                                .take_while(char::is_ascii_alphanumeric)
+                                .collect::<String>(),
+                        );
+                    }
+                }
+            }
+            None => refused.push(name),
+        }
+    }
+
+    assert!(
+        compiled >= 90,
+        "only {compiled} boundary cases compiled, so this census describes a population much \
+         smaller than the table it claims to measure"
+    );
+    assert!(
+        refused.len() <= 2,
+        "the reference refused {} boundary cases not labelled RefRejects: {refused:?}. A census \
+         that drops inputs describes a smaller population than it names.",
+        refused.len()
+    );
+    assert!(
+        present.len() > 20,
+        "only {} distinct operations were seen across {compiled} modules, which is too few for \
+         this census to be measuring what it claims",
+        present.len()
+    );
+
+    assert!(
+        present.contains("CheckedNeg"),
+        "retain the boundary corpus negation witness"
+    );
+
+    let reached: Vec<&str> = RESIDUE_OPS
+        .iter()
+        .copied()
+        .filter(|op| present.contains(*op))
+        .collect();
+    let mut want: Vec<&str> = RESIDUE_OPS.to_vec();
+    want.sort_unstable();
+    let mut got = reached.clone();
+    got.sort_unstable();
+    assert_eq!(
+        got, want,
+        "the boundary table no longer reaches the Byte arithmetic operations the other two corpora miss. It \
+         reached the earlier four-operation population once `scalar/byte_sub_mul` and `scalar/word_unary_neg` were added; a \
+         NARROWER set means one of those cases has left the table or stopped compiling, and the \
+         residue claim in `tests/op_tag_tables.rs` is stale in the unsafe direction."
+    );
+
+    // Name the cases responsible, so the finding is grounded in a witness rather than a count.
+    let mut witnesses: Vec<&str> = Vec::new();
+    for (name, support, src) in boundary_cases() {
+        if matches!(support, Support::RefRejects) {
+            continue;
+        }
+        let Some(module) = tokenize(src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if module
+            .chunks
+            .iter()
+            .flat_map(|c| &c.ops)
+            .any(|op| format!("{op:?}").starts_with("Add"))
+        {
+            witnesses.push(name);
+        }
+    }
+    assert!(
+        witnesses.len() >= 2,
+        "only {} case(s) carry `Op::Add`, where two did when measured. The two loops here \
+         disagree, or a witness has left the table.",
+        witnesses.len()
+    );
+}
+
+/// Keep the five residual tag names aligned with the census source. The
+/// boundary corpus independently retains its additional checked-negation witness.
+#[test]
+fn the_residue_named_here_matches_the_census_file() {
+    const CENSUS: &str = include_str!("op_tag_tables.rs");
+
+    // The whole declaration, through its closing `];`, since rustfmt wraps it once it
+    // grows past one line, as it did when `callnative` joined in Order 6 slice 2.
+    let start = CENSUS
+        .find("const SHIPPED_EXAMPLES_ALSO_MISS")
+        .expect("the census file declares the residue it measured");
+    let line = &CENSUS[start..start + CENSUS[start..].find("];").expect("the declaration closes")];
+
+    for tag in ["addop", "divop", "modop", "subop", "mulop"] {
+        assert!(
+            line.contains(tag),
+            "the census file no longer lists `{tag}` among the tags the stage and named examples miss: {line}. \
+             The residue has changed, so the operation list in the test above is stale."
+        );
+    }
+    // The sixth and seventh tags are `callnative` and `callext`, which no census program
+    // reaches because none imports a native, and the eighth `negop`, since none negates a
+    // Float. They are not arithmetic witnesses, so they are named here rather than above.
+    assert!(
+        line.contains("callnative") && line.contains("callext") && line.contains("negop"),
+        "{line}"
+    );
+    assert_eq!(
+        line.matches('"').count(),
+        16,
+        "the census residue is no longer exactly the five arithmetic tags and `callnative`: \
+         {line}. Byte arithmetic is exercised by the boundary corpus; legacy division has \
+         direct instruction fixtures."
+    );
+}
+
+/// **THE BOUNDARY TABLE'S LABEL COUNTS MATCH WHAT THE HANDOFF STATES, AND ITS NAMES MATCH THEIR
+/// LABELS.**
+///
+/// The construct-support boundary is quoted as a headline figure in `docs/process/HANDOFF.md`,
+/// twice — once as an expectation in the validity block a resuming session runs, once in the state
+/// table. **Nothing checked either.** The figure moved this session, from 94 SOk over 99 cases to
+/// 96 over 101, and it moved because a person remembered to edit two documents.
+///
+/// # Both sides derived, neither pinned
+///
+/// The actual counts come from calling `boundary_cases` — no text extraction, so there is no
+/// parser to be wrong. The expected counts are read out of the current roadmap. A branch that adds a case
+/// stays green provided the document moves with it, which is the property wanted; a branch that
+/// adds one silently does not.
+///
+/// **A TEXT PARSER WAS THE FIRST DESIGN AND IT WAS WRONG.** A regular expression over the table
+/// read 99 cases where there are 101: two entries carry a COMMENT between the opening parenthesis
+/// and the name, which `\(\s*"` rejects. The handoff's own `awk` census strips comments and is
+/// right. Calling the function removes the question entirely — the lesson being that when the data
+/// is reachable as data, parsing its source text is a choice to have an instrument that can be
+/// wrong.
+///
+/// # The naming convention is load-bearing, so it is checked
+///
+/// A case that is not byte-identical carries a `__GAP` or `__REJECT` suffix. That is how a reader
+/// scanning the table sees the exceptions without cross-referencing labels. **A case whose label
+/// changed without its name changing would be a name that lies**, which this repository has
+/// already had to correct once in a doc comment this session.
+#[test]
+fn the_boundary_table_counts_match_the_roadmap_and_the_names_match_the_labels() {
+    const ROADMAP: &str = include_str!("../docs/roadmap/V0_2_X_ROADMAP.md");
+
+    let mut ok = 0usize;
+    let mut diverges = 0usize;
+    let mut refuses = 0usize;
+    let mut rejects = 0usize;
+    let mut lying: Vec<&str> = Vec::new();
+
+    for (name, support, _) in boundary_cases() {
+        let suffixed = name.ends_with("__GAP") || name.ends_with("__REJECT");
+        match support {
+            Support::Ok => {
+                ok += 1;
+                if suffixed {
+                    lying.push(name);
+                }
+            }
+            Support::Diverges => {
+                diverges += 1;
+                if !suffixed {
+                    lying.push(name);
+                }
+            }
+            Support::Refuses => {
+                refuses += 1;
+                if !suffixed {
+                    lying.push(name);
+                }
+            }
+            Support::RefRejects => {
+                rejects += 1;
+                if !suffixed {
+                    lying.push(name);
+                }
+            }
+        }
+    }
+    let total = ok + diverges + refuses + rejects;
+
+    assert!(
+        lying.is_empty(),
+        "these case names disagree with their labels — a byte-identical case carrying a gap \
+         suffix, or a non-identical one without: {lying:?}"
+    );
+    assert!(
+        total >= 50,
+        "only {total} boundary cases were seen, so this guard is measuring almost nothing"
+    );
+
+    let stated =
+        format!("{ok} SOk / {refuses} Refuses / {diverges} Diverges / {rejects} RefRejects");
+    let occurrences = ROADMAP.matches(stated.as_str()).count();
+    assert!(
+        occurrences == 1,
+        "the current roadmap must state `{stated}` once for {total} cases; found {occurrences} occurrences"
+    );
+    assert!(
+        ROADMAP.contains(&format!("{total} cases")),
+        "the roadmap does not state the boundary case total of {total}"
+    );
+}
+
+#[test]
+fn self_host_compiles_wire_debug_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_wire_debug_kel_byte_identically",
+        "wire_debug.kel",
+    );
+}
+
+#[cfg(feature = "self-host")]
+#[test]
+fn self_host_compiles_wire_schema_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_wire_schema_kel_byte_identically",
+        "wire_schema.kel",
     );
 }

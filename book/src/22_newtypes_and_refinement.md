@@ -69,6 +69,7 @@ a `Velocity` is built, the rule is checked. The value `40` passes, so
 
 Change the program to build a velocity outside the range:
 
+<!-- verify: prelude reject: refinement check `in_range` provably fails for newtype `Velocity` at compile time on argument 200 -->
 ```
 fn main() -> Word {
     raw(Velocity(200))

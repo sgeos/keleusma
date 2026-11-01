@@ -1,0 +1,43 @@
+// A composite built once per loop iteration, consumed inside it, with
+// NO CALL in the loop body.
+//
+// The companion to `12_sensor_window.kel`, and the difference is the
+// whole point. That one calls a helper to compute a field, so a
+// confinement analysis must ALSO summarise the callee before it can
+// admit the site. This one calls nothing, so the only thing standing
+// between the site and a confined verdict is the `let` binding --
+// which compiles to a `SetLocal` into a slot that outlives the
+// iteration and is rewritten before the next read.
+//
+// The `v0.3.0` line measured the corpus after `12` through `14` landed
+// and found all three composite sites disqualified by a crude escape
+// test: one by `yield`, three by `SetLocal`, three by `Call`. Every
+// subject needed two analysis features at once. This script needs one.
+//
+// Run: keleusma run examples/scripts/15_pixel_blend.kel
+// Expected output: 240
+
+struct Pixel { r: Word, g: Word, b: Word }
+
+fn main() -> Word {
+    let src = [10, 20, 30, 40];
+
+    // Every field is inline arithmetic on the indexed source. No call.
+    for i in 0..4 {
+        let p = Pixel {
+            r: src[i],
+            g: src[i] * 2,
+            b: src[i] * 3,
+        };
+        let _luma = p.r + p.g + p.b;
+    }
+
+    // Recomputed outside the loop, since immutable bindings mean an
+    // iteration's value cannot be carried out of it.
+    let last = Pixel {
+        r: src[3],
+        g: src[3] * 2,
+        b: src[3] * 3,
+    };
+    last.r + last.g + last.b
+}

@@ -1,0 +1,1622 @@
+// compiler/kel/reconstruct.kel -- the reconstruction stage of the self-hosted
+// compiler.
+//
+// parse.kel emits a function body as a postorder stream of (kind, arg) node
+// records; codegen.kel consumes a random-access (kind, arg, lhs, rhs) node forest.
+// This stage bridges the two, replacing the host-side Rust `reconstruct_into` so the
+// pipeline is record-driven end to end and the host is pure glue. It is a postorder
+// stack machine: a leaf record pushes a node, a binary or unary operator pops its
+// operand node indices, and the structural signals assemble the side arrays. Each
+// input record's `arg` is copied through unchanged, so a packed value such as an
+// IndexRead's `base + len*2^24` needs no unpacking here.
+//
+// The host writes one function's records into the `rin` block, runs this loop once,
+// and copies the `ast` output block (which mirrors codegen.kel's `ast` input block
+// slot for slot) straight into codegen.kel. This increment covers the atomic,
+// operator, block, and `if` node kinds; calls, `for .. limit`, `match`, indexed
+// writes, and the multiheaded dispatch land in later increments.
+//
+// The self-hosted compiler is a full-width host tool.
+require word >= 32;
+
+// The one host-facing block (R28 admits a single shared block per program). Its
+// first fields are the input -- one function's postorder records, written by the
+// host before the run -- and the remainder is the reconstructed forest, laid out so
+// the output portion (from `root` onward) mirrors codegen.kel's `ast` block slot for
+// slot, letting the host copy that slot range straight across: the four parallel
+// node arrays, the five length-256 side arrays, then the parameter count and category.
+shared data io {
+    rec_count: Word,
+    in_category: Word,
+    in_param_count: Word,
+    rec_kind: [Word; 4096],
+    rec_arg: [Word; 4096],
+    root: Word,
+    kinds: [Word; 4096],
+    args: [Word; 4096],
+    lhs: [Word; 4096],
+    rhs: [Word; 4096],
+    call_args: [Word; 1024],
+    for_parts: [Word; 1024],
+    match_parts: [Word; 1024],
+    limit_parts: [Word; 1024],
+    head_parts: [Word; 1024],
+    out_param_count: Word,
+    out_category: Word,
+    // Multiheaded-dispatch input, appended after the codegen.kel-mirroring output so
+    // the output slot range is unchanged. `head_count` is zero for a single-headed
+    // function; otherwise each head's guard and body records occupy the ranges
+    // `[guard_start, guard_start+guard_len)` and `[body_start, body_start+body_len)`
+    // in `rec_kind`/`rec_arg` (a `guard_len` of zero means the head is unguarded).
+    head_count: Word,
+    head_guard_start: [Word; 128],
+    head_guard_len: [Word; 128],
+    head_body_start: [Word; 128],
+    head_body_len: [Word; 128],
+    // The diagnostic pair, APPENDED last so every slot above keeps its address.
+    // Zero means the run completed; otherwise `err_code` names the cause and
+    // `err_detail` carries the quantity that provoked it.
+    err_code: Word,
+    err_detail: Word,
+}
+
+// The node-index work stack and the running array counts. `node_count` is the next
+// free node slot; `sp` the stack depth; `ca`/`lp`/`mp` the next free `call_args`,
+// `limit_parts`, and `match_parts` slots. `pending` collects a `for` loop's five
+// SlotRecords until its ForBuild. All reset at the start of each run.
+private data rs {
+    // The pipe placeholder's argument position in the call being built, or -1, Order 6.
+    ph_at: Word,
+    node_count: Word,
+    sp: Word,
+    stack: [Word; 4096],
+    ca: Word,
+    lp: Word,
+    // The `for_parts` write cursor, the bare form's analogue of `lp`. Appended.
+    fop: Word,
+    mp: Word,
+    pending: [Word; 8],
+    pcount: Word,
+    // Per enum-value match, the EnumArm markers (packed `(vname*65536+disc)*8 + pcount`) in source
+    // arm order; `epcount` the running count. `bindpending` holds the EnumBind markers (packed
+    // `off + kind*65536 + slot*524288`) flat across all arms in field order; `bindcount` its count.
+    // Drained by EnumMatchBuild into the match_parts enum layout.
+    epending: [Word; 64],
+    epcount: Word,
+    bindpending: [Word; 64],
+    bindcount: Word,
+    bcur: Word,
+    tslotcur: Word,
+    // Scratch for `build_enum_match`: the total payload binds across the match's arms, used to
+    // locate this match's EnumBind window on the (stack-discipline) `bindpending` buffer.
+    tbind: Word,
+    // Struct-equality field accumulator: each StructEqField record pushes its packed (offset +
+    // kind*65536) here; the StructEqBuild drains `sqcount` of them into the match_parts layout.
+    sqpending: [Word; 128],
+    sqcount: Word,
+    // Expansion of an ARRAY element's record stream into the recursive `seb` grammar
+    // (`build_array_of_struct_eq`). `aqe_rem` is the per-frame remaining sub-field count, `aqe_out`
+    // the running match_parts write cursor, `aqe_pack` 1 when the next record is a nested block's
+    // packing record (subcount + r2*65536 + l2*2^32). Frame 0 is the element's own field list.
+    aqe_sp: Word,
+    aqe_rem: [Word; 8],
+    aqe_out: Word,
+    aqe_pack: Word,
+    // Enum-eq payload-field accumulator: each EnumEqField record pushes its packed (offset +
+    // kind*65536) here in overall field order (across all variants); `build_enum_eq` pulls each
+    // variant's fields sequentially by that variant's declared field count. `eqcur` is the
+    // match_parts write cursor and `eqfcur` the field read cursor during assembly (state, not
+    // locals, since the nested variant/field walk mutates them).
+    eqfields: [Word; 256],
+    eqfcount: Word,
+    eqcur: Word,
+    eqfcur: Word,
+    // 1 when the nested-block header just laid carried the 40000+size ARRAY sentinel, so the packing
+    // record that follows must lay a fourth word (the element ScalarKind).
+    se_lastarr: Word,
+    se_wasarr: Word,
+    // 1 while inside a nested ENUM BLOCK (header sentinel 50000+size), whose variant records route
+    // into `seb` exactly as a depth-1 enum field's do. `se_blk_enamepos` is the reserved ename slot
+    // (filled from the first variant record) and `se_blk_evn` counts variants laid.
+    se_lastenum: Word,
+    se_enumblk: Word,
+    se_blk_enamepos: Word,
+    se_blk_evn: Word,
+    // Nested struct-eq layout scratch, streamed as records arrive. `seb` accumulates the tagged
+    // top-level field layout: a scalar field is [0, offset, kind]; a nested-struct field is
+    // [1, ext_off, ext_size, variant, r2, l2, subcount, subcount*(sub_off, sub_kind)]. `sebcur` the
+    // write cursor, `setop` the top-level field count, `se_innested` 1 while a nested field's
+    // sub-fields arrive, `se_subpos` the subcount slot to backpatch, `se_subn` the running sub-count.
+    seb: [Word; 256],
+    sebcur: Word,
+    setop: Word,
+    se_innested: Word,
+    se_subpos: Word,
+    se_subn: Word,
+    // GENERAL depth-2+ struct sub-field reassembly STACK (`eq/2level_struct` and deeper). A
+    // nested-struct sub-field arrives as a header record (kind 100+bytesize, laid as a normal
+    // [off, kind] sub-field and counted once), followed by a packing record (subcount + r2*65536 +
+    // l2*2^32) then that struct's own sub-fields -- each of which may itself be a nested-struct
+    // sub-field, recursing. The `seb` for a nested-struct sub-field is therefore, recursively,
+    // [off, 100+size, subcount, r2, l2, field*] where each `field` is a scalar [off, kind] or another
+    // such nested block. `se_sp2` is the number of active stacked frames; `se_nstk_phase` 1 = the next
+    // k=55 is that frame's packing record, 2 = a sub-field of it; `se_nstk_remaining` its sub-fields
+    // still to read (a struct sub-field is counted when its header is laid, so the parent is complete
+    // when its child subtree finishes -- `se_nsub_pop` cascades). `se_ncasc_active` guards that pop
+    // loop. Bounded (array size 8) so worst-case memory stays static; deeper defers to the reference.
+    se_sp2: Word,
+    se_nstk_phase: [Word; 8],
+    se_nstk_remaining: [Word; 8],
+    se_ncasc_active: Word,
+    // Struct-element ARRAY field reassembly (`eq/struct_arrayofstruct`). A variant-1 (array) field
+    // whose first k=55 record has a kind-part >= 100 is a struct-element array: that record is the
+    // packing [acount, 100+arrsize, fieldcount], and the next `fieldcount` k=55 records are the
+    // element struct's [off, kind] sub-fields. `se_arr_mode` 1 = expect the packing record next,
+    // 2 = draining the element sub-fields; `se_arr_remaining` the element sub-fields still to read.
+    // The resulting seb for such a field is [1, ext_off, ext_size, 1, r2, l2, acount, 100+arrsize,
+    // fieldcount, fieldcount*(off, kind)]. A scalar array (kind-part < 100) is unchanged.
+    se_arr_mode: Word,
+    se_arr_remaining: Word,
+    // The current nested field's FlatNested variant (0 tuple, 1 array, 2 struct, 3 enum). An array
+    // field's single sub-record carries [count, kind] rather than a growing sub-field list; an enum
+    // field's sub-stream is EnumEqVariant/EnumEqField records routed into `seb` (see below).
+    se_curvariant: Word,
+    // Variant-3 (enum) nested field scratch. The enum layout in `seb` is
+    // [1, ext_off, ext_size, 3, r2, l2, ename, vcount, per variant: vname, disc, fcount,
+    // fcount*(off, kind)]. `se_enamepos`/`se_vcountpos` are the `seb` slots to backpatch (the ename
+    // is carried in the first EnumEqVariant record, the vcount counted here); `se_evn` the running
+    // variant count.
+    se_enamepos: Word,
+    se_vcountpos: Word,
+    se_evn: Word,
+    // The construction field-position stack, parallel to the node stack: a FieldPos record
+    // pushes the next field value's declaration slot, and StructInit pops one per field value
+    // to place it in declaration order (a construction may write fields out of order).
+    fp_stack: [Word; 64],
+    fp_sp: Word,
+    // The FIRST guard to fire, and the quantity that provoked it. A clamped cursor
+    // provokes cascades, so a later guard must not overwrite an earlier one.
+    outcome_base: [Word; 8],
+    outcome_sp: Word,
+    range_lp: Word, range_fop: Word,
+    outcome_map: [Word; 22],
+    rerr_code: Word,
+    rerr_detail: Word,
+}
+
+// THE NAMED FAILURE MODES OF THIS STAGE.
+//
+// Array size alone cannot identify a failing index. Codes 1 through 5 name
+// node, work-stack and record-range failures. Code 6 names malformed or exhausted
+// outcome descriptors and contexts. The remaining unguarded side arrays are listed
+// explicitly in tests/reconstruct_failure_modes.rs.
+//
+// A cause is reported by yielding `rc_fail_base() - code` in place of the node count.
+// Node counts are non-negative, so a negative yield cannot be mistaken for one.
+fn rc_fail_base() -> Word { 0 - 900 }
+
+// The node arrays `kinds`/`args`/`lhs`/`rhs` are full. Detail: the index attempted.
+fn rc_node_full() -> Word { 1 }
+// The work stack is full. Detail: the depth attempted.
+fn rc_stack_full() -> Word { 2 }
+// A pop from an EMPTY work stack. Detail: zero, the depth it was popped at.
+//
+// This is the one whose message misleads most: it presents as `IndexOutOfBounds(-1, 1024)`,
+// and a reader who sees the 1024 concludes a capacity was exhausted. The opposite is true.
+// It means the record stream consumed more operands than it produced.
+fn rc_stack_empty() -> Word { 3 }
+// A record index past the input arrays. Detail: the index attempted.
+fn rc_record_range() -> Word { 4 }
+// A record range did not reduce to EXACTLY one node. Detail: the depth left behind.
+//
+// This one was not a fault at all before it was named. `reconstruct_range` read
+// `stack[0]` unconditionally, so a range leaving zero nodes returned a STALE index and a
+// range leaving several silently discarded all but the first. A wrong answer, not a trap.
+fn rc_range_arity() -> Word { 5 }
+
+// The node and stack capacity. Both arrays are declared at this width.
+fn rc_cap_node() -> Word { 4096 }
+
+// The radix separating a Call record's two packed fields. Equal to `parse.kel`'s
+// `call_chunk_radix` and to the chunk capacity; a disagreement mis-reads every call.
+fn rc_call_chunk_radix() -> Word { 1024 }
+
+// Record the FIRST cause and its detail. Returns zero; callers use it for effect.
+fn rerr(code: Word, detail: Word) -> Word {
+    if rs.rerr_code == 0 {
+        rs.rerr_code = code;
+        rs.rerr_detail = detail;
+    }
+    0
+}
+
+// Push a node index onto the work stack.
+//
+// The guard is on the POINTER and fires only when the write would land past the last
+// slot, so a program using the full 1024 is still accepted. Once spent, the depth holds
+// at the last usable slot rather than advancing, which keeps every later write in range.
+fn push(idx: Word) -> Word {
+    if rs.sp >= rc_cap_node() {
+        rerr(rc_stack_full(), rs.sp + 1);
+        idx
+    } else {
+        rs.stack[rs.sp] = idx;
+        rs.sp = rs.sp + 1;
+        idx
+    }
+}
+
+// Append a node WITHOUT pushing it on the work stack, and return its index.
+//
+// `emit` pushes, which is right for a node the stream asked for and wrong for one this stage
+// SYNTHESISES. The bare `for` form needs two nodes -- `i >= limit` and `i + 1` -- that no
+// record carries, because they are properties of the LOWERING rather than of the source.
+// Pushing them would leave two indices on a stack the enclosing fold then mis-pops.
+fn emit_only(k: Word, a: Word, l: Word, r: Word) -> Word {
+    if rs.node_count >= rc_cap_node() {
+        rerr(rc_node_full(), rs.node_count + 1);
+        0
+    } else {
+        let idx = rs.node_count;
+        io.kinds[idx] = k;
+        io.args[idx] = a;
+        io.lhs[idx] = l;
+        io.rhs[idx] = r;
+        rs.node_count = idx + 1;
+        idx
+    }
+}
+
+// Pop a node index off the work stack.
+//
+// Unguarded this decremented THEN indexed, so an empty stack read `stack[-1]`.
+fn pop() -> Word {
+    if rs.sp <= 0 {
+        rerr(rc_stack_empty(), 0);
+        0
+    } else {
+        rs.sp = rs.sp - 1;
+        rs.stack[rs.sp]
+    }
+}
+
+// Push a construction field position onto the field-position stack.
+fn push_fp(pos: Word) -> Word {
+    rs.fp_stack[rs.fp_sp] = pos;
+    rs.fp_sp = rs.fp_sp + 1;
+    pos
+}
+
+// Pop a construction field position off the field-position stack.
+fn pop_fp() -> Word {
+    rs.fp_sp = rs.fp_sp - 1;
+    rs.fp_stack[rs.fp_sp]
+}
+
+// Append a node with the given fields, push its index, and return it.
+fn emit(k: Word, a: Word, l: Word, r: Word) -> Word {
+    if rs.node_count >= rc_cap_node() {
+        rerr(rc_node_full(), rs.node_count + 1);
+        0
+    } else {
+        let idx = rs.node_count;
+        io.kinds[idx] = k;
+        io.args[idx] = a;
+        io.lhs[idx] = l;
+        io.rhs[idx] = r;
+        rs.node_count = idx + 1;
+        push(idx)
+    }
+}
+
+// The three kind groups that share a shape. A leaf (Literal 1, Local 2, DataRead 11,
+// Unit 20) carries no operand; a binary node (BinOp 3, LetIn 5, Andalso 8, Orelse 9,
+// DataAssignIn 12, IndexAssignIn 14, ExprStmt 21) pops its right then left child; a
+// unary node (Not 6, Neg 10, IndexRead 13, YieldExpr 24, Cast 26, FieldAccess 28) pops one.
+fn is_leaf(k: Word) -> Word {
+    if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 orelse k == 38 orelse k == 82 { 1 } else { 0 }
+}
+
+fn is_binary(k: Word) -> Word {
+    // 83 is an `assert` statement, its condition and its continuation, Order 6.
+    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 orelse k == 31 orelse k == 43 orelse k == 44 orelse k == 45 orelse k == 60 orelse k == 71 orelse k == 83 {
+        1
+    } else {
+        0
+    }
+}
+
+fn is_unary(k: Word) -> Word {
+    // 85 is a refinement check over a newtype constructor's argument, Order 6.
+    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 orelse k == 30 orelse k == 37 orelse k == 85 { 1 } else { 0 }
+}
+
+// EnumMatchBuild carries the temp, total arm count and enum name. A final wildcard
+// occupies the compact trailer; earlier wildcards keep their source-order arm entries.
+// Pop the results and their EnumArm descriptors, then the scrutinee, and
+// lay out the match_parts enum entry as [temp][ename][per arm: vname, disc, result]; build the
+// EnumMatch node (kind 39): arg the entry start, lhs the scrutinee, rhs the arm count. Held out of
+// `step` so that function's node forest stays within the codegen work buffers.
+fn build_enum_match(a: Word, is_cast: Word) -> Word {
+    let temp = a % 1024;
+    let total = (a / 1024) % 1024;
+    let haswc = if total > 0 andalso rs.epending[rs.epcount - 1] < 0 { 1 } else { 0 };
+    let count = total - haswc;
+    let ename = a / 2097152;
+    let base = rs.mp;
+    io.match_parts[base] = temp;
+    io.match_parts[base + 1] = ename;
+    // Per-arm stride is 20: [vname, disc, result, pcount, tslot, then up to 4 payload fields as
+    // (off, kind, slot) triples]. Each EnumArm packs `(((vname*65536+disc)*8+pcount)*1024+tslot)`,
+    // where `tslot` is the arm's IsEnum test slot carried from parse's slot allocation (not a
+    // forward counter here), so a nested match in a prior arm's result -- which allocates slots
+    // between the arms -- cannot desynchronize the tests. The EnumArm/EnumBind pending buffers are
+    // STACKS: this match's arms are the top `count` EnumArms (base `ebase`) and its binds the top
+    // `tbind` EnumBinds (base `bbase`); a nested match (built first) pops its own entries, leaving
+    // the enclosing match's already-pushed data intact. Popping (not resetting) is the nesting fix.
+    // The wildcard flag and result sit just past the arm entries; the wildcard result (if any) is
+    // on top of the stack, above the variant results, so pop it first, then the variant results in
+    // reverse, then the scrutinee.
+    let ebase = rs.epcount - total;
+    rs.tbind = 0;
+    for kb in 0..count limit 64 {
+        if rs.epending[ebase + kb] >= 0 {
+            rs.tbind = rs.tbind + (rs.epending[ebase + kb] / 1024) % 8;
+        }
+    }
+    let bbase = rs.bindcount - rs.tbind;
+    io.match_parts[base + 2 + count * 20] = haswc;
+    if haswc == 1 {
+        io.match_parts[base + 2 + count * 20 + 1] = pop();
+    }
+    for p in 0..count limit 64 {
+        let res = pop();
+        let arm = count - 1 - p;
+        io.match_parts[base + 2 + arm * 20 + 2] = res;
+    }
+    rs.bcur = bbase;
+    for kk in 0..count limit 64 {
+        let packed = rs.epending[ebase + kk];
+        let rest = packed / 1024;
+        let pc = if packed < 0 { 0 } else { rest % 8 };
+        io.match_parts[base + 2 + kk * 20] = if packed < 0 { 0 - 1 } else { rest / 524288 };
+        io.match_parts[base + 2 + kk * 20 + 1] = (rest / 8) % 65536;
+        io.match_parts[base + 2 + kk * 20 + 3] = pc;
+        io.match_parts[base + 2 + kk * 20 + 4] = packed % 1024;
+        for f in 0..pc limit 4 {
+            let bp = rs.bindpending[rs.bcur];
+            io.match_parts[base + 2 + kk * 20 + 5 + f * 3] = bp % 65536;
+            io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 1] = (bp / 65536) % 65536;
+            io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 2] = bp / 4294967296;
+            rs.bcur = rs.bcur + 1;
+        }
+    }
+    rs.mp = base + 2 + count * 20 + 2;
+    rs.epcount = ebase;
+    rs.bindcount = bbase;
+    let scrut = pop();
+    if is_cast == 1 { emit(26, base + 2, scrut, count) }
+    else { emit(39, base, scrut, count) }
+}
+
+// StructEqBuild assembly: `a` packs `ta + tb*1024 + count*1048576` (the two comparison temps and the
+// field count). Lay the field-compare loop's parameters into `match_parts` as [ta][tb][count][per
+// field: offset, kind] (each field drained from `sqpending`, packed offset + kind*65536), pop the
+// two struct operands, and build the StructEq node (kind 48): arg the entry base, lhs/rhs the
+// operands. codegen `push_struct_eq` reads this to emit the loop.
+fn build_struct_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let count = (a / 1048576) % 1024;
+    let is_ne = (a / 1073741824) % 2;
+    let is_tuple = a / 2147483648;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = count;
+    for i in 0..count limit 64 {
+        let packed = rs.sqpending[i];
+        io.match_parts[base + 3 + i * 2] = packed % 65536;
+        io.match_parts[base + 3 + i * 2 + 1] = packed / 65536;
+    }
+    // The `!=` flag and the tuple/struct accessor flag ride just past the field list; codegen reads
+    // them to append a `Not` and to pick GetTupleField vs GetField.
+    io.match_parts[base + 3 + count * 2] = is_ne;
+    io.match_parts[base + 3 + count * 2 + 1] = is_tuple;
+    rs.mp = base + 3 + count * 2 + 2;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(48, base, lhs, rhs)
+}
+
+// EnumEqBuild: assemble the variant-compare loop's match_parts [ta, tb, ename, vcount, then per
+// variant: vname_id, disc] (each variant drained from `sqpending`, packed vname_id + disc*65536),
+// pop the two enum operands, and build the EnumEq node (kind 51). Mirrors `build_struct_eq`.
+fn build_enum_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let vcount = (a / 1048576) % 64;
+    let ename = (a / 67108864) % 1048576;
+    let is_ne = a / 70368744177664;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = ename;
+    io.match_parts[base + 3] = vcount;
+    // Per variant lay [vname, disc, fcount, then fcount * (offset, kind)]; the payload fields are
+    // pulled sequentially from `eqfields` in overall order (each variant took its own count).
+    rs.eqcur = base + 4;
+    rs.eqfcur = 0;
+    for i in 0..vcount limit 64 {
+        let packed = rs.sqpending[i];
+        let vname = packed % 65536;
+        let disc = (packed / 65536) % 256;
+        let fcount = packed / 16777216;
+        io.match_parts[rs.eqcur] = vname;
+        io.match_parts[rs.eqcur + 1] = disc;
+        io.match_parts[rs.eqcur + 2] = fcount;
+        rs.eqcur = rs.eqcur + 3;
+        for f in 0..fcount limit 32 {
+            let fpacked = rs.eqfields[rs.eqfcur];
+            rs.eqfcur = rs.eqfcur + 1;
+            let kind = fpacked / 65536;
+            io.match_parts[rs.eqcur] = fpacked % 65536;
+            io.match_parts[rs.eqcur + 1] = kind;
+            rs.eqcur = rs.eqcur + 2;
+            if kind >= 100 {
+                // STRUCT payload field: the next record packs subcount + r2*65536 + l2*2^32, then
+                // `subcount` packed (sub_off + sub_kind*65536) sub-fields. Lay
+                // [subcount, r2, l2, subcount*(sub_off, sub_kind)] after the (off, kind) header so
+                // codegen can extract into r2/l2 and build the inner struct-eq loop.
+                let sc = rs.eqfields[rs.eqfcur];
+                rs.eqfcur = rs.eqfcur + 1;
+                let subcount = sc % 65536;
+                io.match_parts[rs.eqcur] = subcount;
+                io.match_parts[rs.eqcur + 1] = (sc / 65536) % 65536;
+                io.match_parts[rs.eqcur + 2] = sc / 4294967296;
+                rs.eqcur = rs.eqcur + 3;
+                for s in 0..subcount limit 64 {
+                    let sp = rs.eqfields[rs.eqfcur];
+                    rs.eqfcur = rs.eqfcur + 1;
+                    io.match_parts[rs.eqcur] = sp % 65536;
+                    io.match_parts[rs.eqcur + 1] = sp / 65536;
+                    rs.eqcur = rs.eqcur + 2;
+                }
+            }
+        }
+    }
+    // The `!=` flag rides just past the variant list; codegen reads it to append a `Not`.
+    io.match_parts[rs.eqcur] = is_ne;
+    rs.mp = rs.eqcur + 1;
+    rs.eqfcount = 0;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(51, base, lhs, rhs)
+}
+
+// ArrayOfEnumEqBuild: mirrors `build_enum_eq` with the array element count and element byte size
+// prepended (compact 13-bit ename decode matching the parse packing). match_parts:
+// [ta, tb, arrcount, arrsize, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind),
+// is_ne]. Build the ArrayOfEnumEq node (kind 16).
+fn build_array_of_enum_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let vcount = (a / 1048576) % 64;
+    let ename = (a / 67108864) % 8192;
+    let is_ne = (a / 549755813888) % 2;
+    let arrcount = (a / 1099511627776) % 256;
+    let arrsize = (a / 281474976710656) % 256;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = arrcount;
+    io.match_parts[base + 3] = arrsize;
+    io.match_parts[base + 4] = ename;
+    io.match_parts[base + 5] = vcount;
+    rs.eqcur = base + 6;
+    rs.eqfcur = 0;
+    for i in 0..vcount limit 64 {
+        let packed = rs.sqpending[i];
+        let vname = packed % 65536;
+        let disc = (packed / 65536) % 256;
+        let fcount = packed / 16777216;
+        io.match_parts[rs.eqcur] = vname;
+        io.match_parts[rs.eqcur + 1] = disc;
+        io.match_parts[rs.eqcur + 2] = fcount;
+        rs.eqcur = rs.eqcur + 3;
+        for f in 0..fcount limit 32 {
+            let fpacked = rs.eqfields[rs.eqfcur];
+            rs.eqfcur = rs.eqfcur + 1;
+            io.match_parts[rs.eqcur] = fpacked % 65536;
+            io.match_parts[rs.eqcur + 1] = fpacked / 65536;
+            rs.eqcur = rs.eqcur + 2;
+        }
+    }
+    io.match_parts[rs.eqcur] = is_ne;
+    rs.mp = rs.eqcur + 1;
+    rs.eqfcount = 0;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(64, base, lhs, rhs)
+}
+
+// ArrayEqBuild: lay the per-element comparison loop's parameters [ta, tb, count, kind, is_ne] into
+// match_parts, pop the two array operands, and build the ArrayEq node (kind 54). codegen
+// `push_array_eq` reads this to emit the loop.
+fn build_array_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let count = (a / 1048576) % 256;
+    let kind = (a / 268435456) % 256;
+    let is_ne = a / 68719476736;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = count;
+    io.match_parts[base + 3] = kind;
+    io.match_parts[base + 4] = is_ne;
+    rs.mp = base + 5;
+    let rhs = pop();
+    let lhs = pop();
+    emit(54, base, lhs, rhs)
+}
+
+// ArrayOfStructEqBuild: `a` packs ta, tb, the element field count, the array element count, the `!=`
+// flag, and the element struct byte size. Lay match_parts as [ta, tb, arrcount, arrsize, fieldcount,
+// per field: offset, kind, is_ne] (fields drained from `sqpending`), pop the two array operands, and
+// build the ArrayOfStructEq node (kind 62). codegen `push_array_of_struct_eq` unrolls the per-element
+// GetIndex(FlatNested Struct) extraction and inner field loop.
+// Pop every ARRAY-element expansion frame whose sub-fields are exhausted. A nested block was already
+// counted against its parent when its header was laid, so completing a child only pops and re-checks
+// the parent -- it must not decrement again. Frame 0 (the element's own field list) never pops.
+// Bounded, non-recursive (R4).
+fn aqe_pop_done() -> Word {
+    for i in 0..8 limit 8 {
+        if rs.aqe_sp > 1 {
+            if rs.aqe_rem[rs.aqe_sp - 1] == 0 {
+                rs.aqe_sp = rs.aqe_sp - 1;
+            }
+        }
+    }
+    0
+}
+
+fn build_array_of_struct_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let fieldcount = (a / 1048576) % 64;
+    let arrcount = (a / 67108864) % 256;
+    let is_ne = (a / 17179869184) % 2;
+    let arrsize = (a / 34359738368) % 256;
+    // `is_tuple` (bit 43): the element is a tuple (GetTupleField + FlatNested Tuple) not a struct.
+    let is_tuple = a / 8796093022208;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = arrcount;
+    io.match_parts[base + 3] = arrsize;
+    io.match_parts[base + 4] = fieldcount;
+    // Expand the element's record stream into the recursive `seb` grammar. A scalar record lays
+    // [off, kind]; a nested block lays [off, 100+size] then, from the packing record that follows,
+    // [subcount, r2, l2], then its children. A block is COUNTED against its parent when its header
+    // is laid, so a completed child simply pops and re-checks the parent. With no nested block this
+    // reduces exactly to the previous fieldcount*2 pair copy.
+    rs.aqe_sp = 1;
+    rs.aqe_rem[0] = fieldcount;
+    rs.aqe_out = base + 5;
+    rs.aqe_pack = 0;
+    for i in 0..rs.sqcount limit 128 {
+        let packed = rs.sqpending[i];
+        if rs.aqe_pack == 1 {
+            let subcount = packed % 65536;
+            io.match_parts[rs.aqe_out] = subcount;
+            io.match_parts[rs.aqe_out + 1] = (packed / 65536) % 65536;
+            io.match_parts[rs.aqe_out + 2] = packed / 4294967296;
+            rs.aqe_out = rs.aqe_out + 3;
+            rs.aqe_rem[rs.aqe_sp] = subcount;
+            rs.aqe_sp = rs.aqe_sp + 1;
+            rs.aqe_pack = 0;
+            aqe_pop_done();
+        } else {
+            let kind = packed / 65536;
+            io.match_parts[rs.aqe_out] = packed % 65536;
+            io.match_parts[rs.aqe_out + 1] = kind;
+            rs.aqe_out = rs.aqe_out + 2;
+            let top = rs.aqe_sp - 1;
+            rs.aqe_rem[top] = rs.aqe_rem[top] - 1;
+            if kind >= 100 {
+                rs.aqe_pack = 1;
+            } else {
+                aqe_pop_done();
+            }
+        }
+    }
+    io.match_parts[rs.aqe_out] = is_ne;
+    io.match_parts[rs.aqe_out + 1] = is_tuple;
+    rs.mp = rs.aqe_out + 2;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(62, base, lhs, rhs)
+}
+
+// ArrayOfArrayEqBuild (record 54): `a` packs ta, tb, M (outer count), arrsize (inner array byte size),
+// N (inner element count), innerkind, is_ne. Lay match_parts [ta, tb, M, arrsize, N, innerkind, is_ne]
+// and build the ArrayOfArrayEq node (kind 67). codegen `push_array_of_array_eq` unrolls the outer
+// GetIndex(FlatNested Array) extract and the inner scalar array-eq loop.
+fn build_array_of_array_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let m = (a / 1048576) % 256;
+    let arrsize = (a / 268435456) % 256;
+    let innercount = (a / 68719476736) % 256;
+    let innerkind = (a / 17592186044416) % 8;
+    let is_ne = (a / 140737488355328) % 2;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = m;
+    io.match_parts[base + 3] = arrsize;
+    io.match_parts[base + 4] = innercount;
+    io.match_parts[base + 5] = innerkind;
+    io.match_parts[base + 6] = is_ne;
+    rs.mp = base + 7;
+    let rhs = pop();
+    let lhs = pop();
+    emit(67, base, lhs, rhs)
+}
+
+// StructEqNestedBuild: finalize the streamed nested layout into match_parts as
+// [ta, tb, topcount, <seb tagged field layout>, is_ne] and build the StructEqNestedNode (kind 59).
+fn build_struct_eq_nested(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let is_ne = (a / 1048576) % 2;
+    // 1 when the TOP-LEVEL container is a tuple; codegen swaps the top-level accessors to
+    // GetTupleField. Appended to match_parts right after is_ne (one extra slot past the flat form).
+    let is_tuple = a / 2097152;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = rs.setop;
+    for i in 0..rs.sebcur limit 256 {
+        io.match_parts[base + 3 + i] = rs.seb[i];
+    }
+    io.match_parts[base + 3 + rs.sebcur] = is_ne;
+    io.match_parts[base + 3 + rs.sebcur + 1] = is_tuple;
+    rs.mp = base + 3 + rs.sebcur + 2;
+    rs.sebcur = 0;
+    rs.setop = 0;
+    rs.se_innested = 0;
+    rs.se_sp2 = 0;
+    rs.se_arr_mode = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(59, base, lhs, rhs)
+}
+
+// Checked arithmetic records use a bounded context stack and match_parts storage.
+// 118 opens after the operand operation, with flag-slot + scalar-kind*65536.
+// 119 wraps a body and optional guard, carrying class + guard*4 + literal0*8 + literal1*16.
+// 120/121 carry literal-pattern values. 123 appends the wrapped arm after its
+// optional LetIn bindings. 124 closes. 125 pushes a typed low/high local read.
+// 126 and 127 carry nonnegative complements of negative pattern literals.
+// A header is [packed slots/type, reverse arm list, arm count, covered classes].
+// An arm is [metadata, literal0, literal1, bound result node, previous arm + 1].
+private data checked {
+    depth: Word,
+    ctx_base: [Word; 32],
+    ctx_root: [Word; 32],
+    ctx_meta: [Word; 32],
+    ctx_literal0: [Word; 32],
+    ctx_literal1: [Word; 32],
+    ctx_pending: [Word; 32],
+    ctx_literal_seen: [Word; 32],
+    inspect: Word,
+    binds: Word,
+    valid: Word,
+}
+fn rc_cap_checked() -> Word { 32 }
+
+fn checked_start(a: Word) -> Word {
+    if checked.depth >= rc_cap_checked() orelse rs.mp + 4 > 256 orelse a < 0
+        orelse a % 65536 > 2045 orelse (a / 65536 != 2 andalso a / 65536 != 3) {
+        rerr(6, a)
+    } else {
+        let root = pop();
+        let kind = io.kinds[root]; let op = io.args[root] % 64;
+        // The host compiler uses 64-bit Words. A checked shift multiplies by
+        // a positive power of two, so literal amounts are restricted to 0..62.
+        let shift = kind == 3 andalso io.args[root] == 37 andalso a / 65536 == 3;
+        let amount = io.rhs[root];
+        let valid = (kind == 31 andalso io.args[root] == a / 65536 andalso a % 65536 <= 2041)
+            orelse (kind == 13 andalso io.args[root] / 281474976710656 == a / 65536 andalso a % 65536 <= 2041)
+            orelse ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5 andalso io.args[root] == op)
+            orelse (kind == 10 andalso a / 65536 == 3)
+            // A handled indexed write. The root carries the data operand, the element kind
+            // at 2^48 and the offset slot plus one at 2^51.
+            orelse (kind == 15 andalso (io.args[root] / 281474976710656) % 8 == a / 65536 andalso a % 65536 <= 2041)
+            orelse (shift andalso io.kinds[amount] == 1 andalso io.args[amount] >= 0 andalso io.args[amount] < 63);
+        if not valid { rerr(6, kind) } else {
+            let d = checked.depth; let base = rs.mp; rs.mp = rs.mp + 4;
+            checked.ctx_root[d] = root; checked.ctx_base[d] = base; checked.ctx_pending[d] = 0;
+            io.match_parts[base] = a; io.match_parts[base + 1] = 0;
+            io.match_parts[base + 2] = 0; io.match_parts[base + 3] = 0;
+            checked.depth = d + 1; 0
+        }
+    }
+}
+
+fn checked_allowed(root: Word, scalar: Word) -> Word {
+    let op = io.args[root] % 64;
+    if io.kinds[root] == 10 orelse io.kinds[root] == 31 orelse io.kinds[root] == 13 orelse io.kinds[root] == 15 { 3 } else {
+    if op == 5 { 9 } else { if op == 4 { if scalar == 3 { 11 } else { 9 } } else {
+        if scalar == 3 { 7 } else { if op == 3 { 5 } else { 3 } }
+    } } }
+}
+
+// Only the binding wrappers emitted by this protocol may surround an arm node.
+// A handled write's `ok` binds old from f+1 and new from f+6 in the element's scalar,
+// and its `invalid_index` binds the offset slot as a Word.
+fn store_arm_binding(init: Word, base: Word) -> Word {
+    let d = checked.depth - 1;
+    let flag = io.match_parts[base] % 65536;
+    let source = io.args[init] % 65536;
+    let scalar = io.args[init] / 65536;
+    let ok = checked.ctx_meta[d] % 4 == 0;
+    if io.kinds[init] != 80 { 0 } else {
+    if ok andalso scalar == io.match_parts[base] / 65536
+        andalso (source == flag + 1 orelse source == flag + 6) { 1 } else {
+    if not ok andalso scalar == 3 andalso checked.binds == 0
+        andalso source == io.args[checked.ctx_root[d]] / 2251799813685248 - 1 { 1 } else { 0 }
+    } }
+}
+fn checked_arm_shape(result: Word, base: Word) -> Word {
+    checked.inspect = result; checked.binds = 0; checked.valid = 1;
+    let store = io.kinds[checked.ctx_root[checked.depth - 1]] == 15;
+    for i in 0..2 limit 2 {
+        if store andalso io.kinds[checked.inspect] == 5 {
+            if store_arm_binding(io.lhs[checked.inspect], base) == 0 { checked.valid = 0; }
+            checked.binds = checked.binds + 1;
+            checked.inspect = io.rhs[checked.inspect];
+        } else {
+        if io.kinds[checked.inspect] == 5 {
+            let init = io.lhs[checked.inspect]; let packed = io.match_parts[base];
+            let source = io.args[init] % 65536;
+            let indexed = io.kinds[checked.ctx_root[checked.depth - 1]] == 31 orelse io.kinds[checked.ctx_root[checked.depth - 1]] == 13;
+            let scalar = if indexed andalso source == packed % 65536 + 2 { 3 } else { packed / 65536 };
+            if indexed andalso (source != packed % 65536 + 1 + checked.ctx_meta[checked.depth - 1] % 4
+                orelse checked.binds > 0) { checked.valid = 0; }
+            if io.kinds[init] != 80 orelse io.args[init] / 65536 != scalar
+                orelse io.args[init] % 65536 < packed % 65536 + 1
+                orelse io.args[init] % 65536 > packed % 65536 + 2 {
+                checked.valid = 0;
+            }
+            checked.binds = checked.binds + 1;
+            checked.inspect = io.rhs[checked.inspect];
+        } }
+    }
+    if io.kinds[checked.inspect] != 78 { checked.valid = 0; }
+    checked.valid
+}
+
+fn checked_arm_finish(d: Word) -> Word {
+    if checked.ctx_pending[d] == 0 orelse rs.mp + 5 > 256 { rerr(6, rs.mp + 5) } else {
+        let result = pop(); let base = checked.ctx_base[d]; let arm = rs.mp;
+        let meta = checked.ctx_meta[d]; let mask = 1 lsl (meta % 4);
+        let allowed = checked_allowed(checked.ctx_root[d], io.match_parts[base] / 65536);
+        if ((io.kinds[checked.ctx_root[d]] == 31 orelse io.kinds[checked.ctx_root[d]] == 13 orelse io.kinds[checked.ctx_root[d]] == 15) andalso meta >= 16)
+            orelse io.match_parts[base + 3] band mask != 0 orelse allowed band mask == 0
+            orelse checked.ctx_literal_seen[d] != meta / 8
+            orelse checked_arm_shape(result, base) == 0 {
+            rerr(6, meta)
+        } else {
+            io.match_parts[arm] = meta;
+            io.match_parts[arm + 1] = checked.ctx_literal0[d];
+            io.match_parts[arm + 2] = checked.ctx_literal1[d];
+            io.match_parts[arm + 3] = result;
+            io.match_parts[arm + 4] = io.match_parts[base + 1];
+            io.match_parts[base + 1] = arm + 1;
+            io.match_parts[base + 2] = io.match_parts[base + 2] + 1;
+            if meta < 4 { io.match_parts[base + 3] = io.match_parts[base + 3] bor mask; }
+            rs.mp = arm + 5; checked.ctx_pending[d] = 0; 0
+        }
+    }
+}
+
+fn step_checked(k: Word, a: Word) -> Word {
+    if k == 118 { checked_start(a) } else {
+    if checked.depth == 0 { rerr(6, k) } else {
+        let d = checked.depth - 1;
+        if k == 125 {
+            if a < 0 orelse a % 65536 > 2047 orelse (a / 65536 != 2 andalso a / 65536 != 3) {
+                rerr(6, a)
+            } else { emit(80, a, 0, 0) }
+        } else { if k == 119 {
+            if checked.ctx_pending[d] != 0 orelse a < 0 orelse a > 31 { rerr(6, a) } else {
+                checked.ctx_meta[d] = a; checked.ctx_literal0[d] = 0; checked.ctx_literal1[d] = 0;
+                checked.ctx_pending[d] = 1; checked.ctx_literal_seen[d] = 0;
+                let body = pop(); let guard = if (a / 4) % 2 == 1 { pop() + 1 } else { 0 };
+                emit(78, a, guard, body)
+            }
+        } else { if k == 120 orelse k == 121 orelse k == 126 orelse k == 127 {
+            let mask = if k % 2 == 0 { 1 } else { 2 };
+            if checked.ctx_pending[d] == 0 orelse (checked.ctx_meta[d] / 8) band mask == 0
+                orelse checked.ctx_literal_seen[d] band mask != 0
+                orelse (k >= 126 andalso a < 0) { rerr(6, k) } else {
+                checked.ctx_literal_seen[d] = checked.ctx_literal_seen[d] bor mask;
+                let value = if k >= 126 { bnot a } else { a };
+                if mask == 1 { checked.ctx_literal0[d] = value; } else { checked.ctx_literal1[d] = value; }
+                0
+            }
+        } else { if k == 123 {
+            if a != 0 { rerr(6, a) } else { checked_arm_finish(d) }
+        } else {
+            let base = checked.ctx_base[d];
+            if a != 0 orelse checked.ctx_pending[d] != 0 orelse io.match_parts[base + 3] band 1 == 0 {
+                rerr(6, k)
+            } else {
+                checked.depth = d;
+                emit(77, base, checked.ctx_root[d], io.match_parts[base + 2])
+            }
+        } } } }
+    } }
+}
+
+// Outcome descriptors use three match_parts entries in canonical dispatch order.
+// Reject exhausted side storage before writing any part of the descriptor.
+fn step_outcome(k: Word, a: Word) -> Word {
+    if k == 112 {
+        if rs.mp + 3 > 256 orelse rs.outcome_sp >= 8 orelse a < 0 orelse a % 12 != 0 orelse a > 244 {
+            rerr(6, rs.mp + 3)
+        } else {
+            let base = rs.mp; rs.mp = base + 3;
+            io.match_parts[base] = 0; io.match_parts[base + 1] = 0; io.match_parts[base + 2] = 0;
+            rs.outcome_map[a / 12] = base + 1;
+            rs.outcome_base[rs.outcome_sp] = base; rs.outcome_sp = rs.outcome_sp + 1; 0
+        }
+    } else { if k == 113 {
+        if rs.outcome_sp == 0 orelse a < 0 orelse a > 2 { rerr(6, a) } else {
+            let arm = pop(); io.match_parts[rs.outcome_base[rs.outcome_sp - 1] + a] = arm + 1; 0
+        }
+    } else { if k == 114 {
+        if rs.outcome_sp == 0 { rerr(6, a) } else { rs.outcome_sp = rs.outcome_sp - 1; 0 }
+    } else { if k == 115 {
+        let body = pop(); let guard = if a / 262144 == 1 { pop() + 1 } else { 0 };
+        emit(75, a % 262144, guard, body)
+    } else { if k == 116 {
+        emit(76, a, 0, 0)
+    } else {
+        let cont = pop();
+        if a < 0 orelse a % 12 != 0 orelse a > 244 { rerr(6, a) } else {
+            if rs.outcome_map[a / 12] == 0 { rerr(6, a) } else { emit(74, a + rs.range_lp, rs.outcome_map[a / 12] - 1, cont) }
+        }
+    } } } } }
+}
+
+// Process one record, folding it into a node and leaving that node's index on the
+// stack. An If (4) pops its else, then, and cond children. Its arg is cond for
+// a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
+fn step(k: Word, a: Word) -> Word {
+    if k == 128 {
+        if a < 0 { rerr(7, a) } else { emit(1, bnot a, 0, 0) }
+    } else { step_record(k, a) }
+}
+fn step_record(k: Word, a: Word) -> Word {
+    if k >= 118 andalso k <= 127 {
+        if k == 122 { rerr(6, k) } else { step_checked(k, a) }
+    } else {
+    if k >= 112 andalso k <= 117 { step_outcome(k, a) } else {
+    if is_leaf(k) == 1 orelse k == 72 orelse k == 84 {
+        // 72 pushes a wildcard arm's sentinel, and 84 a pipe placeholder's, Order 6.
+        if k == 72 { push(0 - 1) } else { if k == 84 { push(0 - 2) } else { emit(k, a, 0, 0) } }
+    } else {
+    if is_binary(k) == 1 {
+        let r = pop();
+        let l = pop();
+        emit(k, a, l, r)
+    } else {
+    if is_unary(k) == 1 {
+        let c = pop();
+        emit(k, a, c, 0)
+    } else {
+    if k == 4 {
+        let el = pop();
+        let th = pop();
+        let cond = pop();
+        // A negative condition encodes an omitted else as -(condition + 1).
+        // All node indices are nonnegative and bounded by rc_cap_node().
+        let tagged = if a == 1 { 0 - cond - 1 } else { cond };
+        emit(4, tagged, th, el)
+    } else {
+    if k == 36 {
+        // IndexStore signal: fold the value (top) and index into a kind-15 node
+        // (value in lhs, index in rhs). The record kind is 36 because 15 collides
+        // with the record DONE marker. The record's argument is the local slot that holds
+        // the offset while the value is evaluated.
+        let value = pop();
+        let index = pop();
+        emit(15, a, value, index)
+    } else {
+    if k == 7 orelse k == 80 {
+        // Call, or a native call (record 80) whose `chunk` is the native's import row and
+        // which becomes a kind-81 node. Node kind 80 is already the checked binding, so the
+        // record tag and the node kind differ here. Shared rather than a second branch, because this
+        // chain's nesting depth is bounded by the reference compiler's recursion limit.
+        // Call: arg packs `chunk + count * rc_call_chunk_radix()`. Pop the `count` node indices
+        // (last-pushed is the last argument) and store them in source order into the
+        // `call_args` side array. The Call node's lhs is that slice's start and its
+        // rhs the argument count.
+        // A native call's external flag rides above the count, at 2^20, and moves into the
+        // node's arg at 2^16, beside the native index. A chunk call never sets it.
+        let chunk = a % rc_call_chunk_radix() + (a / 1048576) * 65536;
+        let count = (a / rc_call_chunk_radix()) % rc_call_chunk_radix();
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        // A pipe placeholder, the sentinel -2 record 84 pushed, takes the piped operand,
+        // which is the first argument, and the arguments after the operand shift down by
+        // one, Order 6. The reference evaluates the operand in the placeholder's position.
+        rs.ph_at = 0 - 1;
+        for j in 0..count limit 64 {
+            if io.call_args[args_start + j] == 0 - 2 { rs.ph_at = j; }
+        }
+        let final_count = if rs.ph_at > 0 {
+            io.call_args[args_start + rs.ph_at] = io.call_args[args_start];
+            for j in 0..(count - 1) limit 64 {
+                io.call_args[args_start + j] = io.call_args[args_start + j + 1];
+            }
+            count - 1
+        } else { count };
+        rs.ca = args_start + final_count;
+        emit(if k == 80 { 81 } else { 7 }, chunk, args_start, final_count)
+    } else {
+    if k == 35 {
+        // FieldPos: the declaration slot of the field value that immediately follows. Push it
+        // onto the field-position stack; StructInit pairs each popped value with its slot.
+        // Emits no node.
+        push_fp(a);
+        0
+    } else {
+    if k == 27 {
+        // StructInit: `arg` packs `byte_size * 1024 + count`. The parser summed the struct's
+        // flat byte size per field (a `Word` eight bytes, a `Byte`/`Bool` one), so a mixed-
+        // scalar struct is sized correctly here. Pop each field-value node with its FieldPos
+        // slot and place the value at its DECLARATION position (a construction may write fields
+        // out of order), then emit the StructInit node whose arg is the byte size, lhs the
+        // field-slice start, rhs the field count, which codegen's `push_struct_init` consumes.
+        let byte_size = a / 1024;
+        let count = a % 1024;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            let pos = pop_fp();
+            io.call_args[args_start + pos] = node;
+        }
+        rs.ca = args_start + count;
+        emit(27, byte_size, args_start, count)
+    } else {
+    if k == 17 {
+        // ArrayLit: `arg` packs `byte_size * 1024 + count` (byte_size = count * word_bytes).
+        // Pop the element nodes into `call_args` in source order (like a Call; array elements
+        // are positional, so no FieldPos), then emit the ArrayLit node whose arg is the byte
+        // size, lhs the element-slice start, rhs the count, which codegen's `push_array_lit`
+        // consumes.
+        let byte_size = a / 1024;
+        let count = a % 1024;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        rs.ca = args_start + count;
+        emit(17, byte_size, args_start, count)
+    } else {
+    if k == 18 {
+        // EnumInit: `arg` packs `byte_size * 1024 + count`. The children are positional (the
+        // discriminant literal first, then the payload expressions), like an ArrayLit, so pop
+        // them in source order with no FieldPos and emit the EnumInit node whose arg is the
+        // enum's flat byte size, lhs the child-slice start, rhs the child count, which codegen's
+        // `push_enum_init` consumes.
+        let byte_size = a / 1024;
+        let count = a % 1024;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        rs.ca = args_start + count;
+        emit(18, byte_size, args_start, count)
+    } else {
+    if k == 19 {
+        // TupleInit: `arg` packs `byte_size * 1024 + count` (byte_size = count * word_bytes).
+        // Positional children like an ArrayLit (no FieldPos), popped in source order, then the
+        // TupleInit node whose arg is the byte size, lhs the element-slice start, rhs the count,
+        // which codegen's `push_tuple_init` consumes.
+        let byte_size = a / 1024;
+        let count = a % 1024;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        rs.ca = args_start + count;
+        emit(19, byte_size, args_start, count)
+    } else {
+    if k == 32 {
+        // A SlotRecord carries one of the pending `for` loop's five frame slots.
+        rs.pending[rs.pcount] = a;
+        rs.pcount = rs.pcount + 1;
+        0
+    } else {
+    if k == 33 {
+        // ForBuild: pop the loop's seven nodes (pushed start, end, body, cap, 0, 1, 2)
+        // and assemble the twelve-word limit_parts entry -- the five slots then the
+        // seven node indices in source order. Emits no node.
+        let two = pop();
+        let one = pop();
+        let zero = pop();
+        let cap = pop();
+        let body = pop();
+        let end = pop();
+        let start = pop();
+        let base = rs.lp;
+        io.limit_parts[base] = rs.pending[0];
+        io.limit_parts[base + 1] = rs.pending[1];
+        io.limit_parts[base + 2] = rs.pending[2];
+        io.limit_parts[base + 3] = rs.pending[3];
+        io.limit_parts[base + 4] = rs.pending[4];
+        io.limit_parts[base + 5] = start;
+        io.limit_parts[base + 6] = end;
+        io.limit_parts[base + 7] = body;
+        io.limit_parts[base + 8] = cap;
+        io.limit_parts[base + 9] = zero;
+        io.limit_parts[base + 10] = one;
+        io.limit_parts[base + 11] = two;
+        rs.lp = base + 12;
+        rs.pcount = 0;
+        0
+    } else {
+    if k == 69 {
+        // ForInBuild: the BARE `for i in start..limit { body }`. Pop the three nodes the
+        // stream carried (pushed start, limit, body) plus the literal 1 the emission ladder
+        // appended for the increment, read the two frame slots out of `rs.pending`, and
+        // assemble the SEVEN-word `for_parts` entry `push_forin` reads position for position.
+        //
+        // **TWO OF THE SEVEN ARE SYNTHESISED HERE**, because no token corresponds to them:
+        // `cond` is `i >= limit` and `incr` is `i + 1`. They are properties of the lowering
+        // rather than of the source, so the stage that owns the lowering's shape builds them,
+        // through `emit_only` so the work stack is untouched.
+        //
+        // The operator codes are `push_binop`'s: 11 is GtEq -> CmpGe, and 1 is Add ->
+        // CheckedAdd plus the two-word PopN, which is what the reference emits for both.
+        let one = pop();
+        let body = pop();
+        let limit = pop();
+        let start = pop();
+        let i_slot = rs.pending[0];
+        let lim_slot = rs.pending[1];
+        let cond = emit_only(3, 11, emit_only(2, i_slot, 0, 0), emit_only(2, lim_slot, 0, 0));
+        let incr = emit_only(3, 1, emit_only(2, i_slot, 0, 0), one);
+        let base = rs.fop;
+        io.for_parts[base] = i_slot;
+        // An argument of 1 marks the array form, whose end is initialised before the
+        // counter. It travels as a negative end slot, `-(slot + 1)`, for `push_forin`.
+        io.for_parts[base + 1] = if a == 1 { 0 - lim_slot - 1 } else { lim_slot };
+        io.for_parts[base + 2] = start;
+        io.for_parts[base + 3] = limit;
+        io.for_parts[base + 4] = cond;
+        io.for_parts[base + 5] = body;
+        io.for_parts[base + 6] = incr;
+        rs.fop = base + 7;
+        rs.pcount = 0;
+        0
+    } else {
+    if k == 70 {
+        // ForIn statement: arg is the `for_parts` entry start. Folds like ForLimit --
+        // continuation in rhs, lhs unused -- and becomes codegen's kind 16, which
+        // `push_forin` lowers.
+        let cont = pop();
+        emit(16, a + rs.range_fop, 0, cont)
+    } else {
+    if k == 23 {
+        // ForLimit statement: arg is the limit_parts entry start. It folds into the
+        // block popping only the continuation, held in rhs; lhs is unused.
+        let cont = pop();
+        emit(23, a + rs.range_lp, 0, cont)
+    } else {
+    if k == 34 {
+        // MatchBuild packs temp*1024 + total arm count. Each ordered arm has a
+        // pattern/result pair; a wildcard pattern is the negative stack sentinel.
+        // A trailing wildcard is compacted into its historical trailer slot.
+        // MatchIn kind 22 retains temp, trailer, then the remaining ordered pairs.
+        let temp = a / 1024;
+        let total = a % 1024;
+        // A final wildcard uses the existing compact trailer. Earlier wildcards
+        // stay in the ordered arm pairs with a negative pattern index.
+        let haswc = if total > 0 andalso rs.stack[rs.sp - 2] < 0 { 1 } else { 0 };
+        let lit_count = total - haswc;
+        let base = rs.mp;
+        io.match_parts[base] = temp;
+        io.match_parts[base + 1] = 0 - 1;
+        if haswc == 1 {
+            io.match_parts[base + 1] = pop();
+            pop();
+        }
+        for p in 0..lit_count limit 64 {
+            let res = pop();
+            let lit = pop();
+            let arm = lit_count - 1 - p;
+            io.match_parts[base + 2 + arm * 2] = lit;
+            io.match_parts[base + 2 + arm * 2 + 1] = res;
+        }
+        rs.mp = base + 2 + lit_count * 2;
+        let scrut = pop();
+        emit(22, base, scrut, lit_count)
+    } else {
+    if (k >= 40 andalso k <= 63) orelse k == 65 orelse k == 67 orelse k == 68 orelse k == 73 orelse k == 74 {
+        // The enum-match / struct-eq / bnot assembly records occupy the contiguous kind range 40..63.
+        // (The values in that range that are NOT assembly records -- 43/44/45/60 binary or unary, and
+        // 54/59/62 which are node-only kinds never yielded as records -- are handled earlier in `step`
+        // or never arrive, so a range test routes exactly the same records as the explicit set while
+        // keeping this function's node count well under the 1024-node forest cap.)
+        // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
+        // keep this function's if/else nesting shallow (the reference compiler's recursion depth
+        // scales with it; a deeper chain overflowed the default compile stack).
+        step_assembly(k, a)
+    } else {
+        0
+    } } } } } } } } } } } } } } } } } }
+}
+}
+
+}
+
+// Pop the top depth-2+ struct reassembly frame (its sub-fields are fully laid into `seb`) and
+// CASCADE: a parent stacked frame whose `se_nstk_remaining` already reached 0 -- because its spawning
+// struct sub-field was counted when that sub-field's header was laid -- is complete too, so pop it as
+// well. The cascade stops at a frame with remaining > 0 or at `se_sp2 == 0` (back to frame 0, whose
+// `se_subn` was counted at header time and is backpatched by StructEqNestedEnd). The `for` cap (16)
+// safely over-estimates the stack depth (<= 8). Non-recursive, per the verifier's R4 rule.
+fn se_nsub_pop() -> Word {
+    rs.se_ncasc_active = 1;
+    for i in 0..16 limit 16 {
+        if rs.se_ncasc_active == 1 {
+            rs.se_sp2 = rs.se_sp2 - 1;
+            if rs.se_sp2 == 0 {
+                rs.se_ncasc_active = 0;
+            } else {
+                let p = rs.se_sp2 - 1;
+                if rs.se_nstk_remaining[p] == 0 {
+                    rs.se_ncasc_active = 1;
+                } else {
+                    rs.se_ncasc_active = 0;
+                }
+            }
+        }
+    }
+    0
+}
+
+// The enum-match and struct-eq assembly records: EnumArm/EnumBind markers accumulate into pending
+// buffers, EnumMatchBuild/StructEqBuild assemble the match_parts loop layout and build the node.
+// Keep each emitted chunk within the unchanged verifier opcode capacity.
+fn nested_eq_field(a: Word) -> Word {
+        // StructEqNestedField: at top level a tagged scalar field ([0, off, kind], setop bumped);
+        // inside an ARRAY field the single [count, kind] record; inside a struct/tuple field a
+        // sub-field ([off, kind], sub-count bumped).
+        if rs.se_innested == 1 {
+            if rs.se_curvariant == 1 {
+                if rs.se_arr_mode == 1 {
+                    // First record inside a variant-1 (array) field: a struct-element array's
+                    // packing record has a kind-part >= 100; a scalar array's single [count, kind]
+                    // record does not.
+                    if (a / 65536) % 65536 >= 100 {
+                        let fcount = a / 4294967296;
+                        rs.seb[rs.sebcur] = a % 65536;
+                        rs.seb[rs.sebcur + 1] = (a / 65536) % 65536;
+                        rs.seb[rs.sebcur + 2] = fcount;
+                        rs.sebcur = rs.sebcur + 3;
+                        rs.se_arr_remaining = fcount;
+                        if fcount == 0 {
+                            rs.se_arr_mode = 0;
+                        } else {
+                            rs.se_arr_mode = 2;
+                        }
+                    } else {
+                        rs.seb[rs.sebcur] = a % 65536;
+                        rs.seb[rs.sebcur + 1] = a / 65536;
+                        rs.sebcur = rs.sebcur + 2;
+                        rs.se_arr_mode = 0;
+                    }
+                } else {
+                    // A struct-element array's element [off, kind] sub-field.
+                    rs.seb[rs.sebcur] = a % 65536;
+                    rs.seb[rs.sebcur + 1] = a / 65536;
+                    rs.sebcur = rs.sebcur + 2;
+                    rs.se_arr_remaining = rs.se_arr_remaining - 1;
+                    if rs.se_arr_remaining == 0 {
+                        rs.se_arr_mode = 0;
+                    }
+                }
+            } else {
+            if rs.se_sp2 > 0 {
+                let top = rs.se_sp2 - 1;
+                if rs.se_nstk_phase[top] == 1 {
+                    // The packing record of a stacked frame: subcount + r2*65536 + l2*2^32. An ARRAY
+                    // block (its header carried the 40000+size sentinel) additionally carries the
+                    // element ScalarKind above l2, laying a fourth word so the block is
+                    // [off, 40000+size, acount, r2, l2, akind].
+                    let subcount = a % 65536;
+                    rs.seb[rs.sebcur] = subcount;
+                    rs.seb[rs.sebcur + 1] = (a / 65536) % 65536;
+                    rs.seb[rs.sebcur + 2] = (a / 4294967296) % 65536;
+                    rs.sebcur = rs.sebcur + 3;
+                    rs.se_wasarr = rs.se_lastarr;
+                    if rs.se_lastenum == 1 {
+                        // [vcount, r2, l2] are laid below; reserve the ename slot after them. vcount
+                        // needs no backpatch (parse knows it); ename comes from the first variant.
+                        rs.seb[rs.sebcur + 3] = 0;
+                        rs.se_blk_enamepos = rs.sebcur + 3;
+                        rs.se_blk_evn = 0;
+                        rs.se_enumblk = 1;
+                        rs.se_lastenum = 0;
+                    }
+                    if rs.se_lastarr == 1 {
+                        rs.seb[rs.sebcur] = a / 281474976710656;
+                        rs.sebcur = rs.sebcur + 1;
+                        rs.se_lastarr = 0;
+                    }
+                    rs.se_nstk_remaining[top] = subcount;
+                    // An ARRAY block has NO sub-fields: its packing first field is the ELEMENT count,
+                    // not a sub-field count, so it must pop immediately. Treating that count as a
+                    // sub-field count made the frame swallow the following sibling field.
+                    if rs.se_enumblk == 1 {
+                        // Stay open: the variant records follow and the block's own End record pops.
+                        rs.sebcur = rs.sebcur + 1;
+                        rs.se_nstk_remaining[top] = 1;
+                        rs.se_nstk_phase[top] = 2;
+                    } else {
+                    if rs.se_wasarr == 1 {
+                        rs.se_nstk_remaining[top] = 0;
+                        se_nsub_pop();
+                    } else {
+                    if subcount == 0 {
+                        se_nsub_pop();
+                    } else {
+                        rs.se_nstk_phase[top] = 2;
+                    } } }
+                } else {
+                    if a / 65536 >= 100 {
+                        // A DEEPER nested-struct sub-field: lay [off, 100+size], count it in this
+                        // frame (so the frame completes when its child subtree finishes), and PUSH a
+                        // child frame whose own packing record follows.
+                        rs.seb[rs.sebcur] = a % 65536;
+                        rs.seb[rs.sebcur + 1] = a / 65536;
+                        rs.sebcur = rs.sebcur + 2;
+                        rs.se_nstk_remaining[top] = rs.se_nstk_remaining[top] - 1;
+                        if a / 65536 >= 50000 {
+                            rs.se_lastenum = 1;
+                        } else {
+                        if a / 65536 >= 40000 {
+                            rs.se_lastarr = 1;
+                        } }
+                        rs.se_nstk_phase[rs.se_sp2] = 1;
+                        rs.se_sp2 = rs.se_sp2 + 1;
+                    } else {
+                        // A scalar sub-field: [off, kind]; pop-cascade when this frame is drained.
+                        rs.seb[rs.sebcur] = a % 65536;
+                        rs.seb[rs.sebcur + 1] = a / 65536;
+                        rs.sebcur = rs.sebcur + 2;
+                        rs.se_nstk_remaining[top] = rs.se_nstk_remaining[top] - 1;
+                        if rs.se_nstk_remaining[top] == 0 {
+                            se_nsub_pop();
+                        }
+                    }
+                }
+            } else {
+                // A frame-0 direct sub-field of the nested struct/tuple: [off, kind], counted once. A
+                // kind >= 100 marks a nested-struct sub-field whose packing + sub-fields follow (push
+                // the first stacked frame; its packing record is the next k=55).
+                rs.seb[rs.sebcur] = a % 65536;
+                rs.seb[rs.sebcur + 1] = a / 65536;
+                rs.sebcur = rs.sebcur + 2;
+                rs.se_subn = rs.se_subn + 1;
+                if a / 65536 >= 100 {
+                    if a / 65536 >= 50000 {
+                        rs.se_lastenum = 1;
+                    } else {
+                    if a / 65536 >= 40000 {
+                        rs.se_lastarr = 1;
+                    } }
+                    rs.se_nstk_phase[0] = 1;
+                    rs.se_sp2 = 1;
+                }
+            }
+            }
+        } else {
+            rs.seb[rs.sebcur] = 0;
+            rs.seb[rs.sebcur + 1] = a % 65536;
+            rs.seb[rs.sebcur + 2] = a / 65536;
+            rs.sebcur = rs.sebcur + 3;
+            rs.setop = rs.setop + 1;
+        }
+        0
+    }
+
+fn step_assembly(k: Word, a: Word) -> Word {
+    if k == 40 orelse k == 73 {
+        // EnumArm descriptor or wildcard sentinel, in source order. No node.
+        rs.epending[rs.epcount] = if k == 73 { 0 - 1 } else { a };
+        rs.epcount = rs.epcount + 1;
+        0
+    } else {
+    if k == 42 {
+        // EnumBind marker: record a payload field's packed (off, kind, slot) in field order. No node.
+        rs.bindpending[rs.bindcount] = a;
+        rs.bindcount = rs.bindcount + 1;
+        0
+    } else {
+    if k == 41 orelse k == 74 {
+        // EnumMatchBuild: assemble the IsEnum-loop match_parts and build the EnumMatch node.
+        build_enum_match(a, if k == 74 { 1 } else { 0 })
+    } else {
+    if k == 46 {
+        // StructEqField marker: accumulate this field's packed (offset + kind*65536). No node.
+        rs.sqpending[rs.sqcount] = a;
+        rs.sqcount = rs.sqcount + 1;
+        0
+    } else {
+    if k == 47 {
+        // StructEqBuild: assemble the field-compare loop's match_parts and build the StructEq node.
+        build_struct_eq(a)
+    } else {
+    if k == 49 {
+        // EnumEqVariant marker. Standalone enum-eq: accumulate the packed
+        // (vname + disc*65536 + fcount*16777216) into `sqpending`. Inside a nested enum field
+        // (variant 3): record the enum name once (carried at bit 30 of the payload), then append
+        // [vname, disc, fcount] into `seb` and count the variant.
+        if rs.se_enumblk == 1 {
+            if rs.se_blk_evn == 0 {
+                rs.seb[rs.se_blk_enamepos] = a / 1073741824;
+            }
+            rs.seb[rs.sebcur] = a % 65536;
+            rs.seb[rs.sebcur + 1] = (a / 65536) % 256;
+            rs.seb[rs.sebcur + 2] = (a / 16777216) % 64;
+            rs.sebcur = rs.sebcur + 3;
+            rs.se_blk_evn = rs.se_blk_evn + 1;
+        } else {
+        if rs.se_innested == 1 andalso rs.se_curvariant == 3 {
+            if rs.se_evn == 0 {
+                rs.seb[rs.se_enamepos] = a / 1073741824;
+            }
+            rs.seb[rs.sebcur] = a % 65536;
+            rs.seb[rs.sebcur + 1] = (a / 65536) % 256;
+            rs.seb[rs.sebcur + 2] = (a / 16777216) % 64;
+            rs.sebcur = rs.sebcur + 3;
+            rs.se_evn = rs.se_evn + 1;
+        } else {
+            rs.sqpending[rs.sqcount] = a;
+            rs.sqcount = rs.sqcount + 1;
+        } }
+        0
+    } else {
+    if k == 50 {
+        // EnumEqBuild: assemble the variant-compare loop's match_parts and build the EnumEq node.
+        build_enum_eq(a)
+    } else {
+    if k == 52 {
+        // EnumEqField marker. Standalone: accumulate the packed scalar payload field (offset +
+        // kind*65536) into `eqfields` in overall field order. Nested enum field (variant 3): append
+        // [off, kind] into `seb`.
+        if rs.se_enumblk == 1 orelse (rs.se_innested == 1 andalso rs.se_curvariant == 3) {
+            rs.seb[rs.sebcur] = a % 65536;
+            rs.seb[rs.sebcur + 1] = a / 65536;
+            rs.sebcur = rs.sebcur + 2;
+        } else {
+            rs.eqfields[rs.eqfcount] = a;
+            rs.eqfcount = rs.eqfcount + 1;
+        }
+        0
+    } else {
+    if k == 53 {
+        // ArrayEqBuild: assemble the per-element compare loop's match_parts and build the ArrayEq.
+        build_array_eq(a)
+    } else {
+    if k == 55 {
+        nested_eq_field(a)
+    } else {
+    if k == 56 {
+        // StructEqNested header. Struct/tuple: [1, ext_off, ext_size, variant, r2, l2, subcount
+        // placeholder] (sub-fields follow). Array (variant 1): [1, ext_off, ext_size, 1, r2, l2]
+        // then a [count, kind] record.
+        rs.seb[rs.sebcur] = 1;
+        rs.seb[rs.sebcur + 1] = a % 65536;
+        rs.seb[rs.sebcur + 2] = (a / 65536) % 65536;
+        rs.seb[rs.sebcur + 3] = (a / 4294967296) % 4;
+        rs.seb[rs.sebcur + 4] = (a / 17179869184) % 1024;
+        rs.seb[rs.sebcur + 5] = a / 17592186044416;
+        rs.se_curvariant = (a / 4294967296) % 4;
+        if rs.se_curvariant == 1 {
+            rs.sebcur = rs.sebcur + 6;
+            // Arm the array sub-drain: the first following k=55 is either a scalar array's
+            // [count, kind] record or a struct-element array's packing record (disambiguated there).
+            rs.se_arr_mode = 1;
+        } else {
+        if rs.se_curvariant == 3 {
+            // Enum field: reserve the ename and vcount slots (the variant records fill them), giving
+            // seb [1, ext_off, ext_size, 3, r2, l2, ename, vcount, per variant: vname, disc, fcount,
+            // fcount*(off, kind)].
+            rs.seb[rs.sebcur + 6] = 0;
+            rs.seb[rs.sebcur + 7] = 0;
+            rs.se_enamepos = rs.sebcur + 6;
+            rs.se_vcountpos = rs.sebcur + 7;
+            rs.se_evn = 0;
+            rs.sebcur = rs.sebcur + 8;
+        } else {
+            rs.seb[rs.sebcur + 6] = 0;
+            rs.se_subpos = rs.sebcur + 6;
+            rs.sebcur = rs.sebcur + 7;
+            rs.se_subn = 0;
+        } }
+        rs.setop = rs.setop + 1;
+        rs.se_innested = 1;
+        0
+    } else {
+    if k == 57 {
+        // StructEqNestedEnd: backpatch (sub-count for struct/tuple, vcount for enum) and leave.
+        if rs.se_enumblk == 1 {
+            rs.se_enumblk = 0;
+            rs.se_nstk_remaining[rs.se_sp2 - 1] = 0;
+            se_nsub_pop();
+        } else {
+        if rs.se_curvariant == 1 {
+            rs.se_innested = 0;
+        } else {
+        if rs.se_curvariant == 3 {
+            rs.seb[rs.se_vcountpos] = rs.se_evn;
+            rs.se_innested = 0;
+        } else {
+            rs.seb[rs.se_subpos] = rs.se_subn;
+            rs.se_innested = 0;
+        } } }
+        0
+    } else {
+    if k == 58 {
+        // StructEqNestedBuild: finalize the nested struct-eq node.
+        build_struct_eq_nested(a)
+    } else {
+    if k == 61 {
+        // ArrayOfStructEqBuild: assemble the per-element struct-eq loop's match_parts and build the
+        // ArrayOfStructEq node.
+        build_array_of_struct_eq(a)
+    } else {
+    if k == 63 {
+        // ArrayOfEnumEqBuild: assemble the per-element enum-eq loop's match_parts and build the
+        // ArrayOfEnumEq node.
+        build_array_of_enum_eq(a)
+    } else {
+    if k == 65 orelse k == 51 {
+        // The `bnot` family: Word bnot arrives on its native record kind 65 (P11 Option E), Byte bnot
+        // still on 51; both build a unary NODE kind >= 64. Handled
+        // in a dedicated helper to keep both `step()` and `step_assembly` under the 1024-node cap.
+        step_bnot(k, a)
+    } else {
+    if k == 67 {
+        // ArrayOfArrayEqBuild: its NATIVE record kind 67 (P11 Option E) -> node 67. A direct build
+        // (no field drain): lay [ta, tb, M, arrsize, N, innerkind, is_ne] and build.
+        build_array_of_array_eq(a)
+    } else {
+    if k == 68 {
+        // Eager `and`/`or`: its NATIVE record kind 68 (P11 Option E) -> node 68, `a` = is_or (0/1). A BINARY
+        // node: pop the two operands. codegen `push_andor` lowers it (spill left, eval right, then a
+        // value-If with condition = left, else-value false for `and` / Not(left) + true for `or`).
+        let rhs = pop();
+        let lhs = pop();
+        emit(68, a, lhs, rhs)
+    } else {
+        0
+    } } } } } } } } } } } } } } } } } }
+}
+
+// Record 65 (Word `bnot`, its native tag) -> node 65 (`push_bnot`, `a bxor -1`); record 51 (Byte `bnot`) -> node 66
+// (`push_byte_bnot`, promote-operate-truncate). A unary node: one operand folded from the stack.
+fn step_bnot(k: Word, a: Word) -> Word {
+    let c = pop();
+    if k == 65 {
+        emit(65, a, c, 0)
+    } else {
+        emit(66, a, c, 0)
+    }
+}
+
+// Reconstruct one record range on a fresh work stack (the node array and the side
+// arrays accumulate across ranges), returning its single remaining node -- the range
+// root. A multihead's per-head guards and bodies each reconstruct as one range.
+fn reconstruct_range(start: Word, len: Word) -> Word {
+    // Parser loop indices restart in each guard/body range; side tables accumulate.
+    rs.range_lp = rs.lp; rs.range_fop = rs.fop;
+    rs.sp = 0; checked.depth = 0;
+    for i in 0..22 limit 22 { rs.outcome_map[i] = 0; }
+    // Guard the RANGE, not each index. The walk below carries `limit 1024`, so a longer
+    // range trapped `LoopLimitExceeded` -- a VM-level message naming no cause at all --
+    // one iteration before a per-index check could have fired.
+    let n = if start + len > rc_cap_node() {
+        rerr(rc_record_range(), start + len);
+        0
+    } else {
+        len
+    };
+    for i in 0..n limit 4096 {
+        step(io.rec_kind[start + i], io.rec_arg[start + i]);
+    }
+    // EXACTLY one node must remain. Reading `stack[0]` unconditionally returned a stale
+    // index for an empty range and silently discarded the remainder for an over-full one.
+    if checked.depth != 0 { rerr(6, checked.depth); }
+    if rs.sp != 1 {
+        rerr(rc_range_arity(), rs.sp);
+        0
+    } else {
+        rs.stack[0]
+    }
+}
+
+// Reconstruct a multiheaded function: each head's guard and body reconstruct with the
+// original relative frame slots. The four-word head_parts entry contains
+// (parameter count, guarded, guard node, body node), and a MultiHead
+// node (kind 25, rhs the head count) is the root.
+fn build_multihead(pc: Word) -> Word {
+    for h in 0..io.head_count limit 128 {
+        let guarded = if io.head_guard_len[h] > 0 { 1 } else { 0 };
+        let guard_node = if guarded == 1 {
+            reconstruct_range(io.head_guard_start[h], io.head_guard_len[h])
+        } else {
+            0
+        };
+        let body_node = reconstruct_range(io.head_body_start[h], io.head_body_len[h]);
+        io.head_parts[h * 4] = pc;
+        io.head_parts[h * 4 + 1] = guarded;
+        io.head_parts[h * 4 + 2] = guard_node;
+        io.head_parts[h * 4 + 3] = body_node;
+    }
+    emit(25, 0, 0, io.head_count)
+}
+
+// Reconstruct one function in a single call: reset the state, dispatch to the
+// single-headed body walk or the multiheaded assembly, publish the root, and pass the
+// category and parameter count through. Yields the node count as a completion signal.
+loop main(resume: Word) -> Word {
+    rs.node_count = 0;
+    rs.sp = 0;
+    rs.ca = 0;
+    rs.lp = 0;
+    rs.fop = 0;
+    rs.mp = 0;
+    rs.pcount = 0;
+    rs.outcome_sp = 0;
+    rs.fp_sp = 0;
+    rs.rerr_code = 0;
+    rs.rerr_detail = 0;
+    if io.head_count > 0 {
+        io.root = build_multihead(io.in_param_count);
+    } else {
+        io.root = reconstruct_range(0, io.rec_count);
+    }
+    io.out_param_count = io.in_param_count;
+    io.out_category = io.in_category;
+    io.err_code = rs.rerr_code;
+    io.err_detail = rs.rerr_detail;
+    // Report the cause INSTEAD of the node count. The forest was built from clamped state
+    // and is meaningless, so the host stops here rather than reading a garbage tree.
+    let out = if rs.rerr_code != 0 {
+        rc_fail_base() - rs.rerr_code
+    } else {
+        rs.node_count
+    };
+    yield out
+}

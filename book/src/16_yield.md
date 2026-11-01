@@ -34,6 +34,7 @@ resumes, let `reply` be the value it hands back.
 
 ## A program that uses yield
 
+<!-- verify: accept -->
 ```
 yield main(input: Word) -> Word {
     let reply = yield input;

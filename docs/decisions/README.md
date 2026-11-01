@@ -6,6 +6,24 @@ Architectural and design decisions for Keleusma.
 
 Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACKLOG. When resolved, they move to RESOLVED with rationale. Decisions are numbered sequentially within each file.
 
+## What a `*_BRIEF.md` is, and what its absence of a marker does NOT mean
+
+This directory also holds many `*_BRIEF.md` files, most paired with a
+`*_COMPLETION_CONDITION.txt`. They are **dated working documents written for a single
+increment**, not live plans. A brief captures the rationale, the prior failures, and the
+specific wrong turns to avoid for the work it was written for; its companion states the
+observable end state that increment was judged against.
+
+**Do not resume a brief's goals without checking the tree first.** Several briefs describe
+work that is now complete, and **most carry no marker saying so**, because marking them was
+never the convention — only a handful say `landed` or similar. **The absence of a status
+marker therefore says nothing about whether the work is done.** The tree is the authority;
+the brief records how a past increment was reasoned about.
+
+Only the substantive decision and evidence documents are indexed below. The briefs are not,
+deliberately: an index of every increment's working notes would need maintaining on every
+increment, and a table that drifts is worse than no table.
+
 ## Contents
 
 | Document | Description |
@@ -13,3 +31,34 @@ Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACK
 | [RESOLVED.md](./RESOLVED.md) | Completed decisions with rationale |
 | [PRIORITY.md](./PRIORITY.md) | Blocking decisions awaiting resolution |
 | [BACKLOG.md](./BACKLOG.md) | Deferred decisions for future consideration |
+| [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md) | Current first-pass self-hosting requirements, evidence and remaining integration work |
+| [ORDER2_COMPLETION_PLAN.md](./ORDER2_COMPLETION_PLAN.md) | Full first-pass validator requirements and implementation evidence |
+| [ORDER2_COMPLETION_AUDIT.md](./ORDER2_COMPLETION_AUDIT.md) | Validator completion evidence, verification receipts and retained reference boundary |
+| [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
+| [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
+| [FLAT_TEXT_LAYOUT_PROOF.md](./FLAT_TEXT_LAYOUT_PROOF.md) | The design of the typed pass that proves a flat Text field is written only from text, and where it cannot reach |
+| [ARRAY_WIRE_SLOT_DESIGN.md](./ARRAY_WIRE_SLOT_DESIGN.md) | Ruled 2026-10-31: encoding F, one wire record per declared field, the per-field schema hash, one logical slot per field and packed private storage, at `BYTECODE_VERSION` 2; not yet implemented |
+| [SIGNATURE_VERIFY_BOUNDS.md](./SIGNATURE_VERIFY_BOUNDS.md) | The signature verifier's panic on a short declared total, reachable from signed loading, and its repair |
+| [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
+| [ORDER5_COMPLETION_AUDIT.md](./ORDER5_COMPLETION_AUDIT.md) | Cryptographic-framing completion evidence, trust boundary, residual limits and receipts |
+| [ORDER5_CRYPTO_FRAMING_PLAN.md](./ORDER5_CRYPTO_FRAMING_PLAN.md) | Order 5 scope and its provenance, the framing and primitive split, design and gate |
+| [ORDER6_FULL_LANGUAGE_PLAN.md](./ORDER6_FULL_LANGUAGE_PLAN.md) | Order 6 scope and its provenance, the measured full-language baseline, gate and slices |
+| [ORDER6_COMPLETION_AUDIT.md](./ORDER6_COMPLETION_AUDIT.md) | Full-language gate evidence, the forms awaiting question 10, defects found, residual limits and receipts |
+| [ORDER4_COMPLETION_AUDIT.md](./ORDER4_COMPLETION_AUDIT.md) | Hosted-runtime completion evidence, bound composition, residual limits and receipts |
+| [ORDER4_HOSTED_RUNTIME_PLAN.md](./ORDER4_HOSTED_RUNTIME_PLAN.md) | Order 4 rulings, design, bound composition and slice record for the hosted runtime |
+| [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
+| [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |
+| [STRING_ABI_OPTION_B.md](./STRING_ABI_OPTION_B.md) | Ruled and binding on this line, received directly 2026-08-30: string marshalling makes the two embeddings agree; not yet implemented |
+| [TEXT_CAPACITY_TYPE.md](./TEXT_CAPACITY_TYPE.md) | Authorized and designed 2026-08-31: static text is a `.rodata` pointer, dynamic text is the capacity-carrying `Text<N>`; values, the literal cast and five operations implemented by 2026-10-31, the operations moving to method calls, the one-address collapse deferred |
+| [RING_BUFFER_DESIGN.md](./RING_BUFFER_DESIGN.md) | Ruled 2026-10-31 for B42 except the batch-push overflow arm, proposed for review: the compiler-managed `Ring<T, N>` data field with method-call operations, its lowering to existing opcodes, its static bounds and schedule; not yet implemented |
+| [FLOAT_ARITH_WIDTH_BRIEF.md](./FLOAT_ARITH_WIDTH_BRIEF.md) | Why float arithmetic must track the module's declared width, the ten narrowing sites, and the mutation result that measured their coverage |
+| [FLOAT_FORMAT_LADDER.md](./FLOAT_FORMAT_LADDER.md) | Companion to the V0.3.X line's `FLOAT_LADDER.md`, which holds the ruling: what the ladder demands of this runtime, why widen-compute-narrow is forced rather than preferred, and two refinements to the arithmetic-width precondition |
+| [INVALID_BYTECODE_CENSUS.md](./INVALID_BYTECODE_CENSUS.md) | Every site where the runtime raises `InvalidBytecode`, with a verdict per group; no site is claimed unreachable |
+| [FEATURE_COMBINATION_SWEEP.md](./FEATURE_COMBINATION_SWEEP.md) | Which feature and width configurations actually build, and which are built by nothing |
+| [NARROW_WIDTH_FAILURE_CLASSIFICATION.md](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md) | A verdict for every `narrow-word-16` failure, separating the suite's wide-host assumptions from the one runtime defect among them |
+| [FLAT_FIELD_WIDTH_AUDIT.md](./FLAT_FIELD_WIDTH_AUDIT.md) | Whether the repaired opaque-width sites were the only ones, by a stated method validated against the pre-repair tree |
+| [COMMENT_MATCHING_GUARD_SWEEP.md](./COMMENT_MATCHING_GUARD_SWEEP.md) | Every guard that searches source for a code pattern, with a verdict per file and the rule for which comment-strip each one needs |
+| [DATA_SLOTS_ROUTING_PLAN.md](./DATA_SLOTS_ROUTING_PLAN.md) | The design for routing the first name-carrying region kind, and the section base the interning walk does not retain |
+| [TARGET_WIDTH_FLOOR.md](./TARGET_WIDTH_FLOOR.md) | Why a target width below the narrowest implemented one is refused, the zero-byte opaque it produced, and the floor argument that had been applied to one width of three |
+| [GUARD_REACH_CENSUS.md](./GUARD_REACH_CENSUS.md) | Which of this line's source-reading guards were SHOWN able to fail, derived from git rather than recall, with the two that were not named |
+| [DISCARD_ARM_REACHABILITY_BRIEF.md](./DISCARD_ARM_REACHABILITY_BRIEF.md) | Which self-hosted-stage discard arms are reached by a driven program, and what each unreached one is waiting on |

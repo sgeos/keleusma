@@ -2,13 +2,30 @@
 //! through Keleusma bytecode.
 //!
 //! The WCMU pass needs to bound the worst-case bytes that
-//! text-producing opcodes allocate from the arena's top region during
-//! a single Stream-to-Reset iteration. `Op::Add` on text operands and
-//! the bundled `to_string`, `concat`, and `slice` natives all
-//! allocate a `KString` whose length depends on the operand lengths
-//! at runtime. The verifier cannot inspect the runtime values, so it
-//! tracks an upper bound through abstract interpretation over a
-//! per-slot lattice.
+//! text-producing operations allocate from the arena's top region
+//! during a single Stream-to-Reset iteration. A host-registered native
+//! declared to return `Text` allocates a `KString` whose length depends
+//! on runtime values the verifier cannot inspect, so it tracks an upper
+//! bound through abstract interpretation over a per-slot lattice.
+//!
+//! # THIS HEADER NAMED MACHINERY THAT DOES NOT EXIST
+//!
+//! It said the lattice bounds `Op::Add` on text operands and "the
+//! bundled `to_string`, `concat`, and `slice` natives". **None of those
+//! exist.** V0.2.0 removed the script-side text-composition library --
+//! `register_utility_natives` registers only `println` -- and `Op::Add`
+//! has no text arm. `Len` is the only text opcode in the instruction
+//! set. Corrected 2026-08-31; the wording had outlived its subject by a
+//! full minor version, and the `v0.3.0` line may have written analysis
+//! against it.
+//!
+//! What that leaves is a lattice with almost nothing to track: a script
+//! cannot compose text at all today, only receive it from a host
+//! native. **This is infrastructure left behind by the removal**, and
+//! the authorized `Text<N>` work is what it was built for. See
+//! `docs/decisions/TEXT_CAPACITY_TYPE.md`. Text composition was
+//! removed because it could not be bounded; a declared capacity is what
+//! lets it back.
 //!
 //! ## Lattice
 //!
@@ -317,6 +334,20 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
 /// flow, so an accumulation `s = s + x` or a comparison of two such values is
 /// rejected.
 pub fn chunk_text_wcet_cycles(chunk: &Chunk, text_byte_cycles: u32) -> alloc::vec::Vec<u32> {
+    chunk_text_wcet_cycles_with_callees(chunk, text_byte_cycles, &[])
+}
+
+/// [`chunk_text_wcet_cycles`] with each callee's text-ness known, indexed by chunk.
+///
+/// A call to a chunk recorded as returning no text pushes a non-text value, so a comparison of
+/// two such results bears no length term. Without it every call result is conservatively
+/// unbounded text, and `a() != b()` over two `Word` results is reported unboundable, which the
+/// self-hosted lexer's `intern_id` hit. An index past the slice keeps the conservative default.
+pub fn chunk_text_wcet_cycles_with_callees(
+    chunk: &Chunk,
+    text_byte_cycles: u32,
+    callee_returns_text: &[bool],
+) -> alloc::vec::Vec<u32> {
     let mut state = TextAnalysis::new(chunk.local_count as usize);
     let mut out: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(chunk.ops.len());
     let mut loop_depth: u32 = 0;
@@ -328,7 +359,13 @@ pub fn chunk_text_wcet_cycles(chunk: &Chunk, text_byte_cycles: u32) -> alloc::ve
             _ => {}
         }
         let conservative = loop_depth > 0 || branch_depth > 0;
-        out.push(state.apply_op_wcet(op, chunk, conservative, text_byte_cycles));
+        out.push(state.apply_op_wcet(
+            op,
+            chunk,
+            conservative,
+            text_byte_cycles,
+            callee_returns_text,
+        ));
         match op {
             Op::EndLoop(_) => loop_depth = loop_depth.saturating_sub(1),
             Op::EndIf => branch_depth = branch_depth.saturating_sub(1),
@@ -545,10 +582,18 @@ impl TextAnalysis {
                 0
             }
             Op::CallVerifiedNative(_, n_args) | Op::CallExternalNative(_, n_args) => {
-                for _ in 0..*n_args {
+                // The high bit is the error-reify flag, not part of the
+                // count. A reified call also pushes its outcome flag. Both
+                // pushed slots are treated as unbounded text, which only
+                // overstates, so that every pushed slot carries one value as
+                // the Keleusma mirror in analyze.kel models it.
+                for _ in 0..(*n_args & 0x7F) {
                     self.pop();
                 }
                 self.push(TextSize::Unbounded);
+                if *n_args & 0x80 != 0 {
+                    self.push(TextSize::Unbounded);
+                }
                 0
             }
             Op::Yield => {
@@ -566,20 +611,42 @@ impl TextAnalysis {
             }
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) => 0,
             Op::Break(_) => 0,
+            // A trap ends its own path. The walk is linear, and the compiler
+            // places a trap last in a branch, so the operations after it
+            // continue the fall-through path, whose stack the trap's payload
+            // pops never touched. Popping here removed live entries, for
+            // example the text a native call returned beneath its reified
+            // flag, once that call gained an explicit host-error trap.
+            Op::Trap(_) => 0,
             Op::BreakIf(_) => {
                 self.pop();
                 0
             }
             _ => {
-                // Other opcodes do not produce text. Apply the
-                // recorded stack growth and shrink and treat any
-                // pushed value as non-text.
-                let shrink = op.stack_shrink() as usize;
-                for _ in 0..shrink {
+                // Other opcodes do not produce text. Pop and push what the
+                // opcode actually pops and pushes, treating every pushed value
+                // as non-text.
+                //
+                // THE COUNTS COME FROM `op_depth_effect`, NOT FROM
+                // `stack_growth`/`stack_shrink`. Those two are the operand-stack
+                // PEAK model — a transient reach and a net — and for an opcode
+                // that pops and then pushes, neither is a pop or a push count.
+                // Reading them as one desynchronised this shadow stack on every
+                // such opcode: a field read popped one entry and pushed none
+                // (losing a slot), and `CheckedAdd` popped none and pushed one
+                // against a truth of pop two, push three.
+                //
+                // `op_depth_effect` returns `(required, delta)`: the opcode pops
+                // `required` and pushes `required + delta`. That is the true
+                // shape for every opcode, including the ones the peak model
+                // deliberately states differently.
+                let (required, delta) = crate::verify::op_depth_effect(op, chunk);
+                let pops = required.max(0) as usize;
+                let pushes = (required + delta).max(0) as usize;
+                for _ in 0..pops {
                     self.pop();
                 }
-                let growth = op.stack_growth() as usize;
-                for _ in 0..growth {
+                for _ in 0..pushes {
                     self.push(TextSize::NotText);
                 }
                 0
@@ -602,6 +669,7 @@ impl TextAnalysis {
         chunk: &Chunk,
         conservative: bool,
         text_byte_cycles: u32,
+        callee_returns_text: &[bool],
     ) -> u32 {
         let sat = |size: TextSize| -> TextSize {
             if conservative {
@@ -669,11 +737,11 @@ impl TextAnalysis {
             }
             // Every other op carries no text length; reuse the shared stack
             // discipline (which saturates loop-carried values as today) and
-            // contribute zero cycles. `callee_returns_text` is empty here, so a
-            // Call result is conservatively `Unbounded`, which a downstream text
-            // op then rejects.
+            // contribute zero cycles. A Call result is conservatively `Unbounded`
+            // unless `callee_returns_text` records the callee as returning no text,
+            // and an unbounded result is then rejected by a downstream text op.
             _ => {
-                let _ = self.apply_op(op, chunk, conservative, &[]);
+                let _ = self.apply_op(op, chunk, conservative, callee_returns_text);
                 0
             }
         }

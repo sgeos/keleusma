@@ -1,0 +1,11483 @@
+//! The self-hosted compile pipeline as a reusable library (gated by the `self-host`
+//! feature).
+//!
+//! This drives the Keleusma stages over a source with the host only moving data between
+//! stages; the compile logic is Keleusma end to end. `kel/lexer.kel` tokenizes,
+//! `kel/parse.kel` emits a postorder record stream, `kel/reconstruct.kel` folds that
+//! into the (kind, arg, lhs, rhs) node forest, `kel/codegen.kel` emits each chunk's ops,
+//! and `kel/analyze.kel` supplies the declared WCET/WCMU header; the `kel/verify_*.kel`
+//! family provides the self-hosted verifier drivers. The [`crate::selfhost::self_host_compile`] entry
+//! splices only the self-hosted chunk ops onto the reference scaffold, whereas
+//! [`crate::selfhost::self_host_compile_scratch`] assembles the whole module (data layout, enum-layout
+//! table, chunk signatures, schema hash, WCET/WCMU header) from the pipeline output, so
+//! for the loop-free stage sources its serialized module is byte-identical to the
+//! reference without borrowing any field from it.
+//!
+//! [`crate::selfhost::self_hosted_compile`] is the shipping entry: it host-guards the target and maps any
+//! out-of-subset panic to a clean [`crate::selfhost::SelfHostError`] (the `keleusma-cli` `--compiler
+//! self-hosted` backend). All fourteen stage sources are embedded via `include_str!`
+//! from `src/selfhost/kel/` (this crate is their canonical home; the detached `compiler/`
+//! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
+//! not read by the Rust host and stays in `compiler/kel/`.
+//!
+//! `wire.kel` supplies the wire-format emitters. `verify_types.kel` supplies the
+//! independent source-rejection stage used before the reference comparison.
+//! Complete production artifacts are emitted through the Keleusma wire stages.
+
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ops::ControlFlow;
+
+use crate::bytecode::{
+    ArrayElem, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
+    Value,
+};
+use crate::value_layout::{CompositeKind, ScalarKind};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState, required_persistent_capacity_for};
+use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
+
+mod analysis_machine;
+pub mod executor;
+use executor::stage_vm;
+pub use executor::{StageExecutor, StageFactory, StageNative, with_stage_factory};
+mod resources;
+mod text_bounds;
+mod traps;
+mod validation;
+pub use traps::classify_traps_via_kel;
+mod yield_fixpoint;
+pub use validation::{
+    VerificationError, VerificationVerdict, initialization_rejects_via_kel, verify_module_via_kel,
+};
+mod call_graph;
+pub use call_graph::call_order_via_kel;
+mod artifact_compare;
+mod data_relocation;
+mod text_flow;
+mod wire_debug_decode;
+pub use wire_debug_decode::{wire_decode_debug_pool_via_kel, wire_decode_parameter_tags_via_kel};
+mod wire_debug;
+pub use wire_debug::wire_debug_pool_via_kel;
+mod wire_aux_decode;
+pub use wire_aux_decode::wire_decode_aux_body_via_kel;
+#[cfg(test)]
+mod wire_auxiliary;
+mod wire_run_encode;
+mod wire_stream_auxiliary;
+pub use wire_stream_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_data_decode;
+pub use wire_data_decode::wire_decode_data_layout_via_kel;
+mod wire_layout_decode;
+pub use wire_layout_decode::{
+    WireDecodedLayouts, wire_decode_enum_layouts_via_kel, wire_decode_layout_metadata_via_kel,
+    wire_decode_struct_templates_via_kel,
+};
+mod wire_constants_decode;
+pub use wire_constants_decode::wire_decode_constant_pools_via_kel;
+mod wire_semantics;
+pub use wire_semantics::{
+    WireDecodedSignatures, wire_decode_signature_metadata_via_kel, wire_decode_signatures_via_kel,
+    wire_name_via_kel,
+};
+mod wire_signatures;
+pub use wire_signatures::{WireSignatureSections, wire_signature_sections_via_kel};
+mod wire_module_decode;
+pub use wire_module_decode::wire_decode_module_via_kel;
+mod wire_decode;
+pub use wire_decode::wire_decode_opcode_sections_via_kel;
+mod wire_directory;
+pub use wire_directory::{
+    WireAuxiliaryDirectory, WireAuxiliaryRegion, wire_auxiliary_directory_via_kel,
+};
+mod wire_records;
+pub use wire_records::{WireSchemaRecord, wire_schema_records_via_kel};
+mod wire_opcodes;
+pub use wire_opcodes::{
+    WireOpcodeSections, wire_module_artifact_via_kel, wire_opcode_sections_via_kel,
+};
+mod wire_framing;
+pub use wire_framing::{
+    wire_artifact_from_sections_via_kel, wire_container_from_regions_via_kel,
+    wire_framing_is_intact_via_kel,
+};
+
+mod typecheck;
+pub use typecheck::{TypeCheckError, type_check_inputs_via_kel, type_check_source_via_kel};
+
+/// Read an embedded stage source by basename without filesystem access.
+fn read_stage(rel: &str) -> String {
+    // All fifteen stage sources are embedded in the crate at `src/selfhost/kel/`
+    // (beside this module) via `include_str!`, so the driver needs no filesystem access
+    // and works in an installed binary. `rel` is a `kel/<name>.kel` path; only the
+    // basename is significant.
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let s: &str = match base {
+        "lexer.kel" => include_str!("kel/lexer.kel"),
+        "parse.kel" => include_str!("kel/parse.kel"),
+        "reconstruct.kel" => include_str!("kel/reconstruct.kel"),
+        "codegen.kel" => include_str!("kel/codegen.kel"),
+        "template_scan.kel" => include_str!("kel/template_scan.kel"),
+        "analyze.kel" => include_str!("kel/analyze.kel"),
+        "verify_structural.kel" => include_str!("kel/verify_structural.kel"),
+        "verify_yield.kel" => include_str!("kel/verify_yield.kel"),
+        "verify_depth.kel" => include_str!("kel/verify_depth.kel"),
+        "verify_typed.kel" => include_str!("kel/verify_typed.kel"),
+        "verify_datalayout.kel" => include_str!("kel/verify_datalayout.kel"),
+        "verify_types.kel" => include_str!("kel/verify_types.kel"),
+        // JOINED THE TABLE when the driver gained a path that emits through it
+        // (`wire_names_via_kel` below). The criterion this module has carried
+        // since step 6 was "when it produces bytes rather than a checksum"; it
+        // produced bytes in the tests some time before the DRIVER could ask it
+        // to, and an entry added then would have recorded a capability the
+        // system did not have.
+        "wire.kel" => include_str!("kel/wire.kel"),
+        "wire_debug.kel" => include_str!("kel/wire_debug.kel"),
+        "wire_schema.kel" => include_str!("kel/wire_schema.kel"),
+        other => panic!("unknown embedded stage source `{other}`"),
+    };
+    s.to_string()
+}
+
+/// Compile a stage or program source with the Rust-hosted reference compiler.
+pub fn compile_src(src: &str) -> Module {
+    compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile")
+}
+
+/// A reconstructed AST node in the flat `(kind, arg, lhs, rhs)` forest that
+/// `reconstruct.kel` emits and `codegen.kel` consumes. Public so the detached
+/// `compiler/` subproject (which re-exports this module) can drive the stages.
+pub struct Node {
+    kind: i64,
+    arg: i64,
+    lhs: i64,
+    rhs: i64,
+}
+
+/// A flattened function body: the flattening context and the body's block root.
+pub struct Body {
+    nodes: Vec<Node>,
+    call_args: Vec<i64>,
+    for_parts: Vec<i64>,
+    match_parts: Vec<i64>,
+    limit_parts: Vec<i64>,
+    head_parts: Vec<i64>,
+    category: i64,
+    root: i64,
+}
+
+/// A parsed function from the record stream: parser category (1 fn, 2 yield, 3 loop),
+/// name id, value-parameter count, and the postorder records of its `when` guard (empty
+/// when unguarded) and its body.
+///
+/// `Debug` is derived so [`ParsedProgram`] can be, which a fallible API wants: a
+/// caller that gets `Ok` and then finds the wrong shape has nothing to print
+/// otherwise. Every field is private, so the derive widens what can be OBSERVED,
+/// not what can be constructed.
+#[derive(Debug)]
+pub struct ParsedFn {
+    cat: i64,
+    name: i64,
+    params: usize,
+    // The type-name id of each value parameter (from the header PTYPE records) and of
+    // the return (the RETTYPE record), for the driver's own chunk-signature assembly.
+    param_types: Vec<i64>,
+    return_type: i64,
+    // Source type records preserve tuple members and every array dimension in postfix order.
+    param_type_records: Vec<Vec<(i64, i64)>>,
+    return_type_records: Vec<(i64, i64)>,
+    /// Per parameter, and for the return, the opaque marker the header carried: 0 none, 1 an
+    /// information-flow label, 2 a newtype, Order 6.
+    param_opaque: Vec<i64>,
+    return_opaque: i64,
+    tuple_header_is_return: bool,
+    guard: Vec<(i64, i64)>,
+    body: Vec<(i64, i64)>,
+    /// Each value parameter's interned name id, in declaration order.
+    ///
+    /// **The record already carried this and the driver threw it away**: the header
+    /// emits `4 + name * 64`, and the arm read the code and discarded the payload
+    /// because a count was all anything needed. Parameters are half the bindings a
+    /// type check has to resolve, so the name is kept now rather than recovered.
+    param_names: Vec<i64>,
+    /// Whether this head's sole parameter is a literal pattern, `fn f(0)`. The stage emits
+    /// the literal's test as this head's guard, and codegen lowers such a head without a
+    /// parameter copy, as the reference does.
+    literal_head: bool,
+    /// Whether the `signed` modifier preceded this head.
+    signed: bool,
+    /// The `(trait, head)` name ids of the impl this head is a method of, if any. Its
+    /// chunk is `Trait::Head::name`.
+    method_of: Option<(i64, i64)>,
+    /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
+    ///
+    /// **Kept OUT of `body`.** The record stream `body` holds is what
+    /// `reconstruct.kel` consumes and what the parse tests pin against the
+    /// reference, so a new record kind inside it would change both. Diverting the
+    /// binding-name record here leaves the node stream byte-for-byte as it was.
+    let_names: Vec<(i64, i64)>,
+    // (guard range, frame slot, name id or negative composite annotation id minus one).
+    let_annotations: Vec<(bool, i64, i64)>,
+    annotation_records: alloc::collections::BTreeMap<(bool, i64), Vec<(i64, i64)>>,
+    active_annotation: Option<(bool, i64)>,
+    // Declared and supplied field counts from consecutive parser metadata/StructInit records.
+    struct_counts: Vec<(i64, i64)>,
+    // Constructor identities in postorder, with their guard/body range.
+    struct_types: Vec<(bool, i64)>,
+    // Declaration-order variant identities, in postorder and separated by source range.
+    enum_variants: Vec<(bool, i64)>,
+    // Source range, allocated frame slot, and variant/payload coordinates.
+    enum_payload_bindings: Vec<(bool, i64, i64)>,
+    field_projections: Vec<(bool, i64)>,
+    tuple_projections: Vec<(bool, i64)>,
+    param_layouts: Vec<Option<crate::bytecode::WireShape>>,
+    return_layout: Option<crate::bytecode::WireShape>,
+    text_boundary: i64,
+    data_bases: alloc::sync::Arc<Vec<i64>>,
+}
+
+impl ParsedFn {
+    /// The declaration category **as `parse.kel` emits it**: `1` for `fn`, `2`
+    /// for `yield`, `3` for `loop`.
+    ///
+    /// # This is NOT the number `reconstruct.kel` consumes
+    ///
+    /// **This doc comment said "as `reconstruct.kel` consumes it" until
+    /// 2026-08-23, and that was false.** The two stages use different encodings
+    /// and the value must be mapped between them; see [`reconstruct_category`],
+    /// which is what a caller seeding the stage wants.
+    ///
+    /// The `v0.3.0` line found the discrepancy by measurement — handing this
+    /// value to the stage raw "seeds a different program" — and worked around it
+    /// with a mirrored copy of the mapping. **The documentation told them the
+    /// opposite of the truth**, which is how a correct observation still costs
+    /// someone an afternoon.
+    pub fn category(&self) -> i64 {
+        self.cat
+    }
+
+    /// The number of value parameters this head declares.
+    pub fn param_count(&self) -> usize {
+        self.params
+    }
+
+    /// This head's category **in `reconstruct.kel`'s encoding**, which is not
+    /// the one [`category`](Self::category) returns.
+    ///
+    /// Equivalent to [`reconstruct_category`] applied to this head; provided so
+    /// a caller holding a `ParsedFn` does not have to reach for a free function.
+    #[must_use]
+    pub fn reconstruct_category(&self) -> i64 {
+        reconstruct_category(self.cat)
+    }
+
+    /// The head's `when` guard as a record stream, empty when it has none.
+    pub fn guard_records(&self) -> &[(i64, i64)] {
+        &self.guard
+    }
+
+    /// The head's body as a record stream.
+    ///
+    /// **Accessors rather than `pub` fields, deliberately.** The `v0.3.0` line
+    /// needs a record stream to call [`seed_reconstruct_shared`] and asked us to
+    /// choose between opening the fields and exposing a reader. Opening them
+    /// would freeze the parse representation as public API, and this stage's
+    /// input shape has already changed once. A reader hands out the same bytes
+    /// while leaving the layout ours to change.
+    ///
+    /// **[`seed_reconstruct_multihead_shared`] never needed this.** It takes
+    /// `&[&ParsedFn]`, and [`parse_functions`] is public and returns
+    /// `Vec<ParsedFn>`, so that accessor was reachable from outside the crate all
+    /// along — measured, not assumed. The report that both entry points were
+    /// blocked was wrong in that half.
+    pub fn body_records(&self) -> &[(i64, i64)] {
+        &self.body
+    }
+}
+
+/// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
+///
+/// **The decision is a property of the heads, not of the declaration keyword.** This
+/// asked `cat == 2` (a `yield` declaration) until 2026-08-12, which was wrong in both
+/// directions and silent in both:
+///
+/// - A multiheaded `fn` took the single-body path, which reads `group[0].body` and
+///   discards every later head together with every `when` guard. The reference admits
+///   and lowers a multiheaded `fn`, so the two compilers emitted different programs
+///   with no diagnostic from either.
+/// - A single-headed `yield` took the dispatch path and gained a parameter copy and a
+///   `Trap(NoMatchingHead)` the reference never emits.
+///
+/// **Neither was reachable from the corpus**, which is why the whole-stage
+/// byte-identity self-compiles never reported it: the ten stage sources contain
+/// exactly one multiheaded function, `codegen.kel`'s nine-headed `emit_next`, and it
+/// was declared `yield`. The keyword and the head count agreed on every input the
+/// oracle had ever seen. That agreement is a fact about the corpus rather than about
+/// the predicate.
+///
+/// A lone GUARDED head still needs the dispatch: its guard can fail, and the reference
+/// emits the trap for that path. A lone guarded `yield` head is inadmissible — it is
+/// not always-yielding, so structural verification rejects any `loop` that delegates
+/// productivity to it — so this predicate never has to route one.
+/// A head's chunk name: `Trait::Head::name` for an impl method, as the reference mangles
+/// it, and the interned name otherwise.
+fn chunk_name(f: &ParsedFn, names: &[String]) -> String {
+    match f.method_of {
+        Some((t, h)) => format!(
+            "{}::{}::{}",
+            names[t as usize], names[h as usize], names[f.name as usize]
+        ),
+        None => names[f.name as usize].clone(),
+    }
+}
+
+fn is_multihead_group(group: &[&ParsedFn]) -> bool {
+    debug_assert!(!group.is_empty(), "a head group is never empty");
+    group.len() > 1
+        || group
+            .first()
+            .is_some_and(|h| !h.guard.is_empty() || h.literal_head)
+}
+
+/// The node capacity of one function's forest, shared by `reconstruct.kel`'s output and
+/// `codegen.kel`'s input. Raised from 1,024 to 4,096 under the operator's ruling of
+/// 2026-10-26 that limits may be raised, for functions such as the piano rolls' `main`.
+pub const AST_NODE_CAP: usize = 4096;
+/// The capacity of each per-function side array, `call_args`, `for_parts`, `match_parts`,
+/// `limit_parts` and `head_parts`, raised from 256 to 1,024 with the node capacity.
+pub const AST_PART_CAP: usize = 1024;
+/// Heads per multiheaded function, raised from 16 to 128 with the node capacity.
+pub const RC_HEAD_CAP: usize = 128;
+
+const KINDS: usize = 1;
+
+const ARGS: usize = 1 + AST_NODE_CAP;
+
+const LHS: usize = 1 + AST_NODE_CAP * 2;
+
+const RHS: usize = 1 + AST_NODE_CAP * 3;
+
+const CALL_ARGS: usize = 1 + AST_NODE_CAP * 4;
+
+const FOR_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP;
+
+const MATCH_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 2;
+
+const LIMIT_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 3;
+
+const HEAD_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 4;
+
+const PARAM_COUNT: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5;
+
+const CATEGORY: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5 + 1;
+
+// The shared-slot layout for `parse.kel` lives in `crate::selfhost_host`, which is
+// gated on `compile + verify` like the harnesses that need it, rather than on the
+// narrower `self-host` feature this module carries.
+use crate::selfhost_host::{
+    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AND_ID, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID,
+    BR_P_BYTE_ID, BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_FALSE_ID, BR_P_LEN, BR_P_LIMIT_ID,
+    BR_P_OR_ID, BR_P_PACKED, BR_P_REQUIRE_ID, BR_P_TRUE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP,
+    PARSE_LET_NAME_TAG, PARSE_STRUCT_FIELDS_TAG, PARSE_TOKEN_CAP,
+};
+
+fn br_shared_word(vm: &dyn StageExecutor, buf: &[u8], slot: usize) -> i64 {
+    match vm.get_shared(buf, slot).expect("get_shared") {
+        Value::Int(n) => n,
+        other => panic!("expected Int at slot {slot}, got {other:?}"),
+    }
+}
+
+/// Resume until the next yielded word, skipping the loop RESET. Used for the raw
+/// pool metadata, where a yielded 0 is a real value, not a PENDING marker.
+fn next_word(vm: &mut dyn StageExecutor, shared: &mut [u8]) -> i64 {
+    loop {
+        match vm
+            .resume_with_shared(shared, Value::Int(0))
+            .expect("resume")
+        {
+            VmState::Yielded(Value::Int(w)) => return w,
+            VmState::Reset => continue,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+/// Stage-owned token words, spellings and full-width integer payloads.
+struct LexedSource {
+    tokens: Vec<(i64, i64)>,
+    names: Vec<String>,
+    values: Vec<i64>,
+}
+
+fn br_lex(src: &str) -> LexedSource {
+    let m = lex_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let (mut vm, mut shared) = lex_open(&arena, m, src);
+    let mut tokens = Vec::new();
+    while let Some(t) = lex_next(&mut vm, &mut shared) {
+        tokens.push((t.rem_euclid(256), t.div_euclid(256)));
+    }
+    let names = lex_names(&vm, &shared, src);
+    let values = lex_values(&vm, &shared, names.len());
+    LexedSource {
+        tokens,
+        names,
+        values,
+    }
+}
+
+// The flat-scalar and composite-variant tag decoders, shared by the composite/enum `decode_op` arms.
+// Identical mapping to the differential-oracle decoder in `tests/selfhost_codegen.rs`.
+fn scalar_kind_from_tag(t: i64) -> ScalarKind {
+    u8::try_from(t)
+        .ok()
+        .and_then(ScalarKind::from_tag)
+        .unwrap_or_else(|| panic!("bad scalar kind tag {t}"))
+}
+
+fn composite_kind_from_tag(t: i64) -> CompositeKind {
+    match t {
+        0 => CompositeKind::Tuple,
+        1 => CompositeKind::Array,
+        2 => CompositeKind::Struct,
+        3 => CompositeKind::Enum,
+        other => panic!("bad composite variant tag {other}"),
+    }
+}
+
+fn decode_op(w: i64) -> Op {
+    // P11 Option E: the op-word radix is 8 bits (256); the tag is `w % 256`, the operand `w / 256`.
+    let (tag, operand) = (w % 256, w / 256);
+    match tag {
+        1 => Op::Const(operand as u16),
+        2 => Op::Return,
+        3 => Op::GetLocal(operand as u16),
+        4 => Op::CheckedMul(operand as u8),
+        5 => Op::CheckedAdd,
+        6 => Op::PopN(operand as u8),
+        7 => Op::SetLocal(operand as u16),
+        8 => Op::CheckedSub,
+        9 => Op::Div,
+        10 => Op::Mod,
+        11 => Op::CmpEq,
+        12 => Op::CmpNe,
+        13 => Op::CmpLt,
+        14 => Op::CmpGt,
+        15 => Op::CmpLe,
+        16 => Op::CmpGe,
+        17 => Op::If(operand as u16),
+        18 => Op::Else(operand as u16),
+        19 => Op::EndIf,
+        20 => Op::Not,
+        21 => Op::Call((operand % 65536) as u16, (operand / 65536) as u8),
+        22 => Op::Dup,
+        23 => Op::CheckedNeg,
+        24 => Op::BitAnd,
+        25 => Op::BitOr,
+        26 => Op::BitXor,
+        27 => Op::GetData(operand as u32),
+        28 => Op::SetData(operand as u32),
+        // Base and length pack with a 2^24 radix so a data slot or length beyond
+        // 65535 (a shared segment over 64 KB) does not spill base into length.
+        29 => Op::GetDataIndexed((operand % 16777216) as u32, (operand / 16777216) as u32),
+        30 => Op::SetDataIndexed((operand % 16777216) as u32, (operand / 16777216) as u32),
+        31 => Op::Loop(operand as u16),
+        32 => Op::BreakIf(operand as u16),
+        33 => Op::EndLoop(operand as u16),
+        34 => Op::PushImmediate(operand as u8),
+        // Match control flow. The stage gives these their own op-word tags so
+        // `emit_op` can backpatch a bare `If`/`EndIf` and multiple unconditional
+        // `Break`s, but they decode to the same reference ops as the structured
+        // forms (an `mif` is an `Op::If`, an `mloop` an `Op::Loop`, and so on).
+        35 => Op::Break(operand as u16),
+        36 => Op::Trap(operand as u16),
+        37 => Op::If(operand as u16),
+        38 => Op::EndIf,
+        39 => Op::Loop(operand as u16),
+        40 => Op::EndLoop(operand as u16),
+        // The `for ... limit` counter header is a conditional break to the loop
+        // exit; its own stage tag lets `emit_op` set its exit target while
+        // preserving the `BreakIf` decode.
+        41 => Op::BreakIf(operand as u16),
+        // The `yield`/`loop` machinery.
+        42 => Op::Yield,
+        43 => Op::Stream,
+        44 => Op::Reset,
+        45 => Op::ByteToWord,
+        // Op tags 46..=63 -- the composite/enum family and the scalar arithmetic/shift ops. These are
+        // ported verbatim from the differential-oracle decoder in `tests/selfhost_codegen.rs::decode_op`
+        // (the main workspace), which is the proven-correct reference. Kept in lockstep with that
+        // decoder; the `all_wire_op_tags_decode` regression test below guards against drift, and the
+        // `verify.sh` merge gate exercises this whole subproject so a future op cannot ride in undecoded.
+        58 => Op::WordToByte,
+        59 => Op::Add,
+        60 => Op::Sub,
+        61 => Op::Mul,
+        62 => Op::Shl,
+        63 => Op::Shr,
+        64 => Op::CheckedDiv(operand as u8),
+        65 => Op::CheckedMod,
+        66 => Op::BoundsCheck(operand as u16),
+        // A native call with the error-reify flag already set in the count.
+        67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
+        // The same transport for a `use external` native.
+        68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
+        // The unchecked negation of a Float.
+        69 => Op::Neg,
+        // A flat struct construction: the operand packs count + byte_size*65536.
+        46 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat array literal: same packing, Array composite kind.
+        50 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Array,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat enum construction: same packing, Enum composite kind.
+        51 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat tuple construction: same packing, Tuple composite kind.
+        52 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Tuple,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat struct field read: the operand packs offset + kind_tag*65536.
+        47 => Op::GetField(StructField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: scalar_kind_from_tag(operand / 65536),
+        }),
+        // A flat-nested struct field read: operand packs offset + size*65536 + variant*2^32.
+        48 => Op::GetField(StructField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 4294967296),
+        }),
+        // A flat array-element read: operand is the element ScalarKind tag.
+        49 => Op::GetIndex(ArrayElem::Flat {
+            kind: scalar_kind_from_tag(operand),
+        }),
+        // A flat-nested array-element read: operand packs size + variant*65536.
+        56 => Op::GetIndex(ArrayElem::FlatNested {
+            size: (operand % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 65536),
+        }),
+        // **TAG 53 HAS TWO FORMS AND THIS DRIVER DECODED ONLY ONE.**
+        //
+        // A tuple field read. The FLAT-NESTED form -- a nested composite tuple element
+        // extracted and re-wrapped -- packs `offset + size*65536 + variant*2^32`; the FLAT
+        // form packs `offset + kind_tag*65536`, which is under 2^20. They are disambiguated
+        // by operand magnitude, exactly as `tests/selfhost_codegen.rs` has always done.
+        //
+        // Without the first arm a struct-typed tuple element fell into the second and its
+        // packed word was read as a scalar-kind tag: for `size = 8, variant = Struct(2)` the
+        // operand is 8,590,458,880, and `operand / 65536` is 131,080 -- the "bad scalar kind
+        // tag 131080" that six `Ok`-recorded boundary cases faulted with. A LOUD fault rather
+        // than a wrong op, but a fault on a construct the boundary reports as supported.
+        //
+        // The sibling arms for `GetField` (47/48) and `GetIndex` (49/56) use distinct op tags
+        // for the two forms, so only the tuple read needs the magnitude guard.
+        // Variant tag 5, Order 6: an element of an untyped tuple, read boxed by its index, as
+        // the reference reads a destructured untyped native result.
+        53 if operand / 4294967296 == 5 => Op::GetTupleField(TupleField::Boxed {
+            index: (operand % 256) as u8,
+        }),
+        53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(if operand / 4294967296 == 4 {
+                0
+            } else {
+                operand / 4294967296
+            }),
+        }),
+        // A flat tuple field read: operand packs offset + kind_tag*65536.
+        53 => Op::GetTupleField(TupleField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: scalar_kind_from_tag(operand / 65536),
+        }),
+        // An IsEnum test: operand packs ename_pool + vname_pool*1024 + disc_pool*1024*1024.
+        54 => Op::IsEnum(
+            (operand % 1024) as u16,
+            ((operand / 1024) % 1024) as u16,
+            (operand / 1048576) as u16,
+        ),
+        // A flat-nested enum-payload field read: operand packs offset + size*65536 + variant*2^32.
+        57 => Op::GetEnumField(EnumField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 4294967296),
+        }),
+        // A flat enum-payload field read: operand packs offset + kind_tag*65536.
+        55 => Op::GetEnumField(EnumField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: scalar_kind_from_tag(operand / 65536),
+        }),
+        other => panic!("unknown op tag {other} (word {w})"),
+    }
+}
+
+/// Drive the codegen; return its emitted ops, the constant pool it built, and the
+/// local-frame size (`local_count`) it computed.
+/// The most private struct slots `codegen.kel`'s copy pass can be told about, the length
+/// of its `ast.dc_slot` table.
+pub const CODEGEN_COPY_SLOT_CAP: usize = 64;
+
+/// Where `codegen.kel`'s copy pass reads its slot table and writes its refusal.
+struct CopyPassSlots {
+    count: usize,
+    slot: usize,
+    size: usize,
+    refuse: usize,
+}
+
+fn copy_pass_slots(m: &Module) -> CopyPassSlots {
+    let find = |name: &str| {
+        m.data_layout
+            .as_ref()
+            .and_then(|l| l.slots.iter().position(|s| s.name == name))
+            .unwrap_or_else(|| panic!("codegen.kel declares no `{name}`"))
+    };
+    CopyPassSlots {
+        count: find("ast.dc_count"),
+        slot: find("ast.dc_slot"),
+        size: find("ast.dc_size"),
+        refuse: find("ast.dc_refuse"),
+    }
+}
+
+/// The shared-slot writes that tell a `codegen.kel` instance compiled to `m` which data
+/// slots are private structs, and their sizes, for its copy pass. Each pair is a shared
+/// slot index and the word to store there.
+///
+/// # Panics
+///
+/// When `composites` holds more than [`CODEGEN_COPY_SLOT_CAP`] slots. That is a refusal
+/// of the program, which the copy pass could not then recognise in full.
+#[must_use]
+pub fn codegen_copy_pass_inputs(m: &Module, composites: &[(u16, u32)]) -> Vec<(usize, i64)> {
+    codegen_copy_pass_inputs_at(&copy_pass_slots(m), composites)
+}
+
+/// The shared slot in which a `codegen.kel` instance compiled to `m` reports, with a
+/// nonzero word, that its copy pass refused the function.
+#[must_use]
+pub fn codegen_copy_refuse_slot(m: &Module) -> usize {
+    copy_pass_slots(m).refuse
+}
+
+fn seed_copy_pass(
+    vm: &dyn StageExecutor,
+    shared: &mut [u8],
+    slots: &CopyPassSlots,
+    composites: &[(u16, u32)],
+) {
+    for (slot, word) in codegen_copy_pass_inputs_at(slots, composites) {
+        vm.set_shared(shared, slot, Value::Int(word))
+            .expect("copy pass input");
+    }
+}
+
+fn codegen_copy_pass_inputs_at(
+    slots: &CopyPassSlots,
+    composites: &[(u16, u32)],
+) -> Vec<(usize, i64)> {
+    assert!(
+        composites.len() <= CODEGEN_COPY_SLOT_CAP,
+        "{} private struct slots exceed the self-hosted copy pass's {CODEGEN_COPY_SLOT_CAP}; \
+         retry with --compiler rust",
+        composites.len()
+    );
+    let mut writes = vec![(slots.count, composites.len() as i64)];
+    for (i, &(slot, size)) in composites.iter().enumerate() {
+        writes.push((slots.slot + i, i64::from(slot)));
+        writes.push((slots.size + i, i64::from(size)));
+    }
+    writes
+}
+
+fn run_codegen(
+    body: &Body,
+    param_count: usize,
+    composites: &[(u16, u32)],
+) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
+    let src = read_stage("kel/codegen.kel");
+    let m = compile_src(&src);
+    let copy_slots = copy_pass_slots(&m);
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify codegen.kel");
+
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(body.root))
+        .expect("root");
+    for (i, n) in body.nodes.iter().enumerate() {
+        vm.set_shared(&mut shared, KINDS + i, Value::Int(n.kind))
+            .expect("kind");
+        vm.set_shared(&mut shared, ARGS + i, Value::Int(n.arg))
+            .expect("arg");
+        vm.set_shared(&mut shared, LHS + i, Value::Int(n.lhs))
+            .expect("lhs");
+        vm.set_shared(&mut shared, RHS + i, Value::Int(n.rhs))
+            .expect("rhs");
+    }
+    for (k, &node) in body.call_args.iter().enumerate() {
+        vm.set_shared(&mut shared, CALL_ARGS + k, Value::Int(node))
+            .expect("call_arg");
+    }
+    for (k, &part) in body.for_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, FOR_PARTS + k, Value::Int(part))
+            .expect("for_part");
+    }
+    for (k, &part) in body.match_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, MATCH_PARTS + k, Value::Int(part))
+            .expect("match_part");
+    }
+    for (k, &part) in body.limit_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, LIMIT_PARTS + k, Value::Int(part))
+            .expect("limit_part");
+    }
+    for (k, &part) in body.head_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, HEAD_PARTS + k, Value::Int(part))
+            .expect("head_part");
+    }
+    vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
+        .expect("param_count");
+    vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
+        .expect("category");
+    seed_copy_pass(&*vm, &mut shared, &copy_slots, composites);
+
+    // Phase 1: ops until Return.
+    let mut ops = Vec::new();
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..65536 {
+        match st {
+            VmState::Yielded(Value::Int(w)) => {
+                if w != 0 {
+                    let op = decode_op(w);
+                    // The op stream's terminator depends on the function category:
+                    // an `fn` ends in `Return`, a `loop` in `Reset`, and a
+                    // multiheaded dispatch in `Trap(NoMatchingHead=1)`. A
+                    // multihead's per-head `Return`s are interior ops, so it must
+                    // read past them to the final trap.
+                    let done = match body.category {
+                        2 => op == Op::Reset,
+                        3 => op == Op::Trap(1),
+                        _ => op == Op::Return,
+                    };
+                    ops.push(op);
+                    if done {
+                        break;
+                    }
+                }
+            }
+            VmState::Reset => {}
+            other => panic!("unexpected VM state {other:?}"),
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+    assert!(
+        br_shared_word(&*vm, &shared, copy_slots.refuse) == 0,
+        "a function needs more private struct copies than the self-hosted copy pass holds; \
+         retry with --compiler rust"
+    );
+
+    // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
+    // tags. **THE TAG IS PART OF THE VALUE AND MUST BE CARRIED OUT OF HERE.**
+    //
+    // `codegen.kel` interns three tags in three separate functions with tag-aware dedup:
+    // 0 `Int` (`intern_int`), 1 `StaticStr` (`intern_str`, the value being the LEXER INTERN
+    // ID rather than the bytes), and 2 `Bool` (`intern_bool`, reached from `push_struct_eq`).
+    //
+    // This loop used to read the tags into `let _tag` and drop them, on the stated grounds
+    // that "the stage sources are all-Int". That was a true statement about the CORPUS and a
+    // false one about the CONTRACT: the byte-identity oracle compiles the stage sources, none
+    // of which contains a string literal or a struct equality, so neither tag was ever
+    // observed. Every pool entry was then rebuilt as `ConstValue::Int`, turning a `StaticStr`
+    // into the integer of its intern id. See `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+    let count = next_word(&mut vm, &mut shared);
+    let values: Vec<i64> = (0..count)
+        .map(|_| next_word(&mut vm, &mut shared))
+        .collect();
+    let pool = values
+        .into_iter()
+        .map(|v| (v, next_word(&mut vm, &mut shared)))
+        .collect();
+    // Phase 3: the local-frame size the stage computed.
+    let local_count = next_word(&mut vm, &mut shared);
+    (ops, pool, local_count)
+}
+
+/// Derive the call-resolution chunk table (the interned name id of each chunk, in the
+/// module's chunk order) from lexer.kel's token stream, with no reference borrow of the
+/// user program. The reference orders chunks by function name and folds a multiheaded
+/// function's several same-named heads into one chunk, so the table is the deduplicated,
+/// lexicographically sorted set of the program's function names. Each `fn` (tok 0),
+/// `yield` (tok 5), or `loop` (tok 6) keyword is immediately followed by the name
+/// identifier (tok 1, whose payload is the interned id), so the function-name set is a
+/// direct token scan. Returns each chunk name's interned id in the sorted order.
+fn chunk_table_from_tokens(tokens: &[(i64, i64)], names: &[String]) -> Vec<i64> {
+    // Track brace-nesting depth (LBrace = 2, RBrace = 3) so a `yield` keyword used as a
+    // yield *statement* inside a body (depth > 0), or any keyword occurrence below the
+    // top level, is not mistaken for a function head. A function head appears only at
+    // depth 0, before its body's opening brace, immediately followed by the name Ident.
+    let mut ids: Vec<i64> = Vec::new();
+    let mut depth: i64 = 0;
+    for w in tokens.windows(2) {
+        let (kw, _) = w[0];
+        let (tok, payload) = w[1];
+        if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && tok == 1 {
+            ids.push(payload);
+        }
+        match kw {
+            2 => depth += 1,
+            3 => depth -= 1,
+            _ => {}
+        }
+    }
+    // The final token is not covered by `windows(2)` as a `w[0]`, but a function head is
+    // never the last token (its body follows), so no head is missed by that omission.
+    // Deduplicate by name (a multiheaded function is one chunk) and order by chunk name,
+    // matching the reference's name-keyed `BTreeMap` chunk order.
+    ids.sort_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+    ids.dedup_by(|&mut a, &mut b| names[a as usize] == names[b as usize]);
+    ids
+}
+
+/// Pull the next token from a live `lexer.kel`, or `None` at end of input.
+///
+/// The lexer's protocol: 63 is PENDING (a step that consumed a byte without
+/// completing a token), 62 is end of input, anything else is a token packed as
+/// `kind + payload * 256`.
+fn lex_next(vm: &mut dyn StageExecutor, shared: &mut [u8]) -> Option<i64> {
+    // Bounded rather than `loop`: a lexer that only ever reported PENDING would
+    // otherwise hang the driver, and a total language should not need a host that
+    // can. Four bytes of pending per token is far past any real run.
+    for _ in 0..(4 * crate::selfhost_host::LEX_SOURCE_CAP) {
+        // A coroutine must be RESUMED, not re-called -- but the FIRST entry has to
+        // be a call, and the machine exposes no predicate for which it wants.
+        // `NotSuspended` is that predicate, and taking it here keeps the caller
+        // from having to track whether it has started the lexer yet.
+        let st = match vm.resume_with_shared(shared, Value::Int(0)) {
+            Err(crate::vm::VmError::NotSuspended) => vm
+                .call_with_shared(shared, &[Value::Int(0)])
+                .expect("start lexer.kel"),
+            other => other.expect("resume lexer.kel"),
+        };
+        match st {
+            VmState::Yielded(Value::Int(62)) => return None,
+            VmState::Yielded(Value::Int(63)) | VmState::Reset => {}
+            VmState::Yielded(Value::Int(t)) => {
+                assert_ne!(
+                    t.rem_euclid(256),
+                    66,
+                    "invalid integer literal in lexer.kel near byte {}",
+                    t.div_euclid(256)
+                );
+                return Some(t);
+            }
+            other => panic!("lexer.kel yielded {other:?}"),
+        }
+    }
+    panic!("lexer.kel reported PENDING without end of input")
+}
+
+/// Build a live `lexer.kel` over `src`, returning the machine and its shared buffer.
+///
+/// Separated from driving so the same construction serves the collecting pass and
+/// the fused one, and so a caller can hold TWO stages live at once.
+/// The compiled lexer, so a caller can size its arena before opening one.
+///
+/// Split out because the persistent region must be resized to the MODULE's
+/// requirement before `Vm::new`, and the requirement is not known until the module
+/// exists. A version of `lex_open` that both compiled and opened could not do that
+/// without guessing a capacity.
+fn lex_module() -> Module {
+    compile_src(&read_stage("kel/lexer.kel"))
+}
+
+fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Box<dyn StageExecutor + 'a>, Vec<u8>) {
+    let vm = stage_vm(m, arena).expect("verify lexer.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let bytes = src.as_bytes();
+    assert!(
+        bytes.len() <= crate::selfhost_host::LEX_SOURCE_CAP,
+        "source has {} bytes, exceeding lexer source capacity {}",
+        bytes.len(),
+        crate::selfhost_host::LEX_SOURCE_CAP,
+    );
+    vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
+        .unwrap();
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b)).unwrap();
+    }
+    (vm, shared)
+}
+
+/// The intern table, read out of a lexer that has reached end of input.
+fn lex_names(vm: &dyn StageExecutor, shared: &[u8], src: &str) -> Vec<String> {
+    let bytes = src.as_bytes();
+    let icount = br_shared_word(vm, shared, BR_LEX_ICOUNT) as usize;
+    (0..icount)
+        .map(|id| {
+            let start = br_shared_word(vm, shared, BR_LEX_ISTART + id) as usize;
+            let len = br_shared_word(vm, shared, BR_LEX_ILEN + id) as usize;
+            String::from_utf8(bytes[start..start + len].to_vec()).unwrap()
+        })
+        .collect()
+}
+
+/// Transport values already computed by the lexer stage. No source parsing occurs here.
+fn lex_values(vm: &dyn StageExecutor, shared: &[u8], count: usize) -> Vec<i64> {
+    assert!(
+        count <= crate::selfhost_host::LEX_INTERN_CAP,
+        "lexer intern capacity exceeded"
+    );
+    (0..count)
+        .map(|id| br_shared_word(vm, shared, crate::selfhost_host::BR_LEX_VALUES + id))
+        .collect()
+}
+
+/// What the first pass over the source establishes, all of it bounded.
+struct FirstPass {
+    /// The intern table. Complete only at end of input, which is why it is a
+    /// whole-input fact rather than something a token can carry.
+    names: Vec<String>,
+    /// The call-resolution chunk table, in the module's chunk order. A method chunk holds
+    /// -1, because its name `Trait::Head::method` is not an interned identifier and no
+    /// plain call names it.
+    chunks: Vec<i64>,
+    /// Every chunk's name in the module's chunk order, methods included.
+    chunk_names: Vec<String>,
+    /// `(head id, method id, chunk index)`, one row per head and method, naming the first
+    /// chunk in order whose name ends `::Head::method`, which is how the reference resolves
+    /// a method call.
+    methods: Vec<(i64, i64, i64)>,
+    /// How many tokens the source lexes to. `parse.kel` compares its cursor
+    /// against this to find end of input, so a windowed feed must know it up
+    /// front -- which is the one thing a single forward pass cannot supply.
+    token_count: usize,
+    has_imports: bool,
+    values: Vec<i64>,
+    /// The generic templates the syntactic scan recognised, Order 6.
+    templates: Vec<Template>,
+    /// The instantiations this table was built for, each with its chunk index and name id.
+    instances: Vec<(Instantiation, i64, i64)>,
+    /// The newtypes the syntactic scan recognised, Order 6.
+    newtypes: Vec<Newtype>,
+}
+
+/// A newtype declaration, recognised syntactically, Order 6.
+///
+/// Only `newtype Name = Base;` and `newtype Name = Base where predicate;` over a base written
+/// as one identifier are recognised. A composite base or a `with` contract is left
+/// unrecognised, so the parser refuses the declaration as before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Newtype {
+    name: i64,
+    base: i64,
+    refined: bool,
+    /// The refinement predicate's name id, when there is one.
+    predicate: Option<i64>,
+    begin: i64,
+    end: i64,
+}
+
+/// Recognise newtype declarations among the top-level runs a lexing pass collected. Each
+/// run is the tokens from an identifier at the top level to the next semicolon, at most
+/// eight, with the position of its first token.
+fn newtypes_from_runs(runs: &[(i64, Vec<(i64, i64)>)], names: &[String]) -> Vec<Newtype> {
+    let name_is = |id: i64, text: &str| names.get(id as usize).is_some_and(|n| n == text);
+    let mut found = Vec::new();
+    for (at, run) in runs {
+        let ident = |i: usize| run.get(i).filter(|t| t.0 == 1).map(|t| t.1);
+        let (Some(keyword), Some(name), Some(base)) = (ident(0), ident(1), ident(3)) else {
+            continue;
+        };
+        if !name_is(keyword, "newtype") || run.get(2).map(|t| t.0) != Some(17) {
+            continue;
+        }
+        let refined = ident(4).is_some_and(|w| name_is(w, "where")) && ident(5).is_some();
+        let mut last = if refined { 5 } else { 3 };
+        match run.get(last + 1).map(|t| t.0) {
+            Some(39) => last += 1,
+            // Anything else before the next declaration, a `with` contract for one, is not
+            // a form this recognises.
+            Some(1)
+                if !refined
+                    && ident(4).is_some_and(|w| name_is(w, "where") || name_is(w, "with")) =>
+            {
+                continue;
+            }
+            Some(1) if refined && ident(6).is_some_and(|w| name_is(w, "with")) => continue,
+            _ => {}
+        }
+        if found.len() < crate::selfhost_host::NEWTYPE_CAP {
+            found.push(Newtype {
+                name,
+                base,
+                refined,
+                predicate: if refined { ident(5) } else { None },
+                begin: *at,
+                end: at + last as i64,
+            });
+        }
+    }
+    found
+}
+
+/// A generic function template, recognised syntactically, Order 6.
+///
+/// The host records only where the template is and how its header is written. Which
+/// instantiations exist is decided by `parse.kel` from the arguments at each call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Template {
+    name: i64,
+    fn_at: i64,
+    lt_at: i64,
+    paren_at: i64,
+    end_at: i64,
+    type_params: Vec<i64>,
+    /// Per value parameter, the type parameter it is written as plus one, else zero.
+    param_map: Vec<i64>,
+    /// The return type's type parameter plus one, else zero.
+    return_map: i64,
+}
+
+/// A template index and its type arguments' scalar kinds, 1 `bool`, 2 `Byte` or 3 `Word`.
+type Instantiation = (usize, Vec<i64>);
+
+/// Seed `parse.kel`'s template and instantiation tables from a first pass, Order 6.
+fn seed_generics(vm: &mut dyn StageExecutor, shared: &mut [u8], first: &FirstPass) {
+    use crate::selfhost_host as h;
+    let mut set = |slot: usize, value: i64| vm.set_shared(shared, slot, Value::Int(value)).unwrap();
+    set(h::BR_P_GEN_COUNT, first.templates.len() as i64);
+    for (g, t) in first.templates.iter().enumerate() {
+        set(h::BR_P_GEN_NAME + g, t.name);
+        set(h::BR_P_GEN_FN + g, t.fn_at);
+        set(h::BR_P_GEN_LT + g, t.lt_at);
+        set(h::BR_P_GEN_PAREN + g, t.paren_at);
+        set(h::BR_P_GEN_END + g, t.end_at);
+        set(h::BR_P_GEN_NTP + g, t.type_params.len() as i64);
+        for (i, &p) in t.type_params.iter().enumerate() {
+            set(h::BR_P_GEN_TP + g * h::GEN_TYPE_PARAM_CAP + i, p);
+        }
+        for (i, &m) in t.param_map.iter().enumerate() {
+            set(h::BR_P_GEN_PMAP + g * h::GEN_VALUE_PARAM_CAP + i, m);
+        }
+        set(h::BR_P_GEN_RMAP + g, t.return_map);
+    }
+    set(h::BR_P_NT_COUNT, first.newtypes.len() as i64);
+    for (n, t) in first.newtypes.iter().enumerate() {
+        set(h::BR_P_NT_NAME + n, t.name);
+        set(h::BR_P_NT_BASE + n, t.base);
+        set(h::BR_P_NT_REFINED + n, i64::from(t.refined));
+        set(h::BR_P_NT_BEGIN + n, t.begin);
+        set(h::BR_P_NT_END + n, t.end);
+        let predicate = t
+            .predicate
+            .and_then(|p| first.chunks.iter().position(|&c| c == p))
+            .map_or(-1, |c| c as i64);
+        set(h::BR_P_NT_PRED + n, predicate);
+    }
+    set(h::BR_P_SPEC_COUNT, first.instances.len() as i64);
+    for (r, ((template, kinds), chunk, name)) in first.instances.iter().enumerate() {
+        let key = kinds.iter().rev().fold(0, |key, &kind| key * 16 + kind);
+        set(h::BR_P_SPEC_GEN + r, *template as i64);
+        set(h::BR_P_SPEC_KEY + r, key);
+        set(h::BR_P_SPEC_CHUNK + r, *chunk);
+        set(h::BR_P_SPEC_NAME + r, *name);
+    }
+}
+
+/// The type name of a modelled scalar kind.
+fn generic_kind_name(kind: i64) -> &'static str {
+    match kind {
+        1 => "bool",
+        2 => "Byte",
+        3 => "Word",
+        other => panic!("unmodelled generic type argument kind {other}"),
+    }
+}
+
+/// The generic template header scan, `template_scan.kel`, Order 6 slice 7.
+///
+/// The operator ruled on 2026-10-28 that the scan be a stand-alone stage if it clearly can be,
+/// and it is one. The host only batches the lexer's tokens, each with its position and the brace
+/// depth before it, and reads back the templates the stage recognised. The stage keeps its state
+/// across batches, so the first pass still holds no token stream.
+pub fn template_scan_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/template_scan.kel")))
+        .clone()
+}
+
+/// The fields of `template_scan.kel` the host touches, `ts.init` first because
+/// [`analysis_machine::AnalysisMachine::command`] writes field 0 before every turn.
+const TS_FIELDS: [&str; 17] = [
+    "ts.init",
+    "ts.count",
+    "ts.tok",
+    "ts.val",
+    "ts.at",
+    "ts.depth",
+    "ts.found",
+    "ts.t_name",
+    "ts.t_fn",
+    "ts.t_lt",
+    "ts.t_paren",
+    "ts.t_end",
+    "ts.t_ntp",
+    "ts.t_tp",
+    "ts.t_np",
+    "ts.t_pmap",
+    "ts.t_rmap",
+];
+/// Tokens per batch, `batch_cap()` in the stage.
+const TS_BATCH: usize = 256;
+
+/// The template scan stage, fed in batches.
+struct TemplateScan<'a> {
+    machine: analysis_machine::AnalysisMachine<'a, 17>,
+    batch: Vec<(i64, i64, i64, i64)>,
+    started: bool,
+}
+
+impl<'a> TemplateScan<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        let machine =
+            analysis_machine::AnalysisMachine::new(template_scan_kel_module(), arena, &TS_FIELDS)
+                .expect("template_scan.kel loads");
+        TemplateScan {
+            machine,
+            batch: Vec::with_capacity(TS_BATCH),
+            started: false,
+        }
+    }
+
+    fn step(&mut self, at: i64, depth: i64, (tok, val): (i64, i64)) {
+        self.batch.push((tok, val, at, depth));
+        if self.batch.len() == TS_BATCH {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        let m = &mut self.machine;
+        m.set(1, self.batch.len() as i64).expect("ts.count");
+        for (i, &(tok, val, at, depth)) in self.batch.iter().enumerate() {
+            for (field, value) in [(2, tok), (3, val), (4, at), (5, depth)] {
+                m.set_element(field, i, value).expect("ts token");
+            }
+        }
+        let init = i64::from(!self.started);
+        self.started = true;
+        m.command(init).expect("template_scan.kel batch");
+        self.batch.clear();
+    }
+
+    /// Flush the last batch and read the recognised templates in source order.
+    fn finish(mut self) -> Vec<Template> {
+        if !self.batch.is_empty() || !self.started {
+            self.flush();
+        }
+        let m = &self.machine;
+        let get = |field: usize, i: usize| m.get_element(field, i).expect("ts result");
+        let found = usize::try_from(get(6, 0)).expect("ts.found");
+        (0..found)
+            .map(|t| Template {
+                name: get(7, t),
+                fn_at: get(8, t),
+                lt_at: get(9, t),
+                paren_at: get(10, t),
+                end_at: get(11, t),
+                type_params: (0..usize::try_from(get(12, t)).expect("ts.t_ntp"))
+                    .map(|i| get(13, t * crate::selfhost_host::GEN_TYPE_PARAM_CAP + i))
+                    .collect(),
+                param_map: (0..usize::try_from(get(14, t)).expect("ts.t_np"))
+                    .map(|i| get(15, t * crate::selfhost_host::GEN_VALUE_PARAM_CAP + i))
+                    .collect(),
+                return_map: get(16, t),
+            })
+            .collect()
+    }
+}
+
+/// Stream the lexer once, keeping only what the second pass needs.
+///
+/// **This is the pre-pass, and it is bounded.** It holds an intern table, a list
+/// of function-name ids, one previous token and a depth counter -- not the token
+/// stream. `chunk_table_from_tokens` walks `windows(2)`, so the same scan runs
+/// incrementally with a single token of lookbehind.
+///
+/// Running the lexer twice is how a single-pass compiler has always handled a
+/// forward reference it cannot settle on first sight, and it is cheap: the lexer
+/// is the fastest stage and the source is the smallest representation in the
+/// pipeline.
+/// A chunk-table entry in the first pass: its name, its interned id or -1 for a method,
+/// and for a method its `(head, method)` name ids.
+type ChunkEntry = (String, i64, Option<(i64, i64)>);
+
+/// The first pass with the source's own instantiations, which the parser decides in probe
+/// rounds when the source holds a generic template. A source without one costs one lexing
+/// pass, as before.
+fn first_pass(src: &str) -> FirstPass {
+    let plain = first_pass_with(src, &[]);
+    if plain.templates.is_empty() {
+        plain
+    } else {
+        first_pass_with(src, &generic_instantiations(src))
+    }
+}
+
+fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
+    let m = lex_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let (mut vm, mut shared) = lex_open(&arena, m, src);
+    let mut ids: Vec<i64> = Vec::new();
+    let mut depth: i64 = 0;
+    let mut prev: Option<(i64, i64)> = None;
+    let mut token_count = 0usize;
+    let mut has_imports = false;
+    // `impl Trait for Head { fn method .. }`: 0 outside, 1 after `impl`, 2 after the trait,
+    // 3 after `for`, 4 after the head awaiting `{`, 5 inside the body. A method is a `fn` at
+    // depth one in state 5. Any other shape leaves the state machine, so a generic or
+    // inherent impl contributes no method here and the stage refuses it.
+    let mut impl_state = 0;
+    let (mut impl_trait, mut impl_head) = (-1i64, -1i64);
+    let mut methods_raw: Vec<(i64, i64, i64)> = Vec::new();
+    let scan_module = template_scan_kel_module();
+    let scan_need = required_persistent_capacity_for(&scan_module);
+    let mut scan_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + scan_need);
+    scan_arena.resize_persistent(scan_need).expect("resize");
+    let mut scan = TemplateScan::new(&scan_arena);
+    let mut runs: Vec<(i64, Vec<(i64, i64)>)> = Vec::new();
+    let mut run_open = false;
+    while let Some(w) = lex_next(&mut vm, &mut shared) {
+        let cur = (w.rem_euclid(256), w.div_euclid(256));
+        // The brace depth before this token. `depth` lags by one token below.
+        let depth_before = depth
+            + match prev {
+                Some((2, _)) => 1,
+                Some((3, _)) => -1,
+                _ => 0,
+            };
+        scan.step(token_count as i64, depth_before, cur);
+        // Top-level runs for the newtype scan, bounded at eight tokens each.
+        if run_open {
+            let run = &mut runs.last_mut().expect("open run").1;
+            run.push(cur);
+            if cur.0 == 39 || run.len() >= 8 {
+                run_open = false;
+            }
+        } else if depth_before == 0 && cur.0 == 1 && runs.len() < 4096 {
+            runs.push((token_count as i64, vec![cur]));
+            run_open = true;
+        }
+        token_count += 1;
+        has_imports |= cur.0 == 19;
+        if let Some((kw, _)) = prev {
+            if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && cur.0 == 1 {
+                ids.push(cur.1);
+            }
+            if impl_state == 5 && depth == 1 && kw == 0 && cur.0 == 1 {
+                methods_raw.push((impl_trait, impl_head, cur.1));
+            }
+            match kw {
+                2 => depth += 1,
+                3 => depth -= 1,
+                _ => {}
+            }
+        }
+        impl_state = match (impl_state, cur.0) {
+            (0, 56) if depth == 0 => 1,
+            (1, 1) => {
+                impl_trait = cur.1;
+                2
+            }
+            (2, 45) => 3,
+            (3, 1) => {
+                impl_head = cur.1;
+                4
+            }
+            (4, 2) => 5,
+            (5, 3) if depth == 1 => 0,
+            (5, _) => 5,
+            _ => 0,
+        };
+        prev = Some(cur);
+    }
+    let mut names = lex_names(&vm, &shared, src);
+    let values = lex_values(&vm, &shared, names.len());
+    let newtypes = newtypes_from_runs(&runs, &names);
+    // A template is not a chunk. Only a name every head of which is a template is dropped, so
+    // a template sharing its name with a plain head stays a chunk and the parser refuses it.
+    let templates: Vec<Template> = scan
+        .finish()
+        .into_iter()
+        .filter(|t| ids.iter().filter(|&&id| id == t.name).count() == 1)
+        .collect();
+    ids.retain(|id| !templates.iter().any(|t| t.name == *id));
+    // Each instantiation is a chunk named as the reference names it, `name__Word__bool`. Its
+    // name and the type names it substitutes are interned past the lexer's table.
+    let intern = |names: &mut Vec<String>, name: String| -> i64 {
+        names.iter().position(|n| *n == name).unwrap_or_else(|| {
+            names.push(name);
+            names.len() - 1
+        }) as i64
+    };
+    let mut instance_ids = Vec::new();
+    for (template, kinds) in instances {
+        for &kind in kinds {
+            intern(&mut names, generic_kind_name(kind).into());
+        }
+        let parts: Vec<&str> = kinds.iter().map(|&k| generic_kind_name(k)).collect();
+        let name = format!(
+            "{}__{}",
+            names[templates[*template].name as usize],
+            parts.join("__")
+        );
+        instance_ids.push(intern(&mut names, name));
+    }
+    // Ordering needs the names, which exist only now. A multiheaded function is
+    // one chunk, and the reference keys its chunk map by name, so the table is the
+    // deduplicated lexicographically sorted set.
+    // Methods are chunks named `Trait::Head::method` and sort among the plain names.
+    let mut all: Vec<ChunkEntry> = ids
+        .iter()
+        .chain(instance_ids.iter())
+        .map(|&id| (names[id as usize].clone(), id, None))
+        .chain(methods_raw.iter().map(|&(t, h, m)| {
+            (
+                format!(
+                    "{}::{}::{}",
+                    names[t as usize], names[h as usize], names[m as usize]
+                ),
+                -1,
+                Some((h, m)),
+            )
+        }))
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all.dedup_by(|a, b| a.0 == b.0);
+    let mut methods: Vec<(i64, i64, i64)> = Vec::new();
+    for (idx, (_, _, method)) in all.iter().enumerate() {
+        if let Some((h, m)) = *method
+            && !methods.iter().any(|&(mh, mm, _)| mh == h && mm == m)
+        {
+            methods.push((h, m, idx as i64));
+        }
+    }
+    let instances = instances
+        .iter()
+        .zip(&instance_ids)
+        .map(|(instance, &id)| {
+            let chunk = all
+                .iter()
+                .position(|(_, cid, _)| *cid == id)
+                .expect("instance chunk");
+            (instance.clone(), chunk as i64, id)
+        })
+        .collect();
+    FirstPass {
+        values,
+        names,
+        templates,
+        instances,
+        newtypes,
+        chunks: all.iter().map(|(_, id, _)| *id).collect(),
+        chunk_names: all.into_iter().map(|(n, _, _)| n).collect(),
+        methods,
+        token_count,
+        has_imports,
+    }
+}
+
+/// Drive lexer.kel then parse.kel over `src`, collecting the token stream first.
+///
+/// The original path: every token materialised into a `Vec` and seeded into a
+/// 40,960-word shared array. Kept because it is the reference the fused path is
+/// checked against.
+// The 4-tuple carries the parsed functions, name table, and the raw data and enum
+// record streams; factoring each into a `type` alias would only scatter it.
+/// **NO PRODUCTION PATH CALLS THIS ANY MORE. It is the fusion oracle.**
+///
+/// Every compile entry point — [`self_host_compile`], [`self_host_compile_full`],
+/// [`self_host_compile_scratch`] and [`binding_rows_from_pipeline`] — moved to
+/// [`parse_functions_fused`] on 2026-08-19, under the operator's direction to
+/// retire the token residency.
+///
+/// # Why it is retained rather than deleted
+///
+/// This feed is what proves the fused one correct.
+/// `the_fused_parse_agrees_with_the_collecting_one` and
+/// `the_fused_compile_agrees_with_the_collecting_one` compare the two, and a
+/// differential oracle with one side removed is not an oracle. Deleting it would
+/// leave fusion checked only against the Rust reference, which is a weaker claim
+/// about the FEED specifically: the reference agrees with a whole-program compile,
+/// not with a particular token-delivery order.
+///
+/// # What it costs, and what happens next
+///
+/// It is the reason `toks.packed` is still 40,960 words: this feed seeds the whole
+/// token stream, so the array cannot shrink while any caller does. **The next
+/// increment shrinks the array to a buffer sized for the equivalence corpus**, at
+/// which point this entry point keeps working for every source those two tests
+/// use and stops working for a large one — which is acceptable precisely because
+/// nothing but those tests calls it.
+#[allow(clippy::type_complexity)]
+pub fn parse_functions(
+    src: &str,
+) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records, _struct_records, _) =
+        parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
+    (fns, names, data_records, enum_records)
+}
+
+/// Map a `parse.kel` declaration category onto the one `reconstruct.kel` and
+/// `codegen.kel` consume.
+///
+/// # There are two encodings and they do not agree
+///
+/// | declaration | `parse.kel` ([`ParsedFn::category`]) | `reconstruct.kel` / `codegen.kel` |
+/// |---|---|---|
+/// | `fn` | 1 | 0 |
+/// | `yield` | 2 | 0 |
+/// | `loop` | 3 | **2** |
+/// | multiheaded dispatch | not a single head | 3 |
+///
+/// The second column's `1` is a single-head `yield`, which this mapping does not
+/// produce, and `3` is assigned by the multihead path rather than by any single
+/// declaration. **The mapping is deliberately lossy**: `codegen.kel` closes
+/// categories 0 and 1 identically, with `Return`, so collapsing `yield` onto `0`
+/// changes no emitted op. It would stop being safe the moment those two
+/// categories diverge, which is why the loss is stated here rather than left to
+/// be rediscovered.
+///
+/// # Why this is public
+///
+/// The `v0.3.0` line needs it to seed `reconstruct.kel` on real input, and was
+/// carrying a mirrored copy having established by measurement that the raw
+/// parser category "seeds a different program". **A duplicate with a structural
+/// cause returns unless the cause is removed**, and the cause was that the
+/// consumer could not reach the original.
+///
+/// **IT WAS FIVE COPIES, NOT ONE.** Three in this file, one in
+/// `tests/selfhost_codegen.rs`, and theirs. The three here now call this
+/// function. The test's copy is left independent ON PURPOSE — it is the second
+/// implementation the driver-parity oracle compares against, and folding it in
+/// would remove the drift and the check together — so
+/// `the_test_drivers_category_mapping_agrees_with_the_library` pins the two
+/// against each other instead.
+///
+/// **THEIR DESCRIPTION OF THE MAPPING WAS "2 for a `yield` declaration and 0
+/// otherwise", AND THAT IS NOT WHAT IT DOES.** It is 2 for a `loop`. Anyone
+/// mirroring the prose rather than the code seeds `loop` as `fn` and `yield` as
+/// `loop`. That is the argument for exporting the function rather than
+/// documenting the rule.
+#[must_use]
+pub fn reconstruct_category(parse_category: i64) -> i64 {
+    // 3 is `loop` on the parse side; 2 is `loop` on the reconstruct side.
+    if parse_category == 3 { 2 } else { 0 }
+}
+
+/// What the parse pipeline refused, as a value rather than as a process abort.
+///
+/// Carries the message the panicking path would have printed. The three causes it
+/// can name are a stage diagnostic (`parse.kel` reporting one of its own capacity
+/// limits), a declaration form the stage does not recognise, and a raw virtual
+/// machine fault surfacing through the driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfHostParseError {
+    /// The failure message, as [`parse_functions`] would have panicked with.
+    pub message: String,
+}
+
+impl core::fmt::Display for SelfHostParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SelfHostParseError {}
+
+/// [`parse_functions`], returning the refusal instead of aborting the process.
+///
+/// # Why this exists
+///
+/// [`parse_functions`] is `pub` under the `self-host` feature and therefore
+/// reachable from outside this crate, and it PANICS on input the reference
+/// compiler accepts — the self-hosted front end admits a narrower surface than
+/// the language does, so ordinary source can reach a stage limit. **The
+/// `v0.3.0` line reported this from the outside**: their corpus survey had to
+/// wrap every call in `catch_unwind` and print which sources aborted, because
+/// silently skipping them would have hidden it. This entry point makes the
+/// supported behaviour a `Result` rather than each caller reinventing the
+/// workaround.
+///
+/// # What it does NOT promise, and the limit is real
+///
+/// The refusal is recovered by unwinding, so **a build compiled with
+/// `panic = "abort"` still aborts.** There is no way around that short of
+/// threading a `Result` through the whole record driver, which changes a
+/// signature both compile paths and many tests depend on; that is a real
+/// question and a separate one. The process panic hook also still runs, so the
+/// message appears on standard error even when it is returned here.
+///
+/// The named example corpus and its current refusals are checked in
+/// `tests/selfhost_parse_refusals.rs`. The parser explicitly refuses array iteration,
+/// newtype declarations, method calls, checked expression blocks, destructuring lets
+/// and signed declarations. These are unsupported syntax, not invalid-source verdicts.
+/// Parsing an example still does not establish complete compilation or execution.
+pub fn try_parse_functions(src: &str) -> Result<ParsedProgram, SelfHostParseError> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_functions(src)));
+    match caught {
+        Ok((functions, names, data_records, enum_records)) => Ok(ParsedProgram {
+            functions,
+            names,
+            data_records,
+            enum_records,
+        }),
+        Err(payload) => Err(SelfHostParseError {
+            // `&payload` would coerce to `&dyn Any` naming the BOX, not its
+            // contents, because `Box<dyn Any + Send>` is itself `Any`. The
+            // downcast then fails for every payload and every refusal reports
+            // "not a string". Measured, not reasoned: the pinning test caught it.
+            message: panic_message(payload.as_ref()),
+        }),
+    }
+}
+
+/// The four-tuple [`parse_functions`] returns, named.
+///
+/// The tuple is kept on the original entry point because its callers destructure
+/// it positionally and several ignore most of it; a fallible API returning a
+/// tuple inside a `Result` reads badly enough to be worth the struct.
+#[derive(Debug)]
+pub struct ParsedProgram {
+    /// The parsed functions, in declaration order.
+    pub functions: Vec<ParsedFn>,
+    /// The interned name table.
+    pub names: Vec<String>,
+    /// Every data block's header records, concatenated in declaration order.
+    pub data_records: Vec<(i64, i64)>,
+    /// Every enum's header records, concatenated in declaration order.
+    pub enum_records: Vec<(i64, i64)>,
+}
+
+/// Recover a panic payload as text.
+///
+/// `panic!` with a formatted message yields a `String`; a literal yields a
+/// `&'static str`. Both are handled because the driver produces both, and a
+/// payload of neither shape is reported as such rather than as an empty message,
+/// which would read as a refusal with no reason.
+fn panic_message(payload: &(dyn core::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "parse.kel refused the input and the panic payload was not a string".to_string()
+    }
+}
+
+/// The same, with `lexer.kel` driven INTO `parse.kel` and no token stream
+/// materialised.
+///
+/// # The two passes, and why there are two
+///
+/// `parse.kel` needs the chunk table before its first token, because a resolved
+/// call index must match the module's chunk order -- and that table is a property
+/// of the WHOLE token stream. No single forward pass supplies it, so the lexer
+/// runs twice: `first_pass` establishes the bounded facts, then the second run
+/// is fused into the parser. That is the classical answer to a forward reference,
+/// and it is what a pipeline cut at this boundary would do with a sidecar file.
+///
+/// The token COUNT comes from the first pass for the same reason: `parse.kel`
+/// finds end of input by comparing its cursor against `toks.len`, which a windowed
+/// feed cannot leave as "however many arrive".
+///
+/// # What it does not change
+///
+/// The output is what [`parse_functions`] returns, and
+/// `the_fused_parse_agrees_with_the_collecting_one` asserts they are equal on real
+/// sources. Fusion changes WHEN a token is produced, not what it is.
+#[allow(clippy::type_complexity)]
+pub fn parse_functions_fused(
+    src: &str,
+) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    let (fns, names, data_records, enum_records, _, _) = parse_functions_fused_with_natives(src);
+    (fns, names, data_records, enum_records)
+}
+
+/// The parsed heads, the name table, the data and enum records, and one row of path
+/// segment name ids per `use` in declaration order.
+type FusedParse = (
+    Vec<ParsedFn>,
+    Vec<String>,
+    Vec<(i64, i64)>,
+    Vec<(i64, i64)>,
+    Vec<Vec<i64>>,
+    Vec<(i64, i64)>,
+);
+
+/// [`parse_functions_fused`] with the native import paths and the struct records as well.
+fn parse_functions_fused_with_natives(src: &str) -> FusedParse {
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records, struct_records, native_paths) =
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
+    (
+        fns,
+        names,
+        data_records,
+        enum_records,
+        native_paths,
+        struct_records,
+    )
+}
+
+/// How many tokens `lexer.kel` produces for `src` — **the count `PARSE_TOKEN_CAP` is
+/// measured against**.
+///
+/// Public because it is NOT the reference tokenizer's count and the difference matters. The
+/// two disagree by one on every source measured, the reference emitting a terminator the
+/// stage's stream does not carry. A caller sizing an input against the cap with
+/// `keleusma::lexer::tokenize(...).len()` is measuring the wrong quantity — the same class
+/// of error as sizing a guard against the wrong array.
+pub fn lex_token_count(src: &str) -> usize {
+    first_pass(src).token_count
+}
+
+/// One binding row for the type channel: `(name, tag, form, target)`.
+///
+/// `form` matches the stage's `ty.bform`: **0** the value is a TAG, **1** it is
+/// another NAME the stage resolves through bounded alias traversal. `target` is that name
+/// for form 1 and empty otherwise. Form 2 addresses an expression row in the same
+/// scoped batch through `value`; the stage derives its result tag.
+///
+/// # Why the target is a string
+///
+/// The two extractions -- this one and the reference-AST walk -- do not share an
+/// id space: the reference numbers by insertion order as it walks, this one uses
+/// the lexer's intern table. A row carrying an id could only be compared by
+/// comparing the NUMBERINGS, which is not the content. A name removes the
+/// question rather than answering it.
+pub type BindingRow = (String, i64, i64, String);
+
+/// `Node::Call`, whose `arg` is the callee's index into the module's chunk table.
+const NODE_CALL: i64 = 7;
+
+/// `Node::LetIn`, the record whose payload carries the frame slot.
+const NODE_LET_IN: i64 = 5;
+
+/// `Node::Literal`. Always an INTEGER: `codegen.kel`'s `push_literal` interns
+/// through `intern_int`, so no other scalar reaches this kind.
+const NODE_LITERAL: i64 = 1;
+
+/// `Node::Unit`, whose payload is `0` synthesized Unit, `3` written Unit, `1`
+/// true, `2` false. Boolean literals ride this kind rather than a new one.
+const NODE_UNIT: i64 = 20;
+
+/// `Node::ArrayLit`. Its ELEMENTS are not `lhs`/`rhs`: `lhs` is the start index into the
+/// `call_args` channel and `rhs` the element count, with the elements in SOURCE ORDER.
+///
+/// **`call_args` IS SHARED WITH `Node::Call`.** Only this node's own `lhs`/`rhs` slice may be
+/// read; scanning the channel would collect call arguments as array elements.
+const NODE_ARRAY_LIT: i64 = 17;
+
+/// A declared type NAME to the type channel's scalar tag.
+///
+/// **THIS WAS TWO IDENTICAL CLOSURES BEFORE A THIRD CALLER WANTED IT**, one inside
+/// `binding_rows_from_pipeline` and one inside `decl_call_rows_from_pipeline`, the second
+/// already carrying a comment saying it was the first restated. A third copy is where a
+/// mapping starts to drift, so the rule this repository keeps rediscovering — reuse the
+/// table, do not re-derive it — is made structural here rather than repeated in prose.
+///
+/// **`bool` IS LOWERCASE AND IT IS THE ONLY PRIMITIVE THAT IS.** `Word`, `Byte` and `Float`
+/// are capitalised; `Bool` with a capital letter is an ordinary NAMED type, which the
+/// reference refuses to add to a `Word`. An earlier revision of this table mapped `Bool`
+/// here and so told the type channel that a value of some user type was a boolean.
+///
+/// # What it deliberately does NOT map, and the direction of that error
+///
+/// **`Float` HAS NO ARM, WHILE THE REFERENCE'S `type_tag` MAPS IT TO 4.** That is a real
+/// disagreement and it is named rather than hidden: float arithmetic is `Diverges` at the
+/// construct-support boundary, so a float-returning function is outside the self-hosted
+/// subset. The error direction is the safe one — an unmapped type reports 0, the type
+/// channel's UNKNOWN, and `ty_pair_disagrees` accepts whenever either side is unknown. So
+/// the gap costs a check that would have been made; it cannot cause a rejection.
+/// `the_pipeline_tag_table_omits_float_and_the_reference_does_not` pins it.
+fn scalar_tag_of_type_name(name: Option<&str>) -> i64 {
+    match name {
+        Some("Word") => 1,
+        Some("bool") => 2,
+        Some("Byte") => 3,
+        _ => 0,
+    }
+}
+
+/// Canonical tag for a declared scalar array. Low four bits retain the scalar tag.
+/// Nominal types use low bits eight or nine, so equal byte sizes cannot alias type identities.
+/// The bound keeps the encoding representable on the stage's minimum 32-bit Word.
+fn scalar_array_tag(element: i64, length: i64) -> i64 {
+    if (1..=3).contains(&element) && (0..=134_217_726).contains(&length) {
+        (length + 1) * 16 + element
+    } else {
+        0
+    }
+}
+
+/// Translate a source layout's scalar kind into the first-pass type vocabulary.
+/// Composite access records must never pass their size or variant here.
+fn scalar_tag_of_layout_kind(kind: i64) -> i64 {
+    match kind {
+        1 => 2, // bool
+        2 => 3, // Byte
+        3 => 1, // Word
+        _ => 0,
+    }
+}
+
+/// Whether a node kind sequences a statement before a CONTINUATION held in `rhs`.
+///
+/// The list is the stage's own, not a second opinion: `reconstruct.kel` documents `LetIn` 5,
+/// `DataAssignIn` 12, `IndexAssignIn` 14 and `ExprStmt` 21 among the binary kinds that pop a
+/// right then a left child, and gives `ForIn` 16 and `ForLimit` 23 an explicit comment saying
+/// the continuation is in `rhs` with `lhs` unused.
+///
+/// **A KIND MISSING FROM THIS LIST AND A KIND WRONGLY IN IT ARE NOT SYMMETRIC.** A missing
+/// one stops the tail descent early on a node `operand` cannot type, which yields the type
+/// channel's unknown and therefore accepts — a lost check, and one the agreement test makes
+/// loud. A kind wrongly present would descend into something that is not a continuation, and
+/// could report a tail the function does not have. So this list only admits a kind the stage
+/// itself documents as carrying one.
+///
+/// `MatchIn` 22 and `EnumMatch` 39 are deliberately absent: their `rhs` is an ARM COUNT.
+fn is_statement_continuation(kind: i64) -> bool {
+    matches!(kind, 5 | 12 | 14 | 16 | 21 | 23 | 74 | 83)
+}
+
+/// The node a function body finally YIELDS, or `None` when it yields nothing.
+///
+/// The reference emits a tail-versus-return row only for a function whose body has a tail
+/// expression, so this has to answer the same question from the forest.
+///
+/// # Termination is structural, not a hope
+///
+/// `reconstruct.kel` emits every child before its parent, so a node's `rhs` is strictly
+/// smaller than its own index and the descent walks a strictly decreasing sequence. It
+/// therefore terminates in at most the node count. The explicit bound is a second belt: this
+/// function is reached with a forest the stage built, and a corrupt one must not hang.
+///
+/// # THE SYNTHESISED UNIT IS WHY THIS CAN BE DONE AT ALL, AND IT NEARLY WAS NOT
+///
+/// A block with no tail expression gets a **synthesised `Unit` continuation** — measured, not
+/// assumed: `fn s() -> Word { let a = 1; }` reconstructs to `[Literal, Unit, LetIn]` with the
+/// `Unit` in the `LetIn`'s `rhs`, where `fn main() -> Word { let a = 1; a }` puts a `Local`.
+/// An omitted else also synthesizes a unit branch, but now has an explicit presence marker.
+///
+/// A written `()` has internal payload 3, preserving its source presence through
+/// reconstruction. Only payload 0 means a synthesized continuation. Code generation
+/// lowers both unit forms to the existing unit immediate. Boolean payloads 1 and 2
+/// are also real source tails.
+fn body_tail_node(body: &Body) -> Option<i64> {
+    block_tail_node(body, body.root)
+}
+
+/// Find a tail from any block root with the same bounded descent as a function body.
+fn block_tail_node(body: &Body, root: i64) -> Option<i64> {
+    let mut at = root;
+    for _ in 0..body.nodes.len() {
+        let n = body.nodes.get(usize::try_from(at).ok()?)?;
+        if is_statement_continuation(n.kind) {
+            at = n.rhs;
+        } else {
+            break;
+        }
+    }
+    let n = body.nodes.get(usize::try_from(at).ok()?)?;
+    if n.kind == NODE_UNIT && n.arg == 0 {
+        None
+    } else {
+        Some(at)
+    }
+}
+
+/// The declaration a record belongs to, or a diagnostic naming what arrived instead.
+///
+/// **SIX BARE `unwrap()`s USED TO SIT HERE, AND THEY ALL FIRE FOR ONE REASON**: a record
+/// arrived while no declaration was open. Measured cause: a top-level `struct` declaration.
+/// `parse.kel` has no struct handling at all — its declaration record codes are 1..3
+/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code — so
+/// its tokens are parsed as something else and the records land here with nothing open.
+///
+/// The old failure was `called Option::unwrap() on a None value`, which names neither the
+/// record nor the declaration form that produced it. **A user writing an ordinary
+/// declaration got a Rust panic with no indication the form was unsupported.**
+///
+/// This does not decide whether the form should be supported; it reports what happened.
+fn open_decl(cur: &mut Option<ParsedFn>, code: i64, val: i64) -> &mut ParsedFn {
+    cur.as_mut().unwrap_or_else(|| {
+        panic!(
+            "parse.kel emitted record ({code}, {val}) with no declaration open. The usual \
+             cause is a top-level declaration form the stage does not recognise: it handles \
+             `fn`, `yield`, `loop`, `data`, `use` and `enum`, and a `struct` declaration is \
+             NOT among them."
+        )
+    })
+}
+
+/// How many tokens the fused feed keeps resident.
+///
+/// Sequential reads keep one token of lookbehind. Return-layout requests can seek
+/// to another source range, which reloads this bounded window through the lexer.
+const FUSED_WINDOW: usize = 8;
+
+/// The token cursor after each resume of `parse.kel`, for measuring how far the
+/// parser actually reaches into its input.
+///
+/// This trace uses the legacy sequential mode, with return queries disabled.
+/// It measures local lookahead and pushback. Production feeds additionally enable
+/// explicit source-range seeks, exercised by the return-layout transport tests.
+#[must_use]
+pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
+    let LexedSource {
+        tokens,
+        names,
+        values,
+    } = br_lex(src);
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    let chunks: Vec<i64> = chunk_table_from_tokens(&tokens, &names);
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| compile_src(&read_stage("kel/parse.kel")))
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (id, &value) in values.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            crate::selfhost_host::BR_P_VALUES + id,
+            Value::Int(value),
+        )
+        .unwrap();
+    }
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_ON_ID,
+        Value::Int(id_of("on") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_OK_ID,
+        Value::Int(id_of("ok") + 1),
+    )
+    .unwrap();
+    for (slot, name) in [
+        (crate::selfhost_host::BR_P_INVALID_INDEX_ID, "invalid_index"),
+        (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
+        (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
+        (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
+        (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
+        (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
+        (crate::selfhost_host::BR_P_HIDDEN_ID, "let"),
+        (crate::selfhost_host::BR_P_OPTION_ID, "Option"),
+        (crate::selfhost_host::BR_P_SOME_ID, "Some"),
+        (crate::selfhost_host::BR_P_NONE_ID, "None"),
+        (crate::selfhost_host::BR_P_CLASSIFY_ID, "classify"),
+        (crate::selfhost_host::BR_P_DECLASSIFY_ID, "declassify"),
+    ] {
+        vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
+            .unwrap();
+    }
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    // **THE EAGER BOOLEAN OPERATORS, WHICH THIS COMMENT USED TO CLAIM WERE ALREADY HERE.**
+    // The sentence below said the boolean literals are "seeded like the eager `and`/`or`
+    // ids" -- true of `tests/selfhost_codegen.rs`, which seeds all four, and false of this
+    // file, which seeded neither. The comment was copied along with the literals and
+    // described the sibling's state.
+    //
+    // `parse.kel` guards its `and`/`or` recognition on `and_id > 0` so an unseeded host
+    // keeps the old behaviour. The old behaviour is that the operator and its RIGHT OPERAND
+    // are dropped: `a and b` compiled to `[GetLocal(0), Return]`, which is `a`. A silent
+    // miscompile, and `true and false` returned `true`.
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids above and for the same
+    // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
+    // Without these the stage resolved them as variable references and emitted
+    // `GetLocal` where the reference emits `PushImmediate`.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("bool")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FLOAT_ID,
+        Value::Int(id_of("Float") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FIXED_ID,
+        Value::Int(id_of("Fixed") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_TEXT_ID,
+        Value::Int(id_of("Text") + 1),
+    )
+    .unwrap();
+
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
+    //
+    // `toks.chunks` holds `PARSE_CHUNK_CAP` entries, and eight load-bearing fields sit
+    // immediately after it in the same shared block: the keyword and type ids, the
+    // eager-operator ids, and the token window's own `base` and `at`. One entry past
+    // the end lands on `require_id`.
+    //
+    // Measured, because the failure mode was not what it looked like. Overflowing by
+    // one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table nor
+    // its cap. A caller reading that would look at loop bounds, not at the function
+    // count of their program.
+    //
+    // THIS COMMENT WAS STALE IN FOUR WAYS AND THE DIAGNOSTIC WITH IT. It said the array
+    // was 256, that a 257th entry overflowed, that `wire.kel` hit the cap at 475 chunks,
+    // and that raising the array was "the real fix and NOT done here" -- after the array
+    // had been raised to 1,024, `wire.kel` measured at 486 chunks, and the raise had in
+    // fact been done. **Every number was left behind by the change that moved it**, and
+    // the message told a caller with 1,025 functions about a 257th entry. The counts now
+    // come from `PARSE_CHUNK_CAP` so they cannot drift again.
+    assert!(
+        chunks.len() <= PARSE_CHUNK_CAP,
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; one entry \
+         past the end overwrites `require_id` and the seven fields after it, including the \
+         token window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+         parser, which names neither this table nor its cap.",
+        chunks.len(),
+        PARSE_CHUNK_CAP
+    );
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    // THE WINDOW BASE, SET EXPLICITLY RATHER THAN LEFT TO ZERO-INITIALISATION.
+    // The whole stream is seeded here, so `packed[0]` really is token zero; but
+    // this file's own rule is that an emitter relying on its buffer starting
+    // zeroed breaks the day it writes into a reused one, and a driver relying on
+    // the same is no different. Stating it also makes the contract visible to a
+    // later windowed driver, which sets a base that is not zero.
+    vm.set_shared(&mut shared, BR_P_BASE, Value::Int(0))
+        .unwrap();
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
+            .unwrap();
+    }
+
+    let mut trace = Vec::new();
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(tokens.len() * 16 + 256) {
+        trace.push(br_shared_word(&vm, &shared, BR_P_AT));
+        match state {
+            VmState::Finished(_) => break,
+            _ => {
+                state = match vm.resume_with_shared(&mut shared, Value::Int(0)) {
+                    Ok(st) => st,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    trace
+}
+
+/// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
+/// with its guard and body records, plus the interned-name table. Multiheaded functions
+/// appear as several same-named entries in declaration order.
+// The 4-tuple return carries the parsed functions, name table, and the raw data and
+// enum record streams; factoring each into a `type` alias would only scatter it, so
+// allow the complexity lint here as the root test file does file-wide.
+#[allow(clippy::type_complexity)]
+/// What the record walk returns beside the functions: the interned name table,
+/// the data-block records, the enum records and the STRUCT records.
+///
+/// Named because clippy asks at this depth and the ask is right -- four `Vec`s
+/// of pairs in a signature tell a reader less than the name does.
+///
+/// **The struct records were being discarded until 2026-08-28.** `parse.kel` has always
+/// emitted them -- a STRUCTSTART carrying the type's name id, then one field record per
+/// field, in declaration order -- and the driver mapped the whole run to skip state and
+/// threw it away. Nothing needed adding to the stage; the data was on the wire.
+type ParseSideTables = (
+    Vec<String>,
+    Vec<(i64, i64)>,
+    Vec<(i64, i64)>,
+    Vec<(i64, i64)>,
+    Vec<Vec<i64>>,
+);
+
+/// Every `(kind, value)` token `lexer.kel` produces for `src`, beside the interned
+/// name table. Wide integer indices are resolved from the stage-owned value table
+/// and reported as integer tokens. No source text is parsed by this transport.
+///
+/// # The third instrument, and why the set was incomplete
+///
+/// `parse_cursor_trace` shows WHERE the stage is reading and `parse_record_trace`
+/// shows WHAT it emits. Neither shows what it is reading, so a record carrying a
+/// wrong value could be a parser fault or a token fault and the two were not
+/// separable from outside.
+///
+/// That gap is not hypothetical: the declaration-mis-naming defect was narrowed
+/// to "the header record carries the field's name", then to "the cursor never
+/// goes backwards", and stalled there — because the remaining question was what
+/// token sits at that cursor position, and nothing could answer it.
+///
+/// # This is the STAGE's stream, not the reference's
+///
+/// `keleusma::lexer::tokenize` is a different tokenizer with a different stream;
+/// see [`lex_token_count`], which exists because sizing a cap against the
+/// reference's count measures the wrong quantity. Compare these tokens against
+/// each other, never across the two lexers, unless the difference is the point.
+///
+/// # Not part of the compile path
+///
+/// A diagnostic instrument, public for the same reason the other two are: a
+/// hidden instrument is one the next person does not know exists.
+#[must_use]
+pub fn lex_token_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
+    let LexedSource {
+        tokens,
+        names,
+        values,
+    } = br_lex(src);
+    let tokens = tokens
+        .into_iter()
+        .map(|(kind, value)| {
+            if kind == 65 {
+                (12, values[value as usize])
+            } else {
+                (kind, value)
+            }
+        })
+        .collect();
+    (names, tokens)
+}
+
+/// One traced record: `(code, value, cursor)`.
+///
+/// `cursor` is `toks.at` at the moment the record was produced -- the index of the
+/// token most recently READ, since the stage writes it before advancing. A record
+/// emitted by a phase handler rather than a token read carries the cursor of the
+/// last token read, which is the useful answer: it says which token the stage had
+/// reached.
+///
+/// # This is what makes the cursor pairable with a record at all
+///
+/// `parse_cursor_trace` samples once per virtual-machine step and this samples
+/// once per record -- 1,232 against 78 for the mis-naming reproduction -- so
+/// zipping the two by index correlates a record with an unrelated position, and
+/// the result LOOKS like data. Carrying the cursor IN the record removes the
+/// temptation rather than documenting it.
+pub type TracedRecord = (i64, i64, i64);
+
+/// Every `(code, value)` record `parse.kel` emits for `src`, in order, beside the
+/// interned name table.
+///
+/// # Why this exists as public surface
+///
+/// **A defect in this driver was diagnosed three times without it and stopped
+/// short of a cause each time.** The declaration-mis-naming bug pinned by
+/// `tests/selfhost_chunk_names.rs` was narrowed to a four-line reproduction and a
+/// confirmed behavioural rule, and the code site stayed unknown, because the
+/// record stream the driver consumes was not observable from outside it.
+///
+/// `thread_local!` is unavailable here (`no_std`), so a hook cannot be smuggled
+/// in from a test. The sink is threaded through `parse_functions_impl` instead,
+/// and this is its one public reader.
+///
+/// # What it is not
+///
+/// **Not part of the compile path**, and nothing in it should be. Every other
+/// caller passes a sink that discards, so the trace costs a branch on a closure
+/// that does nothing. It is a diagnostic instrument, and the reason it is public
+/// rather than `#[doc(hidden)]` is that a hidden instrument is one the next
+/// person does not know exists — which is how this defect survived three
+/// diagnoses.
+///
+/// # Reading the codes
+///
+/// A declaration header is 1..=3 (`fn`/`yield`/`loop`) and carries the name id;
+/// 4 is a parameter name, 6 a parameter type, 7 the return type, 5 closes a
+/// declaration, 9 opens a data block, 16 opens a body, 15 ends one. Resolve a
+/// name id through the returned table.
+#[must_use]
+pub fn parse_record_trace(src: &str) -> (Vec<String>, Vec<TracedRecord>) {
+    let mut records = Vec::new();
+    let (names, ..) = parse_functions_impl(src, false, &mut |_, _| {}, &mut |code, val, at| {
+        records.push((code, val, at));
+    });
+    (names, records)
+}
+
+/// Trace parser records using the bounded token feed, including large stage sources.
+pub fn parse_record_trace_fused(src: &str) -> (Vec<String>, Vec<TracedRecord>) {
+    let mut records = Vec::new();
+    let (names, ..) = parse_functions_impl(src, true, &mut |_, _| {}, &mut |code, val, at| {
+        records.push((code, val, at));
+    });
+    (names, records)
+}
+
+/// [`parse_functions_impl`] for the two callers that want the name table in their
+/// callback and no record trace.
+fn parse_functions_impl_named(
+    src: &str,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+) -> ParseSideTables {
+    parse_functions_impl(src, true, on_function, &mut |_, _, _| {})
+}
+
+fn parse_functions_impl(
+    src: &str,
+    fused: bool,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+    on_record: &mut dyn FnMut(i64, i64, i64),
+) -> ParseSideTables {
+    try_parse_functions_impl(src, fused, on_function, on_record)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn try_parse_functions_impl(
+    src: &str,
+    fused: bool,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+    on_record: &mut dyn FnMut(i64, i64, i64),
+) -> Result<ParseSideTables, crate::selfhost_host::ParseRecordError> {
+    // A request in the final parse is a call the rounds could not resolve, which this round
+    // compiled against a placeholder chunk. It is reported as the stage's unresolved-syntax
+    // diagnostic, so the source is refused rather than miscompiled.
+    let mut unresolved = None;
+    let parsed = try_parse_functions_impl_with(
+        src,
+        fused,
+        first_pass(src),
+        on_function,
+        &mut |code, val, at| {
+            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG && unresolved.is_none() {
+                unresolved = Some(val % 16);
+            }
+            on_record(code, val, at);
+        },
+    )?;
+    match unresolved {
+        Some(template) => Err(crate::selfhost_host::ParseRecordError::Diagnostic {
+            code: crate::selfhost_host::PARSE_DIAG_TAG_BASE - 21,
+            detail: template,
+        }),
+        None => Ok(parsed),
+    }
+}
+
+/// The instantiations a source's generic calls need, decided by `parse.kel` over probe
+/// rounds, Order 6.
+///
+/// Each round parses with the instantiations found so far and collects the requests the
+/// parser emits for calls it could not resolve, including calls inside an instantiation. The
+/// rounds stop when a round requests nothing new, or after a fixed bound, after which the
+/// final parse reports the unresolved call. A probe round that fails to parse stops the
+/// rounds too, and the final parse reports the failure. The result is cached per source,
+/// because several entry points derive the chunk table independently.
+fn generic_instantiations(src: &str) -> Vec<Instantiation> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Vec<(String, Vec<Instantiation>)>> = Mutex::new(Vec::new());
+    if let Some((_, found)) = CACHE
+        .lock()
+        .expect("instantiation cache")
+        .iter()
+        .find(|(s, _)| s == src)
+    {
+        return found.clone();
+    }
+    const ROUNDS: usize = 8;
+    let mut instances: Vec<Instantiation> = Vec::new();
+    for _ in 0..ROUNDS {
+        let first = first_pass_with(src, &instances);
+        let ntp: Vec<usize> = first
+            .templates
+            .iter()
+            .map(|t| t.type_params.len())
+            .collect();
+        let mut requested: Vec<Instantiation> = Vec::new();
+        let probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            try_parse_functions_impl_with(src, true, first, &mut |_, _| {}, &mut |code, val, _| {
+                if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
+                    let template = (val % 16) as usize;
+                    let mut key = val / 16;
+                    let kinds = (0..ntp[template])
+                        .map(|_| {
+                            let kind = key % 16;
+                            key /= 16;
+                            kind
+                        })
+                        .collect();
+                    requested.push((template, kinds));
+                }
+            })
+        }));
+        let fresh: Vec<Instantiation> = requested
+            .into_iter()
+            .filter(|r| !instances.contains(r))
+            .collect();
+        if !matches!(probe, Ok(Ok(_))) && fresh.is_empty() {
+            break;
+        }
+        if fresh.is_empty() {
+            break;
+        }
+        for r in fresh {
+            if !instances.contains(&r) && instances.len() < crate::selfhost_host::GEN_INSTANCE_CAP {
+                instances.push(r);
+            }
+        }
+    }
+    let mut cache = CACHE.lock().expect("instantiation cache");
+    if cache.len() >= 16 {
+        cache.remove(0);
+    }
+    cache.push((src.to_string(), instances.clone()));
+    instances
+}
+
+fn try_parse_functions_impl_with(
+    src: &str,
+    fused: bool,
+    first: FirstPass,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+    on_record: &mut dyn FnMut(i64, i64, i64),
+) -> Result<ParseSideTables, crate::selfhost_host::ParseRecordError> {
+    // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
+    // stateful, and a second copy of it in a fused driver is precisely the drift
+    // `selfhost_host` already records paying for once. Only the token FEED
+    // differs: collected and seeded whole, or windowed and slid.
+    let names = first.names.clone();
+    let token_count = first.token_count;
+    // The collecting feed still needs the tokens themselves.
+    let tokens: Vec<(i64, i64)> = if fused {
+        Vec::new()
+    } else {
+        br_lex(src).tokens
+    };
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    // The chunk table must be in the module's actual chunk order so a resolved call index
+    // matches the assembled module. The Rust compiler orders chunks by name (a `BTreeMap`
+    // keyed by function name), not by declaration order, and groups same-named heads into
+    // one chunk. The same order is the deduplicated, lexicographically sorted set of the
+    // program's function names, which is derived from the token stream itself (each
+    // `fn`/`yield`/`loop` keyword is immediately followed by the name identifier), so the
+    // resolution table needs no reference borrow of the user program.
+    let chunks: Vec<i64> = first.chunks.clone();
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| compile_src(&read_stage("kel/parse.kel")))
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (id, &value) in first.values.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            crate::selfhost_host::BR_P_VALUES + id,
+            Value::Int(value),
+        )
+        .unwrap();
+    }
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_RETURN_QUERIES,
+        Value::Int(1),
+    )
+    .unwrap();
+    // The method table, `(head, method) -> chunk`, which a method call resolves against.
+    assert!(
+        first.methods.len() <= 64,
+        "this program has {} distinct methods and parse.kel's method table holds 64",
+        first.methods.len()
+    );
+    use crate::selfhost_host::{BR_P_MT_CHUNK, BR_P_MT_COUNT, BR_P_MT_HEAD, BR_P_MT_NAME};
+    vm.set_shared(
+        &mut shared,
+        BR_P_MT_COUNT,
+        Value::Int(first.methods.len() as i64),
+    )
+    .unwrap();
+    for (i, &(h, m, c)) in first.methods.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_MT_HEAD + i, Value::Int(h))
+            .unwrap();
+        vm.set_shared(&mut shared, BR_P_MT_NAME + i, Value::Int(m))
+            .unwrap();
+        vm.set_shared(&mut shared, BR_P_MT_CHUNK + i, Value::Int(c))
+            .unwrap();
+    }
+    seed_generics(&mut vm, &mut shared, &first);
+    // THE TOKEN ARRAY HAS A CAP AND OVERFLOWING IT REPORTS ONE OF TWO WRONG THINGS.
+    //
+    // `toks.packed` holds `PARSE_TOKEN_CAP` tokens. Measured on a program that is one long
+    // left-associative sum, so nothing else binds first:
+    //
+    //   41,015 tokens -> `IndexOutOfBounds(40960, 40960)` from inside the stage
+    //   42,015 tokens -> a shared-slot range error from the seeding loop BELOW, which walks
+    //                    off the end of the whole block
+    //
+    // Which one a caller sees depends on how far over they are, and neither names the token
+    // array or a limit the caller controls. Refused here, before any seeding, with both
+    // numbers. `parse.kel` itself is 32,907 tokens, 80% of this.
+    //
+    // **THE CAP BINDS THE COLLECTING FEED ONLY, AS OF 2026-08-19.** It was
+    // unconditional, which meant the FUSED feed carried a bound it does not need:
+    // fusion writes a window of `FUSED_WINDOW` slots and slides it, so the size of
+    // `packed` says nothing about how long an input it can accept. Every
+    // production entry point is fused, so this refusal no longer reaches any
+    // compile a user can start. It still guards the collecting feed, which really
+    // does seed the whole stream and really does overrun the array.
+    //
+    // Pinned by `the_token_cap_binds_only_the_collecting_feed`, which compiles a
+    // source past the cap through the fused feed and refuses it through the other.
+    assert!(
+        fused || token_count <= PARSE_TOKEN_CAP,
+        "this program lexes to {token_count} tokens and `toks.packed` in parse.kel holds \
+         {PARSE_TOKEN_CAP}. Split the source, or use the fused feed, which is windowed."
+    );
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_ASSERT_ID,
+        Value::Int(id_of("assert")),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_HAS_IMPORTS,
+        Value::Int(i64::from(first.has_imports)),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_ON_ID,
+        Value::Int(id_of("on") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_OK_ID,
+        Value::Int(id_of("ok") + 1),
+    )
+    .unwrap();
+    for (slot, name) in [
+        (crate::selfhost_host::BR_P_INVALID_INDEX_ID, "invalid_index"),
+        (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
+        (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
+        (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
+        (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
+        (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
+        (crate::selfhost_host::BR_P_HIDDEN_ID, "let"),
+        (crate::selfhost_host::BR_P_OPTION_ID, "Option"),
+        (crate::selfhost_host::BR_P_SOME_ID, "Some"),
+        (crate::selfhost_host::BR_P_NONE_ID, "None"),
+        (crate::selfhost_host::BR_P_CLASSIFY_ID, "classify"),
+        (crate::selfhost_host::BR_P_DECLASSIFY_ID, "declassify"),
+    ] {
+        vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
+            .unwrap();
+    }
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    // **THE EAGER BOOLEAN OPERATORS, WHICH THIS COMMENT USED TO CLAIM WERE ALREADY HERE.**
+    // The sentence below said the boolean literals are "seeded like the eager `and`/`or`
+    // ids" -- true of `tests/selfhost_codegen.rs`, which seeds all four, and false of this
+    // file, which seeded neither. The comment was copied along with the literals and
+    // described the sibling's state.
+    //
+    // `parse.kel` guards its `and`/`or` recognition on `and_id > 0` so an unseeded host
+    // keeps the old behaviour. The old behaviour is that the operator and its RIGHT OPERAND
+    // are dropped: `a and b` compiled to `[GetLocal(0), Return]`, which is `a`. A silent
+    // miscompile, and `true and false` returned `true`.
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids above and for the same
+    // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
+    // Without these the stage resolved them as variable references and emitted
+    // `GetLocal` where the reference emits `PushImmediate`.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("bool")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FLOAT_ID,
+        Value::Int(id_of("Float") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FIXED_ID,
+        Value::Int(id_of("Fixed") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_TEXT_ID,
+        Value::Int(id_of("Text") + 1),
+    )
+    .unwrap();
+
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
+    //
+    // `toks.chunks` holds `PARSE_CHUNK_CAP` entries, and eight load-bearing fields sit
+    // immediately after it in the same shared block: the keyword and type ids, the
+    // eager-operator ids, and the token window's own `base` and `at`. One entry past
+    // the end lands on `require_id`.
+    //
+    // Measured, because the failure mode was not what it looked like. Overflowing by
+    // one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table nor
+    // its cap. A caller reading that would look at loop bounds, not at the function
+    // count of their program.
+    //
+    // THIS COMMENT WAS STALE IN FOUR WAYS AND THE DIAGNOSTIC WITH IT. It said the array
+    // was 256, that a 257th entry overflowed, that `wire.kel` hit the cap at 475 chunks,
+    // and that raising the array was "the real fix and NOT done here" -- after the array
+    // had been raised to 1,024, `wire.kel` measured at 486 chunks, and the raise had in
+    // fact been done. **Every number was left behind by the change that moved it**, and
+    // the message told a caller with 1,025 functions about a 257th entry. The counts now
+    // come from `PARSE_CHUNK_CAP` so they cannot drift again.
+    assert!(
+        chunks.len() <= PARSE_CHUNK_CAP,
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; one entry \
+         past the end overwrites `require_id` and the seven fields after it, including the \
+         token window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+         parser, which names neither this table nor its cap.",
+        chunks.len(),
+        PARSE_CHUNK_CAP
+    );
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    // THE WINDOW BASE, SET EXPLICITLY RATHER THAN LEFT TO ZERO-INITIALISATION.
+    // The whole stream is seeded here, so `packed[0]` really is token zero; but
+    // this file's own rule is that an emitter relying on its buffer starting
+    // zeroed breaks the day it writes into a reused one, and a driver relying on
+    // the same is no different. Stating it also makes the contract visible to a
+    // later windowed driver, which sets a base that is not zero.
+    vm.set_shared(&mut shared, BR_P_BASE, Value::Int(0))
+        .unwrap();
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
+            .unwrap();
+    }
+    // THE FUSED FEED. A live lexer and a window of `FUSED_WINDOW` tokens, instead
+    // of the whole stream seeded above. Built here rather than in a separate
+    // driver so the record handling below has exactly one implementation.
+    let lex_m = lex_module();
+    let lex_need = required_persistent_capacity_for(&lex_m);
+    let mut lex_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + lex_need);
+    lex_arena.resize_persistent(lex_need).expect("resize");
+    let mut lex: Option<(Box<dyn StageExecutor + '_>, Vec<u8>)> = if fused {
+        Some(lex_open(&lex_arena, lex_m, src))
+    } else {
+        None
+    };
+    let mut win: alloc::collections::VecDeque<i64> = alloc::collections::VecDeque::new();
+    let mut base: i64 = 0;
+    let mut eof = false;
+
+    // NO VECTOR OF FUNCTIONS HERE. A completed function goes straight to the sink, so
+    // the collecting API owns the accumulation and a fusing caller does not have to.
+    let mut cur: Option<ParsedFn> = None;
+    // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
+    // END), concatenated in declaration order, for the driver's own data-layout assembly.
+    let mut data_records: Vec<(i64, i64)> = Vec::new();
+    // One row per `use`, its path segments as name ids from the UPATH records, in
+    // declaration order. The stage refuses a wildcard, so every row names one native.
+    let mut native_paths: Vec<Vec<i64>> = Vec::new();
+    // Set by a `signed` record and taken by the next head.
+    let mut signed_next = false;
+    // The impl whose methods are being parsed, `(trait, head)` name ids.
+    let mut impl_of: Option<(i64, i64)> = None;
+    let mut data_bases = alloc::sync::Arc::new(Vec::new());
+    // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
+    // for the driver's own enum-layout assembly.
+    let mut enum_records: Vec<(i64, i64)> = Vec::new();
+    // Struct-declaration records, collected exactly as the data and enum records are.
+    let mut struct_records: Vec<(i64, i64)> = Vec::new();
+    let mut in_struct = false;
+    // **A STRUCT, TRAIT OR IMPL DECLARATION IS SKIPPED TO ITS `END`, NOT LEFT TO FALL
+    // THROUGH.** `parse.kel` emits STRUCTSTART 18, TRAITSTART 19 and IMPLSTART 20 followed
+    // by the declaration's own PARAM/PTYPE records. Without this state those records reach
+    // the `match` below with no function open and `open_decl` panics by name — which is what
+    // the shipping driver did for every program containing a `struct`, while
+    // `tests/selfhost_codegen.rs`'s copy of this loop carried the skip and compiled them.
+    // See `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+    //
+    // The declaration contributes no chunk and no scaffold record here: a struct's layout
+    // reaches codegen through the BODY record stream (the StructEqField/GetField families),
+    // not through its declaration.
+    let mut in_skip_decl = false;
+    let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
+        (false, false, false, false, false);
+    // PRIME THE WINDOW BEFORE THE INITIAL CALL, not just before resumes.
+    //
+    // `drive_parse_records_with` runs the hook before every RESUME, but the first
+    // step of the parser happens inside this CALL. Left unprimed, that read lands
+    // on a zeroed `packed` and the parser is fed token zero -- which surfaces far
+    // downstream as `IndexOutOfBounds(-1, 64)` on the OPERATOR STACK, not on the
+    // token array, because the wrong token drives the shunting yard into draining
+    // an empty stack. The index that faults names neither the array at fault nor
+    // the cause.
+    if fused {
+        if let Some((lex_vm, lex_shared)) = lex.as_mut() {
+            while !eof && (win.len() as i64) < FUSED_WINDOW as i64 {
+                match lex_next(lex_vm, lex_shared) {
+                    Some(w) => win.push_back(w),
+                    None => eof = true,
+                }
+            }
+        }
+        vm.set_shared(&mut shared, BR_P_BASE, Value::Int(base))
+            .unwrap();
+        for (i, &w) in win.iter().enumerate() {
+            vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(w))
+                .unwrap();
+        }
+    }
+
+    let state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    let budget = token_count * 16 + 256;
+    // SLIDE BEFORE THE RESUME, NEVER AFTER. The parser reads at its cursor the
+    // moment it runs, so a window corrected afterwards is corrected too late.
+    // One token behind the cursor is kept resident, because the parser pushes back
+    // by one and that read must still land inside the window.
+    // THE CURSOR AT EACH RECORD, SHARED BETWEEN THE TWO CLOSURES.
+    //
+    // `drive_parse_records_with` takes the record sink and the resume hook
+    // separately, and only the hook is handed the virtual machine -- so the sink
+    // cannot read `BR_P_AT` itself. A cell carries it across.
+    //
+    // **READ BEFORE THE EARLY RETURN.** The window slider below returns
+    // immediately on the collecting feed, and an earlier arrangement read the
+    // cursor after that return, so the collecting feed captured nothing. The
+    // trace it produced would have paired every record with a cursor of zero and
+    // looked like a fact about the parser.
+    let cursor_at = alloc::rc::Rc::new(core::cell::Cell::new(0i64));
+    let cursor_writer = alloc::rc::Rc::clone(&cursor_at);
+    let before_resume = |vm: &mut (dyn StageExecutor + '_), shared: &mut [u8]| {
+        let at = match vm.get_shared(shared, BR_P_AT).expect("at") {
+            Value::Int(n) => n,
+            other => panic!("expected Int at BR_P_AT, got {other:?}"),
+        };
+        cursor_writer.set(at);
+        if !fused {
+            return;
+        }
+        // Return-layout queries may seek outside the resident window. Re-lex on
+        // rewind, discarding skipped tokens so residency remains bounded.
+        let keep = at.saturating_sub(1).max(0);
+        if at < base {
+            drop(lex.take());
+            lex = Some(lex_open(&lex_arena, lex_module(), src));
+            win.clear();
+            base = 0;
+            eof = false;
+        }
+        let (lex_vm, lex_shared) = lex.as_mut().expect("fused lexer");
+        while base < keep {
+            if win.pop_front().is_some() {
+                base += 1;
+            } else {
+                match lex_next(lex_vm, lex_shared) {
+                    Some(_) => base += 1,
+                    None => {
+                        eof = true;
+                        break;
+                    }
+                }
+            }
+        }
+        while !eof && win.len() < FUSED_WINDOW {
+            match lex_next(lex_vm, lex_shared) {
+                Some(w) => win.push_back(w),
+                None => eof = true,
+            }
+        }
+        assert!(
+            win.len() <= FUSED_WINDOW,
+            "parser token window exceeded its bound"
+        );
+        vm.set_shared(shared, BR_P_BASE, Value::Int(base)).unwrap();
+        for (i, &w) in win.iter().enumerate() {
+            vm.set_shared(shared, BR_P_PACKED + i, Value::Int(w))
+                .unwrap();
+        }
+    };
+
+    crate::selfhost_host::try_drive_parse_records_with(
+        &mut *vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
+            on_record(code, val, cursor_at.get());
+            if code == crate::selfhost_host::PARSE_TOKEN_SEEK_TAG {
+                assert!(
+                    val >= 0 && val <= token_count as i64,
+                    "invalid parser token seek"
+                );
+                return ControlFlow::Continue(());
+            }
+            // A request for an instantiation, consumed by the probe rounds alone.
+            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
+                return ControlFlow::Continue(());
+            }
+            if code == crate::selfhost_host::PARSE_DATA_FIELD_BASE_TAG {
+                assert!(val >= 0, "negative data address record");
+                let index = usize::try_from(val / 16777216).expect("data field ordinal");
+                let base = val % 16777216;
+                data_records.push((code, val));
+                let values = alloc::sync::Arc::make_mut(&mut data_bases);
+                assert!(index <= values.len(), "data address record leaves a gap");
+                if index == values.len() {
+                    values.push(base);
+                } else {
+                    values[index] = base;
+                }
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && matches!(code, 94..=96 | 99..=101 | 103) {
+                use crate::selfhost_host::{
+                    PARSE_ANNOTATION_ARRAY_TAG, PARSE_ANNOTATION_END_TAG,
+                    PARSE_ANNOTATION_START_TAG,
+                };
+                let f = open_decl(&mut cur, code, val);
+                match code {
+                    PARSE_ANNOTATION_START_TAG => {
+                        assert!(
+                            val >= 0 && f.active_annotation.is_none(),
+                            "invalid annotation start"
+                        );
+                        let key = (in_guard, val);
+                        assert!(
+                            f.annotation_records.insert(key, Vec::new()).is_none(),
+                            "duplicate annotation id"
+                        );
+                        f.active_annotation = Some(key);
+                    }
+                    PARSE_ANNOTATION_END_TAG => {
+                        assert_eq!(
+                            f.active_annotation.take(),
+                            Some((in_guard, val)),
+                            "unpaired annotation end"
+                        );
+                    }
+                    _ => {
+                        let key = f.active_annotation.expect("type record outside annotation");
+                        assert_eq!(key.0, in_guard, "annotation crossed source ranges");
+                        let kind = if code == PARSE_ANNOTATION_ARRAY_TAG {
+                            8
+                        } else {
+                            code
+                        };
+                        assert!(val >= 0, "negative annotation payload");
+                        f.annotation_records
+                            .get_mut(&key)
+                            .expect("missing annotation")
+                            .push((kind, val));
+                    }
+                }
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_TUPLE_PROJECTION_TAG {
+                assert!(val >= 0, "negative tuple source position");
+                open_decl(&mut cur, code, val)
+                    .tuple_projections
+                    .push((in_guard, val));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_STRUCT_PROJECTION_TAG {
+                assert!(val >= 0, "negative source field coordinates");
+                open_decl(&mut cur, code, val)
+                    .field_projections
+                    .push((in_guard, val));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_ENUM_VARIANT_TAG {
+                assert!(val >= 0, "negative source enum variant index");
+                open_decl(&mut cur, code, val)
+                    .enum_variants
+                    .push((in_guard, val));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG {
+                assert!(val >= 0, "negative source payload coordinates");
+                let f = open_decl(&mut cur, code, val);
+                assert!(
+                    f.enum_payload_bindings
+                        .last()
+                        .is_none_or(|(_, slot, _)| *slot >= 0),
+                    "unpaired payload binding metadata"
+                );
+                f.enum_payload_bindings.push((in_guard, -1, val));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == 42 {
+                let f = open_decl(&mut cur, code, val);
+                let (guard, slot, _) = f
+                    .enum_payload_bindings
+                    .last_mut()
+                    .expect("payload binding without metadata");
+                assert_eq!(*guard, in_guard, "payload binding crossed source ranges");
+                assert_eq!(*slot, -1, "payload metadata reused");
+                assert!(val >= 0, "negative payload binding record");
+                *slot = val / 4294967296;
+            }
+            if (in_body || in_guard)
+                && matches!(
+                    code,
+                    crate::selfhost_host::PARSE_LET_TYPE_TAG
+                        | crate::selfhost_host::PARSE_ANNOTATION_REF_TAG
+                )
+            {
+                let f = open_decl(&mut cur, code, val);
+                assert!(val >= 0, "negative source annotation name id");
+                assert!(
+                    f.let_annotations
+                        .last()
+                        .is_none_or(|(_, slot, _)| *slot >= 0),
+                    "unpaired source annotation"
+                );
+                assert!(
+                    f.active_annotation.is_none(),
+                    "unfinished source annotation"
+                );
+                let declared = if code == crate::selfhost_host::PARSE_ANNOTATION_REF_TAG {
+                    assert!(
+                        f.annotation_records.contains_key(&(in_guard, val)),
+                        "missing composite annotation"
+                    );
+                    val.checked_add(1)
+                        .and_then(i64::checked_neg)
+                        .expect("annotation id overflow")
+                } else {
+                    val
+                };
+                f.let_annotations.push((in_guard, -1, declared));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == NODE_LET_IN {
+                let f = open_decl(&mut cur, code, val);
+                if let Some((guard, slot, _)) = f.let_annotations.last_mut()
+                    && *slot == -1
+                {
+                    assert_eq!(*guard, in_guard, "annotation crossed source ranges");
+                    *slot = val;
+                }
+            }
+            if (in_body || in_guard) && code == PARSE_STRUCT_FIELDS_TAG {
+                let f = open_decl(&mut cur, code, val);
+                assert!(val >= 0, "negative declared struct field count");
+                assert!(
+                    f.struct_counts.last().is_none_or(|(_, given)| *given >= 0),
+                    "unpaired struct field-count metadata"
+                );
+                f.struct_counts.push((val % 1024, -1));
+                f.struct_types.push((in_guard, val / 1024));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == 27 {
+                let f = open_decl(&mut cur, code, val);
+                let (_, given) = f
+                    .struct_counts
+                    .last_mut()
+                    .expect("StructInit without field-count metadata");
+                assert_eq!(*given, -1, "StructInit reused field-count metadata");
+                *given = val % 1024;
+            }
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    // THE BINDING-NAME RECORD IS DIVERTED, NOT APPENDED.
+                    //
+                    // `parse.kel` emits it immediately before the `LetIn` it belongs
+                    // to, so the slot is the next record's payload. Pairing them here
+                    // is what lets a type-check extraction join a forest of SLOTS to a
+                    // binding table of NAMES, which nothing in the stream could do
+                    // before: slots are reused across scopes and names are not.
+                    c if c == PARSE_LET_NAME_TAG => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.let_names.push((-1, val));
+                    }
+                    _ => {
+                        let f = open_decl(&mut cur, code, val);
+                        // The slot arrives with the `LetIn` that follows the name.
+                        if code == NODE_LET_IN
+                            && let Some(last) = f.let_names.last_mut()
+                            && last.0 == -1
+                        {
+                            last.0 = val;
+                        }
+                        f.body.push((code, val));
+                    }
+                }
+            } else if in_guard {
+                match code {
+                    0 => {}
+                    15 => in_guard = false,
+                    _ => open_decl(&mut cur, code, val).guard.push((code, val)),
+                }
+            } else if in_data {
+                if code == 5 {
+                    data_records.push((5, 0));
+                    in_data = false;
+                } else if code != 0 {
+                    data_records.push((code, val));
+                }
+            } else if in_enum {
+                if code == 5 {
+                    enum_records.push((5, val));
+                    in_enum = false;
+                } else if code != 0 {
+                    enum_records.push((code, val));
+                }
+            } else if in_struct {
+                if code == 5 {
+                    struct_records.push((5, 0));
+                    in_struct = false;
+                } else if code != 0 {
+                    struct_records.push((code, val));
+                }
+            } else if in_use {
+                // Path segments are name ids, so never negative. A signature's return type
+                // rides after them as negative entries: -2 for `()`, `-(id + 3)` for a
+                // named type, and for a tuple one `-(id + 3)` per element followed by -1.
+                // Record 133 carries a named return, 134 a `()` return, 135 a tuple element
+                // and 136 the tuple's close.
+                let row = native_paths
+                    .last_mut()
+                    .expect("a path record outside a `use`");
+                match code {
+                    11 => row.push(val),
+                    133 | 135 => row.push(-(val + 3)),
+                    134 => row.push(-2),
+                    136 => row.push(-1),
+                    _ => {}
+                }
+                in_use = code != 5;
+            } else if in_skip_decl {
+                in_skip_decl = code != 5;
+            } else {
+                match code {
+                    1..=3 => {
+                        cur = Some(ParsedFn {
+                            cat: code,
+                            name: val,
+                            params: 0,
+                            param_types: Vec::new(),
+                            return_type: -1,
+                            param_type_records: Vec::new(),
+                            return_type_records: Vec::new(),
+                            param_opaque: Vec::new(),
+                            return_opaque: 0,
+                            tuple_header_is_return: false,
+                            guard: Vec::new(),
+                            body: Vec::new(),
+                            param_names: Vec::new(),
+                            literal_head: false,
+                            signed: core::mem::take(&mut signed_next),
+                            method_of: impl_of,
+                            let_names: Vec::new(),
+                            let_annotations: Vec::new(),
+                            annotation_records: alloc::collections::BTreeMap::new(),
+                            active_annotation: None,
+                            struct_counts: Vec::new(),
+                            struct_types: Vec::new(),
+                            enum_variants: Vec::new(),
+                            enum_payload_bindings: Vec::new(),
+                            field_projections: Vec::new(),
+                            tuple_projections: Vec::new(),
+                            param_layouts: Vec::new(),
+                            return_layout: None,
+                            text_boundary: 0,
+                            data_bases: alloc::sync::Arc::new(Vec::new()),
+                        })
+                    }
+                    // A literal parameter: a parameter with no name, its value carried for
+                    // the guard the stage emits beside it.
+                    130 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.params += 1;
+                        f.param_names.push(-1);
+                        f.literal_head = true;
+                        f.param_types.push(-1);
+                        f.param_type_records.push(Vec::new());
+                        f.param_layouts.push(None);
+                    }
+                    4 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.params += 1;
+                        f.param_names.push(val);
+                        // Composite tuple headers may emit no PTYPE. Reserve the slot now.
+                        f.param_types.push(-1);
+                        f.param_type_records.push(Vec::new());
+                        f.param_layouts.push(None);
+                    }
+                    6 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.param_type_records.last_mut().unwrap().push((6, val));
+                        *f.param_types
+                            .last_mut()
+                            .expect("parameter type without parameter") = val
+                    }
+                    7 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.return_type = val;
+                        f.return_type_records.push((6, val));
+                    }
+                    8 => {
+                        let f = open_decl(&mut cur, code, val);
+                        if !f.return_type_records.is_empty() {
+                            f.return_type_records.push((8, val));
+                        } else {
+                            f.param_type_records.last_mut().unwrap().push((8, val));
+                        }
+                    }
+                    // An opaque header type follows its head's record and is routed the same way.
+                    crate::selfhost_host::PARSE_OPAQUE_TYPE_TAG => {
+                        assert!(matches!(val, 1 | 2), "invalid opaque type marker");
+                        let f = open_decl(&mut cur, code, val);
+                        if !f.return_type_records.is_empty() {
+                            f.return_opaque = f.return_opaque.max(val);
+                        } else {
+                            let at = f
+                                .param_type_records
+                                .len()
+                                .checked_sub(1)
+                                .expect("opaque type without parameter");
+                            if f.param_opaque.len() <= at {
+                                f.param_opaque.resize(at + 1, 0);
+                            }
+                            f.param_opaque[at] = f.param_opaque[at].max(val);
+                        }
+                    }
+                    // A builtin generic's argument follows its head and is routed the same way.
+                    crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
+                    | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+                        let f = open_decl(&mut cur, code, val);
+                        if !f.return_type_records.is_empty() {
+                            f.return_type_records.push((code, val));
+                        } else {
+                            f.param_type_records.last_mut().unwrap().push((code, val));
+                        }
+                    }
+                    crate::selfhost_host::PARSE_TEXT_BOUNDARY_TAG => {
+                        assert!((0..=3).contains(&val), "invalid text-boundary facts");
+                        open_decl(&mut cur, code, val).text_boundary = val;
+                    }
+                    crate::selfhost_host::PARSE_HEADER_LAYOUT_TAG => {
+                        use crate::bytecode::WireShape;
+                        let f = open_decl(&mut cur, code, val);
+                        assert!(val >= 0, "negative header layout");
+                        let kind = ((val / 8) % 32) as u8;
+                        let shape = match (val / 2) % 4 {
+                            0 => WireShape::Top,
+                            1 => WireShape::Scalar { kind },
+                            2 => WireShape::Flat {
+                                kind,
+                                size: u32::try_from(val / 256).expect("header layout size"),
+                            },
+                            _ => panic!("invalid header shape form"),
+                        };
+                        if val % 2 == 1 {
+                            f.return_layout = Some(shape);
+                        } else {
+                            *f.param_layouts
+                                .last_mut()
+                                .expect("layout without parameter") = Some(shape);
+                        }
+                    }
+                    94..=96 | crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
+                        let f = open_decl(&mut cur, code, val);
+                        if code == 94 {
+                            f.tuple_header_is_return = val == 1;
+                        }
+                        let target = if f.tuple_header_is_return {
+                            &mut f.return_type_records
+                        } else {
+                            f.param_type_records
+                                .last_mut()
+                                .expect("tuple without parameter")
+                        };
+                        target.push((code, val));
+                    }
+                    9 => {
+                        in_data = true;
+                        data_records.push((9, val));
+                    }
+                    10 => {
+                        in_use = true;
+                        native_paths.push(Vec::new());
+                    }
+                    // `signed` precedes the next head.
+                    131 => signed_next = true,
+                    12 => {
+                        in_enum = true;
+                        enum_records.push((12, val));
+                    }
+                    16 => in_body = true,
+                    17 => in_guard = true,
+                    // A STRUCT declaration is now COLLECTED; trait and impl are still
+                    // skipped. Splitting them matters: the skip state exists because
+                    // struct, trait and impl declarations once faulted the driver on 29
+                    // boundary cases, and widening it into a collect for all three would
+                    // re-admit the two that were never made to work.
+                    18 => {
+                        in_struct = true;
+                        struct_records.push((18, val));
+                    }
+                    19 => in_skip_decl = true, // trait declaration
+                    // An impl: the trait now, the head in record 132. Its methods follow as
+                    // functions, and the impl's own END closes it.
+                    20 => impl_of = Some((val, -1)),
+                    132 => {
+                        if let Some((_, head)) = impl_of.as_mut() {
+                            *head = val;
+                        }
+                    }
+                    5 => {
+                        // With no function open, an END closes the impl being parsed.
+                        if cur.is_none() && impl_of.is_some() {
+                            impl_of = None;
+                        } else {
+                            open_decl(&mut cur, code, val).data_bases =
+                                alloc::sync::Arc::clone(&data_bases);
+                            on_function(&names, cur.take().unwrap())
+                        }
+                    }
+                    15 => return ControlFlow::Break(()),
+                    _ => {}
+                }
+            }
+            ControlFlow::Continue(())
+        },
+        before_resume,
+    )?;
+    Ok((
+        names,
+        data_records,
+        enum_records,
+        struct_records,
+        native_paths,
+    ))
+}
+
+/// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
+///
+/// **ONE DEFINITION, USED BY EVERY ENTRY POINT.** Three call sites each rebuilt the pool
+/// inline as `ConstValue::Int`, which is how the tag came to be dropped in three places at
+/// once; a fourth entry point added later would have copied the fourth. The nine-copies
+/// shared-layout defect this crate already paid for is the same shape.
+///
+/// # The tag protocol, which is the stage's and not this function's
+///
+/// | tag | `ConstValue` | what the value word holds |
+/// |---|---|---|
+/// | 0 | `Int` | the integer itself |
+/// | 1 | `StaticStr` | the **lexer intern id**, resolved here through `names` |
+/// | 2 | `Bool` | 0 or 1 |
+///
+/// A `StaticStr` is the only entry needing `names`, and it is why this cannot be a plain
+/// `From` impl on the pair.
+///
+/// # Failure modes
+///
+/// An intern id outside `names` and an unrecognised tag both panic by name rather than
+/// producing a silently wrong constant. Both are stage/host protocol violations: neither is
+/// reachable from a user program, and a wrong constant would be a silent miscompile, which is
+/// the class this function exists to close.
+fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
+    pool.iter()
+        .map(|&(v, tag)| match tag {
+            0 => ConstValue::Int(v),
+            1 => {
+                let raw = names.get(v as usize).unwrap_or_else(|| {
+                    panic!(
+                        "codegen.kel interned StaticStr id {v}, which is outside the \
+                         {}-entry lexer name table",
+                        names.len()
+                    )
+                });
+                ConstValue::StaticStr(unescape_string(raw))
+            }
+            2 => ConstValue::Bool(v != 0),
+            // A Float literal's interned text, converted as the reference lexer converts it.
+            3 => {
+                let text = names.get(v as usize).unwrap_or_else(|| {
+                    panic!("codegen.kel interned Float id {v}, outside the lexer name table")
+                });
+                ConstValue::Float(
+                    text.parse::<f64>()
+                        .unwrap_or_else(|_| panic!("float literal `{text}` is not an f64")),
+                )
+            }
+            other => panic!(
+                "codegen.kel emitted constant-pool tag {other}, which this host does not \
+                 know. A new tag needs a `ConstValue` mapping here, not a default"
+            ),
+        })
+        .collect()
+}
+
+/// Resolve the escape sequences the reference compiler bakes into a `StaticStr`.
+///
+/// The lexer's name table holds a string literal's content **as written**, so `\n` is a
+/// backslash followed by an `n`. The reference bakes the escaped byte, so comparing the two
+/// requires this. All SIX the reference handles are handled here: newline, tab, carriage
+/// return, quote, backslash, and NUL.
+///
+/// **This routine handled four and claimed the missing two did not exist.** Its comment said
+/// it matched the reference by passing an unknown escape through unchanged. That was false in
+/// two directions at once: the reference REJECTS an unknown escape with a lex error rather
+/// than passing it through, and `\r` and `\0` are not unknown to it at all, so a literal
+/// containing either compiled to different bytes under the two pipelines. No stage source
+/// uses any escape, so the byte-identity corpus could not witness it -- the same
+/// unwitnessed-because-unexercised shape this tree keeps recording.
+///
+/// The passthrough arm is retained as an unreachable default rather than a panic: a literal
+/// carrying an unknown escape never reaches codegen, because the reference lexer refuses it
+/// first.
+fn unescape_string(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            out.push(match bytes[i + 1] {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'r' => b'\r',
+                b'"' => b'"',
+                b'\\' => b'\\',
+                b'0' => 0,
+                other => other,
+            });
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("a string literal's unescaped content is valid UTF-8")
+}
+
+/// A construct `parse.kel` does not support, if one is present, as a sentence a
+/// user can act on.
+///
+/// # Why this exists, and what it cost not to have it
+///
+/// `self_host_compile(wire.kel)` fails with ``no chunk named `acc` ``. That names
+/// neither the construct nor the file, and tracing it to a cause took SEVEN
+/// increments: through the record stream, the cursor, the token stream, the fold
+/// continuation, and finally the loop header. The cause is a bare `for` -- a loop
+/// written without `limit`, which `parse.kel`'s header machine does not accept,
+/// though `codegen.kel` handles it perfectly well.
+///
+/// This project's parser names thirteen failure modes with their own causes for
+/// exactly this reason. A message that says which construct is unsupported turns
+/// seven increments into one reading.
+///
+/// # It reports only what it can see
+///
+/// A bare `for` is detectable from the token stream: the `for` keyword's header
+/// runs to its opening brace, and the supported form carries `limit` inside it.
+/// Any OTHER unsupported construct returns `None` and the caller falls back to
+/// the generic diagnosis -- **a guess dressed as a specific cause would be worse
+/// than the bare message it replaces.**
+fn unsupported_construct(src: &str) -> Option<&'static str> {
+    /// `Tok::For` in `parse.kel`'s vocabulary.
+    const TOK_FOR: i64 = 45;
+    /// `Tok::Ident`.
+    const TOK_IDENT: i64 = 1;
+    /// `Tok::LBrace`.
+    const TOK_LBRACE: i64 = 2;
+
+    let (names, tokens) = lex_token_trace(src);
+    let limit_id = names.iter().position(|n| n == "limit").map(|i| i as i64);
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if tokens[i].0 != TOK_FOR {
+            i += 1;
+            continue;
+        }
+        // The header runs from the keyword to its opening brace. `limit` is an
+        // IDENT with a known interned id, not a keyword of its own.
+        let mut j = i + 1;
+        let mut has_limit = false;
+        while j < tokens.len() && tokens[j].0 != TOK_LBRACE {
+            if tokens[j].0 == TOK_IDENT && Some(tokens[j].1) == limit_id {
+                has_limit = true;
+            }
+            j += 1;
+        }
+        if !has_limit {
+            return Some(
+                "a `for` loop written without `limit`. The self-hosted parser accepts \
+                 `for v in lo..hi limit CAP { .. }` and not the bare form; \
+                 `codegen.kel` handles both, so this is a parse-stage gap rather than \
+                 an unsupported language feature. Compile with the reference compiler, \
+                 or add a `limit` clause.",
+            );
+        }
+        i = j.max(i + 1);
+    }
+    None
+}
+
+/// The diagnosis for a declaration whose name matches no chunk.
+///
+/// **THE NAME MISMATCH IS ALWAYS A SYMPTOM.** The pipeline produced a declaration
+/// the reference did not, which means a declaration boundary was mis-parsed. The
+/// name reported is whatever token the parser took for a name, and it is
+/// characteristically NOT the function's -- for `wire.kel` it is a private-data
+/// field.
+fn chunk_lookup_failure(src: &str, name: &str) -> ! {
+    match unsupported_construct(src) {
+        Some(cause) => panic!(
+            "the self-hosted pipeline mis-parsed a declaration boundary and produced a \
+             chunk named `{name}`, which the reference compiler did not emit. The source \
+             contains {cause}"
+        ),
+        None => panic!(
+            "no chunk named `{name}`. The pipeline produced a declaration the reference \
+             did not, so a declaration boundary was mis-parsed and `{name}` is whatever \
+             token was taken for a name. No known unsupported construct was detected, so \
+             this is a NEW case: `keleusma::selfhost::parse_record_trace` and \
+             `lex_token_trace` are the instruments for narrowing it"
+        ),
+    }
+}
+
+/// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
+/// each into its codegen Body (grouping same-named heads into one multihead), run
+/// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
+/// reference module chunk of that name. Native chunks (absent from the source) keep the
+/// reference's ops. The result is a runnable module whose every source-defined chunk was
+/// emitted by the self-hosted pipeline.
+pub fn self_host_compile(src: &str) -> Module {
+    let (mut fns, names, data_records, _enum_records) = parse_functions_fused(src);
+    let composites = private_composite_sizes(&data_records);
+    let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
+    for function in &mut fns {
+        relocation
+            .relocate(function)
+            .expect("relocate data records");
+    }
+    let mut module = compile_src(src);
+    let mut i = 0;
+    while i < fns.len() {
+        let name = chunk_name(&fns[i], &names);
+        // Group consecutive same-named heads (a multiheaded function is one chunk).
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && chunk_name(&fns[j], &names) == name {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        // More than one head, or one guarded head, compiles as a multihead dispatch;
+        // anything else as a single body. See `is_multihead_group` for why this is not
+        // decided by the declaration keyword.
+        // The reconstruction runs through the self-hosted reconstruct.kel stage, so the
+        // whole compile path is Keleusma and the host only moves data between stages.
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &name)
+        };
+        let (ops, pool, lc) = run_codegen(&body, pc, &composites);
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| chunk_lookup_failure(src, &name));
+        module.chunks[idx].ops = ops;
+        module.chunks[idx].constants = pool_to_constants(&pool, &names);
+        module.chunks[idx].local_count = lc as u16;
+    }
+    module
+}
+
+/// The chunk NAME for each chunk index, derived from the parsed function stream.
+///
+/// # Why this has to be derived rather than read off a record
+///
+/// A `Call` node carries the callee's CHUNK INDEX, not its name -- `reconstruct.kel`
+/// packs `chunk + count * CALL_CHUNK_RADIX` into the node's `arg`. The type channel is keyed by
+/// NAMES, so an alias row for `let a = g()` needs the index turned back into `g`.
+///
+/// **IT DELEGATES, BECAUSE THE TABLE ALREADY EXISTED.** `first_pass` computes
+/// `chunks` -- the deduplicated, lexicographically sorted set of function name ids,
+/// in the module's chunk order -- and `parse.kel` is seeded from it. This is a
+/// name lookup over that table and nothing more.
+///
+/// # I DERIVED IT BY HAND FIRST, GOT IT WRONG TWICE, AND IT WAS ALREADY WRITTEN DOWN
+///
+/// The first version grouped **consecutive same-named heads in declaration
+/// order**, reasoning from the grouping [`self_host_compile_fused`] flushes on.
+/// That grouping is real -- a multi-arm function is one chunk -- and it is not the
+/// numbering. It produced the right chunk COUNT and the right SET of names in the
+/// wrong ORDER, so every `Call` node would have resolved to another function, with
+/// nothing about the count or the set looking wrong.
+///
+/// It also **passed the small multi-arm probe**, because there the two rules
+/// coincide. Only the real corpus separated them.
+///
+/// The second version sorted, and then disagreed on `wire.kel` -- which was
+/// recorded as an unexplained divergence and excluded from the corpus test.
+/// **That divergence was the hand-rolled derivation inheriting a defect**, not a
+/// property of the numbering: this version agrees with the reference on every
+/// stage, `wire.kel` included.
+///
+/// **The rule was documented in three places before any of that**, including on
+/// `chunk_table_from_tokens` and beside the seeding in `parse_functions_impl`.
+/// Checking for it would have cost one search and saved two wrong derivations and
+/// a spurious open finding. That is the sixth instance of this pattern in one
+/// session and the first that reached the tree.
+///
+/// # Still checked, not assumed
+///
+/// `the_derived_chunk_names_match_the_reference_compiler` compares this against
+/// `Module::chunks`' own names over the whole stage corpus, with a non-vacuity
+/// guard. Delegation is a reason to expect agreement, not evidence of it.
+#[must_use]
+pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
+    first_pass(src).chunk_names
+}
+
+/// One function's declaration, as the type channel needs it: name, declared arity, and each
+/// parameter's scalar tag.
+pub type DeclRow = (String, i64, Vec<i64>);
+
+/// One call site: the callee's NAME and the number of arguments passed.
+///
+/// **The name, not an index.** The reference numbers functions in DECLARATION order and the
+/// pipeline numbers chunks by SORTED name, so comparing indices would compare two unrelated
+/// numberings rather than the call sites. That trap already cost this line one increment,
+/// where a row carried a name id and "carrying a string removes the question rather than
+/// answering it".
+pub type CallSiteRow = (String, i64);
+
+/// Scoped type constraints, call sites and argument requirements from the pipeline.
+/// Argument rows pair a declared scalar tag with a source operand for stage resolution.
+#[derive(Debug)]
+pub struct CallTypeInputs {
+    /// Source declarations in order, including each function head.
+    pub declarations: Vec<DeclRow>,
+    /// Independent source-head ranges, retaining every call and argument.
+    pub batches: Vec<CallTypeBatch>,
+}
+
+/// Call and expression facts for one source head's guard or body.
+/// Bindings include local slots and only referenced function return declarations.
+#[derive(Debug)]
+pub struct CallTypeBatch {
+    /// Calls carrying callee names and supplied argument counts.
+    pub sites: Vec<CallSiteRow>,
+    /// Declared parameter tags paired with actual operands at corresponding positions.
+    pub arguments: Vec<(i64, ExprOperand)>,
+    /// Scoped bindings for these argument operands. Do not substitute unscoped binding rows.
+    pub bindings: Vec<BindingRow>,
+    /// Expression constraints addressed by form-2 bindings in this same batch.
+    pub expressions: Vec<ExprRow>,
+}
+
+fn structural_type_row(
+    kind: i64,
+    left: ExprOperand,
+    right: ExprOperand,
+    rows: &mut Vec<ExprRow>,
+    bindings: &mut Vec<BindingRow>,
+) -> ExprOperand {
+    let row = rows.len();
+    let identity = format!("#structural:{row}");
+    rows.push((kind, left, right));
+    bindings.push((identity.clone(), row as i64, 2, String::new()));
+    (0, 1, identity)
+}
+
+/// Encode written type syntax as stage construction rows. This does not resolve operands.
+fn declared_type_operand(
+    records: &[(i64, i64)],
+    tag_of: impl Fn(i64) -> i64,
+    rows: &mut Vec<ExprRow>,
+    bindings: &mut Vec<BindingRow>,
+) -> ExprOperand {
+    let mut stack: Vec<Option<ExprOperand>> = Vec::new();
+    for &(kind, value) in records {
+        match kind {
+            6 | 95 => stack.push(Some((tag_of(value), 0, String::new()))),
+            94 => stack.push(None),
+            96 => {
+                let mut tail = (7, 0, String::new());
+                while let Some(element) = stack.pop().expect("tuple type without open") {
+                    tail = structural_type_row(17, element, tail, rows, bindings);
+                }
+                stack.push(Some(tail));
+            }
+            crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
+                if value == 1 {
+                    assert!(
+                        stack.pop().expect("unit without open").is_none(),
+                        "nonempty unit type"
+                    );
+                    stack.push(Some((6, 0, String::new())));
+                } else {
+                    assert_eq!(value, 0, "invalid grouped type marker");
+                    let inner = stack.pop().flatten().expect("empty grouped type");
+                    assert!(
+                        stack.pop().expect("group without open").is_none(),
+                        "multiple grouped types"
+                    );
+                    stack.push(Some(inner));
+                }
+            }
+            8 => {
+                let element = stack.pop().flatten().expect("array type without element");
+                let scalar = if element.1 == 0 {
+                    scalar_array_tag(element.0, value)
+                } else {
+                    0
+                };
+                let array = if scalar != 0 {
+                    (scalar, 0, String::new())
+                } else {
+                    structural_type_row(16, element, (value, 0, String::new()), rows, bindings)
+                };
+                stack.push(Some(array));
+            }
+            // A builtin generic keeps its head as the nominal type operand. The stage does
+            // not compare generic arguments, so the reference cross-check is what refuses
+            // an argument mismatch. This is recorded as a residual in the Order 6 plan.
+            crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
+            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {}
+            _ => panic!("unknown source type record {kind}"),
+        }
+    }
+    if records.is_empty() {
+        (0, 0, String::new())
+    } else {
+        assert_eq!(stack.len(), 1, "unbalanced source type records");
+        stack.pop().flatten().expect("unclosed source tuple type")
+    }
+}
+
+/// Source-declared data types keyed by parser slot ranges, in declaration order.
+/// Ranges avoid expanding large arrays just to look up the few fields a body uses.
+fn source_data_type_ranges(
+    records: &[(i64, i64)],
+    names: &[String],
+    bases: &[i64],
+) -> Vec<(i64, i64, i64)> {
+    let mut fields = Vec::new();
+    let mut visibility = 2;
+    for &(kind, value) in records {
+        match kind {
+            9 => visibility = value % 4,
+            4 if visibility < 2 => fields.push((None, 1i64)),
+            6 if visibility < 2 => {
+                fields.last_mut().expect("data type without field").0 = Some(value)
+            }
+            8 if visibility < 2 => fields.last_mut().expect("data length without field").1 = value,
+            _ => {}
+        }
+    }
+    assert!(
+        bases.len() <= fields.len(),
+        "data address count exceeds declarations"
+    );
+    fields
+        .into_iter()
+        .zip(bases)
+        .map(|((type_id, count), &base)| {
+            assert!(count >= 0 && base >= 0, "negative data field range");
+            let end = base.checked_add(count).expect("data slot range overflow");
+            let tag = scalar_tag_of_type_name(
+                type_id
+                    .and_then(|id| names.get(id as usize))
+                    .map(String::as_str),
+            );
+            (base, end, tag)
+        })
+        .collect()
+}
+
+/// Extract call input facts without reference syntax or inferred expression types.
+///
+/// Operands retain literal values, local identities, called-function identities and synthetic
+/// identities for scalar expression results. The stage resolves those results through expression
+/// rows and form-2 bindings. Composite reads and other unsupported shapes remain unknown.
+/// Local identities include the source head, guard or body range, and frame slot. Function
+/// return identities occupy a separate namespace. Equal spellings cannot alias across heads.
+/// Repeated function heads use the final declaration's parameter tags, matching the
+/// reference input builder. Arity remains separate, so extra or missing arguments are
+/// reported by the stage rather than concealed by the positional zip.
+#[must_use]
+pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
+    try_call_type_inputs_from_pipeline(src).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Extract scoped type facts, retaining parser diagnostics as structured errors.
+/// Stage compilation, lexing and reconstruction still use their existing panic paths.
+/// A caller must not classify such a panic as a source rejection.
+pub fn try_call_type_inputs_from_pipeline(
+    src: &str,
+) -> Result<CallTypeInputs, crate::selfhost_host::ParseRecordError> {
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records, struct_records, _) =
+        try_parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {})?;
+    let nominal_names: alloc::collections::BTreeMap<_, _> = enum_records
+        .iter()
+        .filter(|(kind, _)| *kind == 12)
+        .map(|(_, name)| (*name, 9))
+        .chain(
+            struct_records
+                .iter()
+                .filter(|(kind, _)| *kind == 18)
+                .map(|(_, name)| (*name, 8)),
+        )
+        .collect();
+    let tag_of = |id: i64| {
+        if let Some(kind) = nominal_names.get(&id) {
+            (id + 1) * 16 + kind
+        } else {
+            scalar_tag_of_type_name(names.get(id as usize).map(String::as_str))
+        }
+    };
+    // Variant order and written payload types come from parser declarations.
+    // Preserve each field's syntax so structural identities are derived by the stage.
+    type MemberTypes = Vec<Vec<(i64, i64)>>;
+    let mut enum_variants: Vec<(i64, MemberTypes)> = Vec::new();
+    let mut current_enum = None;
+    for &(kind, value) in &enum_records {
+        match kind {
+            12 => current_enum = Some(value),
+            13 => enum_variants.push((
+                current_enum.expect("variant without enum declaration"),
+                Vec::new(),
+            )),
+            6 | 94 => enum_variants
+                .last_mut()
+                .expect("payload without variant")
+                .1
+                .push(vec![(kind, value)]),
+            8 | 95 | 96 => enum_variants
+                .last_mut()
+                .expect("payload metadata without variant")
+                .1
+                .last_mut()
+                .expect("payload metadata without field")
+                .push((kind, value)),
+            _ => {}
+        }
+    }
+    let mut field_types: alloc::collections::BTreeMap<i64, MemberTypes> =
+        alloc::collections::BTreeMap::new();
+    let mut current_struct = None;
+    for &(kind, value) in &struct_records {
+        match kind {
+            18 => {
+                current_struct = Some(value);
+                field_types.insert(value, Vec::new());
+            }
+            4 => field_types
+                .get_mut(&current_struct.expect("field without struct"))
+                .unwrap()
+                .push(Vec::new()),
+            6 | 8 | 94..=96 => field_types
+                .get_mut(&current_struct.expect("type without struct"))
+                .unwrap()
+                .last_mut()
+                .expect("struct type without field")
+                .push((kind, value)),
+            _ => {}
+        }
+    }
+    let mut declarations = Vec::new();
+    for f in &fns {
+        let Some(name) = Some(chunk_name(f, &names)) else {
+            continue;
+        };
+        let tags = f
+            .param_type_records
+            .iter()
+            .map(|records| {
+                let mut tag = 0;
+                for &(kind, value) in records {
+                    match kind {
+                        6 => tag = tag_of(value),
+                        8 => tag = scalar_array_tag(tag, value),
+                        _ => return 0,
+                    }
+                }
+                tag
+            })
+            .collect();
+        declarations.push((name, f.params as i64, tags));
+    }
+    let parameters: alloc::collections::BTreeMap<_, _> = fns
+        .iter()
+        .filter_map(|f| Some(chunk_name(f, &names)).map(|name| (name, &f.param_type_records)))
+        .collect();
+    let chunk_names = chunk_names_from_pipeline(src);
+    let return_names: Vec<_> = chunk_names
+        .iter()
+        .map(|name| format!("#function:{name}"))
+        .collect();
+    let mut returns = alloc::collections::BTreeMap::new();
+    for f in &fns {
+        if let Some(name) = Some(chunk_name(f, &names)) {
+            returns.insert(format!("#function:{name}"), &f.return_type_records);
+        }
+    }
+    let mut batches = Vec::new();
+    for (head, f) in fns.iter().enumerate() {
+        let Some(name) = Some(chunk_name(f, &names)) else {
+            continue;
+        };
+        let source_slots = source_head_slot_names(f, &names);
+        let data_types = source_data_type_ranges(&data_records, &names, &f.data_bases);
+        for (range, records) in [&f.guard, &f.body].into_iter().enumerate() {
+            if records.is_empty() {
+                continue;
+            }
+            let mut sites = Vec::new();
+            let mut arguments = Vec::new();
+            let mut bindings = Vec::new();
+            let mut expressions = Vec::new();
+            let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
+            // A payload binding the arm never reads still has a frame slot, so its slot is
+            // named as well. Collecting only the slots the body reads left such a binding
+            // without an identity, and type-input extraction panicked on it.
+            let slot_names: alloc::collections::BTreeMap<_, _> = source_slots
+                .keys()
+                .copied()
+                .chain(
+                    body.nodes
+                        .iter()
+                        .filter(|node| node.kind == 2)
+                        .map(|node| node.arg),
+                )
+                .chain(f.enum_payload_bindings.iter().map(|&(_, slot, _)| slot))
+                .map(|slot| (slot, format!("#local:{head}:{range}:{slot}")))
+                .collect();
+            for (slot, records) in f.param_type_records.iter().enumerate() {
+                if let Some(identity) = slot_names.get(&(slot as i64)) {
+                    let (value, form, target) =
+                        declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                    bindings.push((identity.clone(), value, form, target));
+                }
+            }
+            // Bind payload names using source declaration coordinates, never layout size.
+            let payload_bindings: Vec<_> = f
+                .enum_payload_bindings
+                .iter()
+                .filter(|(guard, _, _)| *guard == (range == 0))
+                .collect();
+            assert_eq!(
+                payload_bindings.len(),
+                records.iter().filter(|(kind, _)| *kind == 42).count(),
+                "payload metadata count"
+            );
+            for &&(_, slot, coordinates) in &payload_bindings {
+                let identity = slot_names
+                    .get(&slot)
+                    .expect("payload binding without frame slot");
+                // An `Option<T>` payload carries `T`'s scalar kind, not a declared row.
+                if coordinates >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                    let name = match coordinates - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                        1 => "bool",
+                        2 => "Byte",
+                        3 => "Word",
+                        kind => panic!("unmodelled Option payload kind {kind}"),
+                    };
+                    bindings.push((
+                        identity.clone(),
+                        scalar_tag_of_type_name(Some(name)),
+                        0,
+                        String::new(),
+                    ));
+                    continue;
+                }
+                let variant = usize::try_from(coordinates / 1024).expect("negative variant index");
+                let position =
+                    usize::try_from(coordinates % 1024).expect("negative payload position");
+                let source_type = &enum_variants[variant].1[position];
+                let (value, form, target) =
+                    declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
+                bindings.push((identity.clone(), value, form, target));
+            }
+            // Range-loop induction variables are Word in both supported loop forms.
+            for node in &body.nodes {
+                let slot = match node.kind {
+                    16 => Some(body.for_parts[node.arg as usize]),
+                    23 | 74 => Some(body.limit_parts[node.arg as usize]),
+                    _ => None,
+                };
+                if let Some(identity) = slot.and_then(|slot| slot_names.get(&slot)) {
+                    bindings.push((identity.clone(), 1, 0, String::new()));
+                }
+            }
+            let computed_names: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| typed_result_node(node))
+                .map(|(at, _)| (at as i64, format!("#expression:{head}:{range}:{at}")))
+                .collect();
+            let data_names: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .filter_map(|node| match node.kind {
+                    11 | 12 => Some(node.arg),
+                    13 | 14 => Some(node.arg % 16777216),
+                    _ => None,
+                })
+                .map(|slot| (slot, format!("#data:{slot}")))
+                .collect();
+            for (&slot, identity) in &data_names {
+                if let Some(&(_, _, tag)) = data_types
+                    .iter()
+                    .find(|&&(first, end, _)| slot >= first && slot < end)
+                {
+                    bindings.push((identity.clone(), tag, 0, String::new()));
+                }
+            }
+            let struct_nodes: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.kind == 27)
+                .zip(
+                    f.struct_types
+                        .iter()
+                        .filter(|(guard, _)| *guard == (range == 0)),
+                )
+                .map(|((index, _), (_, name))| (index as i64, *name))
+                .collect();
+            assert_eq!(
+                struct_nodes.len(),
+                f.struct_types
+                    .iter()
+                    .filter(|(guard, _)| *guard == (range == 0))
+                    .count(),
+                "constructor identity count"
+            );
+            let option_payload_types: MemberTypes = vec![Vec::new()];
+            let enum_nodes: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.kind == 18)
+                .zip(
+                    f.enum_variants
+                        .iter()
+                        .filter(|(guard, _)| *guard == (range == 0)),
+                )
+                .map(|((index, _), (_, variant))| {
+                    // An `Option::Some` constructor carries the `Option` name id above the
+                    // base, with one payload field and no declared type for it.
+                    if *variant >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                        let name = *variant - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE;
+                        return (index as i64, (name, &option_payload_types));
+                    }
+                    let variant = usize::try_from(*variant).expect("negative enum variant");
+                    let (name, types) = &enum_variants[variant];
+                    (index as i64, (*name, types))
+                })
+                .collect();
+            assert_eq!(
+                enum_nodes.len(),
+                body.nodes.iter().filter(|node| node.kind == 18).count(),
+                "enum node without constructor metadata"
+            );
+            assert_eq!(
+                enum_nodes.len(),
+                f.enum_variants
+                    .iter()
+                    .filter(|(guard, _)| *guard == (range == 0))
+                    .count(),
+                "enum metadata without constructor node"
+            );
+            let operand = |index| {
+                if let Some(name) = struct_nodes.get(&index) {
+                    (tag_of(*name), 0, String::new())
+                } else if let Some(&(name, _)) = enum_nodes.get(&index) {
+                    (tag_of(name), 0, String::new())
+                } else if let Some(identity) = computed_names.get(&index) {
+                    (0, 1, identity.clone())
+                } else if let Some(node) = body.nodes.get(index as usize)
+                    && node.kind == NODE_LITERAL
+                {
+                    // Preserve literal syntax for the stage's contextual Byte coercion.
+                    (node.arg, 3, String::new())
+                } else if let Some(node) = body.nodes.get(index as usize)
+                    && matches!(node.kind, 28 | 31)
+                {
+                    // Scalar fields pack offset + kind*65536. Scalar array reads
+                    // carry the element kind directly. Nested composite accesses
+                    // have distinct node kinds and remain outside this channel.
+                    let kind = if node.kind == 31 {
+                        node.arg
+                    } else {
+                        node.arg / 65536
+                    };
+                    (scalar_tag_of_layout_kind(kind), 0, String::new())
+                } else if let Some(node) = body.nodes.get(index as usize)
+                    && matches!(node.kind, 11 | 13)
+                {
+                    let slot = if node.kind == 13 {
+                        node.arg % 16777216
+                    } else {
+                        node.arg
+                    };
+                    (0, 1, data_names[&slot].clone())
+                } else {
+                    source_operand(&body, index, &slot_names, &return_names)
+                }
+            };
+            let result_rows = expression_rows_from_body(&body, operand, &mut expressions, true);
+            if range == 1 {
+                for &(declared, given) in &f.struct_counts {
+                    assert!(given >= 0, "unpaired struct field-count metadata");
+                    expressions.push((7, (declared, 0, String::new()), (given, 0, String::new())));
+                }
+                if let Some(tail) = body_tail_node(&body) {
+                    let required = declared_type_operand(
+                        &f.return_type_records,
+                        tag_of,
+                        &mut expressions,
+                        &mut bindings,
+                    );
+                    expressions.push((8, operand(tail), required));
+                }
+            }
+            for (&index, name) in &struct_nodes {
+                let node = &body.nodes[index as usize];
+                let first = usize::try_from(node.lhs).expect("negative struct child offset");
+                let count = usize::try_from(node.rhs).expect("negative struct child count");
+                if let Some(types) = field_types.get(name) {
+                    for (records, &child) in types.iter().zip(&body.call_args[first..first + count])
+                    {
+                        let required =
+                            declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                        expressions.push((8, operand(child), required));
+                    }
+                }
+            }
+            for (&index, (_, types)) in &enum_nodes {
+                let node = &body.nodes[index as usize];
+                let first = usize::try_from(node.lhs).expect("negative enum child offset");
+                let count = usize::try_from(node.rhs).expect("negative enum child count");
+                // `Option::None` alone has no discriminant child and no payload to type.
+                if count == 0 && core::ptr::eq(*types, &option_payload_types) {
+                    continue;
+                }
+                assert!(count > 0, "enum constructor without discriminant");
+                expressions.push((
+                    7,
+                    (types.len() as i64, 0, String::new()),
+                    (node.rhs - 1, 0, String::new()),
+                ));
+                for (records, &child) in types.iter().zip(&body.call_args[first + 1..first + count])
+                {
+                    // An `Option::Some` payload has no declared type, so the self-hosted type
+                    // stage leaves it unconstrained and the reference cross-check governs.
+                    if records.is_empty() {
+                        continue;
+                    }
+                    let required =
+                        declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                    expressions.push((8, operand(child), required));
+                }
+            }
+            let field_nodes: Vec<_> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| matches!(node.kind, 28 | 30))
+                .collect();
+            let field_sources: Vec<_> = f
+                .field_projections
+                .iter()
+                .filter(|(guard, _)| *guard == (range == 0))
+                .collect();
+            assert_eq!(
+                field_nodes.len(),
+                field_sources.len(),
+                "field projection metadata count"
+            );
+            for ((index, node), &(_, coordinates)) in field_nodes.into_iter().zip(field_sources) {
+                let name = coordinates / 1024;
+                let position =
+                    usize::try_from(coordinates % 1024).expect("negative field position");
+                let source_type = &field_types[&name][position];
+                expressions.push((8, operand(node.lhs), (tag_of(name), 0, String::new())));
+                let (value, form, target) =
+                    declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
+                bindings.push((computed_names[&(index as i64)].clone(), value, form, target));
+            }
+            let tuple_nodes: Vec<_> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.kind == 37)
+                .collect();
+            let tuple_sources: Vec<_> = f
+                .tuple_projections
+                .iter()
+                .filter(|(guard, _)| *guard == (range == 0))
+                .collect();
+            assert_eq!(
+                tuple_nodes.len(),
+                tuple_sources.len(),
+                "tuple projection metadata count"
+            );
+            for ((at, node), &(_, position)) in tuple_nodes.into_iter().zip(tuple_sources) {
+                // A payload field of a single-variant enum `let` pattern carries its variant
+                // row and field position above the base. The value read is the variant's enum,
+                // and the result has the field's declared type, as a payload binding has.
+                if position >= crate::selfhost_host::PARSE_ENUM_PROJECTION_BASE {
+                    let coordinates = position - crate::selfhost_host::PARSE_ENUM_PROJECTION_BASE;
+                    let variant =
+                        usize::try_from(coordinates / 1024).expect("negative variant index");
+                    let field =
+                        usize::try_from(coordinates % 1024).expect("negative payload position");
+                    let (name, types) = &enum_variants[variant];
+                    expressions.push((8, operand(node.lhs), (tag_of(*name), 0, String::new())));
+                    let (value, form, target) = declared_type_operand(
+                        &types[field],
+                        tag_of,
+                        &mut expressions,
+                        &mut bindings,
+                    );
+                    bindings.push((computed_names[&(at as i64)].clone(), value, form, target));
+                    continue;
+                }
+                let row = expressions.len();
+                expressions.push((19, operand(node.lhs), (position, 0, String::new())));
+                bindings.push((
+                    computed_names[&(at as i64)].clone(),
+                    row as i64,
+                    2,
+                    String::new(),
+                ));
+            }
+            for (index, node) in body.nodes.iter().enumerate() {
+                if node.kind == 19 {
+                    let first = usize::try_from(node.lhs).expect("negative tuple child offset");
+                    let count = usize::try_from(node.rhs).expect("negative tuple child count");
+                    let mut tail = (7, 0, String::new());
+                    for &child in body.call_args[first..first + count].iter().rev() {
+                        tail = structural_type_row(
+                            17,
+                            operand(child),
+                            tail,
+                            &mut expressions,
+                            &mut bindings,
+                        );
+                    }
+                    bindings.push((
+                        computed_names[&(index as i64)].clone(),
+                        tail.0,
+                        tail.1,
+                        tail.2,
+                    ));
+                }
+            }
+            for node in &body.nodes {
+                if node.kind == NODE_LET_IN
+                    && let Some(identity) = slot_names.get(&node.arg)
+                {
+                    if let Some(&(_, _, declared)) = f
+                        .let_annotations
+                        .iter()
+                        .find(|&&(guard, slot, _)| guard == (range == 0) && slot == node.arg)
+                    {
+                        let required = if declared >= 0 {
+                            (tag_of(declared), 0, String::new())
+                        } else {
+                            let records = f
+                                .annotation_records
+                                .get(&(range == 0, -declared - 1))
+                                .expect("missing annotation source type");
+                            declared_type_operand(records, tag_of, &mut expressions, &mut bindings)
+                        };
+                        let row = expressions.len();
+                        expressions.push((8, operand(node.lhs), required));
+                        bindings.push((identity.clone(), row as i64, 2, String::new()));
+                    } else {
+                        let (value, form, target) = operand(node.lhs);
+                        // Binding and operand forms have separate namespaces.
+                        let (value, form) = if form == 3 { (1, 0) } else { (value, form) };
+                        bindings.push((identity.clone(), value, form, target));
+                    }
+                }
+                if matches!(node.kind, 12 | 14) {
+                    let (slot, value) = if node.kind == 12 {
+                        (node.arg, node.lhs)
+                    } else {
+                        let store =
+                            &body.nodes[usize::try_from(node.lhs).expect("negative store node")];
+                        assert_eq!(store.kind, 15, "indexed assignment without store node");
+                        (node.arg % 16777216, store.lhs)
+                    };
+                    expressions.push((8, operand(value), (0, 1, data_names[&slot].clone())));
+                }
+                if node.kind != NODE_CALL {
+                    continue;
+                }
+                let Some(callee) = chunk_names.get(node.arg as usize) else {
+                    continue;
+                };
+                sites.push((callee.clone(), node.rhs));
+                let Some(types) = parameters.get(callee.as_str()) else {
+                    continue;
+                };
+                let start = usize::try_from(node.lhs).expect("negative call argument offset");
+                let count = usize::try_from(node.rhs).expect("negative call argument count");
+                let end = start
+                    .checked_add(count)
+                    .expect("call argument range overflow");
+                let actual = body
+                    .call_args
+                    .get(start..end)
+                    .expect("call arguments outside side table");
+                for (records, &index) in types.iter().zip(actual) {
+                    let required =
+                        declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                    if required.1 == 0 {
+                        arguments.push((required.0, operand(index)));
+                    } else {
+                        expressions.push((8, operand(index), required));
+                    }
+                }
+            }
+            for (node, row) in result_rows {
+                bindings.push((computed_names[&node].clone(), row as i64, 2, String::new()));
+            }
+            // Select declaration dependencies without resolving a type on the host. Local
+            // aliases remain in the batch for the stage's bounded fixpoint to resolve.
+            let targets: alloc::collections::BTreeSet<_> = arguments
+                .iter()
+                .filter_map(|(_, (_, form, target))| (*form == 1).then_some(target))
+                .chain(
+                    expressions
+                        .iter()
+                        .flat_map(|(_, a, b)| [a, b])
+                        .filter_map(|(_, form, target)| (*form == 1).then_some(target)),
+                )
+                .chain(
+                    bindings
+                        .iter()
+                        .filter_map(|(_, _, form, target)| (*form == 1).then_some(target)),
+                )
+                .filter_map(|target| {
+                    returns
+                        .get(target)
+                        .map(|&records| (target.clone(), records))
+                })
+                .collect();
+            for (name, records) in targets {
+                let (value, form, target) =
+                    declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                bindings.push((name, value, form, target));
+            }
+            batches.push(CallTypeBatch {
+                sites,
+                arguments,
+                bindings,
+                expressions,
+            });
+        }
+    }
+    Ok(CallTypeInputs {
+        declarations,
+        batches,
+    })
+}
+
+/// Declarations and call sites from the same extraction that supplies actual arguments.
+/// Use [`call_type_inputs_from_pipeline`] when the argument requirements are also needed.
+#[must_use]
+pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow>) {
+    let inputs = call_type_inputs_from_pipeline(src);
+    (
+        inputs.declarations,
+        inputs
+            .batches
+            .into_iter()
+            .flat_map(|batch| batch.sites)
+            .collect(),
+    )
+}
+
+/// The top-level DECLARED NAMES a program introduces, from the PIPELINE.
+///
+/// Functions, `data` blocks, enums and structs. Returned sorted, because the reference groups
+/// them by kind (every function, then every data block, then every type) while the records arrive
+/// in SOURCE order, and neither grouping is more correct than the other. Sorting compares the
+/// content rather than either arrangement.
+///
+/// # `use` IMPORTS ARE EXCLUDED, AND THE REASON IS MEASURED RATHER THAN ASSUMED
+///
+/// The reference's declared set also contains the name each `use` declaration imports, or sets a
+/// wildcard flag instead when the import is `path::*`. **The record stream cannot tell those two
+/// cases apart.** Traced with `parse_record_trace`:
+///
+/// | source | records |
+/// |---|---|
+/// | `use play` | USTART(`play`), one path record (`play`) |
+/// | `use host::play` | USTART(`host`), path records (`host`), (`play`) |
+/// | `use host::*` | USTART(`host`), one path record (`host`) |
+///
+/// The first and third are **indistinguishable** — one path record each — yet the reference draws
+/// opposite conclusions from them, taking `play` as an imported name and taking `host::*` as a
+/// wildcard contributing no name at all. Including `use` here would therefore contribute the
+/// module name `host` as though it were an imported symbol.
+///
+/// So this is a re-projection of four declaration kinds and **not** of the fifth.
+/// `the_wildcard_import_is_not_distinguishable_in_the_record_stream` pins that gap in the failing
+/// direction: it fails if the stage ever learns to tell them apart, which is the signal to extend
+/// this function.
+///
+/// # Nothing was added to the driver
+///
+/// All four kinds were already collected: functions by the record walk, `data` blocks and enums
+/// since before this work, and structs since the previous slice. This reads tables that exist.
+#[must_use]
+pub fn declared_names_from_pipeline(src: &str) -> Vec<String> {
+    let mut fn_name_ids: Vec<i64> = Vec::new();
+    let (names, data_records, enum_records, struct_records, _) = parse_functions_impl(
+        src,
+        true,
+        &mut |_, f| fn_name_ids.push(f.name),
+        &mut |_, _, _| {},
+    );
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    let mut out: Vec<String> = fn_name_ids.iter().filter_map(|&id| name_of(id)).collect();
+    // A `data` record packs the block's name with its visibility as `name * 4 + visibility`.
+    for &(code, val) in &data_records {
+        if code == 9
+            && let Some(n) = name_of(val / 4)
+        {
+            out.push(n);
+        }
+    }
+    for &(code, val) in &enum_records {
+        if code == 12
+            && let Some(n) = name_of(val)
+        {
+            out.push(n);
+        }
+    }
+    for &(code, val) in &struct_records {
+        if code == 18
+            && let Some(n) = name_of(val)
+        {
+            out.push(n);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// One name occurrence in a function body: the NAME, whether it is a local, and whether the
+/// occurrence is a call.
+pub type OccurrenceRow = (String, i64, i64);
+
+/// Name occurrences in function bodies, from the PIPELINE.
+///
+/// # What is covered and what is not, measured rather than claimed
+///
+/// The reference's `occurrence_rows` records every `Call` and every `Ident` expression. This
+/// covers the two the forest represents directly: a `Local` node, whose slot resolves to a
+/// parameter or `let` name, and a `Call` node, whose chunk index resolves to the callee's name.
+///
+/// **TWO KINDS OF OCCURRENCE ARE NOT COVERED, AND BOTH WERE MEASURED RATHER THAN GUESSED.**
+///
+/// 1. **An identifier naming a `data` block.** The reference sees `d.q` as a field access whose
+///    object is an `Ident`, and records `d` as a non-local occurrence. The pipeline sees a single
+///    data-read node carrying a block index, with no ident node at all. A difference in
+///    REPRESENTATION, not missing plumbing.
+/// 2. **A `for` loop variable.** Its READ appears in the forest as an ordinary local node, but
+///    **nothing on the wire binds its slot to its name**: only `let` bindings emit a name record,
+///    the one added under the operator's ruling on that fork. So the slot resolves to nothing and
+///    the occurrence is dropped rather than reported under a wrong name.
+///
+/// Both are pinned by tests that fire when they close, so the exclusions cannot quietly become
+/// permanent. Closing the second is the same shape of change as the `let` name record that
+/// already exists.
+///
+/// # A defect this function had before it worked
+///
+/// `let_names` carries `(slot, name)`. An earlier revision paired it positionally against the
+/// `LetIn` nodes and read the tuple backwards, so every `let` occurrence came back under the
+/// ENCLOSING FUNCTION'S name — `main` where `a` was meant. It is now looked up BY SLOT, the way
+/// `binding_rows_from_pipeline` already does it. **Two extractions, one convention.**
+#[must_use]
+pub fn occurrence_rows_from_pipeline(src: &str) -> Vec<OccurrenceRow> {
+    let (fns, names, ..) = parse_functions_fused(src);
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+    let chunk_names = chunk_names_from_pipeline(src);
+
+    let mut out: Vec<OccurrenceRow> = Vec::new();
+    let mut i = 0usize;
+    while i < fns.len() {
+        let Some(group_name) = name_of(fns[i].name) else {
+            i += 1;
+            continue;
+        };
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && name_of(fns[j].name).as_deref() == Some(group_name.as_str()) {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &group_name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &group_name)
+        };
+
+        // SLOT TO NAME. Parameters take the low slots in declaration order; each `let` takes the
+        // slot its `LetIn` node carries, paired with the names the record stream reported in
+        // program order. Pairing by ORDER rather than guessing an allocation rule: the stage
+        // reports both sequences and the driver already keeps them.
+        let mut slot_name: alloc::collections::BTreeMap<i64, String> =
+            alloc::collections::BTreeMap::new();
+        for (slot, &pid) in group[0].param_names.iter().enumerate() {
+            if let Some(n) = name_of(pid) {
+                slot_name.insert(slot as i64, n);
+            }
+        }
+        // `let_names` carries `(slot, name)` -- the slot is filled in from the `LetIn` record
+        // that follows the name record. Looked up BY SLOT, the same way `binding_rows_from_pipeline`
+        // does it, rather than by pairing two sequences in order: an earlier revision of this
+        // function paired them positionally and read the tuple backwards, reporting the enclosing
+        // function's own name where a binding's should have been.
+        for &(slot, nid) in &group[0].let_names {
+            if let Some(n) = name_of(nid) {
+                slot_name.insert(slot, n);
+            }
+        }
+
+        for node in &body.nodes {
+            match node.kind {
+                // A local read. Its slot names a parameter or a `let` binding.
+                2 => {
+                    if let Some(n) = slot_name.get(&node.arg) {
+                        out.push((n.clone(), 1, 0));
+                    }
+                }
+                NODE_CALL => {
+                    if let Some(callee) = chunk_names.get(node.arg as usize) {
+                        let local = i64::from(slot_name.values().any(|n| n == callee));
+                        out.push((callee.clone(), local, 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Source names indexed by the slots of one head, before dispatch remapping.
+fn source_head_slot_names(
+    function: &ParsedFn,
+    names: &[String],
+) -> alloc::collections::BTreeMap<i64, String> {
+    let mut slots = alloc::collections::BTreeMap::new();
+    for (slot, &id) in function.param_names.iter().enumerate() {
+        if let Some(name) = names.get(id as usize) {
+            slots.insert(slot as i64, name.clone());
+        }
+    }
+    for &(slot, id) in &function.let_names {
+        if let Some(name) = names.get(id as usize) {
+            slots.insert(slot, name.clone());
+        }
+    }
+    slots
+}
+
+/// Restate scalar literals and names from the forest without inferring a type.
+fn source_operand(
+    body: &Body,
+    index: i64,
+    slots: &alloc::collections::BTreeMap<i64, String>,
+    chunks: &[String],
+) -> ExprOperand {
+    match body.nodes.get(index as usize) {
+        Some(node) if matches!(node.kind, NODE_LITERAL | 76) => (1, 0, String::new()),
+        Some(node) if node.kind == 80 => (
+            scalar_tag_of_layout_kind(node.arg / 65536),
+            0,
+            String::new(),
+        ),
+        Some(node) if node.kind == NODE_UNIT && (node.arg == 1 || node.arg == 2) => {
+            (2, 0, String::new())
+        }
+        Some(node) if node.kind == NODE_UNIT && matches!(node.arg, 0 | 3) => (6, 0, String::new()),
+        Some(node) if node.kind == 2 => slots
+            .get(&node.arg)
+            .map_or((0, 0, String::new()), |name| (0, 1, name.clone())),
+        Some(node) if node.kind == NODE_CALL => chunks
+            .get(node.arg as usize)
+            .map_or((0, 0, String::new()), |name| (0, 1, name.clone())),
+        _ => (0, 0, String::new()),
+    }
+}
+
+/// Whether a forest node is a BINARY OPERATOR as the reference counts one.
+///
+/// **FOUR FOREST KINDS, NOT ONE, AND THE FIRST REVISION OF THIS SLICE SAW ONLY THE FIRST.**
+/// `Expr::BinOp` in the reference covers every binary operation whatever its operand types, and
+/// contributes one row regardless. The stage's forest splits them by lowering strategy: `Word`
+/// operations, and three `Byte` families that promote, operate and truncate.
+///
+/// | forest kind | lowering |
+/// |---|---|
+/// | 3 | the `Word` operators |
+/// | 44 | `Byte` bitwise, via widen-operate-truncate |
+/// | 45 | `Byte` arithmetic |
+/// | 60 | `Byte` shifts |
+///
+/// All four carry their operands in `lhs` and `rhs`, so one predicate covers them.
+///
+/// **This was a blind spot the agreement test could not see**, because its corpus used only
+/// `Word` operands — the failure this repository has recorded three times as "a guard whose corpus
+/// lacks the construct is a guard for a different question". Found by asking what ELSE the
+/// reference calls a binary operator, after the same reasoning had been applied to the eight node
+/// KINDS but not to the operand TYPES inside one of them.
+fn is_binary_operator(kind: i64) -> bool {
+    matches!(kind, 3 | 44 | 45 | 60)
+}
+
+/// One operand of an expression row: `(value, form, name)`.
+///
+/// Form 0 means `value` is a type TAG and `name` is empty. Form 1 means `name` is the
+/// identifier the operand mentions and `value` is unused. Form 3 retains a source integer
+/// literal in `value` for contextual Byte coercion. Operand forms and binding forms are separate.
+/// Names are strings because the reference and pipeline use different intern tables.
+/// Comparing their numeric ids would compare the numberings instead of the source facts.
+pub type ExprOperand = (i64, i64, String);
+
+/// One expression row as the type channel consumes it: `(kind, left, right)`.
+pub type ExprRow = (i64, ExprOperand, ExprOperand);
+
+/// Binary-operator expression rows, and which row each DERIVED binding resolves through.
+///
+/// # Why order is not reproduced, which is the whole reason this was tractable
+///
+/// The reference's table is positional — `derived` carries `(name, index into the table)` — and
+/// three separate sizings of this slice treated reproducing that order as the obstacle. **It is
+/// not a requirement.** `verify_types.kel` reads the table in exactly two places: `tyb_node_tag`,
+/// indexed by `ty.btag[b]` for a binding whose form is 2, and a per-row predicate that examines
+/// row `i` in isolation. Nothing sweeps it in order. So the index need only be consistent between
+/// the two channels the host supplies, and **any numbering the pipeline chooses works**.
+///
+/// That was established by reading the CONSUMER after three wrong sizings taken from producers —
+/// the reference's line count, its visitor discipline, and the forest's child channels. The
+/// requirement lives at the boundary, not in either implementation.
+///
+/// # Coverage
+///
+/// Six of the eight kinds are extracted here. They are binary operators, array elements,
+/// conditions, conditional and match branch pairs, struct field counts, and tail-versus-return claims.
+/// `branch_pair_rows_follow_explicit_else_presence` compares written branch pairs against
+/// reference syntax, including empty, statement-only, nested and sequential branches.
+///
+/// Parser If records use argument 1 for an omitted else and 0 for a written else.
+/// Reconstruction carries an omitted else as `-(condition_index + 1)` in the If argument.
+/// Code generation decodes that index without changing emitted bytecode. Branch comparison
+/// follows the presence marker instead of guessing from the synthesized branch's value.
+/// `an_empty_else_is_distinguished_from_an_implicit_one` pins the parser distinction.
+///
+/// Field access and index access remain incomplete below. Match-arm pairs use the integer
+/// and enum side tables. Guarded-arm nodes preserve their condition and result separately.
+///
+/// # Composite extraction
+///
+/// This block previously said only that "the two representations disagree about what a node IS",
+/// carried over from the occurrences slice. That was a reason to look, not a finding. Both
+/// blockers below were measured, and one of them is not what reading the two sides predicted.
+///
+/// Declared scalar field and index operations are rejected by parser diagnostics before
+/// reconstruction. The scoped fallible input path retains these as source errors, distinct
+/// from parser capacity and unsupported-syntax failures. The legacy interface here still
+/// panics. Unannotated scalar aliases and other composite input paths remain incomplete.
+/// `a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted` checks the
+/// explicit diagnostics and a valid array control.
+///
+/// Kind 7 comes from metadata emitted by `parse.kel` after it resolves the literal's struct.
+/// The metadata carries the declared field count. The following construction record carries
+/// the supplied count. The driver pairs them before reconstruction, and the type stage checks
+/// equality. `struct_field_metadata_separates_equal_size_literals` pins why byte size alone
+/// cannot provide the declared count. Nested and reordered literals are covered by
+/// `pipeline_struct_literal_counts_drive_type_rejection`.
+///
+/// **THIS FUNCTION CARRIED A NARROWER NAME FOR ONE INCREMENT**, naming only the binary operator.
+/// Covering conditions made that name false, and a name that lies is precisely what several
+/// increments of this session were spent removing, so it was renamed rather than left to drift.
+/// The old name is deliberately NOT spelled here: the citation guard rejects a name that resolves
+/// to nothing, and writing one while explaining its retirement is the fourth instance of that
+/// class in this repository.
+///
+/// This function is deliberately NOT named after the extraction, so the count pin keeps reporting
+/// four of five. A partial migration counted as a whole one is the failure that pin exists to
+/// prevent.
+#[must_use]
+pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, usize)>) {
+    let (fns, names, ..) = parse_functions_fused(src);
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+    let chunk_names = chunk_names_from_pipeline(src);
+
+    let mut rows: Vec<ExprRow> = Vec::new();
+    let mut derived: Vec<(String, usize)> = Vec::new();
+    // Type facts belong to individual source heads. Reconstruct their bodies before
+    // code generation combines them into dispatch, which remaps parameter slots and
+    // replaces the source tails with a synthetic root.
+    for f in &fns {
+        let Some(function_name) = Some(chunk_name(f, &names)) else {
+            continue;
+        };
+        for &(declared, given) in &f.struct_counts {
+            assert!(given >= 0, "unpaired struct field-count metadata");
+            rows.push((7, (declared, 0, String::new()), (given, 0, String::new())));
+        }
+        let slot_name = source_head_slot_names(f, &names);
+
+        for (records, is_guard) in [(&f.guard, true), (&f.body, false)] {
+            if is_guard && records.is_empty() {
+                continue;
+            }
+            let category = reconstruct_category(f.cat);
+            let body = reconstruct_via_kel(records, category, f.params, &function_name);
+
+            let operand = |index| source_operand(&body, index, &slot_name, &chunk_names);
+
+            let row_of_node = expression_rows_from_body(&body, operand, &mut rows, false);
+            for node in &body.nodes {
+                if node.kind == NODE_LET_IN
+                    && let Some(&row) = row_of_node.get(&node.lhs)
+                    && let Some(name) = slot_name.get(&node.arg)
+                {
+                    derived.push((name.clone(), row));
+                }
+            }
+
+            // --- THE TAIL-VERSUS-RETURN CLAIM, KIND 8 -------------------------------------
+            //
+            // One row per function that HAS a tail expression, pairing what the body yields
+            // against what the signature promises. `ty_kind_is_equality` covers kind 8, so this
+            // is the row that refuses `fn f() -> Word { true }`.
+            //
+            // **PUSHED AFTER THE HEAD'S OWN ROWS, and that is not arbitrary.** `row_of_node`
+            // maps a forest node to a position in `rows`, and the derived bindings above read
+            // it; appending here cannot disturb an index already handed out. The reference
+            // appends its tail row at the same point for the same reason.
+            //
+            // The return operand is always form 0 — a tag the signature states outright —
+            // exactly as the reference builds it.
+            // Each source head has its own body here, so dispatch synthesis cannot
+            // hide a head's tail or substitute another head's slot names.
+            // Guard subexpressions participate in the walk above. Do not invent a
+            // root requirement here: the reference currently accepts a Word-valued
+            // function guard. Match guards have a different reference check.
+            if !is_guard && let Some(tail) = body_tail_node(&body) {
+                let ret = scalar_tag_of_type_name(name_of(f.return_type).as_deref());
+                rows.push((8, operand(tail), (ret, 0, String::new())));
+            }
+        }
+    }
+
+    (rows, derived)
+}
+
+/// Shared constraint extraction. Precise scalar rows retain the operator result rule.
+fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
+    body: &Body,
+    operand: F,
+    rows: &mut Vec<ExprRow>,
+    scalar_results: bool,
+) -> alloc::collections::BTreeMap<i64, usize> {
+    let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
+        alloc::collections::BTreeMap::new();
+    let nothing: ExprOperand = (0, 0, String::new());
+
+    for (at, node) in body.nodes.iter().enumerate() {
+        if scalar_results && matches!(node.kind, 16 | 23 | 74) {
+            let base = usize::try_from(node.arg).expect("negative loop-parts offset");
+            let bounds = if node.kind == 16 {
+                &body.for_parts[base + 2..base + 4]
+            } else {
+                &body.limit_parts[base + 5..base + 7]
+            };
+            for &bound in bounds {
+                rows.push((8, operand(bound), (1, 0, String::new())));
+            }
+        }
+        if scalar_results && matches!(node.kind, 13 | 15 | 31 | 43) {
+            // Indexed data reads carry the index in lhs. Stores and value-array
+            // reads carry it in rhs. No host-side type inference is needed.
+            let index = if node.kind == 13 { node.lhs } else { node.rhs };
+            rows.push((8, operand(index), (1, 0, String::new())));
+        }
+        if is_binary_operator(node.kind) {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((
+                if scalar_results {
+                    binary_fact_kind(node)
+                } else {
+                    1
+                },
+                operand(node.lhs),
+                operand(node.rhs),
+            ));
+        } else if node.kind == 6 {
+            // Unary not requires a boolean operand and yields bool.
+            if scalar_results {
+                row_of_node.insert(at as i64, rows.len());
+            }
+            rows.push((3, operand(node.lhs), nothing.clone()));
+        } else if scalar_results && matches!(node.kind, 8 | 9 | 68) {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((13, operand(node.lhs), operand(node.rhs)));
+        } else if scalar_results && matches!(node.kind, 10 | 65 | 66) {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((12, operand(node.lhs), nothing.clone()));
+        } else if scalar_results && node.kind == 26 {
+            row_of_node.insert(at as i64, rows.len());
+            let target = if node.arg == 1 { 3 } else { 1 };
+            rows.push((15, operand(node.lhs), (target, 0, String::new())));
+        } else if scalar_results && node.kind == 43 {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((18, operand(node.lhs), nothing.clone()));
+        } else if matches!(node.kind, 75 | 78) && node.lhs > 0 {
+            rows.push((3, operand(node.lhs - 1), nothing.clone()));
+        } else if node.kind == 71 {
+            // Guarded match-arm wrapper. Its result is compared by the parent match.
+            rows.push((3, operand(node.lhs), nothing.clone()));
+        } else if node.kind == 4 {
+            // The parser marks an absent else, and reconstruction preserves it as a
+            // negative condition index. Empty written branches still contribute a pair.
+            let condition = if node.arg < 0 {
+                -node.arg - 1
+            } else {
+                node.arg
+            };
+            rows.push((3, operand(condition), nothing.clone()));
+            if node.arg >= 0 {
+                let branch_tail =
+                    |root| block_tail_node(body, root).map_or_else(|| nothing.clone(), &operand);
+                if scalar_results {
+                    row_of_node.insert(at as i64, rows.len());
+                }
+                rows.push((4, branch_tail(node.lhs), branch_tail(node.rhs)));
+            }
+        } else if node.kind == 22 || node.kind == 39 {
+            // Match arms compare their first result with every subsequent result.
+            // The integer form always carries its wildcard result; the enum form
+            // carries an explicit presence flag after its fixed-stride arm entries.
+            let base = usize::try_from(node.arg).expect("negative match-parts offset");
+            let count = usize::try_from(node.rhs).expect("negative match arm count");
+            let stride = if node.kind == 22 { 2 } else { 20 };
+            let result_offset = if node.kind == 22 { 3 } else { 4 };
+            let first_row = rows.len();
+            let mut first: Option<ExprOperand> = None;
+            let arm_result = |index: i64| {
+                let node = &body.nodes[usize::try_from(index).expect("negative arm result")];
+                operand(if node.kind == 71 { node.rhs } else { index })
+            };
+            for arm in 0..count {
+                let result = arm_result(body.match_parts[base + arm * stride + result_offset]);
+                if let Some(head) = &first {
+                    rows.push((4, head.clone(), result));
+                } else {
+                    first = Some(result);
+                }
+            }
+            let wildcard = if node.kind == 22 {
+                (body.match_parts[base + 1] >= 0).then_some(body.match_parts[base + 1])
+            } else if body.match_parts[base + 2 + count * stride] == 1 {
+                Some(body.match_parts[base + 3 + count * stride])
+            } else {
+                None
+            };
+            if let (Some(head), Some(wildcard)) = (&first, wildcard) {
+                rows.push((4, head.clone(), arm_result(wildcard)));
+            }
+            if scalar_results {
+                if rows.len() == first_row
+                    && let Some(single) = first.or_else(|| wildcard.map(arm_result))
+                {
+                    rows.push((4, single.clone(), single));
+                }
+                if rows.len() > first_row {
+                    row_of_node.insert(at as i64, first_row);
+                }
+            }
+        } else if node.kind == 77 {
+            // Checked arms retain binding wrappers around node 78. Compare their
+            // body results, while each wrapper independently contributes its guard.
+            let base = usize::try_from(node.arg).expect("negative checked header");
+            let count = usize::try_from(node.rhs).expect("negative checked arm count");
+            assert!(
+                (1..=50).contains(&count),
+                "checked arm count outside descriptor capacity"
+            );
+            let mut link = body.match_parts[base + 1];
+            let first_row = rows.len();
+            let mut first: Option<ExprOperand> = None;
+            for _ in 0..count {
+                let arm = usize::try_from(link - 1).expect("missing checked arm");
+                let root = block_tail_node(body, body.match_parts[arm + 3])
+                    .expect("missing checked arm result");
+                let wrapper = &body.nodes[root as usize];
+                assert_eq!(wrapper.kind, 78, "checked arm without result wrapper");
+                let tail = block_tail_node(body, wrapper.rhs).expect("checked body without tail");
+                let result = operand(tail);
+                if let Some(head) = &first {
+                    rows.push((4, head.clone(), result));
+                } else {
+                    first = Some(result);
+                }
+                link = body.match_parts[arm + 4];
+            }
+            assert_eq!(link, 0, "checked arm count does not consume its list");
+            if scalar_results {
+                if rows.len() == first_row {
+                    let single = first.clone().expect("checked expression has an ok arm");
+                    rows.push((4, single.clone(), single));
+                }
+                row_of_node.insert(at as i64, first_row);
+            }
+            // An arithmetic outcome left without an unguarded catch-all reaches the
+            // wrapping default, which yields the operation's own type, so the result is
+            // compared with the operation as `typecheck::checked_wrap_default_reachable`
+            // requires. The handled index forms trap instead and are not compared.
+            if let Some(head) = &first
+                && let Ok(root_at) = usize::try_from(node.lhs)
+                && let Some(root) = body.nodes.get(root_at)
+                && !matches!(root.kind, 13 | 15 | 31)
+            {
+                let scalar = body.match_parts[base] / 65536;
+                let op = root.arg % 64;
+                // Bit 1 overflow and bit 2 underflow, for the Word and Byte subset.
+                let arises = if root.kind == 10 {
+                    2
+                } else {
+                    match (op, scalar) {
+                        (5, _) | (4, 2) => 0,
+                        (4, _) => 2,
+                        (_, 3) => 6,
+                        (3, _) => 4,
+                        _ => 2,
+                    }
+                };
+                if arises & !body.match_parts[base + 3] != 0 {
+                    rows.push((4, head.clone(), operand(node.lhs)));
+                }
+            }
+        } else if node.kind == NODE_ARRAY_LIT {
+            // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
+            //
+            // The reference pairs element ZERO against every LATER element, so a literal of
+            // n elements contributes n-1 rows and one of n <= 1 contributes none. Kind 2 is
+            // an equality kind, so the pairing must match exactly. An unknown first element
+            // suppresses each first-versus-rest disagreement. Adjacent pairing could still
+            // compare two later known elements and reject the same input.
+            //
+            // **THE ELEMENTS COME FROM `call_args`, SLICED BY THIS NODE'S OWN `lhs`/`rhs`.**
+            // That channel is shared with `Node::Call`; a scan would read call arguments as
+            // array elements.
+            //
+            // Measured before it was written: on every probe the count of kind-17 nodes
+            // equalled the count of the reference's array-literal expressions, INCLUDING the
+            // nested-index shape that once mis-parsed as a literal. That was the one
+            // direction capable of rejecting a correct program.
+            //
+            // **THE `count >= 2` GUARD IS BELT-AND-BRACES AND MUTATING IT PROVES NOTHING.**
+            // The loop below runs `1..count`, which is already empty at a count of one, so
+            // relaxing the guard to `>= 1` is an EQUIVALENT MUTANT: it changes no output and
+            // its survival is not a gap in the tests. Recorded because a surviving mutant
+            // left unexplained reads as a missing guard, and the next reader would go looking
+            // for one. The guard earns its place by making the intent legible and by keeping
+            // the `call_args` read below off a slice that a zero-count node does not own.
+            let start = node.lhs;
+            let count = node.rhs;
+            if scalar_results {
+                let element = if count > 0 {
+                    operand(body.call_args[usize::try_from(start).expect("negative array offset")])
+                } else {
+                    nothing.clone()
+                };
+                row_of_node.insert(at as i64, rows.len());
+                rows.push((16, element, (count, 0, String::new())));
+            }
+            if count >= 2
+                && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
+            {
+                let first = operand(head);
+                for k in 1..count {
+                    let Ok(at) = usize::try_from(start + k) else {
+                        continue;
+                    };
+                    if let Some(&elem) = body.call_args.get(at) {
+                        rows.push((2, first.clone(), operand(elem)));
+                    }
+                }
+            }
+        }
+    }
+    row_of_node
+}
+
+fn typed_result_node(node: &Node) -> bool {
+    is_binary_operator(node.kind)
+        || matches!(
+            node.kind,
+            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 28 | 30 | 37 | 39 | 43 | 65 | 66 | 68 | 77
+        )
+        || (node.kind == 4 && node.arg >= 0)
+}
+
+/// Parser operator numbers describe syntax; the stage decides their operand and result types.
+fn binary_fact_kind(node: &Node) -> i64 {
+    if node.kind == 3 && node.arg == 33 {
+        13
+    } else if node.kind == 3 && (6..=11).contains(&node.arg) {
+        9
+    } else if node.kind == 60
+        || (node.kind == 3 && ((27..=29).contains(&node.arg) || node.arg == 37))
+    {
+        10
+    } else {
+        14
+    }
+}
+
+/// One struct's declared field set: the type's name and its field names, in declaration order.
+///
+/// **Names, not indices, and that is load-bearing.** `field_sets` in
+/// `tests/selfhost_typecheck.rs` returns two independent index spaces -- a type index assigned
+/// in declaration order and a field-name intern index -- and the pipeline shares neither. The
+/// two slices that moved before this one both hit that trap, and the recorded escape is the
+/// same each time: carrying a string removes the question rather than answering it.
+pub type FieldSetRow = (String, Vec<String>);
+
+/// The declared struct field sets, from the PIPELINE rather than the reference syntax tree.
+///
+/// # Nothing was added to the stage, and that was the surprise
+///
+/// The plan for this slice assumed `parse.kel` would have to emit something new, because the
+/// driver's record loop mapped struct, trait and impl declarations alike onto skip state. It
+/// does not. `parse.kel` has always emitted a STRUCTSTART carrying the type's name id followed
+/// by one record per field name in declaration order -- the same record code a function
+/// parameter uses -- and the driver threw the whole run away. **The data was on the wire; only
+/// the receiver was missing.** Checking that before writing an emitter is the difference
+/// between this slice and a much larger one.
+///
+/// # What this moves, and what it does not
+///
+/// `field_sets` returns four values: a per-type first index, a per-type count, the flattened
+/// field names, and the field ACCESSES as (type, field) pairs. **The first three move here.
+/// The accesses do not.** An access needs the type of the object being read, which for a
+/// let-bound local means resolving a binding before the field can be attributed -- a
+/// classifier over the body forest, not a re-projection of data already in hand. It stays in
+/// Rust, and this says so rather than implying the extraction is fully migrated.
+///
+/// The first three are recoverable from the rows returned here: the flattened names are the
+/// concatenation in order, the counts are the row lengths, and the first indices are their
+/// running sum. Returning the grouped form rather than three parallel vectors keeps the
+/// association between a type and its fields from depending on an index space at all.
+#[must_use]
+pub fn field_sets_from_pipeline(src: &str) -> Vec<FieldSetRow> {
+    let (names, _data, _enums, struct_records, _) =
+        parse_functions_impl(src, true, &mut |_, _| {}, &mut |_, _, _| {});
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    let mut rows: Vec<FieldSetRow> = Vec::new();
+    for &(code, val) in &struct_records {
+        match code {
+            // STRUCTSTART carries the type's own name.
+            18 => {
+                if let Some(n) = name_of(val) {
+                    rows.push((n, Vec::new()));
+                }
+            }
+            // A field name, the same record code a function parameter uses.
+            4 => {
+                if let Some(row) = rows.last_mut()
+                    && let Some(n) = name_of(val)
+                {
+                    row.1.push(n);
+                }
+            }
+            _ => {}
+        }
+    }
+    rows
+}
+
+/// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
+///
+/// Returns `(name, tag, form)` triples with names as STRINGS rather than interned
+/// ids, so a caller can compare them against an extraction built over a different id
+/// space. `form` matches the stage's `ty.bform`: 0 the value is a tag, 1 it is
+/// another name the stage resolves through bounded alias traversal.
+///
+/// # What this replaces, and why it could not be written until now
+///
+/// Order 1 records that this input should come from `parse.kel` plus
+/// `reconstruct.kel` because "structure is available" there. It was half true.
+/// Function names, declared return types and declared parameter types were all
+/// reachable; **the names of the things being bound were not**. A `Local` record
+/// carries a slot, and the type channel is keyed by names.
+///
+/// Two records closed that. The parameter's name was **already in the stream** —
+/// the header emits `4 + name * 64` and the driver discarded the payload. The
+/// `let` binding's name is the record added under the operator's ruling on that
+/// fork. Neither invents an encoding, which is what Order 1 asked for.
+///
+/// # What it does NOT yet cover
+///
+/// A `let` bound to a literal or a call still has no tag here: the initialiser's
+/// SHAPE lives in the body record stream, and reading it means walking the forest
+/// rather than the header. That walk is the next slice; this one carries the
+/// declared bindings, which are the ones the source states outright.
+pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
+    let (fns, names, ..) = parse_functions_fused(src);
+    // A type NAME id to the stage's scalar tag. The ids come from the same intern
+    // table the records index, so this is a lookup rather than a second convention.
+    // The table itself is `scalar_tag_of_type_name`, shared with two other callers.
+    let tag_of = |type_name_id: i64| -> i64 {
+        scalar_tag_of_type_name(names.get(type_name_id as usize).map(String::as_str))
+    };
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    // The chunk table, for turning a `Call` node's chunk index back into the
+    // callee's NAME. Computed once: it is a whole extra parse of the source.
+    let chunk_names = chunk_names_from_pipeline(src);
+    let mut rows: Vec<BindingRow> = Vec::new();
+    for f in &fns {
+        // The function's own name carries its declared return type, which is what a
+        // `let a = g()` alias hop resolves through.
+        if let Some(n) = Some(chunk_name(f, &names)) {
+            let t = tag_of(f.return_type);
+            if t != 0 {
+                rows.push((n, t, 0, String::new()));
+            }
+        }
+        for (i, &pid) in f.param_names.iter().enumerate() {
+            let Some(n) = name_of(pid) else { continue };
+            let t = f.param_types.get(i).copied().map_or(0, tag_of);
+            if t != 0 {
+                rows.push((n, t, 0, String::new()));
+            }
+        }
+
+        // --- `let` BINDINGS, VIA THE RECONSTRUCTED FOREST -----------------------
+        //
+        // **NOT BY LOOKING AT THE RECORD NEXT TO THE `LetIn`.** `LetIn` is BINARY
+        // and pops its right child then its left, so the postfix stream for
+        // `let a = 7; a` is `[Literal(7), Local(0), LetIn(0)]` and the record
+        // immediately before the `LetIn` is the CONTINUATION, not the initialiser.
+        // Reasoning from adjacency picks the wrong node every time.
+        //
+        // The forest gives the right answer directly: `lhs` is the initialiser and
+        // `rhs` the continuation. Built by `reconstruct_via_kel`, which is the
+        // validated walker — writing a second one here is the mistake the `v0.3.0`
+        // line recorded when an independently written walk reported 365 of 386
+        // loops disagreeing.
+        if f.let_names.is_empty() {
+            continue;
+        }
+        let body = reconstruct_via_kel(
+            &f.body,
+            f.cat,
+            f.params,
+            Some(chunk_name(f, &names)).as_deref().unwrap_or("?"),
+        );
+        for node in &body.nodes {
+            if node.kind != NODE_LET_IN {
+                continue;
+            }
+            // **JOINED BY SLOT, NOT BY POSITION.** `LetIn`'s payload is the frame
+            // slot and `let_names` carries `(slot, name)`. Pairing by fold order
+            // would be positional and would fail silently on a reordering.
+            let Some(&(_, nid)) = f.let_names.iter().find(|(slot, _)| *slot == node.arg) else {
+                continue;
+            };
+            let Some(bound) = name_of(nid) else { continue };
+            let Some(init) = body.nodes.get(node.lhs as usize) else {
+                continue;
+            };
+            match init.kind {
+                // A literal. `push_literal` interns through `intern_int`, so a
+                // kind-1 node is always an integer; booleans are `Unit` carrying
+                // the `PushImmediate` operand.
+                NODE_LITERAL => rows.push((bound, 1, 0, String::new())),
+                NODE_UNIT if init.arg == 1 || init.arg == 2 => {
+                    rows.push((bound, 2, 0, String::new()))
+                }
+                // **A CALL IS A FORM-1 ALIAS, AND IT CARRIES THE TARGET'S NAME
+                // RATHER THAN AN ID.** `let a = g()` says `a` takes whatever `g`
+                // returns; joining that to `g`'s declared return type is the
+                // stage's alias hop, not this function's.
+                //
+                // The row used to be withheld because a form-1 row carried the
+                // target's NAME ID in the tag position, and the two extractions do
+                // not share an id space -- the reference numbers by insertion order
+                // as it walks, this one uses the lexer's intern table. Comparing
+                // them would have compared the NUMBERING rather than the content.
+                // Carrying the name as a STRING removes the question instead of
+                // answering it.
+                //
+                // The chunk index comes from `reconstruct.kel`'s `Call` node, whose
+                // `arg` is the callee's index into the module's chunk table. That
+                // table is `first_pass`'s `chunks`, which `chunk_names_from_pipeline`
+                // reads -- the same numbering `parse.kel` resolved the call against,
+                // not a second one derived here.
+                NODE_CALL => {
+                    if let Some(target) = chunk_names.get(init.arg as usize) {
+                        rows.push((bound, 0, 1, target.clone()));
+                    }
+                }
+                // An operator expression needs the initialiser's NODE INDEX to reach
+                // the stage's bounded fixpoint (form 2), which is a further slice.
+                // Leaving no row means the stage accepts, the documented
+                // conservative stance.
+                _ => {}
+            }
+        }
+    }
+    (names, rows)
+}
+
+/// Self-host-compile a whole program **without ever holding every function's records**.
+///
+/// Identical output to [`self_host_compile`], which is the point: the boundary between
+/// `parse` and `reconstruct` is cut at FUNCTION granularity, and
+/// `the_fused_compile_agrees_with_the_collecting_one` checks the two modules chunk for
+/// chunk. Only the residency differs.
+///
+/// # What is resident, and what it is worth
+///
+/// [`self_host_compile`] calls [`parse_functions`] first, so every function's postorder
+/// records for the whole program are live before the first one is reconstructed. This
+/// holds one GROUP -- consecutive same-named heads, which are one chunk -- and drops it
+/// as soon as the group is compiled. Measured over the corpus:
+///
+/// | stage | all records | largest group | ratio |
+/// |---|---|---|---|
+/// | `wire` | 8,785 | 214 | 41.1x |
+/// | `parse` | 12,111 | 931 | 13.0x |
+/// | `codegen` | 7,359 | 762 | 9.7x |
+/// | `lexer` | 1,415 | 276 | 5.1x |
+/// | `analyze` | 1,538 | 324 | 4.7x |
+/// | `reconstruct` | 3,222 | 885 | 3.6x |
+/// | `verify_typed` | 1,313 | 382 | 3.4x |
+///
+/// The largest stage benefits most, which is the direction that matters.
+///
+/// # Final data layout and group lookahead
+///
+/// A preliminary parser pass collects the final data address map and discards function
+/// records as they arrive. This allows later shared declarations to relocate earlier
+/// private-data operands. The second pass reconstructs one group at a time. The extra
+/// pass increases parsing work without retaining the whole program's function records.
+///
+/// A group ends when the next function's name differs, so a completed function cannot be
+/// compiled until the following header arrives. That is a bounded lookahead of one
+/// function, not a dependency on the whole stream. **In this corpus the largest group is
+/// exactly the largest single function in every stage**, so grouping costs no residency
+/// at all here -- but that is what the corpus contains, not a bound on what the language
+/// admits, and it must not be offered as one.
+pub fn self_host_compile_fused(src: &str) -> Module {
+    // Collect final layout facts without retaining the function records from this pass.
+    let (_, data_records, ..) = parse_functions_impl_named(src, &mut |_, _| {});
+    let composites = private_composite_sizes(&data_records);
+    let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
+    let mut module = compile_src(src);
+    // The pending group: consecutive heads sharing a name. Flushed when the name changes
+    // and again at end of input, which is the only place the last group can be closed.
+    let mut group: Vec<ParsedFn> = Vec::new();
+    let mut group_name = String::new();
+
+    // **THE NAME TABLE IS A PARAMETER, NOT A RE-DERIVATION.** A `StaticStr` pool entry
+    // carries the lexer's intern id, so resolving it needs the table, and this closure runs
+    // INSIDE the streaming callback where the table is what the feed has interned so far.
+    // Collecting every function through `parse_functions_fused` to obtain the names would
+    // discard the bounded record residency this entry point exists to provide.
+    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module, names: &[String]| {
+        if group.is_empty() {
+            return;
+        }
+        let pc = group[0].params;
+        let refs: Vec<&ParsedFn> = group.iter().collect();
+        let body = if is_multihead_group(&refs) {
+            reconstruct_via_kel_multihead(&refs, pc, name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, name)
+        };
+        let (ops, pool, lc) = run_codegen(&body, pc, &composites);
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| chunk_lookup_failure(src, name));
+        module.chunks[idx].ops = ops;
+        module.chunks[idx].constants = pool_to_constants(&pool, names);
+        module.chunks[idx].local_count = lc as u16;
+        group.clear();
+    };
+
+    let (names, ..) = parse_functions_impl_named(src, &mut |names, mut f| {
+        relocation
+            .relocate(&mut f)
+            .expect("relocate streamed data records");
+        let name = chunk_name(&f, names);
+        if !group.is_empty() && name != group_name {
+            flush(&mut group, &group_name, &mut module, names);
+        }
+        group_name = name;
+        group.push(f);
+    });
+    // The trailing group is flushed against the FINAL table, which is a superset of every
+    // intermediate one: the interner only grows, and an id it has issued keeps its meaning.
+    flush(&mut group, &group_name, &mut module, &names);
+    module
+}
+
+/// The peak record residency of a fused compile, for the residency assertions.
+///
+/// Returns `(peak_group_records, total_records)`. Separated from
+/// [`self_host_compile_fused`] so the compile path carries no measurement apparatus, and
+/// so a test asserting the ratio reads the same numbers the compile would hold.
+pub fn fused_compile_residency(src: &str) -> (usize, usize) {
+    let mut group: Vec<ParsedFn> = Vec::new();
+    let mut group_name = String::new();
+    let (mut peak, mut total) = (0usize, 0usize);
+    parse_functions_impl_named(src, &mut |names, f| {
+        let name = chunk_name(&f, names);
+        if !group.is_empty() && name != group_name {
+            group.clear();
+        }
+        group_name = name;
+        let n = f.body.len() + f.guard.len();
+        total += n;
+        group.push(f);
+        peak = peak.max(
+            group
+                .iter()
+                .map(|g| g.body.len() + g.guard.len())
+                .sum::<usize>(),
+        );
+    });
+    (peak, total)
+}
+
+// -- reconstruct.kel drivers (ported from tests/selfhost_codegen.rs) --------
+
+// Flat shared-slot offsets of reconstruct.kel's single `io` block: the record
+// input, then the codegen.kel-mirroring forest output, then the multihead input.
+const RC_REC_COUNT: usize = 0;
+const RC_IN_CATEGORY: usize = 1;
+const RC_IN_PARAM: usize = 2;
+const RC_REC_KIND: usize = 3;
+const RC_REC_ARG: usize = 3 + AST_NODE_CAP;
+const RC_AST_BASE: usize = 3 + AST_NODE_CAP * 2;
+const RC_AST_ROOT: usize = RC_AST_BASE;
+const RC_AST_KINDS: usize = RC_AST_BASE + 1;
+const RC_AST_ARGS: usize = RC_AST_BASE + 1 + AST_NODE_CAP;
+const RC_AST_LHS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 2;
+const RC_AST_RHS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 3;
+const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4;
+/// `for_parts`, the BARE loop form's seven-word entries. One part-capacity stride after
+/// `call_args`, matching the output block's declaration order.
+///
+/// **This constant did not exist until 2026-08-25**, and `for_parts` was read back as an
+/// empty vector while the driver dutifully copied that emptiness into `codegen.kel`. The
+/// symptom was a structurally correct loop whose every operand was slot 0 and node 0,
+/// because `push_forin` read seven zeros.
+const RC_AST_FOR_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 4;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5 + 1;
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5 + 2;
+const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
+const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP;
+const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 2;
+const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 3;
+
+/// The diagnostic pair `reconstruct.kel` appends after its multihead input.
+const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 4;
+const RC_ERR_DETAIL: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 4 + 1;
+
+/// Decode `reconstruct.kel`'s yielded word into a node count, or panic naming the cause.
+///
+/// The code table lives in [`crate::selfhost_host::describe_reconstruct_diagnostic`], which
+/// is its single definition: a second copy is the copy-drift class that once cost five
+/// defects with one cause.
+fn reconstruct_node_count(yielded: i64, slot_code: i64, detail: i64, chunk: &str) -> usize {
+    // TWO INDEPENDENT SIGNALS. The cause travels both as the yielded tag and in the
+    // appended slot; a disagreement means the stage and this driver have drifted.
+    let code = if yielded >= 0 {
+        0
+    } else {
+        crate::selfhost_host::RECONSTRUCT_DIAG_TAG_BASE - yielded
+    };
+    assert_eq!(
+        code, slot_code,
+        "reconstruct.kel's yielded cause and its published cause disagree"
+    );
+    if yielded >= 0 {
+        return yielded as usize;
+    }
+    panic!(
+        "reconstruct.kel refused on chunk `{chunk}`: {}",
+        crate::selfhost_host::describe_reconstruct_diagnostic(yielded, detail)
+    );
+}
+
+/// Drive reconstruct.kel over one function's postorder records and read back the
+/// reconstructed forest as a `Body`. This increment reads only the node arrays and
+/// the root/category; the side arrays (call/for/match) arrive with those kinds.
+// Compile reconstruct.kel once and clone the module per call: `self_host_compile`
+// drives it for every function, so recompiling each time dominates the runtime.
+/// The compiled `reconstruct.kel` stage module, cached after the first build.
+///
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
+/// stage on real input via [`seed_reconstruct_shared`] or
+/// [`seed_reconstruct_multihead_shared`].
+pub fn reconstruct_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/reconstruct.kel")))
+        .clone()
+}
+
+/// The shared buffer `reconstruct.kel` consumes for ONE function body, seeded
+/// and ready to drive.
+///
+/// **`reconstruct` has TWO entry points and this covers one of them.** The other
+/// is the multihead form, [`seed_reconstruct_multihead_shared`], whose input is a
+/// group of heads rather than a record stream. An accessor for this one alone
+/// would drive the path that has never been the problem: the multihead dispatch
+/// predicate was wrong in both directions and no oracle caught it, because every
+/// corpus input agreed on keyword and head count.
+pub fn seed_reconstruct_shared(
+    vm: &dyn StageExecutor,
+    records: &[(i64, i64)],
+    category: i64,
+    param_count: usize,
+) -> Vec<u8> {
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, RC_REC_COUNT, Value::Int(records.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_CATEGORY, Value::Int(category))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_PARAM, Value::Int(param_count as i64))
+        .unwrap();
+    for (i, &(k, a)) in records.iter().enumerate() {
+        vm.set_shared(&mut shared, RC_REC_KIND + i, Value::Int(k))
+            .unwrap();
+        vm.set_shared(&mut shared, RC_REC_ARG + i, Value::Int(a))
+            .unwrap();
+    }
+    shared
+}
+
+fn reconstruct_via_kel(
+    records: &[(i64, i64)],
+    category: i64,
+    param_count: usize,
+    chunk: &str,
+) -> Body {
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = seed_reconstruct_shared(&vm, records, category, param_count);
+    let yielded = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    // Both call sites below pass `RC_ERR_CODE` or `RC_ERR_DETAIL`, which
+    // `reconstruct.kel` declares as `Word` in its `shared data io` block, and
+    // `get_shared` reads a slot at the kind the module's layout declares. A
+    // `Word` slot therefore yields `Value::Int` and nothing else, so the second
+    // arm cannot be taken here.
+    //
+    // It previously returned 0 — which is `RC_ERR_CODE`'s "no error" value, so a
+    // fallback that could fire would report success while discarding the
+    // diagnostic it was reading. The sibling `rd` closure a few lines down reads
+    // the same kind of slot and panics on a non-`Int`; these now agree.
+    //
+    // A slot later declared `Float` would make this live again, which is the
+    // reason to assert rather than to delete the arm.
+    let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
+        Value::Int(n) => n,
+        other => panic!("shared diagnostic slot {slot} is not an Int: {other:?}"),
+    };
+    let node_count =
+        reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
+    let rd = |vm: &dyn StageExecutor, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    // Read each `AST_PART_CAP`-entry side array in full; the caller compares only the prefix the
+    // Rust reconstruction populated.
+    let read_side = |vm: &dyn StageExecutor, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..AST_PART_CAP)
+            .map(|k| rd(vm, shared, base + k))
+            .collect()
+    };
+    let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
+    let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
+    let for_parts = read_side(&vm, &shared, RC_AST_FOR_PARTS);
+    let limit_parts = read_side(&vm, &shared, RC_AST_LIMIT_PARTS);
+    Body {
+        nodes,
+        call_args,
+        for_parts,
+        match_parts,
+        limit_parts,
+        head_parts: Vec::new(),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+/// Drive reconstruct.kel over a group of same-named heads (a multiheaded function),
+/// feeding each head's guard and body record ranges, and read back the reconstructed
+/// multihead `Body`.
+/// The shared buffer `reconstruct.kel` consumes for a group of same-named heads
+/// (a multiheaded function), seeded and ready to drive.
+///
+/// **THIS IS THE SECOND `reconstruct` ENTRY POINT AND THE ONE THAT MATTERED.**
+/// Its input is a head group, not a record stream, so
+/// [`seed_reconstruct_shared`] cannot stand in for it. The `v0.3.0` line asked
+/// for this one specifically: the multihead dispatch predicate was once wrong in
+/// both directions and no oracle caught it, because every corpus input agreed on
+/// keyword and head count.
+///
+/// The per-head guard and body ranges are computed here rather than passed in,
+/// because they are offsets into the concatenation this function performs and
+/// have no meaning outside it.
+pub fn seed_reconstruct_multihead_shared(
+    vm: &dyn StageExecutor,
+    heads: &[&ParsedFn],
+    pc: usize,
+) -> Vec<u8> {
+    // `reconstruct.kel` holds `RC_HEAD_CAP` heads per function. A group past that used to
+    // write past the head arrays and surface as a shared-slot index fault, which read as a
+    // stage defect rather than a capacity.
+    assert!(
+        heads.len() <= RC_HEAD_CAP,
+        "a multiheaded function with {} heads is outside the self-hosted subset: \
+         reconstruct.kel holds {RC_HEAD_CAP} heads per function",
+        heads.len()
+    );
+    // Concatenate every head's guard then body records, tracking the per-head offsets.
+    let mut recs: Vec<(i64, i64)> = Vec::new();
+    let mut gs = Vec::new();
+    let mut gl = Vec::new();
+    let mut bs = Vec::new();
+    let mut bl = Vec::new();
+    for h in heads {
+        gs.push(recs.len());
+        gl.push(h.guard.len());
+        recs.extend_from_slice(&h.guard);
+        bs.push(recs.len());
+        bl.push(h.body.len());
+        recs.extend_from_slice(&h.body);
+    }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
+    set(vm, &mut shared, RC_IN_CATEGORY, 3);
+    set(vm, &mut shared, RC_IN_PARAM, pc as i64);
+    for (i, &(k, a)) in recs.iter().enumerate() {
+        set(vm, &mut shared, RC_REC_KIND + i, k);
+        set(vm, &mut shared, RC_REC_ARG + i, a);
+    }
+    set(vm, &mut shared, RC_HEAD_COUNT, heads.len() as i64);
+    for h in 0..heads.len() {
+        set(vm, &mut shared, RC_HEAD_GUARD_START + h, gs[h] as i64);
+        set(vm, &mut shared, RC_HEAD_GUARD_LEN + h, gl[h] as i64);
+        set(vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
+        set(vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
+    }
+    shared
+}
+
+fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) -> Body {
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = seed_reconstruct_multihead_shared(&vm, heads, pc);
+    let yielded = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    // Both call sites below pass `RC_ERR_CODE` or `RC_ERR_DETAIL`, which
+    // `reconstruct.kel` declares as `Word` in its `shared data io` block, and
+    // `get_shared` reads a slot at the kind the module's layout declares. A
+    // `Word` slot therefore yields `Value::Int` and nothing else, so the second
+    // arm cannot be taken here.
+    //
+    // It previously returned 0 — which is `RC_ERR_CODE`'s "no error" value, so a
+    // fallback that could fire would report success while discarding the
+    // diagnostic it was reading. The sibling `rd` closure a few lines down reads
+    // the same kind of slot and panics on a non-`Int`; these now agree.
+    //
+    // A slot later declared `Float` would make this live again, which is the
+    // reason to assert rather than to delete the arm.
+    let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
+        Value::Int(n) => n,
+        other => panic!("shared diagnostic slot {slot} is not an Int: {other:?}"),
+    };
+    let node_count =
+        reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
+    let rd = |vm: &dyn StageExecutor, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    // Every side array in full. This read 64 entries until the head cap rose past 16, which
+    // truncated `head_parts`, four words a head, and every other side array of a multiheaded
+    // function, a host-side limit the stage did not share.
+    let read_side = |vm: &dyn StageExecutor, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..AST_PART_CAP)
+            .map(|k| rd(vm, shared, base + k))
+            .collect()
+    };
+    let mut head_parts = read_side(&vm, &shared, RC_AST_HEAD_PARTS);
+    // A literal head's guard is its pattern test. Mode 2 tells codegen to test before any
+    // parameter copy and to copy nothing, which is the reference's order: patterns are
+    // tested before variables are bound, and a literal binds no variable.
+    for (h, head) in heads.iter().enumerate() {
+        if head.literal_head && h * 4 + 1 < head_parts.len() {
+            head_parts[h * 4 + 1] = 2;
+        }
+    }
+    Body {
+        nodes,
+        call_args: read_side(&vm, &shared, RC_AST_CALL_ARGS),
+        for_parts: read_side(&vm, &shared, RC_AST_FOR_PARTS),
+        match_parts: read_side(&vm, &shared, RC_AST_MATCH_PARTS),
+        limit_parts: read_side(&vm, &shared, RC_AST_LIMIT_PARTS),
+        head_parts,
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+// -- analyze.kel driver (ported from tests/selfhost_codegen.rs) --------------
+//
+// analyze.kel reformulates the reference verifier's recursive `wcet_region`/`wcmu_region`
+// max traversals as one explicit region-frame stack, computing a Stream chunk's
+// per-iteration WCET and WCMU from a marshalled op table. Each per-op quantity is the
+// authoritative `Op::cost()`/`stack_growth()`/`stack_shrink()`/`heap_alloc()`; the stage
+// self-hosts only the control-flow algorithm.
+
+const WA_OP_COUNT: usize = 0;
+const WA_STREAM_POS: usize = 1;
+const WA_RESET_POS: usize = 2;
+const WA_LOCAL_COUNT: usize = 3;
+const WA_VSB: usize = 4;
+const WA_ARENA_CAPACITY: usize = 5;
+const WA_REGION_START: usize = 6;
+const WA_REGION_END: usize = 7;
+const WA_COST: usize = 8;
+const WA_CLASS: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP;
+const WA_ARG: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const WA_GROWTH: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const WA_SHRINK: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const WA_HEAP: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const WA_OPK: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const WA_SLOT: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const WA_CVAL: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 8;
+const WA_CINT: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 9;
+const WA_CALLEE_SLOTS: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 10;
+const WA_CALLEE_HEAP: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 11;
+const WA_OUT_WCET: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+const WA_OUT_STACK: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 3;
+const WA_OUT_VALID: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 4;
+
+fn analyze_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/analyze.kel")))
+        .clone()
+}
+
+/// Classify an op for analyze.kel and verify_structural.kel as `(class, arg)`. The class tags
+/// the control-flow role (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf,
+/// 8 Trap, 9 Call); `arg` carries each control-transfer op's target: the branch/exit target for
+/// If and Loop, the matching EndIf position for Else, the back-edge for EndLoop, and the loop
+/// exit a Break/BreakIf jumps to. (analyze.kel reads `arg` only for If and Loop; the EndLoop,
+/// Break, and BreakIf targets are ignored there and consumed only by verify_structural.kel's
+/// target-equality checks, so populating them does not affect the resource analysis.)
+/// The op classification tables `analyze.kel` consumes, re-exported from
+/// [`crate::selfhost_host`] where they are always available.
+///
+/// **They live there rather than here so there is ONE table, not two.** This
+/// module is gated on `self-host`, and `tests/selfhost_codegen.rs` builds
+/// without it, so a consumer that could not reach these was previously obliged
+/// to reproduce them — and the copy in that file had already drifted, keeping a
+/// `_ => (0, 0)` catch-all after this table was made exhaustive and passing `0`
+/// where it passes real branch targets. The differential meant to be the oracle
+/// was running against the unrepaired copy.
+pub use crate::selfhost_host::{analyze_class, analyze_opk};
+
+/// The operand-stack `(growth, shrink)` analyze.kel accounts for `op` under the empty
+/// resolver. Identical to `Op::stack_growth()`/`stack_shrink()` except for a native call: the
+/// reference WCMU native arm uses `during_peak = offset + 1` and `offset += 1 - n` with `n`
+/// the whole argument-count byte (the error-reify high bit included), which the generic
+/// accounting reproduces exactly as `growth = 1, shrink = n_full_byte`.
+fn analyze_stack_effect(op: &crate::bytecode::Op) -> (i64, i64) {
+    // A native call is no longer special. Its growth and shrink mask the
+    // error-reify flag out of the count and count the reified flag slot,
+    // matching the reference walk in `verify::wcmu_region`.
+    (op.stack_growth() as i64, op.stack_shrink() as i64)
+}
+
+/// The per-op arena-heap bytes analyze.kel accounts for `op`: the op's own construction
+/// allocation (`Op::heap_alloc`) plus the copy-out a `GetData`/`GetDataIndexed` performs when
+/// it reads a flat-composite shared slot (`shared_composite_copyout_bytes`). `shared_layout`
+/// is empty for the shallow empty-resolver form (copy-out zero, matching
+/// `wcmu_stream_iteration`) and the module's real layout for the transitive validator.
+fn analyze_op_heap(
+    op: &crate::bytecode::Op,
+    chunk: &crate::bytecode::Chunk,
+    shared_layout: &[crate::bytecode::SharedSlotLayout],
+) -> i64 {
+    use crate::bytecode::{Op, SHARED_SLOT_COMPOSITE_FLAG};
+    let slot_copyout = |slot: usize| -> i64 {
+        shared_layout
+            .get(slot)
+            .filter(|e| e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .map_or(0, |e| e.len as i64)
+    };
+    let copyout = match op {
+        Op::GetData(s) => slot_copyout(*s as usize),
+        Op::GetDataIndexed(base, len) => (0..*len as usize)
+            .map(|i| slot_copyout(*base as usize + i))
+            .max()
+            .unwrap_or(0),
+        _ => 0,
+    };
+    op.heap_alloc(chunk) as i64 + copyout
+}
+
+/// Run analyze.kel over one chunk against `arena_capacity`, returning `(wcet, stack_bytes,
+/// heap_bytes, reject, valid)`. The region is the Stream-to-Reset body for a Stream chunk and
+/// the whole op range for a Func/Reentrant chunk, matching `compute_chunk_wcmu`. `chunk_wcmu`
+/// resolves each `Op::Call` to the callee chunk's already-computed `(stack_bytes, heap_bytes)`
+/// (indexed by chunk index); pass `&[]` for the shallow empty-resolver form, where every
+/// callee folds in as zero. `shared_layout` sizes composite-shared-read copy-out (empty for
+/// the shallow form).
+fn run_analyze_kel(
+    chunk: &crate::bytecode::Chunk,
+    arena_capacity: i64,
+    chunk_wcmu: &[(i64, i64)],
+    shared_layout: &[crate::bytecode::SharedSlotLayout],
+) -> (i64, i64, i64, bool, bool) {
+    use crate::bytecode::{BlockType, Op};
+    let vsb = crate::bytecode::VALUE_SLOT_SIZE_BYTES as i64;
+    // The analysed region and the Stream/Reset positions (used only for a Stream chunk's WCET
+    // overhead term; a Func/Reentrant chunk analyses its whole op range).
+    let (region_start, region_end, sp, rp) = match chunk.block_type {
+        BlockType::Stream => {
+            let sp = chunk
+                .ops
+                .iter()
+                .position(|o| matches!(o, Op::Stream))
+                .expect("Stream op");
+            let rp = chunk
+                .ops
+                .iter()
+                .position(|o| matches!(o, Op::Reset))
+                .expect("Reset op");
+            (sp + 1, rp, sp, rp)
+        }
+        BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
+    };
+    assert!(
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
+        "analyze.kel op-table capacity"
+    );
+    let m = analyze_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify analyze.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, WA_OP_COUNT, chunk.ops.len() as i64);
+    set(&vm, &mut shared, WA_STREAM_POS, sp as i64);
+    set(&vm, &mut shared, WA_RESET_POS, rp as i64);
+    set(&vm, &mut shared, WA_LOCAL_COUNT, chunk.local_count as i64);
+    set(&vm, &mut shared, WA_VSB, vsb);
+    set(&vm, &mut shared, WA_ARENA_CAPACITY, arena_capacity);
+    set(&vm, &mut shared, WA_REGION_START, region_start as i64);
+    set(&vm, &mut shared, WA_REGION_END, region_end as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        let (opk, slot, cval, cint) = analyze_opk(op, chunk);
+        let (growth, shrink) = analyze_stack_effect(op);
+        set(&vm, &mut shared, WA_COST + i, op.cost() as i64);
+        set(&vm, &mut shared, WA_CLASS + i, class);
+        set(&vm, &mut shared, WA_ARG + i, arg);
+        set(&vm, &mut shared, WA_GROWTH + i, growth);
+        set(&vm, &mut shared, WA_SHRINK + i, shrink);
+        set(
+            &vm,
+            &mut shared,
+            WA_HEAP + i,
+            analyze_op_heap(op, chunk, shared_layout),
+        );
+        set(&vm, &mut shared, WA_OPK + i, opk);
+        set(&vm, &mut shared, WA_SLOT + i, slot);
+        set(&vm, &mut shared, WA_CVAL + i, cval);
+        set(&vm, &mut shared, WA_CINT + i, cint);
+        // A Call folds in the callee's transitive WCMU (in slots for the stack term, bytes
+        // for the heap term). An unresolved callee (shallow mode) contributes zero.
+        if let Op::Call(callee, _) = op {
+            let (cs, ch) = chunk_wcmu.get(*callee as usize).copied().unwrap_or((0, 0));
+            set(&vm, &mut shared, WA_CALLEE_SLOTS + i, cs / vsb);
+            set(&vm, &mut shared, WA_CALLEE_HEAP + i, ch);
+        }
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call analyze.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected analyze.kel state: {other:?}"),
+    }
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    (
+        rd(WA_OUT_WCET),
+        rd(WA_OUT_STACK),
+        rd(WA_OUT_HEAP),
+        rd(WA_OUT_REJECT) != 0,
+        rd(WA_OUT_VALID) != 0,
+    )
+}
+
+/// Run analyze.kel over one Stream chunk (shallow, unbounded capacity) and report its
+/// per-iteration `(wcet, stack_bytes, heap_bytes, reject, valid)`. A thin reporting wrapper
+/// over `run_analyze_kel` with the empty resolver and empty layout.
+pub fn analyze_stream_chunk(chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, bool, bool) {
+    run_analyze_kel(chunk, i64::MAX, &[], &[])
+}
+
+// --- Self-hosted structural verifier (verify_structural.kel) ---------------------------------
+//
+// The block-nesting, branch-target, operand-bounds, and block-type portion of the self-hosted
+// structural verifier: `verify.rs`'s first structural pass and its second pass (block-type
+// constraints), leaving only the third pass (productive-divergence analysis). It runs over a
+// marshalled op table: the control-flow `(class, arg)` table `analyze.kel` also receives (with
+// the EndLoop/Break/BreakIf targets populated by `analyze_class`), a parallel operand-bounds
+// table `(opb, o1, o2, o3)` from `structural_opbounds`, a block-type marker table `mark` from
+// `structural_marker`, and the per-chunk/per-module counts the checks validate against. The
+// block-type pass's one inter-procedural input -- whether the chunk Calls an always-yielding
+// chunk (`calls_ay`) -- is resolved here from the reference `compute_always_yielding` fixpoint
+// (marshalled per chunk), pending that fixpoint's own self-hosting alongside the third pass. The
+// shared block `sv` lays out the scalars `op_count` (0), `local_count` (1), `const_count` (2),
+// `template_count` (3), `data_len` (4), `nchunks` (5), `word_bits` (6), `block_type` (7),
+// `calls_ay` (8); the arrays `class` (9..), `arg`, `opb`, `o1`, `o2`, `o3`, `mark` (each crate::selfhost_host::VERIFY_OP_CAP
+// wide); and the verdict `out_reject`.
+
+const SV_OP_COUNT: usize = 0;
+const SV_LOCAL_COUNT: usize = 1;
+const SV_CONST_COUNT: usize = 2;
+const SV_TEMPLATE_COUNT: usize = 3;
+const SV_DATA_LEN: usize = 4;
+const SV_NCHUNKS: usize = 5;
+const SV_WORD_BITS: usize = 6;
+const SV_BLOCK_TYPE: usize = 7;
+const SV_CALLS_AY: usize = 8;
+const SV_CLASS: usize = 9;
+const SV_ARG: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP;
+const SV_OPB: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const SV_O1: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const SV_O2: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const SV_O3: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const SV_MARK: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const SV_OUT_REJECT: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+
+/// The compiled `verify_structural.kel` stage module, cached after the first
+/// build.
+///
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
+/// stage on real input via [`seed_verify_structural_shared`].
+pub fn verify_structural_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_structural.kel")))
+        .clone()
+}
+
+/// The number of declared shared/private data slots (`data_layout.slots.len()`), or 0 when the
+/// module declares no data layout, matching the reference `GetData`/`SetData` bound.
+fn data_layout_slot_count(module: &Module) -> i64 {
+    module
+        .data_layout
+        .as_ref()
+        .map_or(0, |dl| dl.slots.len() as i64)
+}
+
+/// Classify an op's operand-bounds obligation as `(opb, o1, o2, o3)`, mirroring the reference's
+/// operand-index checks (see `verify_structural.kel` for the `opb` tag meanings). For a `Call`,
+/// `o3` is the callee chunk's local count resolved here (0 when the callee index is out of
+/// range, in which case the callee-in-bounds check rejects first). An op with no operand index
+/// to validate yields `(0, 0, 0, 0)`.
+fn structural_opbounds(op: &crate::bytecode::Op, module: &Module) -> (i64, i64, i64, i64) {
+    use crate::bytecode::{NewCompositeOperand, Op, StructField};
+    use crate::value_layout::CompositeKind;
+    match op {
+        Op::GetData(s) | Op::SetData(s) => (1, *s as i64, 0, 0),
+        Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => (2, *b as i64, *l as i64, 0),
+        Op::Const(i) | Op::IsStruct(i) => (3, *i as i64, 0, 0),
+        Op::GetField(StructField::Boxed { name_const }) => (3, *name_const as i64, 0, 0),
+        Op::IsEnum(e, v, d) => (4, *e as i64, *v as i64, *d as i64),
+        Op::Call(callee, nargs) => {
+            let callee_locals = module
+                .chunks
+                .get(*callee as usize)
+                .map_or(0, |ch| ch.local_count as i64);
+            (5, *callee as i64, *nargs as i64, callee_locals)
+        }
+        Op::WordToFixed(fb)
+        | Op::FixedToWord(fb)
+        | Op::FixedMul(fb)
+        | Op::FixedDiv(fb)
+        | Op::CheckedMul(fb)
+        | Op::CheckedDiv(fb) => (6, *fb as i64, 0, 0),
+        Op::GetLocal(s) | Op::SetLocal(s) => (7, *s as i64, 0, 0),
+        Op::NewComposite(NewCompositeOperand::Boxed {
+            kind: CompositeKind::Struct | CompositeKind::Enum,
+            meta,
+            ..
+        }) => (8, *meta as i64, 0, 0),
+        // A native call carries its index and the module's native count, which the stage
+        // compares, so the shared block needs no new count.
+        Op::CallVerifiedNative(native, _) | Op::CallExternalNative(native, _) => {
+            (9, *native as i64, module.native_names.len() as i64, 0)
+        }
+        _ => (0, 0, 0, 0),
+    }
+}
+
+/// Tag an op as a block-type marker for the second reference pass: 1 Yield, 2 Stream, 3 Reset,
+/// 0 other. The stage counts these to enforce each block type's marker profile.
+fn structural_marker(op: &crate::bytecode::Op) -> i64 {
+    use crate::bytecode::Op;
+    match op {
+        Op::Yield => 1,
+        Op::Stream => 2,
+        Op::Reset => 3,
+        _ => 0,
+    }
+}
+
+/// The block type as the stage's tag: 0 Func, 1 Reentrant, 2 Stream.
+fn block_type_tag(chunk: &crate::bytecode::Chunk) -> i64 {
+    use crate::bytecode::BlockType;
+    match chunk.block_type {
+        BlockType::Func => 0,
+        BlockType::Reentrant => 1,
+        BlockType::Stream => 2,
+    }
+}
+
+/// Run verify_structural.kel over one chunk of `module`, returning whether it rejects the
+/// chunk's block nesting, branch targets, operand-index bounds, or block-type marker profile.
+/// Marshals the control-flow `(class, arg)` table via `analyze_class`, the operand-bounds
+/// `(opb, o1, o2, o3)` table via `structural_opbounds`, the block-type markers via
+/// `structural_marker`, and the per-chunk/per-module counts. `always` is the module's
+/// always-yielding chunk set (from `compute_always_yielding`), used to resolve the chunk's
+/// delegated-yield flag. No op is executed: a deliberately malformed chunk is classified but
+/// never run.
+pub fn structural_reject_chunk_via_kel(
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    always: &std::collections::BTreeSet<usize>,
+) -> bool {
+    let m = verify_structural_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_structural.kel");
+    let mut shared = seed_verify_structural_shared(&vm, module, chunk, always);
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_structural.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_structural.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, SV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
+/// The shared buffer `verify_structural.kel` consumes for one chunk, seeded and
+/// ready to drive.
+///
+/// `always` is the module's always-yielding chunk set; it resolves the chunk's
+/// delegated-yield flag and cannot be derived from the chunk alone.
+///
+/// One encoding, two callers: [`structural_reject_chunk_via_kel`] seeds through
+/// this rather than inline, so an external harness feeds the stage exactly what
+/// the driver does.
+pub fn seed_verify_structural_shared(
+    vm: &dyn StageExecutor,
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    always: &std::collections::BTreeSet<usize>,
+) -> Vec<u8> {
+    assert!(
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
+        "verify_structural.kel op-table capacity"
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, SV_OP_COUNT, chunk.ops.len() as i64);
+    set(vm, &mut shared, SV_LOCAL_COUNT, chunk.local_count as i64);
+    set(
+        vm,
+        &mut shared,
+        SV_CONST_COUNT,
+        chunk.constants.len() as i64,
+    );
+    set(
+        vm,
+        &mut shared,
+        SV_TEMPLATE_COUNT,
+        chunk.struct_templates.len() as i64,
+    );
+    set(vm, &mut shared, SV_DATA_LEN, data_layout_slot_count(module));
+    set(vm, &mut shared, SV_NCHUNKS, module.chunks.len() as i64);
+    set(vm, &mut shared, SV_WORD_BITS, 1i64 << module.word_bits_log2);
+    set(vm, &mut shared, SV_BLOCK_TYPE, block_type_tag(chunk));
+    // Whether the chunk delegates its yield to an always-yielding callee (the reference's
+    // `calls_always_yielder`). Resolved from the marshalled always-yielding set.
+    let calls_ay = chunk
+        .ops
+        .iter()
+        .any(|op| matches!(op, crate::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))));
+    set(vm, &mut shared, SV_CALLS_AY, i64::from(calls_ay));
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        set(vm, &mut shared, SV_CLASS + i, class);
+        set(vm, &mut shared, SV_ARG + i, arg);
+        let (opb, o1, o2, o3) = structural_opbounds(op, module);
+        set(vm, &mut shared, SV_OPB + i, opb);
+        set(vm, &mut shared, SV_O1 + i, o1);
+        set(vm, &mut shared, SV_O2 + i, o2);
+        set(vm, &mut shared, SV_O3 + i, o3);
+        set(vm, &mut shared, SV_MARK + i, structural_marker(op));
+    }
+    shared
+}
+
+// --- Self-hosted yield-coverage kernel (verify_yield.kel) and Pass 3 -------------------------
+//
+// verify_yield.kel decides whether every fall-through path of a chunk region passes through a
+// Yield (or a Call delegating to an always-yielding chunk), reproducing the reference
+// `analyze_yield_coverage`. Its shared block `yv` lays out `op_count` (0), `region_start` (1),
+// `region_end` (2); the arrays `class` (3..), `arg`, `mark`, `cay` (each crate::selfhost_host::VERIFY_OP_CAP wide, where `cay`
+// flags a Call to an always-yielding chunk); and the results `out_fell`, `out_hy`. The driver
+// runs it in two orchestrations, both self-hosting what was the reference borrow: the
+// always-yielding monotone fixpoint (over `[0, op_count)` per chunk) and the Stream productivity
+// check (over `[stream_pos + 1, reset_pos)`).
+
+const YV_OP_COUNT: usize = 0;
+const YV_REGION_START: usize = 1;
+const YV_REGION_END: usize = 2;
+const YV_CLASS: usize = 3;
+const YV_ARG: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP;
+const YV_MARK: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const YV_CAY: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const YV_OUT_FELL: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const YV_OUT_HY: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 4 + 1;
+const YV_OUT_REJECT: usize = YV_OUT_HY + 2;
+
+fn verify_yield_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_yield.kel")))
+        .clone()
+}
+
+/// Run verify_yield.kel over `chunk`'s region `[start, end)`, returning `(fell, hy)`: whether
+/// some path falls through to `end`, and whether every such path yielded. `always` is the
+/// current always-yielding chunk set, which flags each `Call`'s delegated yield (`cay`).
+fn run_ayc(
+    chunk: &crate::bytecode::Chunk,
+    start: usize,
+    end: usize,
+    always: &std::collections::BTreeSet<usize>,
+) -> (bool, bool) {
+    use crate::bytecode::Op;
+    assert!(
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
+        "verify_yield.kel op-table capacity"
+    );
+    let m = verify_yield_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_yield.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, YV_OP_COUNT, chunk.ops.len() as i64);
+    set(&vm, &mut shared, YV_REGION_START, start as i64);
+    set(&vm, &mut shared, YV_REGION_END, end as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        set(&vm, &mut shared, YV_CLASS + i, class);
+        set(&vm, &mut shared, YV_ARG + i, arg);
+        set(&vm, &mut shared, YV_MARK + i, structural_marker(op));
+        let cay = matches!(op, Op::Call(g, _) if always.contains(&(*g as usize)));
+        set(&vm, &mut shared, YV_CAY + i, i64::from(cay));
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_yield.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_yield.kel state: {other:?}"),
+    }
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    (rd(YV_OUT_FELL) != 0, rd(YV_OUT_HY) != 0)
+}
+
+/// The self-hosted always-yielding chunk set: the monotone fixpoint of verify_yield.kel over
+/// `[0, op_count)` per chunk (a chunk joins the set when every path of it yields, using the set
+/// from prior rounds for the delegated-yield contribution). A drop-in for the reference
+/// `compute_always_yielding`. The kernel computes each region summary; Rust still
+/// schedules fixpoint rounds and stores the resulting set.
+pub fn self_hosted_always_yielding(module: &Module) -> std::collections::BTreeSet<usize> {
+    yield_fixpoint::always(module).expect("yield-fixpoint stage unavailable")
+}
+
+/// Whether `chunk` is an unproductive Stream chunk: some path from its `Stream` to its `Reset`
+/// passes no Yield (directly or by delegation). Reproduces the reference Pass 3 via the
+/// self-hosted kernel; `always` is the (self-hosted) always-yielding set. Non-Stream chunks and
+/// chunks missing a Stream/Reset marker are not rejected here (Pass 2 handles the latter).
+fn productivity_reject_via_kel(
+    chunk: &crate::bytecode::Chunk,
+    always: &std::collections::BTreeSet<usize>,
+) -> bool {
+    use crate::bytecode::{BlockType, Op};
+    if chunk.block_type != BlockType::Stream {
+        return false;
+    }
+    let sp = chunk.ops.iter().position(|o| matches!(o, Op::Stream));
+    let rp = chunk.ops.iter().position(|o| matches!(o, Op::Reset));
+    if let (Some(s), Some(r)) = (sp, rp) {
+        let (fell, hy) = run_ayc(chunk, s + 1, r, always);
+        fell && !hy
+    } else {
+        false
+    }
+}
+
+// --- Self-hosted operand-stack depth-balance pass (verify_depth.kel) -------------------------
+//
+// verify_depth.kel reproduces the reference `verify_stack_depth`/`verify_depth_region`: it walks
+// a chunk tracking the absolute operand-stack depth through the structured control flow and
+// rejects any op that would underflow the operand stack (audit finding 3). Height-only (no
+// shapes), it is the frame-stack twin of verify_yield.kel. Its shared block `dv` lays out
+// `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each crate::selfhost_host::VERIFY_OP_CAP wide);
+// and the verdict `out_reject`. `dreq`/`dnet` are the reference `op_depth_effect` (the actual
+// operand consumption, NOT the WCMU stack effect); `is_term` flags Trap/Return.
+//
+// The same run decides the definite-initialization rule of `crate::verify_init` from the same
+// table and the appended `lget` and `lset` columns, and publishes that verdict in fields of its
+// own after `out_cause`, so that a caller reading only the depth verdict sees no change.
+
+const DV_OP_COUNT: usize = 0;
+const DV_CLASS: usize = 1;
+const DV_ARG: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP;
+const DV_DREQ: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const DV_DNET: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const DV_IS_TERM: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const DV_OUT_REJECT: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+/// Why `verify_depth.kel` returned the verdict it did.
+///
+/// 0 means the walk completed. 1 means nesting capacity was exceeded and 2 means
+/// the work budget ended before the walk completed. A nonzero cause is
+/// default-deny. **Only the cause distinguishes a proven defect from an
+/// unanalysed program**, and only the cause says whether raising the cap would
+/// change the answer.
+const DV_OUT_CAUSE: usize = 2 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+// The definite-initialization twin of `crate::verify_init`, which the same stage run decides
+// after the depth walk. Per op, `lget` is one more than the local read and `lset` one more than
+// the local written, or -1 for `Stream`, each 0 for none. The verdict fields follow.
+const DV_LGET: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const DV_LSET: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const DV_L_WIDTH: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const DV_L_PARAMS: usize = 4 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const DV_L_STREAM_BIT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_OUT_INIT_REJECT: usize = 6 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_OUT_INIT_IP: usize = 7 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+/// Why the definite-initialization verdict of `verify_depth.kel` is what it is. 0 means the
+/// analysis completed, 1 that the chunk has more locals than the stage's sets hold, and 2 that
+/// the sweep budget ended before the fixpoint. A nonzero cause is not a verdict.
+pub(crate) const DV_OUT_INIT_CAUSE: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+/// The locals one set of the stage holds, its `init_locals()`.
+pub(crate) const DV_INIT_LOCALS: usize = 256;
+// Rule 2 of `crate::verify_init`, private data, decided by the same run after rule 1. The host
+// numbers the private slots whose initializer is `Unit` densely, and `d_width` is their count.
+// Per op, `d_set` is one more than the dense slot written, or -1 at `Return`, `d_lo` and `d_hi`
+// bound the dense slots read, and `d_call` is one more than the row of `d_sum` that holds the
+// callee's summary. The verdict, its cause and this chunk's own summary follow.
+pub(crate) const DV_D_WIDTH: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_D_SET: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_D_LO: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 8;
+pub(crate) const DV_D_HI: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 9;
+pub(crate) const DV_D_CALL: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 10;
+pub(crate) const DV_D_SUM: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 11;
+pub(crate) const DV_OUT_DATA_REJECT: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+pub(crate) const DV_OUT_DATA_IP: usize = 11 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+pub(crate) const DV_OUT_DATA_CAUSE: usize = 12 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+pub(crate) const DV_OUT_DATA_SUM: usize = 13 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+/// The callee summaries one run of the stage holds, the rows of its `d_sum`.
+pub(crate) const DV_DATA_CALLEES: usize = 1024;
+
+/// The compiled `verify_depth.kel` stage module, cached after the first build.
+///
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
+/// stage on real input via [`seed_verify_depth_shared`].
+pub fn verify_depth_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_depth.kel")))
+        .clone()
+}
+
+/// The shared buffer `verify_depth.kel` consumes for one chunk, seeded and
+/// ready to drive.
+///
+/// **One encoding, two callers.** [`depth_reject_chunk_via_kel`] below uses this
+/// rather than seeding inline, so an external harness driving the stage feeds it
+/// exactly what the driver does. That is the point of the accessor and it is the
+/// `v0.3.0` line's stated reason for wanting the `Vm` passed IN: a constructor of
+/// its own would be a second encoding, free to drift from this one.
+///
+/// The `vm` argument supplies the shared layout only. Build it from
+/// [`verify_depth_kel_module`].
+pub fn seed_verify_depth_shared(vm: &dyn StageExecutor, chunk: &crate::bytecode::Chunk) -> Vec<u8> {
+    use crate::bytecode::Op;
+    assert!(
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
+        "verify_depth.kel op-table capacity"
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, DV_OP_COUNT, chunk.ops.len() as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        let (req, net) = crate::verify::op_depth_effect(op, chunk);
+        set(vm, &mut shared, DV_CLASS + i, class);
+        set(vm, &mut shared, DV_ARG + i, arg);
+        set(vm, &mut shared, DV_DREQ + i, i64::from(req.max(0)));
+        set(vm, &mut shared, DV_DNET + i, i64::from(net));
+        set(
+            vm,
+            &mut shared,
+            DV_IS_TERM + i,
+            // `Reset` ends a path as `Trap` and `Return` do, as the reference walk treats it,
+            // so a stream chunk ending in `Reset` does not fall through.
+            i64::from(matches!(op, Op::Trap(_) | Op::Return | Op::Reset)),
+        );
+        // A slot at or past the local count is neither checked nor recorded by the
+        // reference, so it is transported as no effect.
+        let width = usize::from(chunk.local_count);
+        let (get, put) = match op {
+            Op::GetLocal(s) if usize::from(*s) < width => (i64::from(*s) + 1, 0),
+            Op::SetLocal(s) if usize::from(*s) < width => (0, i64::from(*s) + 1),
+            Op::Stream => (0, -1),
+            _ => (0, 0),
+        };
+        set(vm, &mut shared, DV_LGET + i, get);
+        set(vm, &mut shared, DV_LSET + i, put);
+    }
+    let width = i64::from(chunk.local_count);
+    set(vm, &mut shared, DV_L_WIDTH, width);
+    set(
+        vm,
+        &mut shared,
+        DV_L_PARAMS,
+        i64::from(chunk.param_count).min(width),
+    );
+    set(
+        vm,
+        &mut shared,
+        DV_L_STREAM_BIT,
+        i64::from(chunk.param_count > 0 && width > 0),
+    );
+    shared
+}
+
+/// Run verify_depth.kel over one chunk, returning whether any op underflows the operand stack
+/// (the reference `verify_stack_depth`). Marshals the control-flow `(class, arg)` table via
+/// `analyze_class`, the actual operand consumption `(dreq, dnet)` via `op_depth_effect`, and the
+/// Trap/Return terminator flag.
+///
+/// Seeds through [`seed_verify_depth_shared`], so this and any external harness
+/// drive the stage from the same encoding.
+pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
+    let m = verify_depth_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_depth.kel");
+    let mut shared = seed_verify_depth_shared(&vm, chunk);
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_depth.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_depth.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, DV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
+/// Why `verify_depth.kel` rejected `chunk`, distinguishing a proven operand
+/// underflow from a refusal to analyse.
+///
+/// # Why this exists beside [`depth_reject_chunk_via_kel`]
+///
+/// The stage declares a nesting cap and refuses a chunk past it, default-deny, in
+/// line with this project's conservative-verification stance. That refusal and a
+/// proven underflow are the SAME verdict, so a caller reading only the verdict
+/// cannot tell a defective program from one the analysis declined. **A caller
+/// deciding whether to raise the cap needs this and the verdict does not carry
+/// it.**
+///
+/// Returns [`DepthVerdict::Accept`], [`DepthVerdict::Underflow`], or
+/// [`DepthVerdict::OverCap`].
+pub fn depth_verdict_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> DepthVerdict {
+    let m = verify_depth_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_depth.kel");
+    let mut shared = seed_verify_depth_shared(&vm, chunk);
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_depth.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_depth.kel state: {other:?}"),
+    }
+    let reject = match vm.get_shared(&shared, DV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    };
+    let cause = match vm.get_shared(&shared, DV_OUT_CAUSE).unwrap() {
+        Value::Int(n) => n,
+        o => panic!("expected Int at out_cause, got {o:?}"),
+    };
+    match (reject, cause) {
+        (false, _) => DepthVerdict::Accept,
+        (true, cause) if cause != 0 => DepthVerdict::OverCap,
+        (true, _) => DepthVerdict::Underflow,
+    }
+}
+
+/// The outcome of the self-hosted operand-stack depth-balance pass.
+///
+/// `Underflow` and `OverCap` are both rejections, and keeping them distinct is the
+/// point: one is a proven property of the program and the other is a statement
+/// about the analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthVerdict {
+    /// The walk completed and found no operand-stack underflow.
+    Accept,
+    /// The walk completed and proved an op would underflow the operand stack.
+    Underflow,
+    /// The bounded nesting or work budget was exhausted before analysis completed.
+    /// This is not evidence of a defect in the subject.
+    OverCap,
+}
+
+/// Run the current Keleusma structural, depth, productivity, typed and data-layout passes.
+/// The always-yielding classification uses the staged region analysis.
+///
+/// The typed pass retains its documented control-flow widening and bounded storage.
+/// Passing the stage corpus does not establish agreement on every malformed module.
+/// The Order 2 completion plan tracks the complete verdict and admission integration.
+///
+/// # Panics
+/// A stage capacity, transport or execution failure can panic in this legacy Boolean API.
+pub fn structural_reject_module_via_kel(module: &Module) -> bool {
+    let always = self_hosted_always_yielding(module);
+    let per_chunk = module.chunks.iter().any(|chunk| {
+        structural_reject_chunk_via_kel(module, chunk, &always)
+            || productivity_reject_via_kel(chunk, &always)
+            || depth_reject_chunk_via_kel(chunk)
+    });
+    per_chunk || typed_reject_module_via_kel(module) || dl_reject_module_via_kel(module)
+}
+
+// --- Self-hosted A.2.1 typed operand-stack verifier, slices 2a+2b (verify_typed.kel) ---------
+//
+// verify_typed.kel is a frame-stack abstract interpreter over the WHOLE chunk (all control flow).
+// It reconstructs each operand-stack entry's flat shape and validates every compiler-baked flat
+// field/array offset against the composite's known size (audit B1/B2), the operand-stack
+// underflow (finding 3), the if/else branch-height balance (B3/B4), the loop back-edge height
+// neutrality (B5), and -- with signature/native/enum seeding (slice 2b) -- the seeded local
+// composite-field offsets, `SetLocal` compatibility, resume shape, `Call`/native return shape,
+// and enum body size (B8). Per the operator's chosen trade-off it uses the SOUND over-
+// approximation the reference itself falls back to: shapes are precise within a basic block and
+// reset to Top across every control-flow boundary (a loop also invalidates every local), so it
+// never rejects a valid program -- a Top defers to the retained runtime guard -- and forgoes
+// only the cross-join shape precision. `typed_run` marshals the per-op descriptor plus, in the
+// seeded form, the per-slot seed shapes (from the chunk signature), the resume shape, the per-op
+// Call/native return shapes, and the enum body sizes; an unseeded run reproduces the isolation
+// `typed_check_chunk`. Every reference check is now reproduced: the non-enum `NewComposite`
+// packed-size check, the Call argument-vs-parameter check (per-callee parameter shapes marshalled
+// as `cp_*`, packed per call), and exact composite-kind compatibility (a `kind` word threaded through
+// every shape). Together with batched data-layout validation, the typed pass is
+// wired into structural_reject_module_via_kel. Full agreement remains under audit.
+
+const TV_OP_COUNT: usize = 0;
+const TV_RESUME_TAG: usize = 1;
+const TV_RESUME_SIZE: usize = 2;
+const TV_RESUME_KIND: usize = 3;
+const TV_EB_COUNT: usize = 4;
+const TV_CLASS: usize = 5;
+const TV_ARG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP;
+const TV_IS_TERM: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const TV_TK: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const TV_REQ: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const TV_PROD: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const TV_TA: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const TV_TB: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const TV_TC: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 8;
+const TV_RET_TAG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 9;
+const TV_RET_SIZE: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 10;
+const TV_RET_KIND: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 11;
+const TV_SEED_TAG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+const TV_SEED_SIZE: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 256;
+const TV_SEED_KIND: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 512;
+const TV_EB_VALS: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768;
+const TV_CP_TAG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256;
+const TV_CP_SIZE: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256 + 12288;
+const TV_CP_KIND: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256 + 12288 * 2;
+const TV_OUT_REJECT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256 + 12288 * 3;
+const TV_CP_FIRST: usize = TV_OUT_REJECT + 1;
+const TV_CP_COUNT: usize = TV_CP_FIRST + crate::selfhost_host::VERIFY_OP_CAP;
+const TV_CP_CAPACITY: usize = 12288;
+
+/// The compiled `verify_typed.kel` stage module, cached after the first build.
+///
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
+/// stage on real input via [`seed_verify_typed_shared`].
+pub fn verify_typed_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_typed.kel")))
+        .clone()
+}
+
+/// The byte size of a scalar-shaped constant (`const_abs` restricted to its scalar arms), or
+/// `None` for a composite/unknown constant (which the reference leaves `Top`).
+fn const_scalar_size(
+    cv: Option<&crate::bytecode::ConstValue>,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> Option<i64> {
+    use crate::bytecode::ConstValue;
+    use crate::value_layout::ScalarKind;
+    let sz = |k: ScalarKind| k.size_in_bytes(wb, fb, ab) as i64;
+    match cv {
+        Some(ConstValue::Unit) => Some(sz(ScalarKind::Unit)),
+        Some(ConstValue::Bool(_)) => Some(sz(ScalarKind::Bool)),
+        Some(ConstValue::Int(_)) => Some(sz(ScalarKind::Int)),
+        Some(ConstValue::Byte(_)) => Some(sz(ScalarKind::Byte)),
+        Some(ConstValue::Fixed(_)) => Some(sz(ScalarKind::Fixed)),
+        Some(ConstValue::StaticStr(_)) => Some(sz(ScalarKind::Text)),
+        #[cfg(feature = "floats")]
+        Some(ConstValue::Float(_)) => Some(sz(ScalarKind::Float)),
+        _ => None,
+    }
+}
+
+/// The typed op descriptor verify_typed.kel applies for `op`:
+/// `(class, arg, is_term, tk, req, prod, ta, tb)`. `(class, arg)` is the control-flow role/target
+/// (via `analyze_class`); `is_term` flags Trap/Return; `(req, prod)` is the actual operand
+/// consumption and generic push count from the reference `op_depth_effect` (NOT the WCMU
+/// `stack_growth`/`shrink`, which mis-state ops like `Yield`); `tk`/`ta`/`tb` is the shape
+/// transfer (see verify_typed.kel), 0 generic for every op except the shape producers/consumers.
+fn typed_desc(
+    op: &crate::bytecode::Op,
+    chunk: &crate::bytecode::Chunk,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64) {
+    use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField};
+    use crate::value_layout::CompositeKind;
+    let (class, arg) = analyze_class(op);
+    let is_term = i64::from(matches!(op, Op::Return | Op::Trap(_)));
+    let (r, net) = crate::verify::op_depth_effect(op, chunk);
+    let req = i64::from(r.max(0));
+    let prod = i64::from((net + r.max(0)).max(0));
+    // The shape transfer kind, its operands, and (for flat composites) the composite kind `tc`
+    // (the reference's `CompositeKind::to_tag`); everything not listed is generic (tk 0).
+    let (tk, ta, tb, tc): (i64, i64, i64, i64) = match op {
+        Op::Dup => (1, 0, 0, 0),
+        Op::BoundsCheck(_) => (15, wb as i64, 0, 0),
+        Op::SetDataIndexed(_, _) => (16, wb as i64, 0, 0),
+        Op::GetDataIndexed(_, _) => (18, 0, wb as i64, 0),
+        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0, 0),
+        Op::GetLocal(i) => (3, *i as i64, 0, 0),
+        Op::SetLocal(i) => (4, *i as i64, 0, 0),
+        Op::Yield => (11, 0, 0, 0),
+        Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => {
+            (12, 0, 0, 0)
+        }
+        // `tc` 1 marks a static string, which the reference types as a `Text` scalar, so the
+        // stage can record where a body holds text.
+        Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb, ab) {
+            Some(sz) => (
+                2,
+                sz,
+                0,
+                i64::from(matches!(
+                    chunk.constants.get(*idx as usize),
+                    Some(crate::bytecode::ConstValue::StaticStr(_))
+                )),
+            ),
+            None => (0, 0, 0, 0),
+        },
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            byte_size,
+            ..
+        }) => (
+            14,
+            0,
+            *byte_size as i64,
+            i64::from(CompositeKind::Enum.to_tag()),
+        ),
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind, byte_size, ..
+        }) => (6, 0, *byte_size as i64, i64::from(kind.to_tag())),
+        Op::GetField(StructField::Flat { offset, kind })
+        | Op::GetTupleField(TupleField::Flat { offset, kind })
+        | Op::GetEnumField(EnumField::Flat { offset, kind }) => (
+            7,
+            *offset as i64,
+            kind.size_in_bytes(wb, fb, ab) as i64,
+            i64::from(*kind == crate::value_layout::ScalarKind::Text),
+        ),
+        Op::GetField(StructField::FlatNested {
+            offset,
+            size,
+            variant,
+        })
+        | Op::GetTupleField(TupleField::FlatNested {
+            offset,
+            size,
+            variant,
+        })
+        | Op::GetEnumField(EnumField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => (8, *offset as i64, *size as i64, i64::from(variant.to_tag())),
+        Op::GetIndex(elem @ ArrayElem::Flat { kind }) if elem.has_bounds_outcome() => (
+            17,
+            kind.size_in_bytes(wb, fb, ab) as i64,
+            wb as i64,
+            i64::from(*kind == crate::value_layout::ScalarKind::Text),
+        ),
+        Op::GetIndex(ArrayElem::Flat { kind }) => (
+            9,
+            kind.size_in_bytes(wb, fb, ab) as i64,
+            0,
+            i64::from(*kind == crate::value_layout::ScalarKind::Text),
+        ),
+        Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
+            (10, *size as i64, wb as i64, i64::from(variant.to_tag()))
+        }
+        // A boxed read is total with an unknown element shape. Its transfer is
+        // that of an indexed data read: two pops, an unknown value and six Words.
+        Op::GetIndex(ArrayElem::Boxed) => (18, 0, wb as i64, 0),
+        _ => (0, 0, 0, 0),
+    };
+    (class, arg, is_term, tk, req, prod, ta, tb, tc)
+}
+
+/// Lift a wire signature shape into the stage's `(tag, size, kind)` lattice, mirroring
+/// `AbsVal::from_wire`: Top -> (0,0,0); a decodable scalar -> (1, byte size, 0); a decodable flat
+/// composite -> (2, byte size, composite-kind tag); an undecodable tag -> Top.
+fn abs_from_wire(
+    shape: &crate::bytecode::WireShape,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> (i64, i64, i64) {
+    use crate::bytecode::WireShape;
+    use crate::value_layout::{CompositeKind, ScalarKind};
+    match shape {
+        WireShape::Top => (0, 0, 0),
+        // A scalar's kind slot carries 1 for `Text`, which the stage reads only for scalars.
+        WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
+            Some(k) => (
+                1,
+                k.size_in_bytes(wb, fb, ab) as i64,
+                i64::from(k == ScalarKind::Text),
+            ),
+            None => (0, 0, 0),
+        },
+        WireShape::Flat { kind, size } => match CompositeKind::from_tag(*kind) {
+            Some(_) => (2, *size as i64, i64::from(*kind)),
+            None => (0, 0, 0),
+        },
+    }
+}
+
+// Isolation deliberately omits module tables. A missing local signature during
+// module checking still permits callee, native-return and enum-layout evidence.
+#[derive(Clone, Copy)]
+enum TypedSeeding<'a> {
+    Isolated,
+    Module(Option<&'a crate::bytecode::ChunkSignature>),
+}
+
+fn typed_run(
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    seeding: TypedSeeding<'_>,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> bool {
+    let m = verify_typed_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_typed.kel");
+    let mut shared = seed_typed_shared(&vm, module, chunk, seeding, wb, fb, ab);
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_typed.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_typed.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, TV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
+/// The shared buffer `verify_typed.kel` consumes for one chunk, seeded and ready
+/// to drive.
+///
+/// `sig` is the chunk's entry in the module signature table, which seeds the
+/// initial operand shapes; `wb`/`fb` are the module's word and float byte
+/// widths. A chunk driven without its signature is a different, weaker check,
+/// so the argument is required rather than defaulted.
+///
+/// `None` preserves this helper's isolation contract. Whole-module checking uses
+/// the same encoder with module context even when an individual signature is absent.
+pub fn seed_verify_typed_shared(
+    vm: &dyn StageExecutor,
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    sig: Option<&crate::bytecode::ChunkSignature>,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> Vec<u8> {
+    let seeding = match sig {
+        Some(signature) => TypedSeeding::Module(Some(signature)),
+        None => TypedSeeding::Isolated,
+    };
+    seed_typed_shared(vm, module, chunk, seeding, wb, fb, ab)
+}
+
+fn seed_typed_shared(
+    vm: &dyn StageExecutor,
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    seeding: TypedSeeding<'_>,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> Vec<u8> {
+    let (sig, module_context) = match seeding {
+        TypedSeeding::Isolated => (None, false),
+        TypedSeeding::Module(signature) => (signature, true),
+    };
+    use crate::bytecode::Op;
+    assert!(
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
+        "verify_typed.kel op-table capacity"
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
+    // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
+    if let Some(sig) = sig {
+        for (i, param) in sig.params.iter().enumerate().take(256) {
+            let (tag, size, kind) = abs_from_wire(param, wb, fb, ab);
+            set(vm, &mut shared, TV_SEED_TAG + i, tag);
+            set(vm, &mut shared, TV_SEED_SIZE + i, size);
+            set(vm, &mut shared, TV_SEED_KIND + i, kind);
+        }
+        let (rtag, rsize, rkind) = abs_from_wire(&sig.resume, wb, fb, ab);
+        set(vm, &mut shared, TV_RESUME_TAG, rtag);
+        set(vm, &mut shared, TV_RESUME_SIZE, rsize);
+        set(vm, &mut shared, TV_RESUME_KIND, rkind);
+    }
+    if module_context {
+        // Declared enum sizes remain available even if this chunk has no signature.
+        assert!(
+            module.enum_layouts.len() <= 256,
+            "verify_typed.kel enum-table capacity"
+        );
+        for (i, el) in module.enum_layouts.iter().enumerate() {
+            set(
+                vm,
+                &mut shared,
+                TV_EB_VALS + i,
+                wb as i64 + el.min_payload as i64,
+            );
+        }
+        set(
+            vm,
+            &mut shared,
+            TV_EB_COUNT,
+            module.enum_layouts.len() as i64,
+        );
+    }
+    let mut call_shape_cursor = 0usize;
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb, ab);
+        // BoundsCheck preserves its input and uses the dedicated five-Word
+        // transfer. It never enters the generic push_tops unroll.
+        assert!(
+            prod <= 4
+                || ((tk == 15 || tk == 16) && prod == 6)
+                || ((tk == 10 || tk == 17 || tk == 18) && prod == 7),
+            "verify_typed.kel push_tops unroll bound"
+        );
+        set(vm, &mut shared, TV_CLASS + i, class);
+        set(vm, &mut shared, TV_ARG + i, arg);
+        set(vm, &mut shared, TV_IS_TERM + i, is_term);
+        set(vm, &mut shared, TV_TK + i, tk);
+        set(vm, &mut shared, TV_REQ + i, req);
+        set(vm, &mut shared, TV_PROD + i, prod);
+        set(vm, &mut shared, TV_TA + i, ta);
+        set(vm, &mut shared, TV_TB + i, tb);
+        set(vm, &mut shared, TV_TC + i, tc);
+        // Module tables supply call and native results independently of local seeding.
+        // Isolation leaves these facts unknown, matching typed_check_chunk.
+        if module_context {
+            match op {
+                Op::Call(callee, argc) => {
+                    if let Some(cs) = module.signatures.get(*callee as usize) {
+                        let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb, ab);
+                        set(vm, &mut shared, TV_RET_TAG + i, tag);
+                        set(vm, &mut shared, TV_RET_SIZE + i, size);
+                        set(vm, &mut shared, TV_RET_KIND + i, kind);
+                        let count = cs.params.len().min(usize::from(*argc));
+                        let end = call_shape_cursor
+                            .checked_add(count)
+                            .expect("call-shape count overflow");
+                        assert!(
+                            end <= TV_CP_CAPACITY,
+                            "verify_typed.kel call-shape pool capacity"
+                        );
+                        set(vm, &mut shared, TV_CP_FIRST + i, call_shape_cursor as i64);
+                        set(vm, &mut shared, TV_CP_COUNT + i, count as i64);
+                        for (p, param) in cs.params.iter().take(count).enumerate() {
+                            let (ptag, psize, pkind) = abs_from_wire(param, wb, fb, ab);
+                            set(vm, &mut shared, TV_CP_TAG + call_shape_cursor + p, ptag);
+                            set(vm, &mut shared, TV_CP_SIZE + call_shape_cursor + p, psize);
+                            set(vm, &mut shared, TV_CP_KIND + call_shape_cursor + p, pkind);
+                        }
+                        call_shape_cursor = end;
+                    }
+                }
+                Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => {
+                    if let Some(w) = module.native_return_shapes.get(*idx as usize) {
+                        let (tag, size, kind) = abs_from_wire(w, wb, fb, ab);
+                        set(vm, &mut shared, TV_RET_TAG + i, tag);
+                        set(vm, &mut shared, TV_RET_SIZE + i, size);
+                        set(vm, &mut shared, TV_RET_KIND + i, kind);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    shared
+}
+
+/// Run verify_typed.kel over one chunk in isolation (no seeding), the drop-in for
+/// `typed_check_chunk`.
+pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &crate::bytecode::Chunk) -> bool {
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    let ab = (1usize << module.addr_bits_log2) / 8;
+    typed_run(module, chunk, TypedSeeding::Isolated, wb, fb, ab)
+}
+
+/// Run verify_typed.kel over every chunk of a module, seeding each from the module's per-chunk
+/// signature table. Missing local signatures do not discard module metadata. This helper
+/// checks chunk shapes; structural_reject_module_via_kel also checks data layout.
+pub fn typed_reject_module_via_kel(module: &Module) -> bool {
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    let ab = (1usize << module.addr_bits_log2) / 8;
+    module.chunks.iter().enumerate().any(|(i, chunk)| {
+        typed_run(
+            module,
+            chunk,
+            TypedSeeding::Module(module.signatures.get(i)),
+            wb,
+            fb,
+            ab,
+        )
+    })
+}
+
+// --- Self-hosted A.2.1 data-layout validation, slice 2c (verify_datalayout.kel) --------------
+//
+// verify_datalayout.kel reproduces the reference `validate_data_layout` (B6/C4): the shared-slot
+// reconcile (contiguity/count), the shared-slot buffer bounds, and the private-composite
+// monotonicity. It is BATCHED so it scales to the self-hosted stages, whose layouts expand to
+// tens of thousands of slots (one per array element). The driver feeds each table 1024 entries at
+// a time by resuming the coroutine, threading the running state through the shared block `dl`:
+// scalars `phase` (0), `count` (1), `n_slots` (2), `buffer` (3), `pool` (4); the running state
+// `io_prefix` (5) `io_total` `io_still` `io_prev_slot` `io_prev_off` `io_first` `io_bad` (11); and
+// the batch arrays `a0` (12..), `a1`, `a2` (each 1024 wide), reused per phase. After the last
+// batch the driver reads `io_bad`/`io_prefix`/`io_total` and finalises the contiguity/count
+// comparison (`prefix == total`, `n_shared == total`).
+
+const DL_PHASE: usize = 0;
+const DL_COUNT: usize = 1;
+const DL_N_SLOTS: usize = 2;
+const DL_BUFFER: usize = 3;
+const DL_POOL: usize = 4;
+const DL_IO_PREFIX: usize = 5;
+const DL_IO_TOTAL: usize = 6;
+const DL_IO_STILL: usize = 7;
+const DL_IO_PREV_SLOT: usize = 8;
+const DL_IO_PREV_OFF: usize = 9;
+const DL_IO_FIRST: usize = 10;
+const DL_IO_BAD: usize = 11;
+const DL_A0: usize = 12;
+const DL_A1: usize = 12 + 1024;
+const DL_A2: usize = 12 + 1024 * 2;
+
+const DL_BATCH: usize = 1024;
+
+fn verify_datalayout_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_datalayout.kel")))
+        .clone()
+}
+
+/// Run verify_datalayout.kel over a module's data layout, returning whether it rejects a B6
+/// shared-slot reconcile/bounds or a C4 private-composite monotonicity violation (the reference
+/// `validate_data_layout`). A module with no data layout is accepted. The three tables are fed one
+/// 1024-entry batch at a time (resuming the coroutine, the running state persisting in the shared
+/// buffer), so it scales to the self-hosted stages' tens-of-thousands-of-slot layouts.
+pub fn dl_reject_module_via_kel(module: &Module) -> bool {
+    use crate::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
+    use crate::value_layout::ScalarKind;
+    let Some(layout) = module.data_layout.as_ref() else {
+        return false;
+    };
+    let n_slots = layout.slots.len();
+    let n_shared = layout.shared_layout.len();
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    let ab = (1usize << module.addr_bits_log2) / 8;
+    let m = verify_datalayout_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    // The working region must hold verify_datalayout.kel's per-batch frames while it walks a stage's
+    // data layout; the self-hosted stages expand a large shared byte array to per-element slots (the
+    // lexer `src.bytes` buffer alone is hundreds of thousands of entries), so give a generous margin
+    // over the 64 KB default. This is a host-side test-harness arena, not a WCMU claim.
+    let mut arena = Arena::with_capacity(4 * 1024 * 1024 + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_datalayout.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    // Running state and the per-run scalars, initialised once (they persist across resumes).
+    set(&vm, &mut shared, DL_IO_PREFIX, 0);
+    set(&vm, &mut shared, DL_IO_TOTAL, 0);
+    set(&vm, &mut shared, DL_IO_STILL, 1);
+    set(&vm, &mut shared, DL_IO_PREV_SLOT, 0);
+    set(&vm, &mut shared, DL_IO_PREV_OFF, 0);
+    set(&vm, &mut shared, DL_IO_FIRST, 1);
+    set(&vm, &mut shared, DL_IO_BAD, 0);
+    set(&vm, &mut shared, DL_N_SLOTS, n_slots as i64);
+    set(&vm, &mut shared, DL_BUFFER, module.shared_data_bytes as i64);
+    set(
+        &vm,
+        &mut shared,
+        DL_POOL,
+        module.persistent_composite_bytes as i64,
+    );
+
+    // Process one prepared batch (`phase`/`count`/arrays already set). Each batch is a fresh
+    // `call_with_shared` -- it re-enters `loop main` from the entry, runs `run()` once, and yields
+    // -- so the batch's `run()` always executes (a resume can land on the Stream/Reset cycle
+    // boundary, which does not run the body). The running state `io_*` persists in the shared
+    // buffer across calls because the buffer is retained, not re-zeroed.
+    let run_batch = |vm: &mut dyn StageExecutor, shared: &mut [u8]| match vm
+        .call_with_shared(shared, &[Value::Int(0)])
+        .expect("call verify_datalayout.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_datalayout.kel state: {other:?}"),
+    };
+
+    // Phase 1: the slot visibilities (shared prefix/total counts).
+    for batch in layout.slots.chunks(DL_BATCH) {
+        set(&vm, &mut shared, DL_PHASE, 1);
+        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
+        for (j, s) in batch.iter().enumerate() {
+            let is_shared = i64::from(matches!(s.visibility, SlotVisibility::Shared));
+            set(&vm, &mut shared, DL_A0 + j, is_shared);
+        }
+        run_batch(&mut vm, &mut shared);
+    }
+    // Phase 2: the shared-slot layout (offset, precomputed size, undecodable flag).
+    for batch in layout.shared_layout.chunks(DL_BATCH) {
+        set(&vm, &mut shared, DL_PHASE, 2);
+        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
+        for (j, sl) in batch.iter().enumerate() {
+            set(&vm, &mut shared, DL_A0 + j, sl.offset as i64);
+            let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+                (sl.len as i64, 0)
+            } else {
+                match ScalarKind::from_tag(sl.kind) {
+                    Some(k) => (k.size_in_bytes(wb, fb, ab) as i64, 0),
+                    None => (0, 1),
+                }
+            };
+            set(&vm, &mut shared, DL_A1 + j, size);
+            set(&vm, &mut shared, DL_A2 + j, bad);
+        }
+        run_batch(&mut vm, &mut shared);
+    }
+    // Phase 3: the private-composite layout (slot, pool offset).
+    for batch in layout.private_composite_layout.chunks(DL_BATCH) {
+        set(&vm, &mut shared, DL_PHASE, 3);
+        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
+        for (j, e) in batch.iter().enumerate() {
+            set(&vm, &mut shared, DL_A0 + j, e.slot as i64);
+            set(&vm, &mut shared, DL_A1 + j, e.offset as i64);
+        }
+        run_batch(&mut vm, &mut shared);
+    }
+
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    // Reject on any per-entry violation, or the B6 contiguity/count mismatch. When there were no
+    // batches at all (an empty layout), the running state is its init value and this is `false`.
+    rd(DL_IO_BAD) != 0
+        || rd(DL_IO_PREFIX) != rd(DL_IO_TOTAL)
+        || (n_shared as i64) != rd(DL_IO_TOTAL)
+}
+
+/// Keleusma-computed text-allocation and boundary summary for one chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkTextBounds {
+    /// Saturating upper bound on text heap allocation in bytes.
+    pub heap_bytes: u32,
+    /// Whether a return may carry text.
+    pub returns_text: bool,
+    /// Whether a yield may carry text.
+    pub yields_text: bool,
+}
+
+/// Compute the reference text-allocation model through Keleusma transitions.
+/// Callee flags are source-independent summaries; absent entries are conservative.
+pub fn text_bounds_via_kel(
+    chunk: &crate::bytecode::Chunk,
+    callees: &[bool],
+) -> Result<ChunkTextBounds, VerificationError> {
+    let stage = analyze_kel_module();
+    let persistent = required_persistent_capacity_for(&stage);
+    let mut arena = Arena::try_with_capacity(DEFAULT_ARENA_CAPACITY + persistent)
+        .map_err(analysis_machine::error)?;
+    arena
+        .resize_persistent(persistent)
+        .map_err(analysis_machine::error)?;
+    let mut machine = analysis_machine::AnalysisMachine::new(stage, &arena, &text_bounds::FIELDS)?;
+    text_bounds::chunk_bounds(&mut machine, chunk, |i| Ok(callees.get(i).copied()))
+}
+
+/// Verify structure and types, then apply the Keleusma module resource admission.
+/// Invalid programs and unavailable analysis remain distinct. Native resource
+/// attestations are empty, matching verify_resource_bounds. The existing bounded
+/// stage profile and typed control-flow widening apply.
+/// Acceptance describes that profile. Retain reference verification and runtime
+/// guards until independent review establishes that they can be retired.
+pub fn admit_module_via_kel(
+    module: &Module,
+    arena_capacity: usize,
+) -> Result<VerificationVerdict, VerificationError> {
+    match verify_module_via_kel(module)? {
+        VerificationVerdict::Accepted => resources::check(module, arena_capacity),
+        rejected => Ok(rejected),
+    }
+}
+
+/// Resource admission with host-native iteration attestations and the host value-slot width.
+/// Native costs are transported as facts. Keleusma selects per-site versus per-chunk
+/// charging and deduplicates external native contributions.
+/// The bounded typed profile and reference-gate requirement of
+/// [`admit_module_via_kel`] also apply here.
+pub fn admit_module_with_bounds_via_kel(
+    module: &Module,
+    arena_capacity: usize,
+    bounds: &[crate::verify::NativeIterationBound],
+    value_slot_bytes: u32,
+) -> Result<VerificationVerdict, VerificationError> {
+    match verify_module_via_kel(module)? {
+        VerificationVerdict::Accepted => {
+            resources::check_with_bounds(module, arena_capacity, bounds, value_slot_bytes)
+        }
+        rejected => Ok(rejected),
+    }
+}
+
+/// Resource-only compatibility wrapper around the stage-owned admission path.
+/// Text allocation and module summaries are included. The checked admission API
+/// additionally verifies structure and types and reports unavailable analysis.
+///
+/// # Panics
+/// This legacy Boolean interface panics on unavailable stage analysis.
+pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
+    if arena_capacity < 0
+        && module
+            .chunks
+            .iter()
+            .any(|c| c.block_type == crate::bytecode::BlockType::Stream)
+    {
+        return false;
+    }
+    matches!(
+        resources::check(module, arena_capacity.max(0) as usize)
+            .expect("resource stage unavailable"),
+        VerificationVerdict::Accepted
+    )
+}
+
+// -- scaffold assembly from parse.kel's records (ported from tests/selfhost_codegen.rs) --
+//
+// The data layout, enum-layout table, chunk signatures, schema hash, and declared
+// WCET/WCMU header are assembled from the pipeline output (parse.kel's record stream and
+// analyze.kel's per-chunk verdict), rather than borrowed from the Rust reference. Each
+// assembly mirrors the corresponding Rust compiler pass, so the serialized module is
+// byte-identical to the reference for the loop-free stage sources.
+
+/// Each struct's fields, keyed by the struct's name id, as (field name id, type name id, the
+/// array count when the field is declared as an array).
+type StructFieldTable = alloc::collections::BTreeMap<i64, Vec<(i64, i64, Option<i64>)>>;
+
+/// Each struct's fields as (name id, type id, array count when declared), from parse.kel's
+/// struct records: 18 opens a struct, 4 names a field, 6 gives its type and 8 an array count.
+fn struct_field_table(struct_records: &[(i64, i64)]) -> StructFieldTable {
+    let mut structs: StructFieldTable = alloc::collections::BTreeMap::new();
+    let mut current = None;
+    for &(code, val) in struct_records {
+        match code {
+            18 => {
+                current = Some(val);
+                structs.insert(val, Vec::new());
+            }
+            4 => {
+                if let Some(fields) = current.and_then(|c| structs.get_mut(&c)) {
+                    fields.push((val, -1, None));
+                }
+            }
+            6 => {
+                if let Some(f) = current
+                    .and_then(|c| structs.get_mut(&c))
+                    .and_then(|f| f.last_mut())
+                {
+                    f.1 = val;
+                }
+            }
+            8 => {
+                if let Some(f) = current
+                    .and_then(|c| structs.get_mut(&c))
+                    .and_then(|f| f.last_mut())
+                {
+                    f.2 = Some(val);
+                }
+            }
+            _ => {}
+        }
+    }
+    structs
+}
+
+/// The canonical zero of the type named `type_id`, as `crate::zero_value::zero_value` gives
+/// it, for the types a self-hosted private struct field can hold. A scalar is its zero, `Text`
+/// the empty static string, and a struct its fields' zeros in declaration order, an array field
+/// its element's zero repeated. Any other type panics, which the driver reports as a refusal
+/// rather than emit an initializer that might differ from the reference's.
+fn self_hosted_zero(
+    type_id: i64,
+    depth: usize,
+    names: &[String],
+    structs: &StructFieldTable,
+) -> ConstValue {
+    let name = usize::try_from(type_id)
+        .ok()
+        .and_then(|i| names.get(i))
+        .map_or("", String::as_str);
+    match name {
+        "Word" => ConstValue::Int(0),
+        "Byte" => ConstValue::Byte(0),
+        "bool" | "Bool" => ConstValue::Bool(false),
+        "Text" => ConstValue::StaticStr(String::new()),
+        _ => {
+            assert!(depth < 16, "private initializer nests too deeply");
+            let fields = structs
+                .iter()
+                .find(|&(&k, _)| {
+                    usize::try_from(k)
+                        .ok()
+                        .and_then(|i| names.get(i))
+                        .map(String::as_str)
+                        == Some(name)
+                })
+                .map(|(_, f)| f)
+                .unwrap_or_else(|| panic!("no zero for private field type `{name}`"));
+            ConstValue::Struct {
+                type_name: String::from(name),
+                fields: fields
+                    .iter()
+                    .map(|&(field, ty, count)| {
+                        let zero = self_hosted_zero(ty, depth + 1, names, structs);
+                        let value = match count {
+                            Some(n) => ConstValue::Array(alloc::vec![
+                                zero;
+                                usize::try_from(n).expect("negative array count")
+                            ]),
+                            None => zero,
+                        };
+                        let field_name = usize::try_from(field)
+                            .ok()
+                            .and_then(|i| names.get(i))
+                            .cloned()
+                            .unwrap_or_default();
+                        (field_name, value)
+                    })
+                    .collect(),
+            }
+        }
+    }
+}
+
+/// The schema hash the self-hosted driver computes for `src`, from the pipeline's own records,
+/// for a check against the reference's.
+pub fn schema_hash_from_pipeline(src: &str) -> u32 {
+    let (_, names, data_records, _, _, struct_records) = parse_functions_fused_with_natives(src);
+    let dl = assemble_data_layout(&data_records, &struct_records, &names);
+    let layout = (!dl.slots.is_empty()).then_some(dl);
+    crate::bytecode::compute_typed_schema_hash(
+        layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    )
+}
+
+/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
+/// [`assemble_data_slots`], from parse.kel's data records and its struct records.
+///
+/// A data record names each field's type, 6, and an array's element count, 8. A struct record
+/// opens a struct, 18, and gives each field's name, 4, its type, 6, and an array count, 8. The
+/// token is the reference's, built from the same declarations, which the byte-identical oracle
+/// checks for every source with data.
+fn schema_slot_tokens(
+    data_records: &[(i64, i64)],
+    struct_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<String> {
+    let structs = struct_field_table(struct_records);
+    let name_of = |id: i64| {
+        usize::try_from(id)
+            .ok()
+            .and_then(|i| names.get(i))
+            .map_or("", String::as_str)
+    };
+    let struct_id = |type_id: i64| {
+        structs
+            .keys()
+            .copied()
+            .find(|&k| name_of(k) == name_of(type_id))
+    };
+    fn render<'n>(
+        type_id: i64,
+        depth: usize,
+        name_of: &dyn Fn(i64) -> &'n str,
+        struct_id: &dyn Fn(i64) -> Option<i64>,
+        structs: &StructFieldTable,
+        out: &mut String,
+    ) {
+        out.push_str(name_of(type_id));
+        if let Some(sid) = struct_id(type_id)
+            && depth < 16
+        {
+            out.push('{');
+            for (i, &(field, ty, count)) in structs[&sid].iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(name_of(field));
+                out.push(':');
+                match count {
+                    Some(n) => {
+                        out.push('[');
+                        render(ty, depth + 1, name_of, struct_id, structs, out);
+                        out.push(';');
+                        out.push_str(&n.to_string());
+                        out.push(']');
+                    }
+                    None => render(ty, depth + 1, name_of, struct_id, structs, out),
+                }
+            }
+            out.push('}');
+        }
+    }
+    // Data fields as (visibility, type id, slot count), in declaration order.
+    let mut fields: Vec<(i64, i64, i64)> = Vec::new();
+    let mut vis = 0;
+    for &(code, val) in data_records {
+        match code {
+            9 => vis = val % 4,
+            4 => fields.push((vis, -1, 1)),
+            6 => {
+                if let Some(f) = fields.last_mut() {
+                    f.1 = val;
+                }
+            }
+            8 => {
+                if let Some(f) = fields.last_mut() {
+                    f.2 = val;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut tokens = Vec::new();
+    for pass in [0i64, 1i64] {
+        for &(_, ty, count) in fields.iter().filter(|f| f.0 == pass) {
+            let mut token = String::new();
+            render(ty, 0, &name_of, &struct_id, &structs, &mut token);
+            for _ in 0..count.max(1) {
+                tokens.push(token.clone());
+            }
+        }
+    }
+    tokens
+}
+
+/// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
+/// interned block, field, and (unused here) type ids through the name table.
+fn assemble_data_slots(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<crate::bytecode::DataSlot> {
+    use crate::bytecode::{DataSlot, SlotVisibility};
+    struct Blk {
+        name_id: i64,
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (field name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                name_id: val / 4,
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((val, 1)),
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            // 6 (PTYPE) is not needed for the slot names; 5 (END) is a boundary.
+            _ => {}
+        }
+    }
+    let mut slots = Vec::new();
+    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
+    for pass_vis in [0i64, 1i64] {
+        let visibility = if pass_vis == 0 {
+            SlotVisibility::Shared
+        } else {
+            SlotVisibility::Private
+        };
+        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
+            let bname = &names[b.name_id as usize];
+            for &(fid, count) in &b.fields {
+                let fname = &names[fid as usize];
+                if count == 1 {
+                    slots.push(DataSlot {
+                        name: format!("{bname}.{fname}"),
+                        visibility,
+                    });
+                } else {
+                    // ONE NAME FOR THE WHOLE ARRAY, mirroring `compiler.rs`.
+                    //
+                    // This driver builds the data layout from the self-hosted
+                    // parser's data-block records, and its output is compared
+                    // against the reference compiler's byte for byte -- including
+                    // `schema_hash`, which covers the layout. A distinct
+                    // `field[k]` per element defeated the name interner's dedup
+                    // and made the string pool scale with the element count; the
+                    // reference stopped doing it, so this must too or the two
+                    // compilers disagree.
+                    let array_name = format!("{bname}.{fname}");
+                    for _ in 0..count {
+                        slots.push(DataSlot {
+                            name: array_name.clone(),
+                            visibility,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    slots
+}
+
+/// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
+/// data-block records. The shared segment is the single shared block's fields expanded
+/// to one entry per element at consecutive byte offsets; the stage data fields are all
+/// `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
+/// (tag 2, one byte), and each is a scalar (len 0).
+fn assemble_shared_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<crate::bytecode::SharedSlotLayout> {
+    use crate::bytecode::SharedSlotLayout;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let scalar = |type_id: i64| -> (u8, u32) {
+        match names[type_id as usize].as_str() {
+            "Word" => (3, 8),
+            "Byte" => (2, 1),
+            other => panic!("unhandled shared field type `{other}`"),
+        }
+    };
+    let mut layout = Vec::new();
+    let mut offset: u32 = 0;
+    for b in blocks.iter().filter(|b| b.vis == 0) {
+        for &(tid, count) in &b.fields {
+            let (tag, size) = scalar(tid);
+            for _ in 0..count {
+                layout.push(SharedSlotLayout {
+                    offset,
+                    kind: tag,
+                    len: 0,
+                });
+                offset += size;
+            }
+        }
+    }
+    layout
+}
+
+/// Assemble parser-produced private initializer descriptors in private-slot order.
+/// The parser decides the scalar kind, default, literal value and admission verdict.
+///
+/// Kind 6 is a `Text` field, whose initializer is the empty static string, and kind 7 a struct
+/// field, whose initializer is its type's zero, which parse.kel chooses for every field it
+/// does not give a scalar initializer, under option (b) of the operator's ruling of 2026-10-30
+/// on definite initialization. The zero itself is assembled here from the struct records, as
+/// the slot type tokens are.
+fn assemble_private_init(
+    data_records: &[(i64, i64)],
+    names: &[String],
+    structs: &StructFieldTable,
+) -> Vec<ConstValue> {
+    use crate::selfhost_host::{
+        PARSE_PRIVATE_INIT_KIND_TAG, PARSE_PRIVATE_INIT_NEGATIVE_TAG, PARSE_PRIVATE_INIT_VALUE_TAG,
+    };
+    struct Field {
+        count: i64,
+        type_id: i64,
+        kind: Option<i64>,
+        value: Option<ConstValue>,
+    }
+    let mut fields: Vec<Field> = Vec::new();
+    let mut visibility = 2;
+    for &(code, value) in data_records {
+        match code {
+            9 => visibility = value % 4,
+            4 if visibility == 1 => fields.push(Field {
+                count: 1,
+                type_id: -1,
+                kind: None,
+                value: None,
+            }),
+            6 if visibility == 1 => {
+                fields.last_mut().expect("type without field").type_id = value;
+            }
+            8 if visibility == 1 => fields.last_mut().expect("array without field").count = value,
+            PARSE_PRIVATE_INIT_KIND_TAG if visibility == 1 => {
+                let field = fields.last_mut().expect("initializer kind without field");
+                assert!(
+                    field.kind.replace(value).is_none(),
+                    "duplicate initializer kind"
+                );
+            }
+            PARSE_PRIVATE_INIT_VALUE_TAG | PARSE_PRIVATE_INIT_NEGATIVE_TAG if visibility == 1 => {
+                assert!(
+                    value >= 0,
+                    "initializer transport value must be nonnegative"
+                );
+                let value = if code == PARSE_PRIVATE_INIT_NEGATIVE_TAG {
+                    !value
+                } else {
+                    value
+                };
+                let field = fields.last_mut().expect("initializer without field");
+                let initial = match field.kind.expect("initializer without kind") {
+                    0 => {
+                        assert_eq!(value, 0, "nonzero unit initializer");
+                        ConstValue::Unit
+                    }
+                    1 => {
+                        assert!((0..=1).contains(&value), "invalid Bool initializer");
+                        ConstValue::Bool(value != 0)
+                    }
+                    2 => ConstValue::Byte(u8::try_from(value).expect("invalid Byte initializer")),
+                    3 => ConstValue::Int(value),
+                    4 => ConstValue::Fixed(value),
+                    #[cfg(feature = "floats")]
+                    5 => {
+                        assert_eq!(value, 0, "unsupported Float initializer transport");
+                        ConstValue::Float(0.0)
+                    }
+                    6 => {
+                        assert_eq!(value, 0, "nonzero Text initializer");
+                        ConstValue::StaticStr(String::new())
+                    }
+                    7 => {
+                        assert_eq!(value, 0, "nonzero struct initializer");
+                        self_hosted_zero(field.type_id, 0, names, structs)
+                    }
+                    other => panic!("unknown private initializer kind {other}"),
+                };
+                assert!(
+                    field.value.replace(initial).is_none(),
+                    "duplicate initializer value"
+                );
+            }
+            _ => {}
+        }
+    }
+    let mut values = Vec::new();
+    for field in fields {
+        let count = usize::try_from(field.count).expect("negative initializer count");
+        assert!(
+            count <= crate::bytecode::MAX_DATA_ADDR as usize,
+            "initializer count exceeds data addressing"
+        );
+        let value = field
+            .value
+            .expect("private field has no initializer descriptor");
+        values
+            .try_reserve(count)
+            .expect("private initializer allocation");
+        for _ in 0..count {
+            values.push(value.clone());
+        }
+    }
+    values
+}
+
+/// Assemble a whole `DataLayout` from parse.kel's data-block records.
+fn assemble_data_layout(
+    data_records: &[(i64, i64)],
+    struct_records: &[(i64, i64)],
+    names: &[String],
+) -> crate::bytecode::DataLayout {
+    crate::bytecode::DataLayout {
+        slots: assemble_data_slots(data_records, names),
+        shared_layout: assemble_shared_layout(data_records, names),
+        private_composite_layout: private_composite_pool(data_records).0,
+        private_init: assemble_private_init(
+            data_records,
+            names,
+            &struct_field_table(struct_records),
+        ),
+    }
+}
+
+/// The private composite pool, as the reference places it. Every private field whose type
+/// is a struct, which parse.kel marks with a size record after its type record, takes the
+/// next pool offset, keyed by its slot, and the pool total is the sum of those sizes.
+/// Private slots follow every shared slot, in declaration order, an array field taking one
+/// slot per element. An array of structs carries no size record, so the cross-check still
+/// refuses it.
+fn private_composite_pool(
+    data_records: &[(i64, i64)],
+) -> (Vec<crate::bytecode::PrivateCompositeSlot>, u32) {
+    let mut table = Vec::new();
+    let mut total: u32 = 0;
+    for (slot, bytes) in private_composite_sizes(data_records) {
+        table.push(crate::bytecode::PrivateCompositeSlot {
+            slot,
+            offset: total,
+        });
+        total = total
+            .checked_add(bytes)
+            .expect("private composite pool size");
+    }
+    (table, total)
+}
+
+/// Each private composite slot, in pool order, with its flat body size in bytes.
+///
+/// This is the layout `private_composite_pool` places, and it is what `codegen.kel`'s
+/// copy pass needs to recognise a private struct read and size its copy. Every such slot
+/// holds a struct, the only private composite field parse.kel marks with a size record.
+#[must_use]
+pub fn private_composite_sizes(data_records: &[(i64, i64)]) -> Vec<(u16, u32)> {
+    use crate::selfhost_host::PARSE_PRIVATE_COMPOSITE_TAG;
+    let mut shared_slots: i64 = 0;
+    let mut visibility = 0;
+    let mut last_count: i64 = 0;
+    for &(code, value) in data_records {
+        match code {
+            9 => visibility = value % 4,
+            4 if visibility == 0 => {
+                shared_slots += 1;
+                last_count = 1;
+            }
+            8 if visibility == 0 => {
+                shared_slots += value - last_count;
+                last_count = value;
+            }
+            _ => {}
+        }
+    }
+    let mut sizes = Vec::new();
+    let mut slot = shared_slots;
+    let mut field_slot = -1;
+    for &(code, value) in data_records {
+        match code {
+            9 => visibility = value % 4,
+            4 if visibility == 1 => {
+                field_slot = slot;
+                slot += 1;
+                last_count = 1;
+            }
+            8 if visibility == 1 => {
+                slot += value - last_count;
+                last_count = value;
+            }
+            PARSE_PRIVATE_COMPOSITE_TAG if visibility == 1 => {
+                let slot_u16 = u16::try_from(field_slot).expect("private composite slot");
+                let bytes = u32::try_from(value).expect("private composite size");
+                sizes.push((slot_u16, bytes));
+            }
+            _ => {}
+        }
+    }
+    sizes
+}
+
+/// Assemble the enum-layout table from parse.kel's enum record stream.
+fn assemble_enum_layouts(
+    enum_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<crate::bytecode::EnumLayout> {
+    use crate::bytecode::{EnumLayout, EnumVariantDisc};
+    let mut layouts: Vec<EnumLayout> = Vec::new();
+    let mut running = 0i64;
+    for &(code, val) in enum_records {
+        match code {
+            12 => {
+                layouts.push(EnumLayout {
+                    type_name: names[val as usize].clone(),
+                    variants: Vec::new(),
+                    min_payload: 0,
+                });
+                running = 0;
+            }
+            13 => {
+                layouts.last_mut().unwrap().variants.push(EnumVariantDisc {
+                    name: names[val as usize].clone(),
+                    disc: running,
+                });
+                running += 1;
+            }
+            14 => {
+                let vs = &mut layouts.last_mut().unwrap().variants;
+                vs.last_mut().unwrap().disc = val;
+                running = val + 1;
+            }
+            5 => {
+                layouts
+                    .last_mut()
+                    .expect("enum end without declaration")
+                    .min_payload = u32::try_from(val).expect("invalid enum payload size");
+            }
+            _ => {}
+        }
+    }
+    // The reference orders the enum-layout table by type name, not declaration order.
+    layouts.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+    layouts
+}
+
+/// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
+/// Byte scalar (tag 2), bool scalar (tag 1), or a declared enum's flat size.
+/// Other composite layouts remain unresolved and use `Top`.
+fn wire_shape_of(
+    type_id: i64,
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
+    match names.get(type_id as usize).map(String::as_str) {
+        Some("Word") => WireShape::Scalar { kind: 3 },
+        Some("Byte") => WireShape::Scalar { kind: 2 },
+        Some("bool") => WireShape::Scalar { kind: 1 },
+        Some(name) => enums
+            .iter()
+            .find(|layout| layout.type_name == name)
+            // The parser's host-width layout includes an eight-byte discriminant.
+            .and_then(|layout| layout.min_payload.checked_add(8))
+            .map_or(WireShape::Top, |size| WireShape::Flat { kind: 3, size }),
+        None => WireShape::Top,
+    }
+}
+
+/// The reference layout of a builtin generic named in a signature, Order 6.
+///
+/// `Option<T>` is a flat enum of an eight-byte discriminant and `T`'s flat size, and
+/// `Multiword<N>` a flat array of `N` words. Both match `crate::compiler`'s signature
+/// shapes. Any other head, or an argument whose flat size is unknown, stays `Top`, which
+/// the shipping cross-check then refuses rather than accepts.
+fn builtin_generic_shape(
+    head: Option<&str>,
+    kind: i64,
+    value: i64,
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
+    match (head, kind) {
+        (Some("Option"), crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG) => {
+            let size = match wire_shape_of(value, names, enums) {
+                WireShape::Scalar { kind: 1 | 2 } => Some(1u32),
+                WireShape::Scalar { kind: 3 } => Some(8),
+                WireShape::Flat { size, .. } => Some(size),
+                _ => None,
+            };
+            size.and_then(|s| s.checked_add(8))
+                .map_or(WireShape::Top, |size| WireShape::Flat { kind: 3, size })
+        }
+        (Some("Multiword"), crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG) => {
+            u32::try_from(value)
+                .ok()
+                .and_then(|n| n.checked_mul(8))
+                .map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size })
+        }
+        _ => WireShape::Top,
+    }
+}
+
+/// Preserve the outer shape and checked flat size of written structural types.
+fn declared_wire_shape(
+    records: &[(i64, i64)],
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
+    let size_of = |shape| match shape {
+        WireShape::Scalar { kind: 1 | 2 } => Some(1u32),
+        WireShape::Scalar { kind: 3 } => Some(8),
+        WireShape::Flat { size, .. } => Some(size),
+        _ => None,
+    };
+    let mut stack: Vec<Option<WireShape>> = Vec::new();
+    // The most recent named type, the head a following generic argument applies to.
+    let mut head = None;
+    for &(kind, value) in records {
+        match kind {
+            6 | 95 => {
+                head = Some(value);
+                stack.push(Some(wire_shape_of(value, names, enums)))
+            }
+            94 => stack.push(None),
+            96 => {
+                let mut size = Some(0u32);
+                while let Some(element) = stack.pop().expect("tuple signature without open") {
+                    size = size.and_then(|n| size_of(element).and_then(|s| n.checked_add(s)));
+                }
+                stack.push(Some(
+                    size.map_or(WireShape::Top, |size| WireShape::Flat { kind: 0, size }),
+                ));
+            }
+            8 => {
+                let element = stack
+                    .pop()
+                    .flatten()
+                    .expect("array signature without element");
+                let size = u32::try_from(value)
+                    .ok()
+                    .and_then(|length| size_of(element).and_then(|s| length.checked_mul(s)));
+                stack.push(Some(
+                    size.map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size }),
+                ));
+            }
+            crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
+            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+                stack
+                    .pop()
+                    .flatten()
+                    .expect("generic argument without head");
+                stack.push(Some(builtin_generic_shape(
+                    head.and_then(|h| names.get(h as usize)).map(String::as_str),
+                    kind,
+                    value,
+                    names,
+                    enums,
+                )));
+            }
+            crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
+                let inner = if value == 1 {
+                    WireShape::Scalar { kind: 0 }
+                } else {
+                    stack.pop().flatten().expect("empty grouped signature")
+                };
+                assert!(stack.pop().expect("group without open").is_none());
+                stack.push(Some(inner));
+            }
+            _ => panic!("unknown signature type record {kind}"),
+        }
+    }
+    if records.is_empty() {
+        WireShape::Top
+    } else {
+        assert_eq!(stack.len(), 1, "unbalanced signature type records");
+        stack.pop().flatten().expect("unclosed tuple signature")
+    }
+}
+
+/// Assemble the per-chunk signature table from the parsed functions, grouping
+/// same-named heads into one chunk and ordering by chunk name to match the module.
+fn assemble_signatures(
+    fns: &[ParsedFn],
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> Vec<crate::bytecode::ChunkSignature> {
+    use crate::bytecode::{ChunkSignature, WireShape};
+    let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = chunk_name(&fns[i], names);
+        let first = &fns[i];
+        // Skip the rest of this head group.
+        let mut j = i + 1;
+        while j < fns.len() && chunk_name(&fns[j], names) == name {
+            j += 1;
+        }
+        i = j;
+        let params: Vec<WireShape> = first
+            .param_type_records
+            .iter()
+            .enumerate()
+            .map(|(i, records)| {
+                // A newtype parameter has no shape the reference states.
+                if first.param_opaque.get(i) == Some(&2) {
+                    return WireShape::Top;
+                }
+                first.param_layouts[i].unwrap_or_else(|| declared_wire_shape(records, names, enums))
+            })
+            .collect();
+        let ret = if first.return_opaque == 2 {
+            WireShape::Top
+        } else {
+            first
+                .return_layout
+                .unwrap_or_else(|| declared_wire_shape(&first.return_type_records, names, enums))
+        };
+        // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
+        let resume = if first.cat == 3 {
+            params.first().copied().unwrap_or(WireShape::Top)
+        } else {
+            WireShape::Top
+        };
+        chunks.push((
+            name,
+            ChunkSignature {
+                params,
+                ret,
+                resume,
+            },
+        ));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Lower each `Option::None` construction to the reference's boxed composite, Order 6.
+///
+/// The parser emits `None` as an enum construction with no children, which codegen encodes
+/// as a flat enum of count zero. No declared enum produces that, because every declared
+/// construction carries its discriminant. The reference builds `None` as a boxed enum whose
+/// metadata indexes a per-chunk template naming `Option` and `None`, appending one template
+/// per construction in emission order, so the templates are produced in the same order here.
+/// The self-hosted pipeline emits no other template, so the indices start at zero.
+fn option_none_templates(ops: &mut [Op]) -> Vec<crate::bytecode::StructTemplate> {
+    let mut templates = Vec::new();
+    for op in ops.iter_mut() {
+        if let Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            count: 0,
+            byte_size: 0,
+        }) = op
+        {
+            let meta =
+                u16::try_from(templates.len()).expect("too many None templates in one chunk");
+            *op = Op::NewComposite(NewCompositeOperand::Boxed {
+                kind: CompositeKind::Enum,
+                count: 0,
+                meta,
+            });
+            templates.push(crate::bytecode::StructTemplate {
+                type_name: String::from("Option"),
+                field_names: vec![String::from("None")],
+            });
+        }
+    }
+    templates
+}
+
+/// Set a module's declared WCET/WCMU header from the self-hosted analyze.kel stage: the
+/// per-iteration maximum across the module's Stream chunks, mirroring the reference
+/// compiler's fold (`compiler.rs` sets `wcet_cycles`/`wcmu_bytes` to that maximum).
+fn assemble_resource_bounds(module: &mut Module) {
+    let mut max_wcet = 0i64;
+    let mut max_wcmu = 0i64;
+    for c in &module.chunks {
+        if c.block_type != crate::bytecode::BlockType::Stream {
+            continue;
+        }
+        // The self-hosted analyze.kel driver already ported into this file: the shallow
+        // empty-resolver form matches `wcet_stream_iteration`/`wcmu_stream_iteration`.
+        let (wcet, stack, heap, reject, _valid) = run_analyze_kel(c, i64::MAX, &[], &[]);
+        assert!(!reject, "analyze.kel rejected a stage Stream chunk");
+        max_wcet = max_wcet.max(wcet);
+        max_wcmu = max_wcmu.max(stack + heap);
+    }
+    module.wcet_cycles = max_wcet as u32;
+    module.wcmu_bytes = max_wcmu as u32;
+}
+
+/// Each chunk's `(name, param_count, block_type, param_types)` assembled from the parsed
+/// functions, in chunk-name order. The block type comes from the declaration category (fn ->
+/// Func, yield -> Reentrant, loop -> Stream); the parameter type tags map `Word`/`Byte` to
+/// their [`crate::bytecode::TypeTag`] (a stage boundary carries only scalar parameters). A
+/// multiheaded function is one chunk described by its first head.
+#[allow(clippy::type_complexity)]
+fn assemble_chunk_metadata(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<(
+    String,
+    u8,
+    crate::bytecode::BlockType,
+    Vec<crate::bytecode::TypeTag>,
+)> {
+    use crate::bytecode::{BlockType, TypeTag};
+    let tag_of = |type_id: i64| -> TypeTag {
+        match names.get(type_id as usize).map(String::as_str) {
+            Some("Word") => TypeTag::Word,
+            Some("Byte") => TypeTag::Byte,
+            Some("bool") => TypeTag::Bool,
+            _ => TypeTag::Composite,
+        }
+    };
+    let mut chunks = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = chunk_name(&fns[i], names);
+        let first = &fns[i];
+        let mut j = i + 1;
+        while j < fns.len() && chunk_name(&fns[j], names) == name {
+            j += 1;
+        }
+        i = j;
+        let block_type = match first.cat {
+            1 => BlockType::Func,
+            2 => BlockType::Reentrant,
+            _ => BlockType::Stream,
+        };
+        let param_types: Vec<TypeTag> = first
+            .param_types
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| {
+                // A labelled or newtype parameter is tagged `Composite`, as the reference tags
+                // it, whatever its underlying type.
+                if first.param_opaque.get(i).is_some_and(|&o| o > 0) {
+                    return TypeTag::Composite;
+                }
+                if let Some(shape) = first.param_layouts[i] {
+                    return match shape {
+                        crate::bytecode::WireShape::Scalar { kind: 0 } => TypeTag::Unit,
+                        crate::bytecode::WireShape::Scalar { kind: 1 } => TypeTag::Bool,
+                        crate::bytecode::WireShape::Scalar { kind: 2 } => TypeTag::Byte,
+                        crate::bytecode::WireShape::Scalar { kind: 3 } => TypeTag::Word,
+                        crate::bytecode::WireShape::Scalar { kind: 4 } => TypeTag::Fixed,
+                        crate::bytecode::WireShape::Scalar { kind: 5 } => TypeTag::Float,
+                        crate::bytecode::WireShape::Scalar { kind: 6 } => TypeTag::Text,
+                        _ => TypeTag::Composite,
+                    };
+                }
+                if first.param_type_records[i]
+                    .iter()
+                    .any(|(kind, _)| matches!(kind, 8 | 94))
+                {
+                    TypeTag::Composite
+                } else {
+                    tag_of(t)
+                }
+            })
+            .collect();
+        chunks.push((name, first.params as u8, block_type, param_types));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks
+}
+
+/// Self-host-compile a whole program with a from-scratch module scaffold: the
+/// self-hosted chunk ops (via [`crate::selfhost::self_host_compile`]) plus a data layout, schema hash,
+/// enum-layout table, chunk signatures, per-chunk metadata, and declared WCET/WCMU header all
+/// assembled from the pipeline output (parse.kel's record stream and analyze.kel's verdict)
+/// rather than borrowed from the Rust reference. For the loop-free stage sources the
+/// serialized module is byte-identical to the reference; the reference is used only as the
+/// oracle in `tests/scaffold.rs`.
+///
+/// What still rides the reference base: the chunk table's names and order, the (absent, for
+/// the stages) native chunks, and the module bookkeeping metadata (`aux_arena_bytes`,
+/// `persist_composite_bytes`, `flags`, and the target bit-widths). The last three are
+/// program-analysis-derived (opaque-intern reachability, private-composite persistence, entry
+/// modifiers) and self-hosting them is a distinct increment.
+pub fn self_host_compile_full(src: &str) -> Module {
+    let mut module = self_host_compile(src);
+    let (fns, names, data_records, enum_records, _, struct_records) =
+        parse_functions_fused_with_natives(src);
+    let dl = assemble_data_layout(&data_records, &struct_records, &names);
+    module.data_layout = (!dl.slots.is_empty()).then_some(dl);
+    module.persistent_composite_bytes = private_composite_pool(&data_records).1;
+    module.schema_hash = crate::bytecode::compute_typed_schema_hash(
+        module.data_layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    );
+    module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
+    module.signatures = assemble_signatures(&fns, &names, &module.enum_layouts);
+    // Self-assemble each source chunk's param_count, block_type, and param_types (the last
+    // per-chunk scaffold field). A native chunk (absent for the stages) is not in `meta` and
+    // keeps the reference's metadata.
+    let meta = assemble_chunk_metadata(&fns, &names);
+    for chunk in &mut module.chunks {
+        if let Some((_, pc, bt, pts)) = meta.iter().find(|(n, _, _, _)| n == &chunk.name) {
+            chunk.param_count = *pc;
+            chunk.block_type = *bt;
+            chunk.param_types = pts.clone();
+        }
+    }
+    assemble_resource_bounds(&mut module);
+    self_host_module_bookkeeping(&mut module, &fns, &names);
+    module
+}
+
+/// Compute the module bookkeeping fields the reference derives by program analysis --
+/// `aux_arena_bytes`, `persistent_composite_bytes`, and `flags` -- from the pipeline output,
+/// rather than inheriting them from the reference base.
+///
+/// Scalar private storage gives the existing zero auxiliary and composite-pool totals.
+/// The parser supplies entry-parameter text usage and structural return-type facts.
+/// When those facts require a text boundary check, analyze.kel computes abstract stack,
+/// local and callee text flow. The host stores values and schedules callees before callers.
+/// Opaque allocation, private composites and signed entries remain outside this assembly path.
+fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[String]) {
+    module.aux_arena_bytes = 0;
+    let text_flags = fns
+        .iter()
+        .find(|f| chunk_name(f, names) == "main")
+        .map_or(0, |f| f.text_boundary);
+    module.flags = if module.private_data_bytes != 0 {
+        0
+    } else if text_flags == 0 {
+        crate::bytecode::FLAG_EPHEMERAL
+    } else {
+        text_flow::ephemeral_flag(module, text_flags).expect("Keleusma text-boundary analysis")
+    };
+    // `signed` on the entry sets the requires-signature flag, as the reference sets it. On
+    // any other head the reference rejects the program, and this path refuses it.
+    for f in fns {
+        if f.signed {
+            assert!(
+                chunk_name(f, names) == "main",
+                "`signed` on a function other than `main` is outside the self-hosted subset"
+            );
+            module.flags |= crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+    }
+}
+
+/// The shared segment's flat byte total, derived from the assembled shared-slot layout the
+/// same way the reference accumulates it (`compile_with_target`'s `shared_data_flat_bytes`):
+/// one entry per shared slot at consecutive byte offsets, so the total is the byte past the
+/// last entry. The per-slot size is fixed by the scalar kind tag the layout records: a `Word`
+/// (tag 3) is eight bytes and a `Byte` (tag 2) is one byte at the 64-bit reference width, the
+/// same `(tag, size)` mapping `assemble_shared_layout` uses. Zero for a module with no shared
+/// slots.
+fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> u32 {
+    shared_layout
+        .iter()
+        .map(|e| {
+            let size = match e.kind {
+                3 => 8u32,
+                2 => 1u32,
+                other => panic!("unhandled shared slot kind tag {other}"),
+            };
+            e.offset + size
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Self-host-compile a whole program building the emitted [`Module`] entirely from the
+/// pipeline output, with no reference-compiler borrow of the user program. Unlike
+/// [`self_host_compile_full`] (which starts from `compile_src(src)` and overwrites fields),
+/// every one of the module's eighteen fields is assembled here from parse.kel's record
+/// stream, reconstruct.kel's forest, codegen.kel's ops, and analyze.kel's verdict; the
+/// reference is used only as the byte-identity oracle in `tests/scaffold.rs`.
+///
+/// The chunk order matches the reference's name-keyed `BTreeMap` order (chunks sorted
+/// lexicographically by name, same-named heads folded into one chunk). The entry point is the
+/// name-sorted index of `main`. The scalar bit widths are the host target's. The
+/// shared/private data byte totals are derived from the assembled `DataLayout` exactly as the
+/// reference derives them (the shared segment's flat byte span, and the private-slot count
+/// times `VALUE_SLOT_SIZE_BYTES`). The stages declare no natives, so `native_names` and
+/// `native_return_shapes` are empty.
+pub fn self_host_compile_scratch(src: &str) -> Module {
+    use crate::bytecode::{Chunk, SlotVisibility};
+    let (mut fns, names, data_records, enum_records, native_paths, struct_records) =
+        parse_functions_fused_with_natives(src);
+    let composites = private_composite_sizes(&data_records);
+    let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
+    for function in &mut fns {
+        relocation
+            .relocate(function)
+            .expect("relocate data records");
+    }
+
+    // Build each source chunk from the pipeline output. Group consecutive same-named heads
+    // (a multiheaded function is one chunk), mirroring `self_host_compile`, but emit a fresh
+    // `Chunk` rather than splicing into a reference base.
+    let meta = assemble_chunk_metadata(&fns, &names);
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = chunk_name(&fns[i], &names);
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && chunk_name(&fns[j], &names) == name {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &name)
+        };
+        let (mut ops, pool, lc) = run_codegen(&body, pc, &composites);
+        let struct_templates = option_none_templates(&mut ops);
+        // The metadata table (already name-sorted) supplies param_count, block_type, and
+        // param_types; look this chunk's entry up by name.
+        let (_, param_count, block_type, param_types) = meta
+            .iter()
+            .find(|(n, _, _, _)| n == &name)
+            .unwrap_or_else(|| panic!("no metadata for chunk `{name}`"));
+        chunks.push(Chunk {
+            name,
+            ops,
+            constants: pool_to_constants(&pool, &names),
+            struct_templates,
+            local_count: lc as u16,
+            param_count: *param_count,
+            block_type: *block_type,
+            param_types: param_types.clone(),
+            debug_pool: None,
+        });
+    }
+    // Order chunks by name to match the reference's name-keyed chunk order. The stage
+    // sources have no native chunks, so every chunk is source-defined.
+    chunks.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // The entry point is the name-sorted index of the module's `main`.
+    let entry_point = chunks.iter().position(|c| c.name == "main");
+
+    // The native names come from the `use` declarations, in declaration order, each its
+    // segments joined by `::` as the reference joins them. The `external` modifier is a
+    // keyword, not a segment, so it is absent here. A native without a signature returns
+    // `Top`, as in the reference. A signature's return, the row's negative last entry,
+    // maps to the reference's shape for a scalar or `()`; any other named return is outside
+    // this path.
+    let native_names: Vec<String> = native_paths
+        .iter()
+        .map(|path| {
+            path.iter()
+                .filter(|&&id| id >= 0)
+                .map(|&id| names[id as usize].as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .collect();
+
+    // The data layout, assembled from parse.kel's data-block records, drives both the shared
+    // and private byte totals the reference derives from the same layout.
+    let dl = assemble_data_layout(&data_records, &struct_records, &names);
+    let shared_data_bytes = shared_data_bytes_of(&dl.shared_layout);
+    let private_slot_count = dl
+        .slots
+        .iter()
+        .filter(|s| s.visibility == SlotVisibility::Private)
+        .count() as u32;
+    let private_data_bytes =
+        private_slot_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES);
+    // An absent data segment has no layout regions in the artifact. An empty
+    // layout would encode extra regions and differ from the reference.
+    let data_layout = (!dl.slots.is_empty()).then_some(dl);
+    let schema_hash = crate::bytecode::compute_typed_schema_hash(
+        data_layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    );
+
+    let enum_layouts = assemble_enum_layouts(&enum_records, &names);
+    let signatures = assemble_signatures(&fns, &names, &enum_layouts);
+    // After the enum table, since a native may return an enum declared after its `use`.
+    let native_return_shapes: Vec<crate::bytecode::WireShape> = native_paths
+        .iter()
+        .map(|path| {
+            use crate::bytecode::WireShape;
+            match path.last().copied() {
+                Some(-2) => WireShape::Scalar { kind: 0 },
+                // A tuple return, flat with its elements' sizes summed, as the reference sizes
+                // `(Status, Word)` at twenty-four bytes. An element of unknown size is outside
+                // the subset.
+                Some(-1) => {
+                    let elements = path.iter().rev().skip(1).take_while(|&&c| c <= -3);
+                    let mut size = 0u32;
+                    for &code in elements {
+                        let element = match names[(-code - 3) as usize].as_str() {
+                            "bool" | "Byte" => 1,
+                            "Word" => 8,
+                            other => match wire_shape_of(-code - 3, &names, &enum_layouts) {
+                                WireShape::Flat { size, .. } => size,
+                                _ => panic!(
+                                    "a native returning a tuple of `{other}` is outside the \
+                                     self-hosted subset"
+                                ),
+                            },
+                        };
+                        size = size.checked_add(element).expect("tuple return size");
+                    }
+                    WireShape::Flat { kind: 0, size }
+                }
+                Some(code) if code < -2 => match names[(-code - 3) as usize].as_str() {
+                    "bool" => WireShape::Scalar { kind: 1 },
+                    "Byte" => WireShape::Scalar { kind: 2 },
+                    "Word" => WireShape::Scalar { kind: 3 },
+                    // A declared enum takes its flat shape, as the reference resolves a
+                    // named return type. Any other named type stays outside the subset.
+                    other => match wire_shape_of(-code - 3, &names, &enum_layouts) {
+                        shape @ WireShape::Flat { .. } => shape,
+                        _ => {
+                            panic!("a native returning `{other}` is outside the self-hosted subset")
+                        }
+                    },
+                },
+                _ => WireShape::Top,
+            }
+        })
+        .collect();
+
+    // The scalar bit widths are the host target's, matching the reference `compile`, which
+    // compiles with `Target::host()`.
+    let target = crate::target::Target::host();
+
+    let mut module = Module {
+        chunks,
+        native_names,
+        entry_point,
+        data_layout,
+        word_bits_log2: target.word_bits_log2,
+        addr_bits_log2: target.addr_bits_log2,
+        float_bits_log2: target.float_bits_log2,
+        // Assembled from analyze.kel below.
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        // Assembled from the program-analysis bookkeeping below.
+        aux_arena_bytes: 0,
+        persistent_composite_bytes: private_composite_pool(&data_records).1,
+        flags: 0,
+        shared_data_bytes,
+        private_data_bytes,
+        schema_hash,
+        enum_layouts,
+        signatures,
+        native_return_shapes,
+    };
+    assemble_resource_bounds(&mut module);
+    self_host_module_bookkeeping(&mut module, &fns, &names);
+    module
+}
+
+/// Why a self-hosted compile could not proceed. The self-hosted pipeline is not a
+/// general-purpose compiler: it accepts the self-hosted language subset at the host
+/// target width. `keleusma-cli`'s `--compiler self-hosted` maps these to a clear error
+/// suggesting `--compiler rust`.
+#[derive(Debug, Clone)]
+pub enum SelfHostError {
+    /// The pipeline's source facts or Keleusma type stage rejected the program before
+    /// the Rust reference compiler inspected it.
+    PipelineRejected {
+        /// Independent pipeline rejection diagnostic.
+        detail: String,
+    },
+    /// The independent type stage could not produce a verdict. This is not source rejection.
+    TypeCheckUnavailable {
+        /// Capacity, transport or execution failure preventing a verdict.
+        detail: String,
+    },
+    /// The requested target differs from the host width. The self-hosted pipeline is only
+    /// validated byte-identical to the reference at host word/address/float widths, so a
+    /// cross-width compile is refused rather than emitting an unverified module.
+    NonHostTarget,
+    /// The program does not compile under the *reference* compiler either: a genuine source
+    /// error (a lex, parse, or type error), not a self-hosted-subset limitation. Retrying
+    /// with `--compiler rust` reports the identical error, so the CLI does NOT suggest it.
+    ReferenceRejected {
+        /// The reference compiler's own diagnostic message.
+        detail: String,
+    },
+    /// The program is within the reference language but outside the self-hosted subset (for
+    /// example floats, generics, `Text`, or native calls). This surfaces either as a
+    /// recovered pipeline panic or as a divergence from the reference output; `detail` names
+    /// the diverging chunk and the first differing op where a divergence is the cause.
+    /// Retrying with `--compiler rust` compiles the program, so the CLI suggests it.
+    Unsupported {
+        /// A best-effort description: for a divergence, the diverging chunk and the first
+        /// differing op or dimension; for a stage panic, the recovered panic payload.
+        detail: String,
+    },
+}
+
+impl SelfHostError {
+    /// Whether retrying the compile with the Rust reference backend (`--compiler rust`)
+    /// would help. True for a self-hosted-subset limitation ([`Unsupported`]) and for a
+    /// cross-width target ([`NonHostTarget`], which the reference compiler supports). False
+    /// for source rejection by either the pipeline or the reference.
+    ///
+    /// [`Unsupported`]: SelfHostError::Unsupported
+    /// [`NonHostTarget`]: SelfHostError::NonHostTarget
+    /// [`ReferenceRejected`]: SelfHostError::ReferenceRejected
+    pub fn rust_backend_would_help(&self) -> bool {
+        !matches!(
+            self,
+            SelfHostError::ReferenceRejected { .. } | SelfHostError::PipelineRejected { .. }
+        )
+    }
+}
+
+impl core::fmt::Display for SelfHostError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SelfHostError::PipelineRejected { detail } => {
+                write!(f, "pipeline type rejection ({detail})")
+            }
+            SelfHostError::TypeCheckUnavailable { detail } => {
+                write!(f, "self-hosted type checking unavailable ({detail})")
+            }
+            SelfHostError::NonHostTarget => write!(
+                f,
+                "the self-hosted compiler supports only the host target width"
+            ),
+            SelfHostError::ReferenceRejected { detail } => {
+                write!(f, "the program does not compile ({detail})")
+            }
+            SelfHostError::Unsupported { detail } => write!(
+                f,
+                "the self-hosted compiler does not support this program ({detail})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SelfHostError {}
+
+/// The shared-slot layout `wire.kel` declares, derived once from its `shared data
+/// wire` block.
+///
+/// # Why this is a module and not three sets of local constants
+///
+/// It was three. `wire_names_from_input`, `wire_regions_from_input` and
+/// `wire_chunks_from_input` each restated `1 + 65536 + 1 + 1024 * 4`, and they
+/// agreed -- which is the state a drifted copy starts in. This tree has already
+/// paid for the same shape twice: nine copies of `parse.kel`'s layout collapsed
+/// into `crate::selfhost_host`, and four silent miscompiles in one day from the
+/// shipping driver disagreeing with a copy of itself that the boundary measured
+/// instead.
+///
+/// # The derivation, field by field
+///
+/// A slot index is a WORD index for a `Word` field and a BYTE index inside a
+/// `[Byte; N]` field, because `set_shared` addresses the declared slots. Reading
+/// down the block:
+///
+/// | field | width | first slot |
+/// |---|---|---|
+/// | `len` | 1 | 0 |
+/// | `bytes` | 65,536 | 1 |
+/// | `nregions` | 1 | 65,537 |
+/// | `rkind`, `rflags`, `rlen`, `rcovers` | 1,024 each | 65,538 |
+/// | `warg` .. `warg5` | 5 | 69,634 |
+/// | `fin` | 1,024 | 69,639 |
+/// | `bin` | 49,152 | 70,663 |
+///
+/// **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Every constant here is an
+/// offset from the fields above it, so a field inserted rather than appended
+/// moves every slot after it and every one of these becomes wrong at once.
+pub mod wire_slots {
+    /// `wire.len`, the directory byte length.
+    pub const LEN: usize = 0;
+    /// First byte of `wire.bytes`, the artifact window.
+    pub const BYTES: usize = LEN + 1;
+    /// `wire.nregions`.
+    pub const NREGIONS: usize = BYTES + 65536;
+    /// First slot of the four per-region input arrays.
+    pub const REGION_INPUTS: usize = NREGIONS + 1;
+    /// `wire.warg`, first of the five general argument slots.
+    pub const WARG: usize = REGION_INPUTS + 1024 * 4;
+    /// First slot of `wire.fin`, the record-field batch buffer.
+    pub const FIN: usize = WARG + 5;
+    /// First slot of `wire.bin`, the byte-pool batch buffer.
+    pub const BIN: usize = FIN + 1024;
+}
+
+/// Emit a module's `NAMES` and `STRING_POOL` regions through `wire.kel`.
+///
+/// **This is the first thing the DRIVER asks `wire.kel` to do**, and it is what
+/// makes `wire.kel`'s place in the stage table honest. Until now the wire format
+/// was exercised only from the test harness; the driver ran pipeline stages and
+/// produced no auxiliary body at all.
+///
+/// The module reaches Keleusma as a length-prefixed blob and nothing else: no
+/// Every constant root the reference encoder emits, the chunk constants in chunk order and
+/// then the private initializers unless they are elided.
+///
+/// This was the chunk constants alone. The two sets coincided while every private initializer
+/// was a scalar, and parted once a composite private field was given its type's zero, as for
+/// the `Frame` of `examples/scripts/14_frame_log.kel`. The joins this blob feeds then interned
+/// no name for the initializer and wrote zeros in `NAMES` and `STRING_POOL` where the reference
+/// holds its names. The root set is now the reference's own definition rather than a model of
+/// it. The shipping serializer, `wire_auxiliary_from_module_via_kel`, does not read this blob.
+fn const_roots_of(module: &Module) -> Vec<ConstValue> {
+    crate::wire_schema::constant_roots_of_module(module)
+}
+
+/// The wire tag and payload for a constant node.
+///
+/// Composite tags are RETURNED rather than rejected, so a refusal comes from the
+/// stage. A host that quietly dropped them would make the stage's guard
+/// untestable, which is the same reason the blob carries a zero enum count
+/// rather than omitting the section.
+/// A constant's child nodes, in the order the wire format numbers them.
+///
+/// Extracted from `push_blob_node`, which is no longer its only caller: the
+/// `CONSTS` streaming emitter walks the same structure into a different encoding.
+/// Two walks of one shape is how a composite comes to be counted one way and
+/// emitted another.
+fn const_children(c: &ConstValue) -> Vec<&ConstValue> {
+    use ConstValue as K;
+    match c {
+        K::Tuple(v) | K::Array(v) => v.iter().collect(),
+        K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+        K::Enum { fields, .. } => fields.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A constant's `(flags, discriminant)` pair.
+///
+/// Only a resolved enum discriminant sets a flag, and the bit is
+/// [`crate::wire_schema::FLAG_HAS_DISCRIMINANT`] rather than a literal `1`, for
+/// the same reason the tags below are named: the flag layout is the wire
+/// contract, not a number that happens to match it.
+fn const_flags_and_discriminant(c: &ConstValue) -> (i64, i64) {
+    use ConstValue as K;
+    match c {
+        K::Enum {
+            discriminant: Some(d),
+            ..
+        } => (i64::from(crate::wire_schema::FLAG_HAS_DISCRIMINANT), *d),
+        _ => (0, 0),
+    }
+}
+
+fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
+    use crate::wire_schema::tag;
+    use ConstValue as K;
+    // THE TAGS ARE THE ENCODER'S OWN CONSTANTS, NOT NUMBERS THAT MATCH THEM.
+    // This arm list carried the literals 1..12 and they agreed with
+    // `wire_schema::tag` by coincidence rather than by construction: the tag
+    // numbering is the wire contract, so a renumbering there would leave this
+    // function silently emitting the old contract. That is the shipping-driver
+    // versus test-copy shape that produced four silent miscompiles on
+    // 2026-08-21, one layer down.
+    match c {
+        K::Unit => (tag::UNIT, 0),
+        K::Bool(b) => (tag::BOOL, i64::from(*b)),
+        K::Int(v) => (tag::INT, *v),
+        K::Byte(v) => (tag::BYTE, i64::from(*v)),
+        K::Fixed(v) => (tag::FIXED, *v),
+        #[cfg(feature = "floats")]
+        K::Float(v) => (tag::FLOAT, v.to_bits() as i64),
+        K::None => (tag::NONE, 0),
+        K::StaticStr(_) => (tag::STATIC_STR, 0),
+        K::Tuple(_) => (tag::TUPLE, 0),
+        K::Array(_) => (tag::ARRAY, 0),
+        K::Struct { .. } => (tag::STRUCT, 0),
+        K::Enum { .. } => (tag::ENUM, 0),
+    }
+}
+
+/// Total nodes in a constant forest, counting every descendant.
+fn count_blob_nodes(roots: &[ConstValue]) -> usize {
+    use ConstValue as K;
+    fn go(c: &K) -> usize {
+        1 + match c {
+            K::Tuple(v) | K::Array(v) => v.iter().map(go).sum::<usize>(),
+            K::Struct { fields, .. } => fields.iter().map(|(_, v)| go(v)).sum::<usize>(),
+            K::Enum { fields, .. } => fields.iter().map(go).sum::<usize>(),
+            _ => 0,
+        }
+    }
+    roots.iter().map(go).sum()
+}
+
+/// The names a constant node contributes, in the order the reference interns
+/// them.
+fn blob_node_names(c: &ConstValue) -> Vec<&str> {
+    use ConstValue as K;
+    match c {
+        K::Struct { type_name, fields } => {
+            let mut n = vec![type_name.as_str()];
+            n.extend(fields.iter().map(|(f, _)| f.as_str()));
+            n
+        }
+        K::Enum {
+            type_name, variant, ..
+        } => vec![type_name.as_str(), variant.as_str()],
+        K::StaticStr(s) => vec![s.as_str()],
+        _ => Vec::new(),
+    }
+}
+
+/// One constant node in PREORDER: tag, payload, child count, flags,
+/// discriminant, its interned names, then its children.
+///
+/// The order is the reference's rather than a fresh choice: the reference
+/// flattener pushes a node and then descends, so both the node table and the
+/// name sequence are depth-first preorder. Writing the blob in that order is
+/// what lets the stage reproduce both with a linear scan.
+fn push_blob_node(c: &ConstValue, out: &mut Vec<u8>, names: &mut usize) {
+    let node_names = blob_node_names(c);
+    let children = const_children(c);
+    let (tag, payload) = const_tag_and_name(c);
+    let (flags, disc) = const_flags_and_discriminant(c);
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&payload.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(children.len())
+            .expect("kids fit u16")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&disc.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(node_names.len())
+            .expect("names fit u16")
+            .to_le_bytes(),
+    );
+    for n in node_names {
+        let b = n.as_bytes();
+        out.extend_from_slice(&u16::try_from(b.len()).expect("len fits u16").to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+    for ch in children {
+        push_blob_node(ch, out, names);
+    }
+}
+
+/// The module-input blob and an UPPER BOUND on the names it interns.
+///
+/// **The two are returned together deliberately.** They are the same walk, and
+/// until this moved out of the test harness the caller supplied the count
+/// separately — from a model that omitted the data-slot contributor entirely,
+/// reporting 252 for `parse` where the module really interns 627. A count that
+/// disagrees with the blob it describes is the "one model with two readers"
+/// shape that produced the understated worst-case-memory bound, so there is one
+/// walk and no second opinion.
+///
+/// **It is a BOUND rather than the record count, and the direction matters.**
+/// The count returned here is the number of interning EVENTS. The reference
+/// dedups, so its `NAMES` record count can be lower — and by how much is
+/// order-dependent, because `Names::intern_fresh` records its entry in the
+/// index so a later `intern` can share it. Reproducing the exact count
+/// host-side would mean replicating the reference's interning ORDER, which is
+/// precisely what `wire.kel`'s `mi_*` producers already do and what the
+/// byte-identity oracle already checks. Duplicating it here would be a second
+/// model of the thing under test.
+///
+/// The bound's only consumer is the cap check in [`wire_names_via_kel`], where
+/// over-counting refuses slightly early and under-counting would admit a module
+/// that overruns the interner. The old caller under-counted. On all ten corpus
+/// stages the bound is exact; an enum constant makes it loose, and both facts
+/// are pinned by test.
+///
+/// Sections, in the order `wire.kel`'s `mi_*` producers read them: chunk names,
+/// the enum layouts, the data-slot runs, then the constant forest as a tail.
+/// **Every count is written even when it is zero.** Inferring an absent section
+/// from the blob ENDING cannot distinguish empty from truncated, and it would
+/// have passed here by accident, because `bin` is zero-filled past the blob so a
+/// reader would find a zero count and be right for a reason that is not the
+/// encoding.
+/// Scalar-only forests use a compact tail. Its count has bit 15 set, followed
+/// by ten bytes per scalar, a two-byte tag and an eight-byte payload. Other
+/// forests retain the legacy thirty-byte node header and its name data.
+pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
+    let constants = const_roots_of(module);
+    let compact = constants.iter().all(constant_is_scalar) && constants.len() <= 0x7FFF;
+    module_input_encoded(module, compact)
+}
+
+// Compact scalar facts omit the four fields that are necessarily zero. The
+// private count's high bit distinguishes this from the legacy forest grammar.
+#[cfg(test)]
+fn compact_scalar_module_input(module: &Module) -> Result<(Vec<u8>, usize), SelfHostError> {
+    let constants = module.chunks.iter().flat_map(|chunk| &chunk.constants);
+    if !constants.clone().all(constant_is_scalar) || constants.count() > 1365 {
+        return Err(SelfHostError::Unsupported {
+            detail: "compact module input requires at most 1365 scalar constants".into(),
+        });
+    }
+    Ok(module_input_encoded(module, true))
+}
+
+fn module_input_encoded(module: &Module, compact: bool) -> (Vec<u8>, usize) {
+    // The constant section rides at the END, so the sections the stage reads
+    // first are at fixed offsets from the start.
+    let consts = const_roots_of(module);
+    let mut nodes = Vec::new();
+    let mut const_names = 0usize;
+    for c in &consts {
+        if compact {
+            let (tag, payload) = const_tag_and_name(c);
+            nodes.extend_from_slice(&tag.to_le_bytes());
+            nodes.extend_from_slice(&payload.to_le_bytes());
+        } else {
+            push_blob_node(c, &mut nodes, &mut const_names);
+        }
+    }
+    let cn = u16::try_from(count_blob_nodes(&consts)).expect("node count fits u16");
+    let mut tail = Vec::new();
+    tail.extend_from_slice(&(cn | if compact { 0x8000 } else { 0 }).to_le_bytes());
+    tail.extend_from_slice(&nodes);
+
+    module_input_with_tail(module, tail, const_names)
+}
+
+fn module_input_with_tail(module: &Module, tail: Vec<u8>, const_names: usize) -> (Vec<u8>, usize) {
+    let mut out = Vec::new();
+    let mut names = 0usize;
+    fn push_name(out: &mut Vec<u8>, s: &str, names: &mut usize) {
+        let b = s.as_bytes();
+        let l = u16::try_from(b.len()).expect("name length fits u16");
+        out.extend_from_slice(&l.to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+
+    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
+    out.extend_from_slice(&n.to_le_bytes());
+    for c in &module.chunks {
+        push_name(&mut out, &c.name, &mut names);
+    }
+
+    let e = u16::try_from(module.enum_layouts.len()).expect("enum count fits u16");
+    out.extend_from_slice(&e.to_le_bytes());
+    for l in &module.enum_layouts {
+        push_name(&mut out, &l.type_name, &mut names);
+        let v = u16::try_from(l.variants.len()).expect("variant count fits u16");
+        out.extend_from_slice(&v.to_le_bytes());
+        for var in &l.variants {
+            push_name(&mut out, &var.name, &mut names);
+        }
+    }
+
+    // The DATA-SLOT section, one name per RUN. Consecutive slots sharing a name
+    // and visibility collapse into one record in the reference, and the name is
+    // interned once per run; interning per SLOT would emit one name per array
+    // element, which is how the pre-run-length-encoding artifact reached tens of
+    // thousands of names and produced the 395,804 figure that outlived it.
+    let mut runs: Vec<&str> = Vec::new();
+    if let Some(dl) = &module.data_layout {
+        let mut i = 0usize;
+        while i < dl.slots.len() {
+            let s = &dl.slots[i];
+            let mut n = 1usize;
+            while i + n < dl.slots.len()
+                && dl.slots[i + n].name == s.name
+                && dl.slots[i + n].visibility == s.visibility
+            {
+                n += 1;
+            }
+            runs.push(s.name.as_str());
+            i += n;
+        }
+    }
+    let sn = u16::try_from(runs.len()).expect("slot run count fits u16");
+    out.extend_from_slice(&sn.to_le_bytes());
+    for r in &runs {
+        push_name(&mut out, r, &mut names);
+    }
+
+    out.extend_from_slice(&tail);
+    (out, names + const_names)
+}
+
+/// name lengths, no offsets, no interning sequence. Keleusma recovers all three
+/// and runs the interner and the emitters in ONE call, because shared data is
+/// re-seeded on every call and the sequence would not survive a return.
+///
+/// **Bounded, and it says so.** The interner admits at most `NAME_CAP` names per
+/// call and the blob must fit `wire.kel`'s `bin`. Both bounds now cover every
+/// stage in the corpus: the largest, `parse`, interns 627 names from a
+/// 33,395-byte blob. A module past either bound is refused rather than
+/// truncated, because a silent partial artifact would be byte-identical for a
+/// prefix and wrong after it.
+///
+/// The figure previously named here — "a real stage's 395,804" — described no
+/// name count. It was a REGION RECORD count belonging to `CONSTS`, carried over
+/// from the pre-run-length-encoding representation, and it made a 2.5x problem
+/// look like a 1500x one. Measured: the largest `NAMES` region is 627 records.
+///
+/// **THE DRIVER IS WIRED TO THE MODULE, NOT TO A MODEL.** It builds the blob and
+/// its name count with [`module_input`] rather than accepting them. Until this
+/// changed the function took a pre-built blob and opened with `let _ = module;`
+/// — the module was in the signature and unused, and the only producer of the
+/// blob was a Rust function in the test harness. A path that cannot be driven
+/// from a `Module` is not a compile path, however byte-identical its output.
+///
+/// [`wire_names_from_input`] remains for tests that must inject a blob or a
+/// count the encoder would never produce, which is the only way to reach the
+/// two cap refusals.
+pub fn wire_names_via_kel(
+    module: &Module,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let (blob, names) = lone_join_input(module)?;
+    wire_names_from_input(&blob, names, directory, regions)
+}
+
+/// The module-input blob for the joins that read it, or a refusal where they would intern
+/// names in an order the reference does not.
+///
+/// The reference interns the names of its constant forest breadth-first across every root,
+/// while the joins' walk of this blob interns them in preorder. The two orders agree on the
+/// stage corpus, where no constant carries a name, and on a forest with one name-bearing root,
+/// such as the private `Frame` of `examples/scripts/14_frame_log.kel`. They part when two roots
+/// carry names below them, for instance two private struct fields that each hold a struct.
+/// Such a module is refused here rather than given a `NAMES` region that differs from the
+/// reference's. Reordering the walk is a change to `wire.kel`, which is at the name capacity of
+/// the self-hosted type stage. The shipping serializer, `wire_auxiliary_from_module_via_kel`,
+/// interns in the reference's order and is not affected.
+fn lone_join_input(module: &Module) -> Result<(Vec<u8>, usize), SelfHostError> {
+    let roots = const_roots_of(module);
+    let mut preorder: Vec<&str> = Vec::new();
+    let mut stack: Vec<&ConstValue> = roots.iter().rev().collect();
+    // Each node is pushed once by its parent, so both walks visit the finite forest once.
+    while let Some(c) = stack.pop() {
+        preorder.extend(blob_node_names(c));
+        stack.extend(const_children(c).into_iter().rev());
+    }
+    let mut breadth: Vec<&str> = Vec::new();
+    let mut queue: alloc::collections::VecDeque<&ConstValue> = roots.iter().collect();
+    while let Some(c) = queue.pop_front() {
+        breadth.extend(blob_node_names(c));
+        queue.extend(const_children(c));
+    }
+    if preorder != breadth {
+        return Err(SelfHostError::Unsupported {
+            detail: "the module-input joins intern constant names in preorder and the reference \
+                     interns them breadth-first, and this module's constant forest orders its \
+                     names differently under the two"
+                .into(),
+        });
+    }
+    Ok(module_input(module))
+}
+
+/// [`wire_names_via_kel`] with the module input supplied directly.
+///
+/// Separate so the cap refusals are reachable: both bounds cover every stage in
+/// the corpus, so no real module can exercise them and a negative test must
+/// inject the input.
+pub fn wire_names_from_input(
+    blob: &[u8],
+    names: usize,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    /// The interner's per-call name bound, mirrored from `wire.kel`'s
+    /// `nm_max_names`. Named rather than spelled inline so a widening there is
+    /// a compile-time mismatch here rather than a silent overrun.
+    const NAME_CAP: usize = 2048;
+    /// The blob buffer's size, mirrored from `wire.kel`'s `bin_capacity`.
+    ///
+    /// Checked HERE because the stage cannot check it: the host seeds `bin` by
+    /// slot before the call, and a blob longer than the array writes past it or
+    /// is silently truncated depending on the seeding loop. `bin_capacity` is
+    /// consulted inside `wire.kel` only against the interner's cursor, which is
+    /// a different quantity.
+    const BLOB_CAP: usize = 49152;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has \
+                 {names}; staging is not implemented"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is \
+                 {}; staging is not implemented",
+                blob.len()
+            ),
+        });
+    }
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // Slot layout mirrors `wire.kel`'s shared block: `len`, then `bytes`, then
+    // the region inputs. The directory is seeded so `dir_find` can locate
+    // NAMES and STRING_POOL; the blob rides `bin`.
+    use wire_slots::{BIN as BIN_SLOT, NREGIONS as NREGIONS_SLOT};
+    const CMD_JOIN: i64 = 167;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    // `dir_find` walks `0..wire.nregions`, so a directory seeded without its
+    // COUNT is a directory the stage cannot see: the first attempt refused with
+    // -233, which reads as "no NAMES region" and means "no regions at all".
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = vm
+        .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN)])
+        .expect("run wire.kel");
+    match st {
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// The eleven `HEADER` record fields a module contributes, in the order
+/// `emit_header_record_at` reads them from `fin`.
+///
+/// Host-side because they are scalar module properties rather than anything the
+/// blob walk derives. See [`wire_regions_via_kel`] for what that means for the
+/// coverage claim.
+fn header_fields_of(module: &Module) -> [i64; 11] {
+    [
+        // `ABSENT` for a module with no entry point, matching the reference's
+        // own sentinel rather than inventing one.
+        module
+            .entry_point
+            .map_or(i64::from(crate::wire_schema::ABSENT), |e| e as i64),
+        module.word_bits_log2 as i64,
+        module.addr_bits_log2 as i64,
+        module.float_bits_log2 as i64,
+        0, // flags
+        0, // wcet_cycles
+        0, // wcmu_bytes
+        0, // shared_data_bytes
+        0, // private_data_bytes
+        0, // schema_hash
+        // The reserved word carries the format fingerprint. Taken from the
+        // same function the reference emitter calls, never a copied literal:
+        // a duplicated constant would drift silently, whereas this cannot
+        // disagree with the reference by construction.
+        i64::from(crate::bytecode::FORMAT_FINGERPRINT),
+    ]
+}
+
+/// Emit `NAMES`, `STRING_POOL` and the `HEADER` record for `module` through
+/// `wire.kel`, returning the artifact bytes.
+///
+/// # What this covers, stated precisely because the distinction is the point
+///
+/// - `NAMES` and `STRING_POOL` are **computed**: the stage walks the module blob
+///   built by [`module_input`], interns the names itself, and derives every byte
+///   of both regions from that walk.
+/// - `HEADER` is **encoded but not derived**: the eleven scalar field values are
+///   read off the `Module` here and seeded into `fin`, and the stage decides the
+///   record's offsets, widths and endianness. Keleusma owns the ENCODING, the
+///   host owns the NUMBERS.
+///
+/// Neither region's payload comes from the reference artifact, so both are
+/// module-driven; but only the first two are self-hosted end to end, and a
+/// reader should not read the third as more than it is.
+///
+/// # Why `CONSTS` is not here, which is the largest region but no longer a dominant one
+///
+/// `CONSTS` is **37,152 bytes across the eleven stages, 33.9% of the
+/// 109,552-byte corpus auxiliary body**, against 25,752 for `NAMES` and
+/// `STRING_POOL` together. It is still the largest single region and still the
+/// obvious next target. **The share is of the BODY**, which is what the 90.5%
+/// it replaces was a share of; against the sum of region payloads alone the same
+/// corpus reads 37.5%, and quoting the two interchangeably is how a figure stops
+/// meaning anything.
+///
+/// **THIS PARAGRAPH SAID 645,312 BYTES AND 90.5% OF 712,936, AND CLAIMED EVERY
+/// FIGURE IN IT WAS DERIVED BY A TEST.** Neither was true. Those numbers predate
+/// the all-default elision, which removed the 38,087 wholly-default private-slot
+/// initialisers that made up the bulk of the region, and no test asserted them —
+/// so the correction was available to anyone who measured and to nobody who
+/// read. That is the seventh stale-figure incident on this line and the third in
+/// this doc comment specifically; an earlier revision quoted 663,120 and 34,960
+/// from a measurement nothing re-ran.
+///
+/// The share is now pinned by `the_recorded_region_magnitude_is_the_one_the_tree_produces`
+/// in `tests/consts_region_composition.rs`, as a band rather than an exact
+/// figure: an exact pin fails on every stage edit, which trains its reader to
+/// re-baseline it rather than to read it.
+///
+/// Two obstacles were recorded. **Only the first is real for this corpus**, and
+/// the correction matters because the second is the one that looked like a
+/// design decision:
+///
+/// 1. **The producer and the consumer use different arrays.** `mi_put_node_full`
+///    writes the constant node table into `wire.bytes` at byte zero, which is
+///    where the artifact lives, while the flattener reads its nodes from
+///    `wire.fin`. Running the node walk inside a join that also emits would
+///    overwrite the directory, which is the same failure this file already
+///    records for the seventh chunk onward. This one stands.
+/// 2. **The two paths intern in different orders** — the module walk in preorder
+///    by linear scan, the flattener breadth-first, with the difference
+///    observable in `NAMES`. True of the general case and **unreachable here**.
+///    The flattener interns only for `StaticStr`, `Struct` and `Enum` nodes, and
+///    all 40,332 constants across the eleven stages are `Int`. Pinned by
+///    `the_flattener_interns_no_name_for_any_stage`, which asserts both the node
+///    census and the observation that clearing every constant leaves the string
+///    pool byte-identical.
+///
+/// # What actually blocks it, which is neither of the two above
+///
+/// The emit machinery is **already driven from real modules and already
+/// byte-identical**: `keleusma_flattens_a_constant_forest_breadth_first` in
+/// `tests/selfhost_wire.rs` compiles a source, seeds its constants into
+/// `wire.fin` as nodes, and compares the emitted `CONSTS` region against the
+/// reference. What excludes the eleven stages is a CAPACITY BOUND, not a
+/// disagreement:
+///
+/// * **The 170-node flattener cap.** `wire.fin` is 1,024 words and a node costs
+///   six, so the flattener walks at most 170 nodes per call. `parse` needs
+///   **857**, so it needs six calls rather than one. **This figure was recorded
+///   as 17,391 and that was a forest nothing emits**: it counted the
+///   wholly-default initialisers the encoder elides, overstating the margin
+///   twenty-six-fold. The bound still excludes the stages and the magnitude was
+///   wrong, which is why both are stated.
+/// * **This is not the only node cap and the two are easy to conflate.** The
+///   MODULE-INPUT walk separately refuses past 1,024 NODES (`nm_max_names`,
+///   error `-240`), which is what `wire.kel` hits at 1,194 chunk constants.
+///   Different walks, different bounds, and only the first is derived from a
+///   word count.
+/// * **What the emitted set actually is.** `keleusma::wire_schema::constant_roots`
+///   is the one definition of it: every chunk's constants in chunk order, then
+///   `DataLayout::private_init` unless the encoder elides it. `const_roots_of`
+///   now returns that set. It was the chunk constants alone, which coincided with
+///   it only while no module carried a non-elided initializer, and a composite
+///   private field's zero initializer parted them, as this paragraph warned.
+///
+/// # Why enlarging `wire.fin` cannot be the answer
+///
+/// A stage's private data array is itself initialised, one `Int(0)` per word, so
+/// widening `fin` to hold N nodes adds 6N records to `wire.kel`'s **own**
+/// `CONSTS` region. Walking `parse`'s 857 nodes needs `fin` at 5,142 words,
+/// which is 82,272 bytes of `CONSTS` in the walking stage — six times the
+/// 13,712-byte region it is trying to emit. **The ratio is the node width and is
+/// what makes this a non-answer**; it does not depend on the forest size, which
+/// is why the correction to that size leaves the conclusion standing. The
+/// stage's capacity to describe a data segment is paid for out of a data segment
+/// described the same way, so the approach diverges rather than converging.
+/// Batching across calls is the route, and for a scalar-only forest it is sound
+/// with no carried state, because each record depends on nothing outside
+/// itself.
+///
+/// `STRUCT_AUX` and `ENUM_AUX` are deliberately not candidates either: measured
+/// across the eleven stages, both regions are EMPTY in all of them, so a byte
+/// identity for either would pass without emitting anything. That is the same
+/// fact as the census above, seen from the other side — both regions are written
+/// only for `Struct` and `Enum` constants, and there are none.
+pub fn wire_regions_via_kel(
+    module: &Module,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let (blob, names) = lone_join_input(module)?;
+    wire_regions_from_input(&blob, names, directory, regions, &header_fields_of(module))
+}
+
+/// [`wire_regions_via_kel`] with the module input and header fields supplied
+/// directly, so the cap refusals stay reachable.
+pub fn wire_regions_from_input(
+    blob: &[u8],
+    names: usize,
+    directory: &[u8],
+    regions: usize,
+    header: &[i64; 11],
+) -> Result<Vec<u8>, SelfHostError> {
+    const NAME_CAP: usize = 2048;
+    const BLOB_CAP: usize = 49152;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has \
+                 {names}; staging is not implemented"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is \
+                 {}; staging is not implemented",
+                blob.len()
+            ),
+        });
+    }
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT};
+    /// `mi_join_header`. Mirrored from `wire.kel`'s dispatch, where
+    /// `highest_command` is a real guard: a command above it returns `0 - 99`.
+    const CMD_JOIN_HEADER: i64 = 168;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = vm
+        .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN_HEADER)])
+        .expect("run wire.kel");
+    match st {
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the widened join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// The ten host-supplied fields of each chunk record, in the order
+/// `emit_chunks_batch` reads them from `fin` after slot zero.
+///
+/// Slot zero is left at zero deliberately: the stage overwrites it with the
+/// interner's own index, so the host cannot supply a name index the `NAMES`
+/// region would disagree with.
+fn chunk_fields_of(module: &Module) -> Vec<i64> {
+    use crate::bytecode::BlockType;
+    let mut out = Vec::with_capacity(module.chunks.len() * 11);
+    for c in &module.chunks {
+        out.push(0); // name: the stage fills this from the interner
+        out.push(c.constants.len() as i64);
+        out.push(c.struct_templates.len() as i64);
+        out.push(c.param_types.len() as i64);
+        // No debug pool in the auxiliary body this path builds, so the span is
+        // ABSENT rather than an empty range. The reference uses the sentinel to
+        // distinguish `None` from `Some(empty)`.
+        out.push(i64::from(crate::wire_schema::ABSENT));
+        out.push(0);
+        out.push(0); // op_byte_offset
+        out.push(0); // op_record_count
+        out.push(c.local_count as i64);
+        out.push(c.param_count as i64);
+        out.push(match c.block_type {
+            BlockType::Func => i64::from(crate::wire_schema::block_tag::FUNC),
+            BlockType::Reentrant => i64::from(crate::wire_schema::block_tag::REENTRANT),
+            BlockType::Stream => i64::from(crate::wire_schema::block_tag::STREAM),
+        });
+    }
+    out
+}
+
+/// `wire.kel`'s single-batch chunk cap, mirrored so a module past it is refused
+/// here rather than truncated there.
+const CHUNK_BATCH_CAP: usize = 90;
+
+/// `wire.bytes`, the stage's artifact buffer. Mirrored for the same reason.
+const STAGE_BUFFER_BYTES: usize = 65536;
+
+/// Emit `NAMES`, `STRING_POOL`, the `HEADER` record and the `CHUNKS` region for
+/// `module`, returning the artifact bytes.
+///
+/// # What each region owes to whom
+///
+/// - `NAMES` and `STRING_POOL` are **computed**: the stage walks the module blob
+///   and derives every byte.
+/// - `HEADER` is **encoded but not derived**: eleven scalars come from the host.
+/// - `CHUNKS` is **mixed, per field**. The stage computes the name index, taking
+///   it from the interner that produced `NAMES` rather than from the host, and it
+///   computes the three running range cursors `consts_first`, `templates_first`
+///   and `param_types_first` by accumulation across records. The other ten fields
+///   per record are host-supplied.
+///
+/// # Which modules this serves, and why not all of them
+///
+/// Two limits, both mirrored from `wire.kel` and both measured against the eleven
+/// stage sources:
+///
+/// - **90 chunk records per call.** `wire.fin` is 1024 words at eleven per chunk.
+///   `wire.kel` itself has 466 chunks and `parse.kel` has 94.
+/// - **65,536 artifact bytes.** The emitter writes at absolute artifact offsets
+///   into `wire.bytes`. `parse.kel` produces 304,432 bytes, `codegen.kel` 111,864
+///   and `verify_structural.kel` 102,256.
+///
+/// Seven of the eleven stages satisfy both. The four that do not are refused with
+/// a stated reason rather than truncated. `ck_emit_window` exists for the
+/// oversize case and is not driven from a module yet.
+pub fn wire_chunks_via_kel(
+    module: &Module,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    if module.chunks.len() > CHUNK_BATCH_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel emits at most {CHUNK_BATCH_CAP} chunk records per call and this \
+                 module has {}; the windowed path is not driven from a module yet",
+                module.chunks.len()
+            ),
+        });
+    }
+    // NO ARTIFACT-SIZE GUARD HERE, AND THE FIRST VERSION HAD ONE THAT COULD NEVER
+    // FIRE. It compared `directory.len()` against the buffer, but that length is
+    // the SHARED ARRAY's size, not the artifact's -- it is 65,536 for every
+    // module, so the comparison was false by construction. A guard that cannot
+    // fire is worse than none: it reads as coverage.
+    //
+    // The real limit is enforced where it is actually known. The stage writes at
+    // absolute artifact offsets and FAILS CLOSED with an out-of-bounds fault
+    // naming the offset and the bound, which the call below turns into a refusal.
+    let (blob, names) = lone_join_input(module)?;
+    wire_chunks_from_input(
+        &blob,
+        names,
+        directory,
+        regions,
+        &header_fields_of(module),
+        &chunk_fields_of(module),
+        module.chunks.len(),
+    )
+}
+
+/// [`wire_chunks_via_kel`] with every input supplied directly.
+#[allow(clippy::too_many_arguments)]
+pub fn wire_chunks_from_input(
+    blob: &[u8],
+    names: usize,
+    directory: &[u8],
+    regions: usize,
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    chunk_count: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const NAME_CAP: usize = 2048;
+    const BLOB_CAP: usize = 49152;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has {names}"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is {}",
+                blob.len()
+            ),
+        });
+    }
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    use wire_slots::{
+        BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT, WARG as WARG_SLOT,
+    };
+    /// `mi_join_chunks`, mirrored from `wire.kel`'s dispatch where
+    /// `highest_command` is a real guard.
+    const CMD_JOIN_CHUNKS: i64 = 169;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    // `warg` carries the chunk-record count the join emits.
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
+        .expect("warg");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    // Chunk records take `fin[0..990]` at eleven words each; the header rides
+    // `fin[990..1001]`. **Disjoint on purpose.** Every region of one artifact is
+    // emitted in a single call, because shared data is re-seeded on every call,
+    // so a header at slot zero would be read out of chunk data. The first version
+    // of this function did exactly that.
+    const HEADER_FIELD_BASE: usize = 990;
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &v) in chunk_fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("chunk field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = match vm.call_with_shared(&mut shared, &[Value::Int(CMD_JOIN_CHUNKS)]) {
+        Ok(st) => st,
+        Err(e) => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "wire.kel writes at absolute artifact offsets into a \
+                     {STAGE_BUFFER_BYTES}-byte buffer and this artifact reaches past it; \
+                     the windowed path is not driven from a module yet ({e:?})"
+                ),
+            });
+        }
+    };
+    match st {
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the chunk join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// Emit `NAMES`, `STRING_POOL`, `HEADER` and, where the chunk count allows,
+/// `CHUNKS` for `module`, assembling the artifact from one window per region.
+///
+/// # Why this exists when [`wire_chunks_via_kel`] already emits those regions
+///
+/// That entry writes at ABSOLUTE artifact offsets into a 65,536-byte buffer, so
+/// it serves only a module whose artifact fits. **The ceiling was never about
+/// region size.** Measured across the eleven stage sources, the largest of these
+/// four payloads is `wire.kel`'s `CHUNKS` at 22,512 bytes, a third of the buffer;
+/// what overflows is the OFFSET, and `parse.kel` puts `NAMES` at byte 299,416 of
+/// a 304,432-byte artifact.
+///
+/// So each region is emitted at window offset zero and copied to its true base
+/// here. Every stage is reachable for the three regions that need no batching.
+///
+/// # What each region owes to whom
+///
+/// - `NAMES` and `STRING_POOL` are **computed**: the stage walks the module blob
+///   and derives every byte.
+/// - `CHUNKS` is **mixed per field** — the stage computes the name index from its
+///   own interner and the three range cursors by accumulation; ten fields per
+///   record come from the host.
+/// - `HEADER` is **encoded but not derived**: eleven scalars come from the host
+///   and the stage owns the record layout.
+///
+/// # The one limit that remains
+///
+/// `CHUNKS` is a single batch of at most 90 records. `wire.kel` has 469 chunks
+/// and `parse.kel` 94, so both are emitted without it and say so through
+/// [`WindowedArtifact::chunks_emitted`]. The batching carries exist in the stage
+/// and are exercised from harness inputs; driving them from a module is a further
+/// step.
+///
+/// # Cost, stated because it looks wasteful and is not
+///
+/// One call per region re-walks the blob and re-interns, because shared data is
+/// re-seeded on every call. The interner is a pure function of its input, so the
+/// second run is the same answer rather than a second answer. Carrying indices
+/// between calls host-side would reproduce the stage's output, which is the drift
+/// this crate has now found four times.
+pub struct WindowedArtifact {
+    /// The assembled artifact bytes.
+    pub bytes: Vec<u8>,
+    /// Whether the chunk region was emitted. False when the module exceeds the
+    /// single-batch cap, in which case those bytes are left zero.
+    pub chunks_emitted: bool,
+}
+
+/// Emit one region into the window and return the bytes written.
+// EIGHT ARGUMENTS, ONE OVER CLIPPY'S LIMIT, AND ALLOWED RATHER THAN GROUPED.
+// The eighth is the compiled stage, hoisted out of this function so one
+// artifact compiles `wire.kel` once instead of once per region. Grouping the
+// seven that were already here into a struct is a reasonable change and it is
+// not this one; `wire_chunks_from_input` carries the same allow for the same
+// shape of input list.
+#[allow(clippy::too_many_arguments)]
+fn window_emit(
+    stage: &Module,
+    blob: &[u8],
+    names: usize,
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    chunk_count: usize,
+    cmd: i64,
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
+        .expect("warg");
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    // CAPPED AT THE BATCH BOUND, WHICH IS EXACTLY WHERE THE HEADER STARTS.
+    // `fin` is 1024 words and a chunk costs eleven, so 90 records fill slots
+    // 0..990 and the header rides 990..1001. `parse.kel` has 94 chunks, whose
+    // 1034 fields overran the header and silently rewrote it -- the emitted
+    // header then differed from the reference for that stage alone, which is how
+    // this was found. A module past the cap does not have its chunks emitted at
+    // all, so truncating here loses nothing that would otherwise be written.
+    const CHUNK_FIELD_LIMIT: usize = CHUNK_BATCH_CAP * 11;
+    for (i, &v) in chunk_fields.iter().take(CHUNK_FIELD_LIMIT).enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("chunk field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    // **`names` IS ACCEPTED AND DELIBERATELY UNUSED, AND THAT IS NOT AN OVERSIGHT.**
+    //
+    // Investigated 2026-08-21 after a sweep for discarded stage inputs flagged it, because a
+    // parameter read into a discard is the exact shape of four defects repaired that day. This
+    // one is not: `wire.kel` derives the name count itself -- `name_count()` is a function of the
+    // blob it was given, returned by command 18 -- so a host-supplied count would be a SECOND
+    // answer to a question the stage already answers, which is the drift this file records
+    // paying for repeatedly. The only host-supplied argument in this block is `chunk_count`, at
+    // `WARG_SLOT`.
+    //
+    // Kept in the signature rather than removed so every windowed emitter takes the same
+    // arguments; removing it is a safe cleanup, not a repair.
+    let _ = names;
+    let st = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)]) {
+        Ok(st) => st,
+        Err(e) => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted emitting into the window: {e:?}"),
+            });
+        }
+    };
+    match st {
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the windowed emit: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; want];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+// `wire.kel`'s shared-block slot map, for every windowed emitter here.
+//
+// **THIS COMMENT USED TO SIT ON A SECOND COPY OF THE ARITHMETIC.** It was hoisted
+// out of `window_emit` when a second emitter needed it, and it says, correctly,
+// that two copies of a slot map is a drift this file's history already records --
+// while being one of four. The three `wire_*_from_input` entry points each
+// restated it as well. The reasoning was right and the remedy was applied one
+// scope too narrowly, which is the more common failure than not knowing the rule.
+//
+// The definition is `wire_slots`. These are re-exports so the emitters below read
+// unchanged; the shared block is addressed BY SLOT, so a constant that disagrees
+// with its twin shifts every field after it and produces a WRONG artifact rather
+// than a refused one.
+use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, WARG as WARG_SLOT};
+/// Where the eleven header scalars ride in `fin`, above the chunk-field area.
+const HEADER_FIELD_BASE: usize = 990;
+
+/// Send one command to a suspended `wire.kel` and return the word it yields.
+///
+/// # Why the RESET skip is bounded rather than a loop
+///
+/// The stage's `loop main(...)` reports its RESET between iterations, so a
+/// yielded value is not always the next state. Skipping resets without a bound
+/// would let a stage that only ever resets hang the driver instead of reporting
+/// it; four is well past the one reset a well-formed stage produces.
+///
+/// # Why `NotSuspended` falls back to a call
+///
+/// The first command on a fresh virtual machine has nothing to resume. Every
+/// later one must resume, because CALLING a suspended coroutine stacks another
+/// activation rather than replacing it — a several-hundred-record region
+/// exhausts the arena that way, and the failure surfaces as an operand-stack
+/// error naming neither the call pattern nor the record count.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage faults, returns a non-integer
+/// state, or resets without ever yielding.
+fn enter_wire(
+    vm: &mut dyn StageExecutor,
+    shared: &mut [u8],
+    cmd: i64,
+) -> Result<i64, SelfHostError> {
+    let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
+        Err(crate::vm::VmError::NotSuspended) => vm
+            .call_with_shared(shared, &[Value::Int(cmd)])
+            .map_err(|e| SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+            })?,
+        other => other.map_err(|e| SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+        })?,
+    };
+    for _ in 0..4 {
+        match st {
+            crate::vm::VmState::Yielded(Value::Int(v)) => return Ok(v),
+            crate::vm::VmState::Reset => {}
+            other => {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!("wire.kel returned {other:?} for command {cmd}"),
+                });
+            }
+        }
+        st = vm
+            .resume_with_shared(shared, Value::Int(cmd))
+            .map_err(|e| SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted resuming command {cmd}: {e:?}"),
+            })?;
+    }
+    Err(SelfHostError::Unsupported {
+        detail: alloc::format!("wire.kel reset repeatedly without yielding for {cmd}"),
+    })
+}
+
+/// Emit the whole `CHUNKS` region by STREAMING, one record per call.
+///
+/// `window_emit` seeds a batch into `fin` and takes one region back, which is why
+/// it inherits the batch's 90-record cap: `fin` is 1,024 words at eleven fields a
+/// chunk. This drives commands 174 and 175 instead — begin once, then one record
+/// per call — so the host holds the artifact and the stage holds one record.
+///
+/// **The three running range cursors are NOT relayed here, and that is the
+/// point.** The batch path takes `first`, `c0`, `t0` and `p0` because a function
+/// entered fresh cannot remember; the stage is a coroutine and carries them in a
+/// private block across the loop's RESET. A host that recomputed them would be
+/// asserting an answer it has no way to check.
+///
+/// The virtual machine is built ONCE and resumed, never re-called. Calling a
+/// suspended coroutine stacks another activation instead of replacing it, and a
+/// module with several hundred chunks exhausts the arena that way — the failure
+/// arrives as an operand-stack error naming neither the call pattern nor the
+/// chunk count.
+fn window_emit_chunks(
+    stage: &Module,
+    blob: &[u8],
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 174;
+    const CMD_STEP: i64 = 175;
+    const FIELDS: usize = 11;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let records = chunk_fields.len() / FIELDS;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(records as i64))
+        .expect("chunk count");
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the chunk stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    // `as_chunks` rather than `chunks_exact`, so `row` is a `&[i64; FIELDS]` with
+    // its length known to the type system rather than a slice that happens to be
+    // that long. Clippy's `chunks_exact_to_as_chunks` requires it for a CONSTANT
+    // chunk size, and the lint is MSRV-gated: `as_chunks` stabilised at 1.88, which
+    // is this crate's `rust-version` exactly. Verified against a real 1.88
+    // toolchain, not inferred from the lint firing.
+    for (j, row) in chunk_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("chunk field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused chunk record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "chunk record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
+/// Data-slot records as `(run index, visibility, reserved, run length)`.
+///
+/// **The first field is a RUN INDEX, not a name index**, which is the whole
+/// difference between commands 182/183 and the formatter at 178. The stage
+/// takes its name from the interner that produced `NAMES`; the host supplies
+/// only what the host decides.
+///
+/// Grouping mirrors the encoder exactly: consecutive slots sharing a name AND
+/// visibility collapse into one run, and a run longer than `u16::MAX` is
+/// CHUNKED into several records rather than rejected. The chunked case emits
+/// more records than runs while every one of them carries the same run index,
+/// because the encoder interns once per run and not once per record.
+fn slot_run_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    let Some(dl) = &module.data_layout else {
+        return out;
+    };
+    let mut i = 0usize;
+    let mut run_index = 0i64;
+    while i < dl.slots.len() {
+        let s = &dl.slots[i];
+        let vis = match s.visibility {
+            crate::bytecode::SlotVisibility::Shared => {
+                i64::from(crate::wire_schema::visibility_tag::SHARED)
+            }
+            crate::bytecode::SlotVisibility::Private => {
+                i64::from(crate::wire_schema::visibility_tag::PRIVATE)
+            }
+        };
+        let mut n = 1usize;
+        while i + n < dl.slots.len()
+            && dl.slots[i + n].name == s.name
+            && dl.slots[i + n].visibility == s.visibility
+        {
+            n += 1;
+        }
+        let mut left = n;
+        while left > 0 {
+            let take = left.min(u16::MAX as usize);
+            out.push(run_index);
+            out.push(vis);
+            out.push(0);
+            out.push(take as i64);
+            left -= take;
+        }
+        run_index += 1;
+        i += n;
+    }
+    out
+}
+
+/// Emit the whole `DATA_SLOTS` region by STREAMING, one record per call.
+///
+/// The same coroutine discipline as [`window_emit_chunks`]: one virtual machine
+/// and ONE shared buffer for the begin and every step, because `wire.nmap` lives
+/// in shared data and the interner's result has to survive between them.
+///
+/// Command 182 runs the interner and nothing else. The two commands that would
+/// otherwise have served each do something a slot pass does not want -- 174
+/// zeroes the chunk range cursors, 170 emits the `NAMES` records into the
+/// window -- so borrowing either would mean undoing or discarding a side effect.
+fn window_emit_slots(
+    stage: &Module,
+    blob: &[u8],
+    slot_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 182;
+    const CMD_STEP: i64 = 183;
+    const FIELDS: usize = 4;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the slot stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in slot_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("slot field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused slot record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "slot record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
+/// Enum-variant records as `(first-of-enum flag, reserved, discriminant)`.
+///
+/// **The first field is a BOUNDARY, not a name index.** The enum section
+/// interleaves a type name with that enum's variants, so the stage walks it with
+/// a cursor and needs to know only where an enum begins; the host supplies the
+/// boundary it legitimately knows and never the name.
+fn enum_variant_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    for l in &module.enum_layouts {
+        for (k, v) in l.variants.iter().enumerate() {
+            out.push(i64::from(k == 0));
+            out.push(0);
+            out.push(v.disc);
+        }
+    }
+    out
+}
+
+/// Emit the whole `ENUM_VARIANTS` region by STREAMING, one record per call.
+fn window_emit_variants(
+    stage: &Module,
+    blob: &[u8],
+    variant_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 184;
+    const CMD_STEP: i64 = 185;
+    const FIELDS: usize = 3;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the variant stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in variant_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("variant field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused variant record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "variant record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
+/// Enum-layout records as `(variant count, minimum payload)`.
+///
+/// **Only two of the record's four fields.** The type NAME comes from the
+/// stage's interner and `variants_first` is accumulated in the stage, so the
+/// host supplies only what it decides. The count does double duty: it is a
+/// field AND the distance the stage's cursor travels to the next enum.
+fn enum_layout_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    for l in &module.enum_layouts {
+        out.push(l.variants.len() as i64);
+        out.push(i64::from(l.min_payload));
+    }
+    out
+}
+
+/// Emit the whole `ENUM_LAYOUTS` region by STREAMING, one record per call.
+fn window_emit_enum_layouts(
+    stage: &Module,
+    blob: &[u8],
+    layout_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 186;
+    const CMD_STEP: i64 = 187;
+    const FIELDS: usize = 2;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the enum-layout stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in layout_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("layout field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused enum-layout record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "enum-layout record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
+/// The `PARAM_TYPES` byte pool, one tag byte per parameter.
+///
+/// **This region is a POOL, not a record table**, and `wire_schema` says why: a
+/// type tag is one byte, so a whole-word record per tag would waste seven
+/// eighths of the region.
+fn param_type_bytes(module: &Module) -> Vec<u8> {
+    let mut out = Vec::new();
+    // Per CHUNK, in chunk order, exactly as the encoder walks them: the pool is
+    // one contiguous run and each chunk's `param_types_first` indexes into it.
+    for c in &module.chunks {
+        for t in &c.param_types {
+            out.push(crate::wire_schema::type_tag_byte(*t));
+        }
+    }
+    out
+}
+
+/// Emit a byte-POOL region through the window, seeding `bin` rather than `fin`.
+///
+/// **The stage COPIES here; it does not encode.** `emit_pool_bytes` moves `n`
+/// bytes from the host's input buffer into the artifact and decides nothing
+/// about them -- no offset, no width, no endianness, because a byte pool has
+/// none. That is a WEAKER standing than `HEADER`, which at least decides the
+/// record's layout, and it is recorded as its own row in the provenance table so
+/// the coverage figure cannot absorb it silently.
+///
+/// `STRING_POOL` goes through a different path for exactly this reason: the
+/// stage DERIVES those bytes from the module blob rather than copying them.
+fn window_emit_pool(
+    stage: &Module,
+    kind: u16,
+    bytes: &[u8],
+    want: usize,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
+        .expect("kind");
+    vm.set_shared(&mut shared, WARG_SLOT + 1, Value::Int(bytes.len() as i64))
+        .expect("count");
+    vm.set_shared(&mut shared, WARG_SLOT + 2, Value::Int(0))
+        .expect("offset");
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("pool byte");
+    }
+
+    let wrote = enter_wire(&mut vm, &mut shared, 164)?;
+    if wrote < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel refused {label} ({} byte(s)) with {wrote}",
+                bytes.len()
+            ),
+        });
+    }
+    let mut out = vec![0u8; want];
+    let n = (wrote as usize).min(want);
+    // Iterate the SLICE rather than the range: clippy's `needless_range_loop`
+    // asks for it, and the ask is right here because the index does double duty
+    // as the shared-slot offset, which reads better named than repeated.
+    for (k, slot) in out.iter_mut().enumerate().take(n) {
+        *slot = match vm.get_shared(&shared, 1 + k).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// Emit a module's `CONSTS` region by STREAMING, one constant record per call.
+///
+/// # Why this path exists at all, when `fl_walk` already emits a byte-identical region
+///
+/// `fl_walk` is the breadth-first flattener and it is capped at 170 nodes,
+/// because the whole forest must sit in `wire.fin` — 1,024 words at six words a
+/// node. It needs a QUEUE: a composite's record carries `(first, count)` into
+/// children numbered after every node at its own depth, so it cannot write a
+/// record until it knows how many nodes precede its children.
+///
+/// **A forest of scalars has no children.** The queue never grows past the roots,
+/// the walk degenerates to a linear scan, and it becomes one node in, one record
+/// out with no state but a cursor. That is commands 176 and 177, and it is not
+/// bounded by the cap because the stage holds ONE node rather than the forest.
+/// Measured 2026-08-22, every constant across all eleven stages is an `Int` and
+/// the largest forest is `parse` at 857 nodes — five times the walk's cap and
+/// unbounded for this path.
+///
+/// # The refusal is the point, not a limitation
+///
+/// The stage refuses a node with children (`-264`), an interning tag (`-265`) and
+/// a range-carrying tag (`-266`). A composite reaching this path would be emitted
+/// with a zero range and a zero `aux`: structurally valid, silently wrong, and
+/// indistinguishable downstream from a correct record. **The refusal is what keeps
+/// the gap visible instead of encoding it in the bytes**, so this function relays
+/// the code rather than falling back to `fl_walk`.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a node, naming the node
+/// index and the refusal code, or when the stage faults.
+pub fn wire_consts_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_consts(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &const_node_fields(module),
+    )
+}
+
+/// The constant forest as six words a node, in the encoder's own root order.
+///
+/// Extracted so the standalone entry point and the artifact assembler build the
+/// input the same way. Two constructions of a stage's input is the defect class
+/// this file already records against nine copies of a shared layout.
+fn const_node_fields(module: &Module) -> Vec<i64> {
+    let roots = crate::wire_schema::constant_roots_of_module(module);
+    let mut fields = Vec::new();
+    for r in &roots {
+        push_const_preorder(r, &mut fields);
+    }
+    fields
+}
+
+/// One constant subtree in depth-first preorder, six words a node.
+///
+/// The six words are `(tag, payload, child count, names_first, flags,
+/// discriminant)`, matching what `wire.kel` reads out of `fin`. **Every word is
+/// written even when it is zero**: the stride is what locates the NEXT node, so a
+/// short record silently shifts the whole forest rather than failing.
+///
+/// `names_first` is zero because this path admits no interning tag; the stage
+/// refuses `StaticStr`, `Struct` and `Enum` rather than reading it.
+fn push_const_preorder(c: &ConstValue, out: &mut Vec<i64>) {
+    let (tag, payload) = const_tag_and_name(c);
+    let children = const_children(c);
+    let (flags, disc) = const_flags_and_discriminant(c);
+    out.push(i64::from(tag));
+    out.push(payload);
+    out.push(children.len() as i64);
+    out.push(0);
+    out.push(flags);
+    out.push(disc);
+    for ch in children {
+        push_const_preorder(ch, out);
+    }
+}
+
+/// Drive commands 176 and 177 over a preorder node stream, concatenating the
+/// records.
+///
+/// The same coroutine discipline as [`window_emit_chunks`]: the virtual machine
+/// is built ONCE and resumed. Calling a suspended coroutine stacks another
+/// activation rather than replacing it, and a stage with several hundred
+/// constants exhausts the arena that way, reporting an operand-stack error that
+/// names neither the call pattern nor the constant count.
+fn window_emit_consts(stage: &Module, node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 176;
+    const CMD_STEP: i64 = 177;
+    /// `(tag, payload, children, names_first, flags, discriminant)`.
+    const FIELDS: usize = 6;
+
+    if !node_fields.len().is_multiple_of(FIELDS) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the preorder stream is {} words, not a multiple of {FIELDS}",
+                node_fields.len()
+            ),
+        });
+    }
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the constant stream with {began}"),
+        });
+    }
+
+    let mut out = Vec::with_capacity(node_fields.len() / FIELDS * 16);
+    for (j, row) in node_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("node field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "wire.kel refused constant node {j} with {wrote}; -264 is a node with \
+                     children, -265 an interning tag, -266 a range-carrying tag, and each \
+                     means this forest is outside the streaming path rather than that the \
+                     path is broken"
+                ),
+            });
+        }
+        for k in 0..wrote as usize {
+            out.push(
+                match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                },
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Emit a module's `SHAPES` region by STREAMING, one record per call.
+///
+/// # What this region is, and the standing it has
+///
+/// `SHAPES` is the deduplicated table of operand shapes a signature's parameters,
+/// return and resume value refer to by index. The indices are an **encoder
+/// decision** rather than a property of the module, so the host cannot derive
+/// them and must take them from the one definition the encoder itself consumes,
+/// [`crate::wire_schema::signature_tables`].
+///
+/// That makes this region **encoded but not derived**, the standing the `HEADER`
+/// record has: Keleusma decides every byte of the record's layout and the host
+/// decides the values. `wire.kel` says the same thing about its own formatters,
+/// and counting them beside `NAMES` -- which the stage computes from the module
+/// blob -- would overstate what is self-hosted.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
+pub fn wire_shapes_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_records(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &shape_fields(module),
+        4,
+        179,
+        "SHAPES",
+    )
+}
+
+/// The `SHAPES` records as four words each, from the encoder's own table.
+fn shape_fields(module: &Module) -> Vec<i64> {
+    let (shapes, _) = crate::wire_schema::signature_tables(&module.signatures);
+    let mut fields = Vec::with_capacity(shapes.len() * 4);
+    for r in &shapes {
+        fields.push(i64::from(r.tag));
+        fields.push(i64::from(r.kind));
+        fields.push(i64::from(r.reserved));
+        fields.push(i64::from(r.size));
+    }
+    fields
+}
+
+/// Emit a module's `SIGNATURES` region by STREAMING, one record per call.
+///
+/// Same standing as [`wire_shapes_via_kel`]: the parameter run and the two shape
+/// indices come from the encoder's own numbering, so this is encoded rather than
+/// derived.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
+pub fn wire_signatures_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_records(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &signature_fields(module),
+        4,
+        180,
+        "SIGNATURES",
+    )
+}
+
+/// The `SIGNATURES` records as four words each, from the encoder's own table.
+fn signature_fields(module: &Module) -> Vec<i64> {
+    let (_, sigs) = crate::wire_schema::signature_tables(&module.signatures);
+    let mut fields = Vec::with_capacity(sigs.len() * 4);
+    for r in &sigs {
+        fields.push(i64::from(r.params_first));
+        fields.push(i64::from(r.params_count));
+        fields.push(i64::from(r.ret));
+        fields.push(i64::from(r.resume));
+    }
+    fields
+}
+
+/// Drive a stateless record formatter over a field stream, concatenating the
+/// records it returns.
+///
+/// # Why these need no `begin` and the chunk and constant streams do
+///
+/// `wire.kel` says it in its own comment: the chunk and constant streams carry
+/// state between records -- running range cursors, a node cursor -- and these
+/// depend on nothing outside themselves. A `begin` here would exist only to look
+/// symmetric with its neighbours, and a reader would have to open its body to
+/// learn it reset nothing.
+///
+/// The virtual machine is still built ONCE and resumed. Calling a suspended
+/// coroutine stacks another activation rather than replacing it, and `wire.kel`
+/// carries 486 signatures, which exhausts the arena that way.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the field stream is not a whole number of
+/// records, when the stage refuses one, or when the stage faults.
+/// The `SHARED_LAYOUT` record fields, seven per record, grouped into runs exactly as the
+/// reference encoder groups them.
+///
+/// # The grouping is the caller's job, and it must match byte for byte
+///
+/// `wire.kel`'s emitter writes whatever fields it is handed; forming runs is the host's. A run is
+/// consecutive entries sharing `kind` and `len` whose `offset` advances by a CONSTANT delta, and a
+/// run forms only when that delta fits `u16` -- a wider one falls back to single-slot records
+/// rather than truncating, which would place every later slot in the run at a wrong offset. Each
+/// run is then chunked at `u16::MAX` slots per record. This mirrors `SchemaBuilder::add_data_layout`
+/// and any divergence from it is a wrong artifact rather than a missing one.
+///
+/// # The batch bound does not bind, and that was measured rather than assumed
+///
+/// The scouting for this increment named the field-buffer capacity as the live constraint, on the
+/// reasoning that a stage with a large shared layout would overflow it. **That was wrong.** The
+/// grouping is enormously effective because a shared layout is overwhelmingly uniform arrays:
+/// measured 2026-08-31 across the twelve stage sources, `lexer.kel`'s 395,778 slots collapse to
+/// NINE records and `wire.kel`'s 144,391 to eight; every other stage produces one. Nine records is
+/// 63 field words against a `fin` of 1024. The guard below is still written correctly, but nothing
+/// in the corpus approaches it.
+fn shared_slot_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    let Some(layout) = module.data_layout.as_ref() else {
+        return out;
+    };
+    let sl = &layout.shared_layout;
+    let mut i = 0usize;
+    while i < sl.len() {
+        let a = &sl[i];
+        let mut n = 1usize;
+        let mut stride: u32 = 0;
+        if i + 1 < sl.len() {
+            let b = &sl[i + 1];
+            if b.kind == a.kind && b.len == a.len {
+                let d = b.offset.wrapping_sub(a.offset);
+                if d <= u32::from(u16::MAX) {
+                    stride = d;
+                    n = 2;
+                    while i + n < sl.len() {
+                        let c = &sl[i + n];
+                        let p = &sl[i + n - 1];
+                        if c.kind != a.kind
+                            || c.len != a.len
+                            || c.offset.wrapping_sub(p.offset) != d
+                        {
+                            break;
+                        }
+                        n += 1;
+                    }
+                }
+            }
+        }
+        let mut done = 0usize;
+        while done < n {
+            let take = (n - done).min(u16::MAX as usize);
+            out.push(i64::from(a.offset + (done as u32) * stride));
+            out.push(i64::from(a.kind));
+            out.push(0);
+            out.push(i64::from(a.len));
+            out.push((i + done) as i64);
+            out.push(take as i64);
+            out.push(i64::from(stride));
+            done += take;
+        }
+        i += n;
+    }
+    out
+}
+
+/// The `DATA_INIT` record fields, two per record, or `None` when this module's pool is one the
+/// driver cannot yet place.
+///
+/// # Both forms are driven now, and the second was recorded as blocked when it was not
+///
+/// The reference elides a wholly-default private-initialiser pool, writing the [`ABSENT`] sentinel
+/// as `first` and the slot count as `count`. That case needs nothing from the constant table and is
+/// what eleven of the twelve stage sources produce.
+///
+/// The remaining form stores the pool in the shared constant table and records the index it landed
+/// at. That was recorded as blocked on modelling the encoder's constant ordering -- the `CONSTS`
+/// problem -- and **that reason holds for a pool with CONTENTS and not for an empty one.** An empty
+/// pool has no values to place, so its `first` is simply where the pool would have started, and its
+/// count is zero.
+///
+/// The one corpus stage taking this path is `verify_datalayout.kel`, whose pool is EMPTY. An empty
+/// pool is deliberately not reported as elided, so that the sentinel stands for one situation only;
+/// that is the predicate behaving as documented, not an edge case to work around. Measured against
+/// the reference on 2026-09-04 rather than derived: it encodes as `first = 4, count = 0`, with four
+/// `Int` constant roots.
+///
+/// A pool with contents still returns `None` and still leaves an honest zeroed gap, and so does any
+/// module whose constant roots are not all scalars, because `constant_roots` documents that a
+/// composite root expands into further records and the root count is then not the record count.
+///
+/// **The elision test calls the shared predicate rather than restating its condition.** The
+/// predicate exists precisely so the encoder and any other producer cannot drift, and its own
+/// documentation records that a disagreement here is not a state anything would notice.
+fn data_init_fields(module: &Module) -> Option<Vec<i64>> {
+    let layout = module.data_layout.as_ref()?;
+    if crate::wire_schema::private_init_is_elided(layout) {
+        return Some(alloc::vec![
+            i64::from(crate::wire_schema::ABSENT),
+            layout.private_init.len() as i64,
+        ]);
+    }
+    // **THE EMPTY NON-ELIDED POOL IS PREDICTABLE, AND IT WAS RECORDED AS BLOCKED.**
+    // The comment above said this form needs the encoder's constant ordering, "the
+    // `CONSTS` problem and a separate increment". That is true of a pool with
+    // CONTENTS, whose index depends on where its values land. An EMPTY pool has no
+    // values, so its `first` is simply where the pool would have started: the
+    // record count the chunk constants occupy, with a count of zero.
+    //
+    // Measured against the reference rather than derived and hoped for:
+    // `verify_datalayout.kel`, the one corpus stage on this path, encodes as
+    // `first = 4, count = 0`, and its four constant roots are four `Int`s.
+    //
+    // **The scalar guard is what makes the count usable, and it is the whole risk.**
+    // `constant_roots` documents that roots are not records -- a composite root
+    // expands during `finish` -- so the root count equals the record count only for
+    // a forest of scalars. Where any root is composite this returns `None` and the
+    // region stays an honest zeroed gap. That distinction matters: a wrong `first`
+    // would turn a `Skipped` region into a `Differs` one, and
+    // `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is
+    // never mistaken for a defect. A gap is a smaller error than a lie.
+    if layout.private_init.is_empty() {
+        let roots = crate::wire_schema::constant_roots_of_module(module);
+        if roots.iter().all(constant_is_scalar) {
+            return Some(alloc::vec![roots.len() as i64, 0]);
+        }
+    }
+    None
+}
+
+/// Whether a constant root occupies exactly one record.
+///
+/// Listed positively rather than as "not a composite", so a variant added later is
+/// excluded by default and the region falls back to its honest gap instead of being
+/// silently assumed flat.
+fn constant_is_scalar(c: &crate::bytecode::ConstValue) -> bool {
+    use crate::bytecode::ConstValue as C;
+    match c {
+        C::Unit | C::Bool(_) | C::Int(_) | C::Byte(_) | C::Fixed(_) | C::None => true,
+        #[cfg(feature = "floats")]
+        C::Float(_) => true,
+        _ => false,
+    }
+}
+
+/// Emit `n` records of one region kind into the window through the generic `emit_in_window`
+/// command, which takes the kind, the record count and the window offset as arguments.
+///
+/// # The length is checked, never truncated
+///
+/// The sibling paths that write `&win[..len]` silently discard a disagreement between what the
+/// stage produced and what the reference reserved. Here a mismatch is reported, on the same ground
+/// as the `CONSTS` and `SHAPES` paths: a short write would turn an honest `Skipped` region into a
+/// `Differs` one, and `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is
+/// never mistaken for a defect.
+fn window_emit_kind(
+    stage: &Module,
+    kind: u16,
+    fields: &[i64],
+    per_record: usize,
+    want: usize,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    use wire_slots::{FIN as FIN_SLOT, WARG as WARG_SLOT};
+
+    if !fields.len().is_multiple_of(per_record) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the {label} field stream is {} words, not a multiple of {per_record}",
+                fields.len()
+            ),
+        });
+    }
+    let records = fields.len() / per_record;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
+        .expect("kind");
+    vm.set_shared(&mut shared, WARG_SLOT + 1, Value::Int(records as i64))
+        .expect("count");
+    vm.set_shared(&mut shared, WARG_SLOT + 2, Value::Int(0))
+        .expect("offset");
+    for (i, &v) in fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("record field");
+    }
+
+    let wrote = enter_wire(&mut vm, &mut shared, 164)?;
+    if wrote < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused {label} ({records} record(s)) with {wrote}"),
+        });
+    }
+    if wrote as usize != want {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the self-hosted {label} region is {wrote} bytes and the reference reserved \
+                 {want}; the host's record model and the encoder disagree"
+            ),
+        });
+    }
+    let mut out = Vec::with_capacity(wrote as usize);
+    for k in 0..wrote as usize {
+        out.push(
+            match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            },
+        );
+    }
+    Ok(out)
+}
+
+fn window_emit_records(
+    stage: &Module,
+    fields: &[i64],
+    per_record: usize,
+    cmd: i64,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    if !fields.len().is_multiple_of(per_record) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the {label} field stream is {} words, not a multiple of {per_record}",
+                fields.len()
+            ),
+        });
+    }
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let mut out = Vec::new();
+    for (j, row) in fields.chunks(per_record).enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("record field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, cmd)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused {label} record {j} with {wrote}"),
+            });
+        }
+        for k in 0..wrote as usize {
+            out.push(
+                match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                },
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// See [`WindowedArtifact`]. `regions` gives each region's `(kind, base, len)` in
+/// the artifact the caller is assembling.
+pub fn wire_windowed_via_kel(
+    module: &Module,
+    artifact_len: usize,
+    regions: &[(u16, usize, usize)],
+) -> Result<WindowedArtifact, SelfHostError> {
+    const WINDOW: usize = 65536;
+    let (blob, names) = lone_join_input(module)?;
+    let header = header_fields_of(module);
+    let fields = chunk_fields_of(module);
+    // COMPILED ONCE FOR THE WHOLE ARTIFACT, NOT ONCE PER REGION.
+    //
+    // Each `window_emit*` used to compile `wire.kel` itself, so assembling one
+    // stage's artifact compiled a 486-function source five times -- sixty times
+    // across the corpus. `Module` is `Clone`, and cloning one is far cheaper than
+    // compiling it, so the stage is built here and cloned per virtual machine.
+    //
+    // **A GLOBAL CACHE IS NOT AVAILABLE AND THAT IS WHY THIS IS LOCAL.** The crate
+    // is `no_std + alloc`: `std::sync::OnceLock` is out of reach and
+    // `core::cell::OnceCell` is not `Sync`, so a `static` holding the compiled
+    // stage cannot be written here. Hoisting to the caller needs no static and
+    // captures the repetition that actually mattered.
+    let stage = compile_src(&read_stage("kel/wire.kel"));
+    let mut out = vec![0u8; artifact_len];
+    for &(kind, base, len) in regions {
+        if base.checked_add(len).is_none_or(|end| end > artifact_len) {
+            return Err(SelfHostError::Unsupported {
+                detail: String::from("windowed region exceeds artifact extent"),
+            });
+        }
+        if len == 0 {
+            continue;
+        }
+
+        // CHUNKS TAKES THE STREAMING PATH, so the 90-record batch no longer
+        // decides whether a stage is reachable. `parse` (94) and `wire` (475)
+        // were the two it excluded and both emit now.
+        if kind == crate::wire_schema::kind::CHUNKS {
+            let win = window_emit_chunks(&stage, &blob, &header, &fields, len)?;
+            out[base..base + len].copy_from_slice(&win[..len]);
+            continue;
+        }
+        // CONSTS TAKES THE STREAMING PATH TOO, for the same reason CHUNKS does:
+        // it emits at window offset zero, one record per call, so the host
+        // places the bytes and no cap decides which stages are reachable.
+        //
+        // **THE LENGTH IS CHECKED RATHER THAN TRUNCATED.** The branches around
+        // this one write `&win[..len]`, which silently discards a disagreement
+        // between what the stage produced and what the reference reserved. Here
+        // a mismatch is the interesting event -- it means the root model and the
+        // encoder have parted -- so it is reported rather than trimmed away.
+        if kind == crate::wire_schema::kind::CONSTS {
+            let win = window_emit_consts(&stage, &const_node_fields(module))?;
+            if win.len() != len {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!(
+                        "the self-hosted CONSTS region is {} bytes and the reference \
+                         reserved {len}; the constant-root model and the encoder disagree",
+                        win.len()
+                    ),
+                });
+            }
+            out[base..base + len].copy_from_slice(&win);
+            continue;
+        }
+        // SHAPES AND SIGNATURES TAKE THE FORMATTER STREAMS, commands 179 and
+        // 180. Both exceed a single `fin` batch on `wire.kel` -- 341 and 486
+        // records against a 256-record batch -- so the one-record-per-call form
+        // is what makes them reachable at all rather than a stylistic choice.
+        //
+        // The length is CHECKED rather than truncated, on the same ground as
+        // CONSTS above: a mismatch means the host's model of the encoder's
+        // numbering has parted from the encoder, which is the interesting event.
+        if kind == crate::wire_schema::kind::SHAPES || kind == crate::wire_schema::kind::SIGNATURES
+        {
+            let win = if kind == crate::wire_schema::kind::SHAPES {
+                window_emit_records(&stage, &shape_fields(module), 4, 179, "SHAPES")?
+            } else {
+                window_emit_records(&stage, &signature_fields(module), 4, 180, "SIGNATURES")?
+            };
+            if win.len() != len {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!(
+                        "the self-hosted region {kind:#06x} is {} bytes and the reference \
+                         reserved {len}; the host's model of the encoder's shape numbering \
+                         and the encoder disagree",
+                        win.len()
+                    ),
+                });
+            }
+            out[base..base + len].copy_from_slice(&win);
+            continue;
+        }
+        // SHARED_LAYOUT AND DATA_INIT TAKE THE GENERIC WINDOW EMITTER. Both formatters have
+        // existed in the stage all along, dispatched by `emit_at`; what was missing was the
+        // DRIVER supplying their fields, which is why both sat in the catch-all below and were
+        // left as zeros. Neither carries a name index, which is what makes them reachable
+        // without the interning route the remaining four kinds still wait on.
+        if kind == crate::wire_schema::kind::SHARED_LAYOUT {
+            let fields = shared_slot_fields(module);
+            // A module with no shared slots reserves no region; emitting zero records would ask
+            // the stage for an empty write rather than skipping, so fall through to the gap.
+            if !fields.is_empty() {
+                let win = window_emit_kind(&stage, kind, &fields, 7, len, "SHARED_LAYOUT")?;
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // DATA_SLOTS TAKES THE NAME-AWARE STREAM, commands 182 and 183.
+        //
+        // **THE FIRST ROUTED KIND WHOSE RECORD CARRIES A NAME.** Every kind
+        // routed before it -- `SHAPES`, `SIGNATURES`, `SHARED_LAYOUT`,
+        // `DATA_INIT` -- carries none, which is what let the host supply every
+        // field. A host-supplied name index can disagree with the interner that
+        // produced `NAMES`, and the host has no way to check it, so the stage
+        // takes this one from its own interner and the host supplies the RUN
+        // INDEX instead.
+        //
+        // A module with no data layout reserves no region; emitting zero
+        // records would ask the stage for an empty write rather than skipping,
+        // so fall through to the gap as `SHARED_LAYOUT` does.
+        if kind == crate::wire_schema::kind::DATA_SLOTS {
+            let fields = slot_run_fields(module);
+            if !fields.is_empty() {
+                let win = window_emit_slots(&stage, &blob, &fields, len)?;
+                if win.len() != len {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!(
+                            "the self-hosted DATA_SLOTS region is {} bytes and the reference \
+                             reserved {len}; the host's run grouping and the encoder disagree",
+                            win.len()
+                        ),
+                    });
+                }
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // ENUM_VARIANTS TAKES THE CURSOR STREAM, commands 184 and 185. Not the
+        // slot stream's shape: the enum section interleaves a type name with
+        // each enum's variants, so the stage walks rather than indexes and the
+        // host supplies only the boundary.
+        if kind == crate::wire_schema::kind::ENUM_VARIANTS {
+            let fields = enum_variant_fields(module);
+            if !fields.is_empty() {
+                let win = window_emit_variants(&stage, &blob, &fields, len)?;
+                if win.len() != len {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!(
+                            "the self-hosted ENUM_VARIANTS region is {} bytes and the reference \
+                             reserved {len}; the host's variant walk and the encoder disagree",
+                            win.len()
+                        ),
+                    });
+                }
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // ENUM_LAYOUTS TAKES ITS OWN STREAM, commands 186 and 187. TWO of its
+        // four fields are the stage's -- the type name from the interner and
+        // `variants_first` accumulated in the stage -- which is a stronger
+        // standing than the two kinds routed before it.
+        if kind == crate::wire_schema::kind::ENUM_LAYOUTS {
+            let fields = enum_layout_fields(module);
+            if !fields.is_empty() {
+                let win = window_emit_enum_layouts(&stage, &blob, &fields, len)?;
+                if win.len() != len {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!(
+                            "the self-hosted ENUM_LAYOUTS region is {} bytes and the reference \
+                             reserved {len}; the host's enum walk and the encoder disagree",
+                            win.len()
+                        ),
+                    });
+                }
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // PARAM_TYPES IS A BYTE POOL AND THE STAGE ONLY COPIES IT. Routed so the
+        // skipped set reaches zero, and recorded at its true standing: the stage
+        // decides nothing about these bytes, because a pool has no layout to
+        // decide. See `window_emit_pool`.
+        if kind == crate::wire_schema::kind::PARAM_TYPES {
+            let bytes = param_type_bytes(module);
+            if !bytes.is_empty() {
+                let win = window_emit_pool(&stage, kind, &bytes, len, "PARAM_TYPES")?;
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        if kind == crate::wire_schema::kind::DATA_INIT {
+            // `None` is the pool form whose constant-table index the driver cannot yet predict;
+            // leaving it zeroed keeps it an honest `Skipped` rather than a wrong `Differs`.
+            if let Some(fields) = data_init_fields(module) {
+                let win = window_emit_kind(&stage, kind, &fields, 2, len, "DATA_INIT")?;
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        let cmd = match kind {
+            k if k == crate::wire_schema::kind::NAMES => 170,
+            k if k == crate::wire_schema::kind::STRING_POOL => 171,
+            k if k == crate::wire_schema::kind::HEADER => 172,
+            // EVERY OTHER KIND IS LEFT AS ZEROS, and this is the honest name for
+            // what the windowed path does NOT cover. The stage has an emitter for
+            // all of them -- `emit_in_window` dispatches eighteen kinds -- so what
+            // is missing is the DRIVER supplying their fields, not the Keleusma
+            // side. `tests/selfhost_region_coverage.rs` measures which kinds land
+            // and which are skipped, so the coverage claim is a figure rather
+            // than a sentence.
+            //
+            // FOUR KINDS REACH HERE NOW: `ENUM_VARIANTS`, `ENUM_LAYOUTS`,
+            // `DATA_SLOTS` and `PARAM_TYPES`, all four waiting on the
+            // name-interning route. Down from five on 2026-09-04 when `DATA_INIT`
+            // was routed for its last stage, and from six on 2026-08-31 when
+            // `SHARED_LAYOUT` was routed above.
+            _ => continue,
+        };
+        if len > WINDOW {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "region {kind:#06x} is {len} bytes and the stage window holds {WINDOW};                      emitting a region larger than the window needs batching within it"
+                ),
+            });
+        }
+        let win = window_emit(
+            &stage,
+            &blob,
+            names,
+            &header,
+            &fields,
+            module.chunks.len(),
+            cmd,
+            len,
+        )?;
+        out[base..base + len].copy_from_slice(&win[..len]);
+    }
+    Ok(WindowedArtifact {
+        bytes: out,
+        // Always, now. The field is kept rather than removed because callers read
+        // it, and because a flag that is permanently true is a smaller lie than a
+        // silently deleted one; a future limit would set it false again.
+        chunks_emitted: true,
+    })
+}
+
+/// Name the earliest known-unsupported construct in `src`, for a refusal message.
+///
+/// # Why this runs only on the failure path
+///
+/// **A scan that decided admission could refuse a program the subset actually handles.**
+/// This one cannot, because it is consulted only after the pipeline has already failed: it
+/// changes what a refusal SAYS and never whether one happens. A construct wrongly listed
+/// here therefore costs a misleading noun in a message that was going to be emitted
+/// anyway, not a working compile.
+///
+/// # Why a name is worth adding at all
+///
+/// Measured on 2026-09-12, the four known gaps reported a `reconstruct.kel` work-stack
+/// underflow or an unreduced record range, with a note about `reconstruct_range` reading
+/// slot zero. That text is addressed to someone debugging the stage. It never mentions the
+/// `v =>`, the `P { x }`, the `assert` or the `audio::` the user wrote, so a user cannot
+/// act on it. The stage's own detail is retained after the name, because it is the part a
+/// stage author needs.
+///
+/// # What is deliberately not listed
+///
+/// Only constructs OBSERVED to be outside the subset are named. A tuple pattern, for one,
+/// is absent because its support was never measured, and guessing would attach a confident
+/// noun to a failure that may have nothing to do with it.
+///
+/// **A BARE UNIT ENUM VARIANT IS ABSENT BECAUSE IT IS NO LONGER A GAP.** `E::N` in
+/// expression position was refused while `E::N()` compiled, and the syntax tree records both
+/// as `EnumVariant` with empty `args`, so no arm here could have told them apart. Order 6
+/// slice 1 lowered the bare form exactly as the parenthesised one, so both compile.
+///
+/// The float entry is the sharpest case of that rule. "Floats are outside the subset" is
+/// the loose summary; what is measurably outside is the LITERAL. A function taking and
+/// returning `Float` compiles and matches the reference byte for byte, so listing the type
+/// would attach a confident and wrong noun to every such program that failed for an
+/// unrelated reason. No stage source uses a float type, so the stage-source guard would not
+/// have caught that mistake either.
+///
+/// Returns the description and the 1-based source line, choosing the earliest occurrence so
+/// the message is deterministic when a program contains several.
+fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
+    use crate::ast::{Expr, Pattern, Stmt};
+    use crate::visitor::Visitor;
+
+    // The reference has already accepted this source by the time a refusal is built, so a
+    // failure here is not expected; returning `None` degrades to the stage's own detail.
+    let program = parse(&tokenize(src).ok()?).ok()?;
+
+    struct Scan {
+        /// `(line, start, description)`, earliest wins.
+        found: Vec<(u32, usize, String)>,
+    }
+    impl Visitor for Scan {
+        fn visit_expr(&mut self, e: &Expr) {
+            match e {
+                Expr::Match { arms, .. } => {
+                    for arm in arms {
+                        let named = match &arm.pattern {
+                            Pattern::Variable(n, s) => {
+                                Some((s, format!("a variable pattern `{n}` in a match arm")))
+                            }
+                            Pattern::Struct(n, _, s) => {
+                                Some((s, format!("a struct destructuring pattern `{n} {{ .. }}`")))
+                            }
+                            _ => None,
+                        };
+                        if let Some((span, what)) = named {
+                            self.found.push((span.line, span.start, what));
+                        }
+                    }
+                }
+                // A qualified call carries the path in its name. Enum construction does NOT
+                // reach this arm, measured 2026-09-12, so `::` here is not a variant literal.
+                // A two-segment call of a `use`-imported native compiles since Order 6
+                // slice 2, so only a path of three or more segments is named.
+                Expr::Call { name, span, .. } if name.matches("::").count() > 1 => {
+                    self.found
+                        .push((span.line, span.start, format!("a qualified call `{name}`")));
+                }
+                // The float-literal arm left in Order 6 slice 5b, when float literals came to
+                // compile byte-identically, so naming one would blame a supported construct.
+                _ => {}
+            }
+            self.walk_expr(e);
+        }
+        fn visit_stmt(&mut self, s: &Stmt) {
+            // A plain `assert` compiles since Order 6, which compiles it out as the reference
+            // does. The message form is not lowered, so only it is named.
+            if let Stmt::Assert {
+                span,
+                message: Some(_),
+                ..
+            } = s
+            {
+                self.found
+                    .push((span.line, span.start, "an `assert` statement".to_string()));
+            }
+            self.walk_stmt(s);
+        }
+    }
+
+    let mut scan = Scan { found: Vec::new() };
+    for f in &program.functions {
+        scan.visit_block(&f.body);
+    }
+    scan.found.sort();
+    scan.found
+        .into_iter()
+        .next()
+        .map(|(line, _, what)| (what, line))
+}
+
+/// The line of the first `Text<N>` the source names in any type position, or `None`.
+///
+/// The stages under `kel/` do not lower `Text<N>`. Left to them, a program naming it
+/// reached four different outcomes depending on where the type appeared. A parameter
+/// diverged on the module signature, a cast was rejected by the parser stage, a `let`
+/// annotation left the type evidence unavailable, and a struct field that no code used
+/// compiled. Only the first and last of these were even arguably correct. Refusing at
+/// the shipping entry, before any stage runs, makes the outcome one clean refusal that
+/// names the construct, and it stays correct when the reference later accepts more of
+/// the type, because the refusal does not depend on what the reference decides.
+///
+/// A source the reference parser rejects answers `None`, so the existing rejection
+/// paths classify it exactly as before.
+fn first_text_capacity_line(src: &str) -> Option<u32> {
+    use crate::ast::{Expr, Stmt, TypeDef, TypeExpr};
+    use crate::visitor::Visitor;
+
+    fn type_line(te: &TypeExpr) -> Option<u32> {
+        match te {
+            TypeExpr::TextN(_, span) => Some(span.line),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => type_line(inner),
+            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
+                items.iter().filter_map(type_line).min()
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => None,
+        }
+    }
+
+    struct Scan {
+        lines: Vec<u32>,
+    }
+    impl Scan {
+        fn note(&mut self, te: &TypeExpr) {
+            if let Some(line) = type_line(te) {
+                self.lines.push(line);
+            }
+        }
+    }
+    impl Visitor for Scan {
+        fn visit_expr(&mut self, e: &Expr) {
+            if let Expr::Cast { target, .. } = e {
+                self.note(target);
+            }
+            self.walk_expr(e);
+        }
+        fn visit_stmt(&mut self, s: &Stmt) {
+            if let Stmt::Let(l) = s
+                && let Some(te) = &l.type_expr
+            {
+                self.note(te);
+            }
+            self.walk_stmt(s);
+        }
+    }
+
+    let program = parse(&tokenize(src).ok()?).ok()?;
+    let mut scan = Scan { lines: Vec::new() };
+    let note_fn = |scan: &mut Scan, f: &crate::ast::FunctionDef| {
+        scan.note(&f.return_type);
+        for p in &f.params {
+            if let Some(te) = &p.type_expr {
+                scan.note(te);
+            }
+        }
+        scan.visit_block(&f.body);
+    };
+    for f in &program.functions {
+        note_fn(&mut scan, f);
+    }
+    for b in &program.impls {
+        for m in &b.methods {
+            note_fn(&mut scan, m);
+        }
+    }
+    for t in &program.traits {
+        for m in &t.methods {
+            scan.note(&m.return_type);
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    scan.note(te);
+                }
+            }
+        }
+    }
+    for td in &program.types {
+        match td {
+            TypeDef::Struct(s) => s.fields.iter().for_each(|f| scan.note(&f.type_expr)),
+            TypeDef::Enum(e) => e
+                .variants
+                .iter()
+                .for_each(|v| v.fields.iter().for_each(|t| scan.note(t))),
+            TypeDef::Newtype(n) => scan.note(&n.underlying),
+        }
+    }
+    for d in &program.data_decls {
+        d.fields.iter().for_each(|f| scan.note(&f.type_expr));
+    }
+    for u in &program.uses {
+        if let Some(sig) = &u.signature {
+            scan.note(&sig.return_type);
+            sig.params.iter().for_each(|t| scan.note(t));
+        }
+    }
+    scan.lines.into_iter().min()
+}
+
+/// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
+/// [`Module`] for an in-subset program at the host target.
+///
+/// This is the shipping entry behind `keleusma-cli --compiler self-hosted`.
+/// It checks the target, obtains a pipeline type verdict before the reference sees
+/// the user source, then compares the independently assembled module with the reference.
+/// Source rejection, unavailable type evidence and unsupported constructs are distinct
+/// errors. The reference still gates successful compilation because composite type
+/// coverage is incomplete. Artifact serialization remains a separate operation.
+///
+/// "Oracle" here means the yardstick this check compares against, not an implementation
+/// assumed correct. A divergence establishes that the two disagree and not which is wrong;
+/// see the cross-check below for the case where the reference was the wrong side.
+pub fn self_hosted_compile(
+    src: &str,
+    target: &crate::target::Target,
+) -> Result<Module, SelfHostError> {
+    let host = crate::target::Target::host();
+    if target.word_bits_log2 != host.word_bits_log2
+        || target.addr_bits_log2 != host.addr_bits_log2
+        || target.float_bits_log2 != host.float_bits_log2
+    {
+        return Err(SelfHostError::NonHostTarget);
+    }
+    // A `Text<N>` program is refused before any stage runs. The reference is consulted
+    // first so that a program it rejects, such as a literal longer than its capacity,
+    // reports that rejection rather than a subset limit that would send the user to a
+    // backend which rejects it too.
+    if let Some(line) = first_text_capacity_line(src) {
+        compile_reference(src)?;
+        return Err(SelfHostError::Unsupported {
+            detail: format!(
+                "a capacity-bounded `Text<N>` at line {line} is outside the self-hosted subset"
+            ),
+        });
+    }
+    // Obtain an independent verdict before the reference sees the source. Unknown facts
+    // still require the reference gate, but cannot mask rejection-stage coverage tests.
+    let type_result = type_check_source_via_kel(src);
+    if matches!(type_result, Ok(false)) {
+        return Err(SelfHostError::PipelineRejected {
+            detail: "source facts rejected by the parser or Keleusma type stage".into(),
+        });
+    }
+    let reference = compile_reference(src)?;
+    if let Err(error) = type_result {
+        let detail = error.to_string();
+        let unsupported = matches!(&error,
+            TypeCheckError::Parse(crate::selfhost_host::ParseRecordError::Diagnostic { code, .. })
+            if matches!(crate::selfhost_host::PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(18..=21 | 30..=31)));
+        if unsupported || matches!(&error, TypeCheckError::ExtractionPanic(_)) {
+            if let Some((what, line)) = name_unsupported_construct(src) {
+                return Err(SelfHostError::Unsupported {
+                    detail: format!(
+                        "{what} at line {line} is outside the self-hosted subset. The stage reported: {detail}"
+                    ),
+                });
+            }
+            if unsupported {
+                return Err(SelfHostError::Unsupported { detail });
+            }
+        }
+        return Err(SelfHostError::TypeCheckUnavailable { detail });
+    }
+    // The pipeline `panic!`s on some out-of-subset constructs. Recover those into a clean
+    // error; suppress the default panic output for the duration.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let owned = src.to_string();
+    let result = std::panic::catch_unwind(move || self_host_compile_scratch(&owned));
+    std::panic::set_hook(prev);
+    let module = result.map_err(|payload| {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unsupported construct".to_string());
+        // Lead with the construct the user wrote; keep the stage's detail after it, since
+        // that half is what a stage author needs. See `name_unsupported_construct` for why
+        // naming on the failure path cannot cause a false rejection.
+        let detail = match name_unsupported_construct(src) {
+            Some((what, line)) => format!(
+                "{what} at line {line} is outside the self-hosted \
+                 subset. The stage reported: {detail}"
+            ),
+            None => detail,
+        };
+        SelfHostError::Unsupported { detail }
+    })?;
+    // Compare chunk bodies and every assembled metadata field, including signatures,
+    // data layouts and resource bounds. The reference supplies no field to the result.
+    //
+    // **A DIVERGENCE DOES NOT SAY WHICH SIDE IS WRONG**, and this comment used to claim it
+    // meant the program was outside the self-hosted subset. That is the usual cause and is
+    // not the only one. On 2026-08-31 the REFERENCE was the divergent side: `lex_string`
+    // re-encoded every byte at or above `0x80`, so a six-byte non-ASCII literal baked as
+    // eleven bytes, while `lexer.kel`, which interns raw bytes, was right. Before the fix a
+    // program carrying such a literal diverged here, was refused, and the caller was pointed
+    // at `--compiler rust`, which compiled it silently and wrongly -- the tool steering a
+    // user from a safe refusal toward a corrupt artifact.
+    //
+    // The behaviour is unchanged and correct: refuse, and recommend the reference, which is
+    // the far more mature implementation and will be the right side in almost every case.
+    // What changed is the claim, because "the cause is already known" is what stops someone
+    // investigating the case where it is not.
+    if let Some(detail) = artifact_compare::difference(&module, &reference) {
+        return Err(SelfHostError::Unsupported { detail });
+    }
+    Ok(module)
+}
+
+/// Compile `src` with the reference compiler, mapping any lex/parse/compile failure to
+/// [`SelfHostError::ReferenceRejected`] with the reference's message. Used as the
+/// correctness oracle by [`crate::selfhost::self_hosted_compile`]. A failure here is a genuine source error,
+/// distinct from a self-hosted-subset limitation, so it does not carry the `--compiler rust`
+/// retry hint.
+fn compile_reference(src: &str) -> Result<Module, SelfHostError> {
+    let tokens =
+        tokenize(src).map_err(|e| SelfHostError::ReferenceRejected { detail: e.message })?;
+    let program =
+        parse(&tokens).map_err(|e| SelfHostError::ReferenceRejected { detail: e.message })?;
+    compile(&program).map_err(|e| SelfHostError::ReferenceRejected { detail: e.message })
+}
+
+/// Describe how the self-hosted `module` diverges from the `reference`, naming the first
+/// diverging chunk and the specific dimension (chunk count/order, op index, local frame,
+/// or constant pool). This turns the backend's out-of-subset rejection from an opaque
+/// "diverges from the reference" into an actionable pointer at the offending function.
+///
+/// Precondition: the two modules are known to differ (the caller checks equality first);
+/// the fallthrough message is retained only for total-function safety.
+fn describe_divergence(module: &Module, reference: &Module) -> String {
+    if module.chunks.len() != reference.chunks.len() {
+        return format!(
+            "self-hosted output has {} chunk(s), reference has {}",
+            module.chunks.len(),
+            reference.chunks.len()
+        );
+    }
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        if m.name != r.name {
+            return format!(
+                "chunk order diverges: `{}` vs reference `{}`",
+                m.name, r.name
+            );
+        }
+        if m.ops != r.ops {
+            return match m.ops.iter().zip(r.ops.iter()).position(|(a, b)| a != b) {
+                Some(i) => format!(
+                    "chunk `{}`: op {} diverges ({:?} vs reference {:?})",
+                    m.name, i, m.ops[i], r.ops[i]
+                ),
+                None => format!(
+                    "chunk `{}`: op count {} vs reference {}",
+                    m.name,
+                    m.ops.len(),
+                    r.ops.len()
+                ),
+            };
+        }
+        if m.local_count != r.local_count {
+            return format!(
+                "chunk `{}`: local frame size {} vs reference {}",
+                m.name, m.local_count, r.local_count
+            );
+        }
+        if m.constants != r.constants {
+            return format!(
+                "chunk `{}`: constant pool diverges from the reference",
+                m.name
+            );
+        }
+    }
+    "the self-hosted output diverges from the reference compiler".to_string()
+}
+
+#[cfg(test)]
+mod decoder_drift_guard {
+    use super::decode_op;
+
+    /// Every op tag the codegen can emit -- currently `1..=65` (the `wire` const
+    /// block in `kel/codegen.kel` assigns ops 1..=65 with no gap) -- must decode without hitting the
+    /// `unknown op tag` catch-all. This is the FAST guard against decoder DRIFT: an op added to the
+    /// codegen wire set but not to `decode_op` above fails this test in microseconds, rather than only
+    /// surfacing in a ~40-second stage self-compile. It is the standing regression for the
+    /// `unknown op tag 62` defect, which rode into the `v0.2.3` release line undetected because the
+    /// subproject decoder had fallen behind the emitted op set and nothing gated the subproject.
+    ///
+    /// P11 Option E's eight-bit radix admits the new transport tags 64 and 65
+    /// for existing CheckedDiv and CheckedMod instructions, and 66 for the
+    /// existing BoundsCheck that probes an indexed write. These are internal
+    /// transport identifiers, not additional public instructions.
+    ///
+    /// # WHAT THIS TEST DOES NOT CHECK, RAISED BY THE `v0.3.0` LINE
+    ///
+    /// It discards the decoded value, so it distinguishes a correct table from a PERMUTED one not
+    /// at all: **a transposition passes it.** That is a statement about coverage, not a defect --
+    /// no disagreement has ever been observed here.
+    ///
+    /// `tests/op_tag_tables.rs` covers the rest, and the pieces are separate because each catches
+    /// something the others cannot. `the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap`
+    /// rejects a duplicate or a gap but NOT a swap, since a swap leaves a bijection.
+    /// `the_two_decoders_agree_on_every_op_tag` compares this decoder against the copy in
+    /// `tests/selfhost_codegen.rs` that the comment above claims is kept in lockstep with it --
+    /// which nothing checked -- but a swap applied to both would still agree.
+    /// `every_stage_tag_name_matches_the_operation_its_number_decodes_to` is the one that catches a
+    /// one-sided transposition, and mutation testing confirms it is the ONLY one that does.
+    /// `the_stage_corpus_names_every_unexercised_op_tag` measures where such a
+    /// defect could hide from the byte-identity oracle.
+    #[test]
+    fn all_wire_op_tags_decode() {
+        for tag in 1..=69i64 {
+            // operand 0 is the minimal representative word for each tag; decode must not panic.
+            let _ = decode_op(tag);
+        }
+    }
+}
+
+/// Structural checks on the classification tables `analyze.kel` consumes.
+///
+/// These are not numbers, so no numeric differential can see them wrong: a
+/// misclassified opcode changes the control-flow graph `analyze.kel`
+/// reconstructs, and the bound it extracts from a wrong graph can be finite and
+/// wrong rather than absent.
+#[cfg(test)]
+mod classification_tables {
+    use super::{analyze_class, analyze_opk};
+    use crate::bytecode::{Chunk, Op};
+
+    fn scratch_chunk() -> Chunk {
+        let m = crate::compiler::compile(
+            &crate::parser::parse(&crate::lexer::tokenize("fn main() -> Word { 1 }").expect("lex"))
+                .expect("parse"),
+        )
+        .expect("compile");
+        m.chunks.first().expect("a chunk").clone()
+    }
+
+    /// Every control-flow opcode carries its own class, and its ARGUMENT.
+    ///
+    /// The argument matters as much as the class: `analyze.kel` follows
+    /// `If`/`Loop`/`EndLoop`/`Break` targets to rebuild the graph, so a class
+    /// that is right with an argument that is wrong reconstructs a graph that
+    /// is plausible and not the program's.
+    #[test]
+    fn every_control_flow_opcode_keeps_its_class_and_its_target() {
+        let cases: &[(Op, i64, i64)] = &[
+            (Op::If(11), 1, 11),
+            (Op::Else(12), 2, 12),
+            (Op::EndIf, 3, 0),
+            (Op::Loop(13), 4, 13),
+            (Op::EndLoop(14), 5, 14),
+            (Op::Break(15), 6, 15),
+            (Op::BreakIf(16), 7, 16),
+            // Class 8 is PATH EXIT, shared by both opcodes that end a path
+            // without transferring control to an enclosing loop.
+            (Op::Trap(0), 8, 0),
+            (Op::Return, 8, 0),
+            (Op::Call(17, 2), 9, 0),
+        ];
+        for (op, class, arg) in cases {
+            let got = analyze_class(op);
+            assert_eq!(
+                got,
+                (*class, *arg),
+                "{op:?} classified as {got:?}, expected ({class}, {arg})"
+            );
+        }
+    }
+
+    /// Ordinary opcodes must classify as plain, or `analyze.kel` invents an edge.
+    #[test]
+    fn ordinary_opcodes_classify_as_plain() {
+        let cases: &[Op] = &[
+            Op::Const(0),
+            Op::GetLocal(0),
+            Op::SetLocal(0),
+            Op::Add,
+            Op::Sub,
+            Op::Div,
+            Op::CmpEq,
+            Op::Dup,
+            Op::Not,
+            // `Op::Return` WAS HERE until 2026-08-16 and is now class 8. It ends
+            // the path, and treating it as plain made `analyze.kel` walk a
+            // multiheaded dispatch as though every head ran in sequence. This
+            // test failing is how that change was confirmed to reach the table.
+            Op::Yield,
+            Op::Stream,
+            Op::Reset,
+            Op::Len,
+        ];
+        for op in cases {
+            assert_eq!(
+                analyze_class(op),
+                (0, 0),
+                "{op:?} was given a control-flow class it does not have"
+            );
+        }
+    }
+
+    /// The class table has exactly nine kinds, and the hole this test used to
+    /// describe is CLOSED.
+    ///
+    /// It previously read: "`analyze_class` ends in `_ => (0, 0)`. A
+    /// control-flow opcode added later and not added here becomes 'plain'
+    /// silently — no panic, no rejection, just a control-flow graph missing an
+    /// edge and a bound extracted from it that is finite and wrong. This test
+    /// cannot close that hole." That was correct, and the closing move it named
+    /// is the one that was taken: `analyze_class` and `analyze_opk` are now
+    /// exhaustive over `Op`, so the compiler refuses a new opcode until someone
+    /// decides its class. Verified by adding a variant to `Op` and observing
+    /// `E0004` at both sites.
+    ///
+    /// **This test is still worth keeping, and its job has changed.** The
+    /// compiler now guarantees every opcode is CLASSIFIED; it cannot guarantee
+    /// the classification is RIGHT. Exhaustiveness is satisfied just as well by
+    /// mapping a new control-flow opcode to `(0, 0)` in the plain group, which
+    /// is exactly the silent-edge defect wearing a different hat. So this pins
+    /// the count: a tenth kind fails here, and `analyze.kel` needs a decoder for
+    /// it before it means anything.
+    #[test]
+    fn the_class_table_covers_exactly_nine_kinds() {
+        let control: &[Op] = &[
+            Op::If(0),
+            Op::Else(0),
+            Op::EndIf,
+            Op::Loop(0),
+            Op::EndLoop(0),
+            Op::Break(0),
+            Op::BreakIf(0),
+            Op::Trap(0),
+            Op::Call(0, 0),
+        ];
+        let classes: alloc::collections::BTreeSet<i64> =
+            control.iter().map(|op| analyze_class(op).0).collect();
+        assert_eq!(
+            classes.len(),
+            9,
+            "the class table no longer has nine distinct kinds; a new one needs a decoder \
+             in analyze.kel before it means anything"
+        );
+        assert!(
+            !classes.contains(&0),
+            "a control-flow opcode fell through to the plain default"
+        );
+    }
+
+    /// The loop-bound extraction's opcode tags, which pick out the induction
+    /// variable's update. A wrong tag here yields a bound, not an error.
+    #[test]
+    fn the_bound_extraction_tags_name_the_right_opcodes() {
+        let chunk = scratch_chunk();
+        let cases: &[(Op, i64)] = &[
+            (Op::GetLocal(3), 1),
+            (Op::SetLocal(4), 2),
+            (Op::CmpGe, 4),
+            (Op::BreakIf(0), 5),
+            (Op::CheckedAdd, 6),
+            (Op::PopN(2), 7),
+            (Op::EndLoop(0), 8),
+            (Op::Loop(0), 9),
+            (Op::Add, 0),
+            (Op::Mul, 0),
+        ];
+        for (op, opk) in cases {
+            let got = analyze_opk(op, &chunk).0;
+            assert_eq!(got, *opk, "{op:?} tagged {got}, expected {opk}");
+        }
+        // The slot travels with the tag; a tag without its slot reads the wrong
+        // local and extracts a bound for a variable that is not the induction one.
+        assert_eq!(analyze_opk(&Op::GetLocal(3), &chunk).1, 3);
+        assert_eq!(analyze_opk(&Op::SetLocal(4), &chunk).1, 4);
+        assert_eq!(analyze_opk(&Op::PopN(2), &chunk).2, 2);
+    }
+}
+
+#[cfg(test)]
+mod typecheck_input_feasibility {
+    use super::*;
+
+    /// **IDENTITY NOW TRAVELS WITH THE STRUCTURE.**
+    ///
+    /// Order 1 records that the type checker's input should come from `parse.kel`
+    /// plus `reconstruct.kel` because "structure is available" there. Measured, that
+    /// was only half true: a `Local` record carries a **slot**, `codegen.kel` lowers
+    /// it straight to `GetLocal(slot)`, and no body record mentioned a name at all.
+    /// The type channel is keyed by interned NAME ids, so a forest of slots could
+    /// not be joined to a binding table of names.
+    ///
+    /// The operator ruled on the fork: a `let` record carries its name id, rather
+    /// than the type channel being keyed by slot for locals and by name for
+    /// everything else. `parse.kel` already held the name at the emitting site and
+    /// the Option E transport had a full word free.
+    ///
+    /// # Why the pairing is positional, and why that is safe here
+    ///
+    /// The name record is emitted immediately before the `LetIn` it belongs to, by
+    /// the same fold step, so the slot is the very next record's payload. That is a
+    /// positional coupling and normally a smell — it is sound here because one fold
+    /// step emits exactly the pair and nothing can be interleaved between them.
+    /// **This test is what keeps that true**: it checks the slot and name of every
+    /// binding, so a reordering that broke the pairing would show up as a wrong
+    /// slot rather than as silence.
+    #[test]
+    fn every_let_binding_carries_its_slot_and_name() {
+        // Padded so a name id cannot coincide with a slot or a literal, which would
+        // let a wrong pairing pass by arithmetic accident.
+        let mut src = String::new();
+        for i in 0..12 {
+            src.push_str(&alloc::format!("fn pad{i}() -> Word {{ 0 }}\n"));
+        }
+        src.push_str("fn main() -> Word { let aardvark = 1; let barnacle = 2; aardvark }");
+        let (fns, names, ..) = parse_functions(&src);
+
+        let id = |want: &str| {
+            names
+                .iter()
+                .position(|n| n == want)
+                .unwrap_or_else(|| panic!("`{want}` is not interned")) as i64
+        };
+        let main = fns.last().expect("a function");
+        let mut got: Vec<(i64, i64)> = main.let_names.clone();
+        got.sort();
+
+        // Two bindings, distinct slots, and the NAMES the source spelled. The fold
+        // emits statements last to first, so the pairs are sorted rather than
+        // compared in source order.
+        assert_eq!(got.len(), 2, "expected two bindings, got {got:?}");
+        let mut want = alloc::vec![(got[0].0, id("aardvark")), (got[1].0, id("barnacle"))];
+        want.sort();
+        assert_eq!(
+            got,
+            want,
+            "the binding names did not arrive with their slots. Slots {:?}, names \
+             aardvark={} barnacle={}",
+            got.iter().map(|(s, _)| *s).collect::<alloc::vec::Vec<_>>(),
+            id("aardvark"),
+            id("barnacle")
+        );
+        assert_ne!(got[0].0, got[1].0, "two bindings share a frame slot");
+        assert!(
+            got.iter().all(|(s, _)| *s >= 0),
+            "a binding was never paired with its `LetIn`, so its slot is still the \
+             unpaired sentinel: {got:?}"
+        );
+    }
+
+    #[test]
+    fn the_struct_field_tag_matches_the_stage() {
+        let declared: i64 = include_str!("kel/parse.kel")
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("fn tag_struct_fields() -> Word {"))
+            .and_then(|l| l.split('{').nth(1))
+            .and_then(|t| t.split('}').next())
+            .and_then(|n| n.trim().parse().ok())
+            .expect("declared struct field metadata tag");
+        assert_eq!(declared, PARSE_STRUCT_FIELDS_TAG);
+        assert_ne!(declared, PARSE_LET_NAME_TAG);
+    }
+
+    /// The driver's tag is the stage's, checked rather than assumed.
+    #[test]
+    fn the_let_name_tag_matches_the_stage() {
+        const STAGE: &str = include_str!("kel/parse.kel");
+        let declared: i64 = STAGE
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("fn tag_let_name() -> Word {"))
+            .and_then(|l| l.split('{').nth(1))
+            .and_then(|t| t.split('}').next())
+            .and_then(|n| n.trim().parse().ok())
+            .expect("parse.kel declares `fn tag_let_name()`");
+        assert_eq!(
+            declared, PARSE_LET_NAME_TAG,
+            "the stage emits binding names under {declared} and the driver diverts \
+             {PARSE_LET_NAME_TAG}. A mismatch puts the record into the node stream, \
+             where `reconstruct.kel` would meet a tag it has no arm for."
+        );
+    }
+}
+
+#[cfg(test)]
+mod construct_naming_guard {
+    use super::{name_unsupported_construct, parse, read_stage, self_hosted_compile, tokenize};
+
+    /// Every stage source embedded by the driver.
+    const STAGES: &[&str] = &[
+        "lexer.kel",
+        "parse.kel",
+        "reconstruct.kel",
+        "codegen.kel",
+        "analyze.kel",
+        "verify_structural.kel",
+        "verify_yield.kel",
+        "verify_depth.kel",
+        "verify_typed.kel",
+        "verify_datalayout.kel",
+        "verify_types.kel",
+        "wire.kel",
+    ];
+
+    /// **THE SCAN MUST NAME NOTHING IN A SOURCE THE SUBSET COMPILES.**
+    ///
+    /// `name_unsupported_construct` lists constructs observed to be outside the self-hosted
+    /// subset. Every stage source compiles through that subset byte-identically, which is
+    /// what self-hosting means, so none of them can contain one. A hit here says the list
+    /// has acquired a construct the subset actually supports.
+    ///
+    /// That would not cause a false rejection — the scan runs only after a compile has
+    /// already failed — but it would attach a confident and wrong noun to an unrelated
+    /// failure, which is worse than the generic message it replaced.
+    ///
+    /// **The vacuity trap is real and is closed below.** The scan returns `None` when the
+    /// source does not parse, so a test that only asserted `None` would pass if every stage
+    /// source failed to tokenize. Parsing is therefore asserted first, per source.
+    ///
+    /// **Mutation-tested.** Adding the supported enum pattern to the list fails this test,
+    /// naming `parse.kel` and the first offending occurrence, and removing it again is
+    /// green. A guard never observed to fail is not evidence about the guard.
+    #[test]
+    fn the_scan_names_no_construct_in_any_stage_source() {
+        for name in STAGES {
+            let src = read_stage(name);
+
+            // NON-VACUITY, per source: a parse failure makes the scan return `None` for a
+            // reason that has nothing to do with the construct list.
+            let tokens = tokenize(&src).unwrap_or_else(|e| {
+                panic!(
+                    "{name}: no longer tokenizes ({e:?}), so the \
+                     absence of a named construct below would prove nothing"
+                )
+            });
+            parse(&tokens).unwrap_or_else(|e| {
+                panic!(
+                    "{name}: no longer parses ({e:?}), so \
+                 the absence of a named construct below would prove nothing"
+                )
+            });
+
+            assert!(
+                name_unsupported_construct(&src).is_none(),
+                "{name}: the scan names {:?} in a stage source. Every stage source compiles \
+                 through the self-hosted subset, so the construct list has gained something \
+                 the subset supports. Remove it from the list rather than excluding this \
+                 source",
+                name_unsupported_construct(&src)
+            );
+        }
+    }
+
+    /// **EVERY CONSTRUCT THE SCAN CAN NAME IS REALLY OUTSIDE THE SUBSET.**
+    ///
+    /// This is the check the stage-source guard cannot perform, and the one that would have
+    /// caught the mistake recorded below.
+    ///
+    /// # Why the other guard is not enough
+    ///
+    /// `the_scan_names_no_construct_in_any_stage_source` establishes that nothing on the list
+    /// appears in a source the subset compiles. That only covers constructs the eleven stage
+    /// sources HAPPEN TO USE. On 2026-09-12 the float TYPE was about to be added to the list
+    /// on the strength of "floats are outside the subset"; no stage source uses a float type,
+    /// **so that guard would have passed**, and every float-typed program failing for an
+    /// unrelated reason would have been blamed on a construct that in fact compiles and
+    /// matches the reference byte for byte. Only running such a program showed it.
+    ///
+    /// # What this asserts
+    ///
+    /// For each construct the scan can name: a minimal program containing it is refused by
+    /// the pipeline, AND the scan names it in that program. A construct that is named but
+    /// compiles fine is a wrong entry; a construct that is refused but unnamed is a missing
+    /// one. Both directions fail here.
+    ///
+    /// # The reach of the two guards together, measured
+    ///
+    /// **A scan arm added with no row here passes this test.** The count below compares the
+    /// table's length against a constant, so it catches a row added or removed without
+    /// thought; it cannot see the scan's arms, which are `match` patterns and not data. The
+    /// first version of this comment claimed adding an arm without a row would fail the
+    /// test. That was wrong, and keeping it would have made this guard look broader than it
+    /// is.
+    ///
+    /// Mutation-testing both guards against the same wrong entry gives the real picture. An
+    /// arm naming the SUPPORTED wildcard pattern:
+    ///
+    /// - passes this test, because no row mentions it; but
+    /// - FAILS `the_scan_names_no_construct_in_any_stage_source`, because the stage sources
+    ///   use `_`.
+    ///
+    /// So the two cover the union of "constructs the stage sources happen to use" and
+    /// "constructs with a row here". **The hole is the complement, and it is not
+    /// hypothetical**: the float type is used by no stage source, so a float-type arm added
+    /// with no row would have passed BOTH. That is the entry that was nearly added on
+    /// 2026-09-12, and only running a float-typed program caught it.
+    ///
+    /// A new entry SHOULD therefore be registered here, enforced by convention rather than by
+    /// the test, and a new entry for a construct the stages do not use has no automatic check
+    /// at all.
+
+    #[test]
+    fn every_named_construct_is_really_outside_the_subset() {
+        // (the phrase the scan emits, a minimal program containing that construct)
+        const NAMED: &[(&str, &str)] = &[
+            // A variable arm on a scalar match compiles since Order 6. On an enum scrutinee
+            // it is still refused, so the scan's arm stays and names it.
+            (
+                "a variable pattern",
+                "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
+            ),
+            (
+                "a struct destructuring pattern",
+                // Shorthand destructuring compiles since Order 6. A literal field is refused.
+                "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
+            ),
+            (
+                "an `assert` statement",
+                "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }",
+            ),
+            (
+                // Three segments, because a two-segment native call compiles since
+                // Order 6 slice 2 and so no longer witnesses this arm.
+                "a qualified call",
+                "use audio::tone::midi_to_freq\nfn main() -> Float { audio::tone::midi_to_freq(69) }",
+            ),
+        ];
+
+        // Catches a row added or removed without thought. It does NOT see the scan's arms:
+        // an arm with no row here passes. See the note above.
+        const EXPECTED_ROWS: usize = 4;
+        assert_eq!(
+            NAMED.len(),
+            EXPECTED_ROWS,
+            "the construct table changed size without the count being updated. If an arm was \
+             added to the scan, add its row and bump this; if one was removed, drop the row"
+        );
+
+        let target = crate::target::Target::host();
+        for (phrase, src) in NAMED {
+            let named = name_unsupported_construct(src);
+            let named = named.unwrap_or_else(|| {
+                panic!(
+                    "{phrase}: the scan names nothing in a program written to contain it, so \
+                     the row and the scan arm have drifted apart"
+                )
+            });
+            assert!(
+                named.0.contains(phrase),
+                "{phrase}: the scan names {:?} here instead. Either the wording changed and \
+                 this row is stale, or an earlier construct in the same source is being \
+                 reported",
+                named.0
+            );
+
+            // THE HALF THE OTHER GUARD CANNOT DO: the construct must really be refused.
+            assert!(
+                self_hosted_compile(src, &target).is_err(),
+                "{phrase}: this program COMPILES through the self-hosted pipeline, so the \
+                 scan names a construct that is inside the subset. On the failure path that \
+                 attaches a confident and wrong noun to an unrelated failure. Remove the arm \
+                 rather than this row, unless the subset genuinely just narrowed"
+            );
+        }
+    }
+
+    /// The guard above is only evidence if the scan can find anything at all.
+    #[test]
+    fn the_scan_finds_a_construct_when_one_is_present() {
+        const WITH_ASSERT: &str = "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }";
+        let found = name_unsupported_construct(WITH_ASSERT);
+        assert!(
+            found.is_some(),
+            "the scan finds nothing in a program that contains an `assert`, so the clean \
+             result over the stage sources is about a scan that never reports anything"
+        );
+    }
+}
+
+#[cfg(test)]
+mod checked_outcomes_tests;
+
+#[cfg(test)]
+mod type_corpus;
+
+#[cfg(test)]
+mod reference_poison_tests;

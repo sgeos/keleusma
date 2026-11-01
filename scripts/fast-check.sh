@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# fast-check.sh — the fast INNER-LOOP lane (seconds-scale), NOT a gate.
+#
+# Purpose: a reliable, named version of the targeted check run by hand during
+# development, so the inner loop has a fast signal without paying for the full gate.
+# It runs fmt, clippy on the touched crate, and a test filter you pass in — typically
+# the ONE construct test or the ONE changed self-host stage in flight.
+#
+#   scripts/fast-check.sh 'test(self_host_compiles_word_bnot)'                 # one construct
+#   scripts/fast-check.sh 'test(self_host_compiles_parse_kel_byte_identically)' # one changed stage
+#   scripts/fast-check.sh 'test(self_hosted_construct_support_boundary)'        # the boundary
+#
+# Item 3 of the 2026-07-22 process audit — "re-self-compile only the changed stage in
+# the inner loop": pass just that stage's `*_kel_byte_identically` filter here; the full
+# five-stage self-compile stays in the push hook and merge gate.
+#
+# This lane sets KEL_SELFHOST_CACHE=1, which enables the COMPLETE-KEY memoization in
+# tests/common/mod.rs for the expensive whole-stage self-compile and analyze tests. A
+# result is reused only when the test binary (hence the whole Rust reference compiler,
+# VM, and wire format) AND every .kel input the test reads are byte-for-byte unchanged,
+# so a stale cache cannot mask a divergence. The gate leaves the variable unset and
+# always runs for real, so the memoization never affects a push or a merge. Measured:
+# the eight heaviest self-host tests drop from ~102s to ~0.02s on a warm cache.
+#
+# This is NOT sufficient before a push or merge. The push runs the cargo-husky pre-push
+# hook, and a merge to the release line waits on the pull request's CI run, which runs
+# the whole heavy self-host tier. `scripts/release-gate.sh` remains the full local gate
+# before a publication or a merge into main.
+#
+# Optional second arg overrides the crate clippy targets (default: -p keleusma).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+FILTER="${1:-}"
+CLIPPY_PKG="${2:--p keleusma}"
+
+step() { printf '\n\033[1mfast-check: %s\033[0m\n' "$1"; }
+
+# `self-host` is required: the self-host tests this lane exists for are gated on it.
+# Measured 2026-10-24: without it, the header's own
+# 'test(self_host_compiles_parse_kel_byte_identically)' example selected no test.
+FEATURES="compile verify self-host"
+
+step "Format (cargo fmt --check)"
+cargo fmt --all -- --check
+
+step "Clippy (${CLIPPY_PKG}, tests, -D warnings)"
+# shellcheck disable=SC2086
+cargo clippy ${CLIPPY_PKG} --tests --features "$FEATURES" -- -D warnings
+
+if [ -n "$FILTER" ]; then
+  step "Tests matching: ${FILTER}"
+  if cargo nextest --version >/dev/null 2>&1; then
+    KEL_SELFHOST_CACHE=1 cargo nextest run --features "$FEATURES" -E "$FILTER"
+  else
+    echo "note: cargo-nextest not installed; falling back to a substring filter with cargo test" >&2
+    # Best-effort: strip a leading `test(...)` wrapper to a bare substring for cargo test.
+    SUB="$(printf '%s' "$FILTER" | sed -E 's/^test\((.*)\)$/\1/')"
+    KEL_SELFHOST_CACHE=1 cargo test --features "$FEATURES" "$SUB"
+  fi
+else
+  printf '\n\033[1mfast-check: no test filter given.\033[0m Pass one, e.g.\n'
+  printf "  scripts/fast-check.sh 'test(self_host_compiles_word_bnot)'\n"
+fi
+
+# Incidental sccache metrics capture (guarded; no-op without sccache).
+"$(dirname "$0")/sccache-metrics.sh" "fast-check" >/dev/null 2>&1 || true
+
+printf '\n\033[1;32mfast-check: OK\033[0m\n'

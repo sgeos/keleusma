@@ -33,8 +33,53 @@ handled automatically. For a function that may fail, `register_fn_fallible`
 accepts a `Result<R, VmError>` return:
 
 ```rust
-vm.register_fn_fallible("io::read_setting", |key: String| -> Result<String, VmError> {
-    fetch(&key).map_err(|e| VmError::NativeError(format!("{}", e)))
+vm.register_fn_fallible("io::read_setting", |key: &str| -> Result<String, VmError> {
+    fetch(key).map_err(|e| VmError::NativeError(format!("{}", e)))
+});
+```
+
+## Strings: take a borrowed view
+
+A native that takes a script's `Text` should declare its argument as
+`&str`, not `String`:
+
+```rust
+vm.register_fn("host::name_length", |s: &str| -> i64 { s.len() as i64 });
+```
+
+The borrow is valid for the call and no longer. That is not a
+restriction the marshalling layer invented; a script's dynamic string
+lives in the arena, and the arena is reclaimed at the next `resume`. The
+lifetime simply makes the rule one the compiler checks. Copy what you
+need to keep before returning.
+
+Two properties of the view matter and are easy to get wrong:
+
+- The length is authoritative. A Keleusma string is a **byte** string, so
+  it may contain a NUL byte in the middle, and that byte is content. Do
+  not treat the view as NUL-terminated.
+- The length counts **bytes**, not characters. A three-character string
+  may be six bytes long.
+
+An owned `String` argument still works and behaves as it always has:
+
+```rust
+vm.register_fn("host::name_length", |s: String| -> i64 { s.len() as i64 });
+```
+
+It is a convenience for the VM embedding only. The ahead-of-time native
+backend cannot hand a native an owned `String` without copying, so a
+native written against `String` does not carry across to that embedding,
+while one written against `&str` does. If you may ever compile your
+scripts ahead of time, take the borrowed view. The full contract is in
+[`docs/spec/NATIVE_STRING_ABI.md`](https://github.com/sgeos/keleusma/blob/main/docs/spec/NATIVE_STRING_ABI.md).
+
+A borrowed string may appear in any argument position, mixed freely with
+owned arguments:
+
+```rust
+vm.register_fn("host::pad", |s: &str, width: i64| -> i64 {
+    core::cmp::max(s.len() as i64, width)
 });
 ```
 

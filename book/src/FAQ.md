@@ -76,6 +76,7 @@ All other characters appear directly without escaping. Any other backslash seque
 
 A program like
 
+<!-- verify: reject: text concatenation is not available -->
 ```
 fn main() -> Text {
     let s = "a";
@@ -127,7 +128,7 @@ match vm.call(&[]) {
 }
 ```
 
-For sizing the arena, use `auto_arena_capacity_for` plus a host-side margin, or the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting.
+For sizing the arena, use `auto_arena_capacity_for`, which counts the composite inputs the host passes, or the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting. A host whose composite inputs carry `Text` uses `auto_arena_capacity_with_input_text` and supplies a bound on that text.
 
 ## Other Surprises
 
@@ -189,18 +190,31 @@ The feature requires the `signatures` cargo feature, which is off by default and
 
 Use case: multi-party module delivery to embedded targets. A signer compiles scripts and signs them; a device flashed with the signer's public key verifies before loading. See the [Distributing signed bytecode](./COOKBOOK.md#distributing-signed-bytecode) cookbook recipe and `R42` in [RESOLVED.md](../../docs/decisions/RESOLVED.md).
 
-### If-else at statement position requires a trailing semicolon
+### A trailing semicolon after a block-form statement is optional
 
-The parser does not auto-insert semicolons. An `if-else` expression used as a statement (followed by another statement) requires `;` even though the expression evaluates to unit.
+The parser does not auto-insert semicolons, but a block-form `if`, `if-else`, `match`, `loop`, or `for` used as a statement does not need one. Both forms below parse, and they mean the same thing.
 
 ```
 if state.rem0 == 0 {
     /* ... */
 } else {
     state.rem0 = state.rem0 - 1;
-};   // <-- this semicolon is required
+}    // <-- no semicolon needed
+state.rem1 = state.rem1 - 1;
+
+if state.rem0 == 0 {
+    /* ... */
+} else {
+    state.rem0 = state.rem0 - 1;
+};   // <-- also accepted
 state.rem1 = state.rem1 - 1;
 ```
+
+An earlier revision of this entry stated the semicolon was required. It was not, and had not been; the behaviour is pinned by `an_if_else_before_another_statement_needs_no_semicolon` in `tests/block_form_statements.rs`.
+
+The semicolon does still matter in one position. Omitting it makes a block-form expression the block's **tail expression**, so its value is the block's value; writing it makes the construct a statement and the block's value comes from whatever follows.
+
+Ordinary expression statements, such as a call made for its side effect, do require a terminator.
 
 ### Opaque types flow through the native boundary as `Value::Opaque`
 
@@ -210,6 +224,7 @@ V0.2.0 introduced first-class opaque type support through the `HostOpaque` trait
 
 Keleusma's `Word` is a fixed-width signed integer whose width is declared by the target descriptor. Arithmetic operations mask the result to that width using a sign-extending shift on every step. Overflow does not produce a typed error; the result silently wraps in the modular sense the declared width permits.
 
+<!-- verify: accept -->
 ```
 fn main() -> Word {
     let max = 9223372036854775807;
@@ -222,23 +237,40 @@ This choice is intentional. The Worst-Case Execution Time and Worst-Case Memory 
 
 Hosts that need overflow detection register a native that performs the checked operation against a wider Rust integer and surfaces an error through `VmError::NativeError`. The host owns the checked-arithmetic vocabulary; the script consumes it through `use` declarations.
 
-### Loop-calls-loop is rejected by lexical productivity
+### How the productivity rule treats a yield inside a called function
 
-The productivity rule that admits `loop` blocks is enforced by a purely lexical structural check. The verifier walks the syntactic body of each `loop` and requires that every control-flow path through one iteration contains at least one `yield`. A `loop` block whose body's only `yield` is inside a function it calls is rejected because the structural pass does not chase the call.
+The productivity rule that admits `loop` blocks requires that every
+control-flow path through one iteration reaches a `yield`. The `yield` does not
+have to be written in the `loop` body itself. A call to a function that yields
+on every one of its own fall-through paths satisfies the rule, and the set of
+such functions is computed as a fixpoint over the call graph, so a chain of
+delegations is admitted as well.
 
+**This entry said the opposite until 2026-09-26.** It stated that the check was
+purely lexical, that it did not chase calls, and that the program below was
+rejected. None of those is true of the current implementation, whose own
+diagnostic names delegation explicitly. The entry was wrong in the direction
+that costs a reader real work, because it advised restructuring code that needs
+no restructuring.
+
+<!-- verify: compile -->
 ```
 yield helper() -> Word { yield 1 }
 
 loop main() -> Word {
-    let v = helper();   // <-- structural pass does not see the yield
+    let v = helper();   // helper yields on every path, so the rule is satisfied
     v
 }
 ```
 
-This program is rejected with `loop body has no yield on at least one path`. The rule errs conservative on purpose. A semantic check that chased calls would be unsound for parameter-dependent dispatch or trait method resolution and would also have to handle mutually recursive call graphs. The lexical check is sound, fast, and easy to explain at the cost of forcing the `yield` to appear at the top level of the `loop` body.
+What is still rejected is a body with a path that reaches neither a `yield` nor
+a call to a function that always yields. `WHY_REJECTED.md` shows that case and
+quotes its diagnostic.
 
-The recommended pattern is to keep `yield` at the top of the `loop` body and call helpers around it.
+Keeping the `yield` at the top of the `loop` body remains the clearest pattern,
+and is now a matter of readability rather than a requirement.
 
+<!-- verify: compile -->
 ```
 yield helper() -> Word { yield 1 }
 

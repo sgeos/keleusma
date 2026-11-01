@@ -1,0 +1,44 @@
+Ordering is not a completion criterion. Any order that leaves the tree in the
+state below is complete. Steps may be interleaved, split, or done in reverse.
+
+1. The module header's reserved word carries a format fingerprint that is
+   DERIVED from the canonical flat-layout table rather than written by hand.
+   Changing any scalar kind's size formula changes the value without anyone
+   editing the fingerprint.
+
+2. The fingerprint is computed at reference widths that are pairwise distinct,
+   so a kind that switches from one width to another changes the value even
+   though those two widths are equal on a 64-bit host. A test demonstrates
+   this property rather than only asserting the current number.
+
+3. Loading a module whose fingerprint differs from the runtime's is rejected
+   with its own named error. It is not accepted, and not folded into an
+   existing unrelated error.
+
+4. Setting a header flag bit that the runtime does not define causes rejection.
+
+5. A test pins the fingerprint's numeric value, so any future layout change
+   makes a number move visibly instead of passing silently.
+
+6. The self-hosted byte-identity comparisons pass, and the Keleusma side
+   obtains the fingerprint from the same constant the reference uses rather
+   than from a separately written literal.
+
+7. The scalar kind for opaque handles is sized by the address width, and the
+   work carrying that change compiles under default features, under the
+   self-hosted feature, and under the signatures-and-shell feature set
+   INCLUDING test targets.
+
+8. Every statement in the transcript about what compiles or passes names the
+   feature set and the target selection it was measured under. No result from
+   one configuration is stated as a conclusion about others. Where a check was
+   not run, that is said rather than implied.
+
+9. Documentation of this mechanism states what it does not do: it catches a
+   release that sets a previously unknown bit or field, and does not catch a
+   release that reinterprets a field both readers already read. It is not
+   described as cross-release compatibility.
+
+10. Anything left unfinished is recorded in the process channels AS
+    unfinished, naming the specific failing sites or checks, so that a
+    resuming session is not told the work is verified when it is not.

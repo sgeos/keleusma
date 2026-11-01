@@ -1,0 +1,3637 @@
+// compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
+//
+// Increment 34: a flat struct field read `obj.f` (a FieldAccess node, kind 28) lowers to
+// the object ops then `GetField(Flat{offset, kind})` (op tag 47), packed as
+// `offset + kind*65536` where `kind` is the field's ScalarKind tag. The baked byte offset
+// and kind come from the struct layout on the node, as the reference bakes them. Only a
+// flat scalar field is read; a nested-composite (FlatNested) or boxed field is a later
+// increment. The stage still self-compiles byte-identically.
+//
+// Increment 33: the first struct-codegen slice. A flat all-scalar struct construction
+// (a StructInit node, kind 27) lowers to its field expressions in declaration order then
+// a `NewComposite(Flat{Struct, count, byte_size})` (op tag 46), packed as
+// `count + byte_size*65536`, exactly like a Call but emitting the composite op. The
+// struct's packed byte size is supplied on the node by the layout (an earlier stage), not
+// computed here; only a flat all-scalar struct is lowered. The stage self-compiles
+// byte-identically.
+//
+// Increment 32: multiheaded `yield` dispatch and `yield` expressions — the codegen
+// stage is now FULLY SELF-HOSTING. A `yield <expr>` lowers to the expression ops
+// then `Yield` (a YieldExpr node, kind 24). A multiheaded function lowers to the
+// per-head dispatch (a MultiHead node, kind 25, category 3): each head copies the
+// parameters into fresh locals, a guarded head tests its `when` guard with a bare
+// `If`/`EndIf` and on a match runs its body and returns while the final unguarded
+// head returns directly, and an unmatched dispatch falls through to a dead
+// `Trap(NoMatchingHead)`. The multiheaded `yield emit_next` (eight heads) now
+// self-compiles byte-identically, so every one of this file's 34 functions
+// round-trips through itself byte for byte. The self-compile probe groups heads
+// by name and reads a multihead's op stream to its terminating trap (its per-head
+// returns are interior ops). See tests/selfhost_codegen.rs and MILESTONES.md.
+//
+// Increment 31: the `loop` wrapper. The stage now emits a function's category
+// wrapper: a `loop` (productive divergent) function opens with a `Stream` marker
+// before the body and closes by discarding the body value and resetting the
+// stream (`PopN(1); Reset`) instead of returning, while an `fn`/`yield` still
+// ends in `Return`. The category rides in a new `ast.category` field (0 fn,
+// 1 yield, 2 loop) alongside `param_count`. This is the first non-atomic support:
+// `loop main(resume) { emit_next(resume) }` now self-compiles byte-identically
+// (the call's yield propagates through the stream). The multiheaded `yield
+// emit_next` heads remain the only self-compile gap. `yield` expressions and the
+// multiheaded guard dispatch are the next increment.
+//
+// Increment 30: `for ... limit` bounded-runtime-range loops. The stage now lowers
+// a bare `for i in start..end limit CAP { body }` (a ForLimit node, kind 23),
+// reproducing the reference `compile_for_limit` byte for byte: a compile-time
+// counter `0..CAP` gives the verifier the bound, the runtime range is tested
+// alongside, an outcome local records why the loop ended, and after the loop the
+// count==cap boundary and an unhandled break reclassify to OK before an
+// unhandled overrun traps. The counter header is a new conditional-break tag
+// (`mbreakif`) patched to the loop exit like the match `mbreak`s, and the
+// `mendloop` patch was made tag-preserving so the header keeps its `BreakIf`
+// decode. With the lowering in place, this file's own four scan loops were
+// rewritten from `for i in 0..64 { if i < n { ... } }` to `for i in 0..n limit
+// 64 { ... }` (and the `emit_op` break-patch loop to `for i in bstart..cf_mbc
+// limit 64`), which is both idiomatic and self-compiles: all 30 atomic functions
+// still round-trip byte-identically, and the count==cap boundary fixup is what
+// makes a full pool or arg list (exactly 64) complete rather than trap. Bare form
+// only; the outcome-block forms are a later increment.
+//
+// Increment 29: node-array capacity. The four flat-node arrays (`kinds`, `args`,
+// `lhs`, `rhs`) and the op buffer and work-stack grew from 64/256 to 512 so the
+// stage's own largest functions fit: `emit_op` flattens to 308 nodes and emits
+// 367 ops. With that headroom every one of the stage's 29 atomic functions now
+// self-compiles byte-identically (including `emit_op`, `walk_step`, `push_match`,
+// and `push_forin`); only the multiheaded `yield`/`loop` machinery remains. The
+// `call_args`/`for_parts`/`match_parts` side arrays stay at 64 (no single function
+// has more than a handful of calls, one `for`, or one `match`), and the `for
+// i in 0..64` scan loops are bound to the pool/call-args/arm/break-list, not the
+// node arrays, so they are unchanged. Sizing only, no behavior change; the
+// conformance suite stays byte-identical.
+//
+// Increment 28: `match` over an integer scrutinee (a MatchIn node, kind 22, with
+// integer-literal arms and a trailing wildcard). The reference lowers it to a
+// virtual loop: the scrutinee is stashed in a fresh temp local, each arm tests it
+// with `GetLocal(temp) Const(lit) CmpEq If(fail)`, emits its result and an
+// unconditional `Break`, and closes with `EndIf`; the wildcard result and its
+// `Break` follow, then a dead `Trap(NoMatchingArm)` tail and `EndLoop`. The bare
+// `If`/`EndIf` (no `Else`) and the multiple per-loop `Break`s are a new control-
+// flow shape, so the stage gives them their own op-word tags (`mif`/`mendif`/
+// `mloop`/`mbreak`/`mendloop`) and dedicated backpatch stacks in `emit_op`; they
+// decode to the same reference ops as the structured forms. The temp occupies one
+// local, so `local_count` grows by one. This unblocks `push_binop`'s operator
+// table (self-compiled byte-identically). Not yet covered: a binding or guarded
+// arm; the largest functions still exceed the 64-slot node arrays.
+//
+// Named wire constants. The op-word tags, encoding radices, and work-stack item
+// kinds that were bare integer literals throughout the handlers are now read from
+// the `const data wire` block below. Const-data fields inline to `Const` literals at
+// compile time, so the emitted bytecode is byte-identical to before the rename;
+// the conformance suite confirms this. Readability only, no behavior change. (R28
+// once limited a program to one const data block; it now admits any number of named
+// private and const blocks, so these could later split into cohesive groups.)
+//
+// Increment 27: statement-form expressions. A block statement that is a bare
+// expression (a call for effect, `push_emit(wire.endif);`, or a statement-form `if`) is an
+// ExprStmtIn node (kind 21): the expression ops then `PopN(1)` to discard the
+// value, then the continuation. A statement-form `if` without an `else` synthesizes
+// a Unit else block (both branches produce `PushImmediate(0)`), reusing the
+// if-expression path. These are the two most common gaps in the self-compile probe.
+//
+// Increment 25: `for` loops over a range. A ForIn node (kind 16) lowers
+// `for i in start..limit { body }` to: the start ops and SetLocal(i), the limit
+// ops and SetLocal(limit), a Loop marker, the condition `i >= limit` and BreakIf,
+// the body ops (a statement block ending in a Unit, PushImmediate(0)) and PopN(1),
+// the increment `i + 1` and SetLocal(i), an EndLoop marker, then the continuation.
+// The condition and increment are synthetic expression trees the adapter builds
+// from the loop var and limit; the loop var and limit occupy two locals, so
+// local_count grows by two. Loop/BreakIf/EndLoop targets are backpatched in the op
+// buffer by `emit_op` (the Loop and BreakIf exit to after EndLoop, the EndLoop
+// back-edges to after the Loop) using a control-flow loop stack. The seven
+// per-loop pieces ride in a `for_parts` side array. Range for-loops only; array
+// iteration is a later increment.
+//
+// Increment 24: array indexed data access. Reading `d.arr[i]` lowers to the index
+// ops then `GetDataIndexed(base, len)` (IndexRead, kind 13), and `d.arr[i] = v`
+// lowers to the value ops, the index ops, then `SetDataIndexed(base, len)`
+// (IndexAssignIn, kind 14, with an IndexStore child, kind 15, sequencing value
+// then index). `base` is the element-0 data slot and `len` the array length, both
+// resolved by name by the input adapter and packed as base + len*65536. Single
+// dimension only; multi-dimensional arrays are a later increment.
+//
+// Increment 23: scalar data-segment access. Adds a DataRead node (kind 11, args =
+// data slot) that emits `GetData(slot)`, and a DataAssignIn block statement (kind
+// 12, args = data slot, lhs = value, rhs = continuation) that emits the value ops
+// then `SetData(slot)` before the continuation, generalizing the block from a
+// `let`-only cons-list to a sequence of `let` and data-assignment statements. The
+// data slot is the field's index in the module data layout, resolved by name by
+// the input adapter (layout data, like the parameter arity). The dispatch in
+// walk_step below pipes the kind field into a `match` (increment 22's idiom).
+//
+// Increment 21: the loop delegates its yield to a multiheaded `yield` function.
+// The phase state machine, previously the heads of `loop main`, is now the
+// multiheaded `yield emit_next`, one head per phase selected by a `when` guard on
+// the `data` state; each head yields directly, so every path through `emit_next`
+// yields. `loop main` is then just `emit_next(resume)`: it delegates its single
+// yield to `emit_next`, and the runtime propagates that yield up as the loop's
+// suspension. This is admissible because the productivity verifier now recognizes
+// delegation to an always-yielding callee (see `src/verify.rs`), which this file's
+// own structure exercises end to end. The yield contract (Word in, Word out)
+// matches across the call. Pure refactor: the conformance suite confirms
+// byte-identical output. Not yet covered: the data segment (`GetData`/`SetData`,
+// indexed access), `for` loops, and statement-form blocks, the next and larger
+// frontier. See compiler/MILESTONES.md and
+// docs/reference/INCREMENTAL_SELF_HOSTING.md.
+//
+// The self-hosted compiler is a full-width host tool; declare its word floor.
+require word >= 32;
+
+// Named wire constants. The op-word tags and the encoding radices share this one
+// `wire` block (R28 now admits several named const blocks, but one here is enough).
+// An op word is `tag + operand*wire.radix`; the tags match the wire table below
+// and the reference bytecode's opcodes. `radix` is the op-word radix; `item` the
+// work-item radix (`kind + payload*item`); `pack` the base for packing two
+// operands into one operand field (`a + b*pack`).
+const data wire {
+    konst: Word = 1,
+    ret: Word = 2,
+    getlocal: Word = 3,
+    checkedmul: Word = 4,
+    checkedadd: Word = 5,
+    popn: Word = 6,
+    setlocal: Word = 7,
+    checkedsub: Word = 8,
+    divop: Word = 9,
+    modop: Word = 10,
+    cmpeq: Word = 11,
+    cmpne: Word = 12,
+    cmplt: Word = 13,
+    cmpgt: Word = 14,
+    cmple: Word = 15,
+    cmpge: Word = 16,
+    iff: Word = 17,
+    els: Word = 18,
+    endif: Word = 19,
+    lnot: Word = 20,
+    call: Word = 21,
+    dup: Word = 22,
+    checkedneg: Word = 23,
+    bitand: Word = 24,
+    bitor: Word = 25,
+    bitxor: Word = 26,
+    getdata: Word = 27,
+    setdata: Word = 28,
+    getdataix: Word = 29,
+    setdataix: Word = 30,
+    loopop: Word = 31,
+    breakif: Word = 32,
+    endloop: Word = 33,
+    pushimm: Word = 34,
+    mbreak: Word = 35,
+    trap: Word = 36,
+    mif: Word = 37,
+    mendif: Word = 38,
+    mloop: Word = 39,
+    mendloop: Word = 40,
+    mbreakif: Word = 41,
+    yieldop: Word = 42,
+    stream: Word = 43,
+    reset: Word = 44,
+    bytetoword: Word = 45,
+    newcomposite: Word = 46,
+    getfield: Word = 47,
+    getfieldnested: Word = 48,
+    getindex: Word = 49,
+    newcompositearray: Word = 50,
+    newcompositeenum: Word = 51,
+    newcompositetuple: Word = 52,
+    gettuplefield: Word = 53,
+    isenum: Word = 54,
+    getenumfield: Word = 55,
+    getindexnested: Word = 56,
+    getenumfieldnested: Word = 57,
+    wordtobyte: Word = 58,
+    addop: Word = 59,
+    subop: Word = 60,
+    mulop: Word = 61,
+    shl: Word = 62,
+    shr: Word = 63,
+    // Internal transport tags for existing public instructions. The ISA stays at 66.
+    checkeddiv: Word = 64,
+    checkedmod: Word = 65,
+    boundscheck: Word = 66,
+    // CallVerifiedNative(index, count) with the error-reify flag set in the count.
+    callnative: Word = 67,
+    // CallExternalNative(index, count), the same transport for a `use external` native.
+    callext: Word = 68,
+    // Neg, the unchecked negation the reference emits for a Float operand.
+    negop: Word = 69,
+    // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
+    // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
+    // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
+    // the i64 word. The host `decode_op` splits with the matching `% 256` / `/ 256`.
+    radix: Word = 256,
+    item: Word = 16,
+    pack: Word = 65536,
+    visit: Word = 1,
+    emit: Word = 2,
+    emitisenum: Word = 3,
+    emitbool: Word = 0,
+    headbegin: Word = 4, headbody: Word = 5, headend: Word = 6, rawemit: Word = 7,
+    physicalemit: Word = 8, bindlocal: Word = 9,
+    lsrvalue: Word = 10, lsrcount: Word = 11,
+    nomatch: Word = 2,
+    looplimit: Word = 7,
+    ocok: Word = 1,
+    ocbreak: Word = 2,
+    catloop: Word = 2,
+    catmulti: Word = 3,
+    nomatchhead: Word = 1,
+}
+
+// Flattened expression forest from the codegen input adapter, a structure-of-
+// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot,
+// 7 Call, 8 Andalso, 9 Orelse (the last two have lhs=left, rhs=right), 10 UnaryNeg
+// (operand in lhs), 11 DataRead (args = data slot), 12 DataAssignIn (args = data
+// slot, lhs = value, rhs = continuation), 13 IndexRead (args = base + len*65536,
+// lhs = index), 14 IndexAssignIn (args = base + len*65536, lhs = IndexStore node,
+// rhs = continuation), 15 IndexStore (lhs = value, rhs = index). `args` is
+// the literal *value* for a Literal, the slot for a Local, the
+// operator for a BinOp, the condition node for an If, the bound slot for a LetIn,
+// or the callee chunk index for a Call. `lhs`/`rhs` are child node indices: for a
+// BinOp the two operands; for an If the then/else block roots; for a LetIn the
+// value expression and the continuation; for a UnaryNot the operand in `lhs`; for
+// a Call the argument-list start (into `call_args`) in `lhs` and the argument
+// count in `rhs`. `call_args[k]` is the k-th call argument's expression node
+// index. `root` is the function body's block root. `param_count` is the parameter
+// arity (declaration data the codegen threads into `local_count`). A ForIn node
+// (kind 16) has args = the start of its 7-word entry in `for_parts`
+// (loop-var slot, limit slot, start expr, limit expr, condition, body, increment)
+// and rhs = the continuation; a Unit node (kind 20) emits PushImmediate(0).
+// The node arrays are sized to the largest stage function: parse.kel's
+// `step_draining` reconstructs to about 440 nodes and emits about 540 ops, past
+// the 512 that held the smaller stages. The wire-format V2 16 MB shared ceiling
+// admits the larger `ast` block (these arrays plus `st.stack`/`st.ops` stay far
+// under it).
+shared data ast {
+    root: Word,
+    kinds: [Word; 4096],
+    args: [Word; 4096],
+    lhs: [Word; 4096],
+    rhs: [Word; 4096],
+    // The per-function side arrays, sized 256 (was 64): each accumulates across a whole
+    // function -- `limit_parts` twelve words per `for .. limit` loop, `call_args` one per
+    // call argument -- and the stage's own largest dispatch functions (with five to seven
+    // scan loops) exceed a 64-word `limit_parts`. The consuming loops bound per-entity counts
+    // (one call's args, one match's arms), so those stay `limit 64`.
+    call_args: [Word; 1024],
+    for_parts: [Word; 1024],
+    match_parts: [Word; 1024],
+    limit_parts: [Word; 1024],
+    head_parts: [Word; 1024],
+    param_count: Word,
+    category: Word,
+    // A separate command translates data operands through parser-produced field ranges.
+    relocate_mode: Word, relocate_count: Word, relocate_kind: Word, relocate_arg: Word,
+    relocate_source: [Word; 1024], relocate_length: [Word; 1024], relocate_target: [Word; 1024],
+    // The private struct data slots and their flat byte sizes, which the host lays out from
+    // parse.kel's data records, for the copy pass after the walk. `dc_refuse` is the pass's
+    // one output, set to 1 when a function needs more copies than `dcopy` holds or than the
+    // op buffer fits, so the host refuses that function rather than emit unlike bytes.
+    dc_count: Word, dc_slot: [Word; 64], dc_size: [Word; 64], dc_refuse: Word,
+}
+
+// The work-stack (R3.1), the op buffer the stage backpatches, and the constant
+// pool. Each stack entry is a work item, `kind + payload*16`: kind 1 VISIT a node
+// (payload is its index), kind 2 EMIT an op (payload is the op wire word).
+// Additional internal kinds schedule head phases, physical emits and late bindings. The
+// `ops` buffer accumulates the emitted op words so `If`/`Else` targets can be
+// patched in place before the buffer is streamed; `op_count` is its length and
+// `emit_cursor` the streaming cursor. `cf_if`/`cf_else` are a control-flow
+// position stack (depth `cf_sp`) recording where the open `If`/`Else` markers
+// sit in `ops`. All persist across the loop's per-iteration RESET.
+private data st {
+    stack: [Word; 8192],
+    sp: Word,
+    started: Word,
+    ret_done: Word,
+    // The per-function emitted-op buffer, sized 2048 (was 1024): the composite-equality emitters --
+    // `push_struct_eq_nested` in particular, which now handles the tuple-of-struct top-level container
+    // -- exceed 1024 emitted ops for their own self-compilation. `st` is private data, so this size
+    // is internal to the program and does not touch the wire format, the shared-data layout, or
+    // `BYTECODE_VERSION`. The V2 16 MB shared ceiling admits the larger private frame.
+    ops: [Word; 8192],
+    op_count: Word,
+    emit_cursor: Word,
+    cf_if: [Word; 32],
+    cf_else: [Word; 32],
+    cf_sp: Word,
+    cf_loop: [Word; 32],
+    cf_breakif: [Word; 32],
+    cf_lsp: Word,
+    cf_mif: [Word; 16],
+    cf_mifsp: Word,
+    cf_mloop: [Word; 16],
+    cf_mbstart: [Word; 16],
+    cf_mlsp: Word,
+    cf_mbreak: [Word; 64],
+    cf_mbc: Word,
+    // Constants per chunk, raised from 64 to 1,024 under the operator's ruling of 2026-10-26
+    // that limits may be raised, since a piano roll's `main` holds more than 64.
+    pool: [Word; 1024],
+    // Per pool entry, the constant kind: 0 an Int (the payload is the value), 1 a StaticStr (the
+    // payload is the lexer intern id the host resolves to string bytes). Streamed after the pool
+    // values so the host builds the right ConstValue per entry.
+    pool_tag: [Word; 1024],
+    pool_count: Word,
+    count_done: Word,
+    pool_cursor: Word,
+    tag_cursor: Word,
+    header_done: Word,
+    let_count: Word,
+    in_head: Word, head_base: Word, head_bias: Word, head_guard: Word, head_next: Word,
+    // 1 while emitting a literal head (head mode 2), which keeps no parameter copies.
+    head_lit: Word,
+    local_slots: [Word; 2048], extra_slots: Word, forest_temps: Word,
+    arm_bias: Word, arm_saved: [Word; 8], arm_depth: Word,
+    dup_idx: Word,
+    // Per pending IsEnum emit (work-item kind 3), the enum-name id, variant-name id, and
+    // discriminant. Interning happens when the item is PROCESSED during the forward walk (not at
+    // push time), so the enum/variant/disc pool entries land interleaved with each arm's result
+    // constants, matching the reference. `isenum_ctr` is the running scratch cursor.
+    isenum_e: [Word; 64],
+    isenum_v: [Word; 64],
+    isenum_d: [Word; 64],
+    isenum_ctr: Word,
+    // Per-variant pre-interned pool indices for an `enum == enum` lowering (`push_enum_eq`): the
+    // variant-name StaticStr index and the discriminant Int index, filled in a forward pass so the
+    // pool order matches the reference, then read by the reverse emission pass.
+    eq_vidx: [Word; 64],
+    eq_didx: [Word; 64],
+    // Per-variant match_parts start offset (the variable-stride records are not fixed-index, so the
+    // interning walk records each variant's offset for the emission walk) and the running walk cursor.
+    eq_voff: [Word; 64],
+    eq_cur: Word,
+    // Per-field match_parts offset within the current variant (`push_enum_eq` emission walk): a
+    // scalar field is 2 words (off, kind) but a STRUCT-payload field is 5 + subcount*2, so the
+    // reverse emission cannot index by `f*2`. A forward pass per variant records each field's offset.
+    eq_foff: [Word; 32],
+    eq_fcur2: Word,
+    // Pre-interned true/false result pool indices for an `enum == enum` lowering (state, not locals,
+    // since a local cannot be reassigned inside the interning loop).
+    eq_true: Word,
+    eq_false: Word,
+    // Per DEFERRED int-const emit (a `push_bool` work item, kind 0, whose payload is >= 2): the int
+    // value to intern when the item is processed in the forward walk, indexed by `payload - 2`. Used
+    // by `push_int_const` so a computed constant (e.g. an `lsr` mask) interns AFTER an operand's own
+    // constants, matching the reference pool order. `defer_ctr` is the running scratch cursor.
+    defer_int: [Word; 64],
+    defer_ctr: Word,
+    // Nested struct-eq scratch: each top-level field's start offset in match_parts (recorded in the
+    // forward pass so the reverse emission pass can locate the variable-stride records) and the
+    // running forward-walk cursor.
+    se_foff: [Word; 64],
+    se_cur: Word,
+    // DEPTH-2 struct-eq scratch: each sub-field's start offset in match_parts (a sub-field is variable
+    // length once a nested-struct sub-field can appear) and that walk's cursor.
+    se_sfoff: [Word; 64],
+    se_sfcur: Word,
+    // GENERAL nested struct-eq emit stack (`push_struct_eq_subfields`), the reference
+    // `emit_composite_fieldwise_eq` recursion unrolled onto an explicit stack (R4 forbids recursion).
+    // Each frame f is a composite's sub-field list [es_sbase, es_subcount) with a REVERSE cursor
+    // es_cur, container temps es_l/es_r and sub-field accessor es_acc. A nested sub-field pushes a
+    // child frame; its loop-head + extract are deferred as the child's SUFFIX (es_has_suffix, the
+    // extract operand es_sfx_extp, and the parent temps es_sfx_pl/es_sfx_pr), emitted when the child
+    // completes -- so the child's ops land between the parent's loop-trailer and loop-head, exactly
+    // the reference nesting. es_sfoff[f*64 + s] holds frame f's direct sub-field offsets (es_walk is
+    // that forward pass's cursor). Bounded (8 frames) so worst-case time and memory stay static.
+    es_sp: Word,
+    es_sbase: [Word; 8],
+    es_subcount: [Word; 8],
+    es_cur: [Word; 8],
+    es_l: [Word; 8],
+    es_r: [Word; 8],
+    es_acc: [Word; 8],
+    es_has_suffix: [Word; 8],
+    es_sfx_extp: [Word; 8],
+    es_sfx_pl: [Word; 8],
+    es_sfx_pr: [Word; 8],
+    es_sfoff: [Word; 512],
+    es_walk: Word,
+    cs_walk: Word,
+    // Struct sub-field forest walk (`struct_forest_end`): a remaining-fields stack over the preorder
+    // record layout, used for the slot-count stride/temp count and for `nested_end`.
+    cs_cur: Word,
+    cs_sp: Word,
+    cs_rem: [Word; 8],
+    // Per open bare loop, the break-list watermark at its `Loop`, Order 6, so its `EndLoop`
+    // patches the user `break`s recorded inside it, as a `mendloop` does for its own.
+    cf_lbstart: [Word; 32],
+}
+
+// Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
+// PENDING. While the walk runs, every yield is PENDING; the real op words come
+// out only once the buffer is streamed:
+//   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
+//   6 PopN(count)  7 SetLocal(slot)  8 CheckedSub  9 Div  10 Mod
+//   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
+//   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)  20 Not
+//   21 Call(chunk, count)   operand packed as chunk + count*65536   22 Dup
+//   23 CheckedNeg  24 BitAnd  25 BitOr  26 BitXor  27 GetData(slot)  28 SetData(slot)
+//   29 GetDataIndexed(base,len)  30 SetDataIndexed(base,len)   base + len*65536 packed
+//   31 Loop(exit)  32 BreakIf(exit)  33 EndLoop(back)  (targets backpatched)  34 PushImmediate(v)
+// The op stream ends with Return. After Return the stage emits its constant pool:
+// first the pool size as a raw Word, then that many raw Word values, then that many
+// raw Word tags (0 Int, 1 StaticStr -- the value is the intern id for a StaticStr),
+// and finally `local_count` as one raw Word. The host reads ops until Return, then the
+// pool size, then the values, then the tags, then local_count.
+
+// Push a VISIT work item for node index `node` onto the work-stack.
+fn push_visit(node: Word) -> Word {
+    st.stack[st.sp] = wire.visit + node * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+
+// Push an EMIT work item carrying op wire `word` onto the work-stack.
+fn push_emit(word: Word) -> Word {
+    st.stack[st.sp] = wire.emit + word * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+
+// Push a PROCESS-TIME bool Const work item (kind 0) carrying the bool `value` (0 or 1). Like
+// `push_enum_isenum`, the interning is deferred to when the item is processed in the forward walk
+// (see `walk_step`), so a result Const interns interleaved with any operand-construction constants
+// rather than ahead of them -- interning at push time runs in reverse and diverges from the
+// reference pool when an operand is itself a composite construction (e.g. a literal `E::A()` RHS).
+fn push_bool(value: Word) -> Word {
+    st.stack[st.sp] = wire.emitbool + value * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+
+// Push a PROCESS-TIME int Const work item (a kind-0 item whose payload is `2 + index`, distinguishing
+// it from `push_bool`'s 0/1 payloads). The value is stashed in `defer_int` and interned when the item
+// is processed in the forward walk, so a computed constant (an `lsr` mask) interns AFTER the operand
+// constants emitted before it, matching the reference pool order.
+fn push_int_const(value: Word) -> Word {
+    // Repeated outcome flags and pattern constants share immutable scratch slots.
+    // Pool interning still occurs when the work item executes, in source order.
+    st.dup_idx = st.defer_ctr;
+    for i in 0..st.defer_ctr limit 64 {
+        if st.defer_int[i] == value { st.dup_idx = i; }
+    }
+    let index = st.dup_idx;
+    if index == st.defer_ctr {
+        st.defer_int[index] = value;
+        st.defer_ctr = st.defer_ctr + 1;
+    }
+    st.stack[st.sp] = wire.emitbool + (2 + index) * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+
+// Append an op word to the buffer, backpatching control-flow targets in place:
+// an `If` records its slot; an `Else` sets the matching `If`'s target to the op
+// after this `Else`; an `EndIf` sets the matching `Else`'s target to itself.
+fn emit_op(word: Word) -> Word {
+    emit_raw(word);
+    let tag = word % wire.radix; let kind = word / wire.radix;
+    // Total array reads: flat Word or Byte, and since 2026-10-24 every nested composite.
+    if (tag == wire.getindex andalso (kind == 2 orelse kind == 3)) orelse tag == wire.getindexnested {
+        emit_raw(wire.konst + intern_int(1) * wire.radix);
+        emit_raw(wire.cmpeq); emit_raw(wire.mif);
+        emit_raw(wire.trap + 8 * wire.radix); emit_raw(wire.mendif);
+        emit_raw(wire.popn + 5 * wire.radix);
+    }
+    0
+}
+fn emit_raw(word: Word) -> Word {
+    let pos = st.op_count;
+    st.ops[pos] = word;
+    st.op_count = pos + 1;
+    let tag = word % wire.radix;
+    if tag == wire.iff {
+        st.cf_if[st.cf_sp] = pos;
+        st.cf_sp = st.cf_sp + 1;
+    }
+    if tag == wire.els {
+        let ip = st.cf_if[st.cf_sp - 1];
+        st.ops[ip] = wire.iff + (pos + 1) * wire.radix;
+        st.cf_else[st.cf_sp - 1] = pos;
+    }
+    if tag == wire.endif {
+        let ep = st.cf_else[st.cf_sp - 1];
+        st.ops[ep] = wire.els + pos * wire.radix;
+        st.cf_sp = st.cf_sp - 1;
+    }
+    // Loop backpatching. A `Loop` records its slot; a `BreakIf` records its slot
+    // against the open loop; an `EndLoop` resolves all three targets: the `Loop`
+    // and `BreakIf` exit to the op after this `EndLoop`, and this `EndLoop`'s
+    // back-edge to the op after the `Loop` (its condition).
+    if tag == wire.loopop {
+        st.cf_loop[st.cf_lsp] = pos;
+        st.cf_lbstart[st.cf_lsp] = st.cf_mbc;
+        st.cf_lsp = st.cf_lsp + 1;
+    }
+    if tag == wire.breakif {
+        st.cf_breakif[st.cf_lsp - 1] = pos;
+    }
+    if tag == wire.endloop {
+        let lp = st.cf_loop[st.cf_lsp - 1];
+        let bp = st.cf_breakif[st.cf_lsp - 1];
+        st.ops[lp] = wire.loopop + (pos + 1) * wire.radix;
+        st.ops[bp] = wire.breakif + (pos + 1) * wire.radix;
+        st.ops[pos] = wire.endloop + (lp + 1) * wire.radix;
+        // A user `break` inside this bare loop is an `mbreak` on the shared break list, and
+        // exits past this `EndLoop` like the header's `BreakIf`.
+        let lbstart = st.cf_lbstart[st.cf_lsp - 1];
+        for i in lbstart..st.cf_mbc limit 64 {
+            st.ops[st.cf_mbreak[i]] = wire.mbreak + (pos + 1) * wire.radix;
+        }
+        st.cf_mbc = lbstart;
+        st.cf_lsp = st.cf_lsp - 1;
+    }
+    // Match backpatching. A `match` lowers to a virtual loop whose arms each test
+    // the scrutinee with a bare `If`/`EndIf` (no `Else`) and exit through an
+    // unconditional `Break`; the wildcard arm and a dead `Trap` tail follow. An
+    // `mif` records its slot; the matching `mendif` sets the `mif`'s false target to
+    // its own slot. An `mloop` records its slot and the break-list watermark; each
+    // `mbreak` appends its slot to the break list; the `mendloop` resolves the
+    // `mloop` and every break of this loop to the op past this `mendloop`, sets its
+    // own back-edge to the op after the `mloop`, and rewinds the break list.
+    if tag == wire.mif {
+        st.cf_mif[st.cf_mifsp] = pos;
+        st.cf_mifsp = st.cf_mifsp + 1;
+    }
+    if tag == wire.mendif {
+        let mp = st.cf_mif[st.cf_mifsp - 1];
+        st.ops[mp] = wire.mif + pos * wire.radix;
+        st.cf_mifsp = st.cf_mifsp - 1;
+    }
+    if tag == wire.mloop {
+        st.cf_mloop[st.cf_mlsp] = pos;
+        st.cf_mbstart[st.cf_mlsp] = st.cf_mbc;
+        st.cf_mlsp = st.cf_mlsp + 1;
+    }
+    // Both `mbreak` (unconditional) and `mbreakif` (the `for ... limit` counter
+    // header, conditional) record their slot against the open loop; the
+    // `mendloop` patch below preserves each one's own tag while setting its exit
+    // target, so an `mbreakif` stays a `BreakIf`.
+    if tag == wire.mbreak {
+        st.cf_mbreak[st.cf_mbc] = pos;
+        st.cf_mbc = st.cf_mbc + 1;
+    }
+    if tag == wire.mbreakif {
+        st.cf_mbreak[st.cf_mbc] = pos;
+        st.cf_mbc = st.cf_mbc + 1;
+    }
+    if tag == wire.mendloop {
+        let lp = st.cf_mloop[st.cf_mlsp - 1];
+        let bstart = st.cf_mbstart[st.cf_mlsp - 1];
+        let after = pos + 1;
+        st.ops[lp] = wire.mloop + after * wire.radix;
+        // Patch every break of this loop (the contiguous slice [bstart, cf_mbc) of
+        // the break list) to exit past this `mendloop`, preserving each break's
+        // own tag. The scan bound is the break-list capacity; the two guards
+        // select this loop's slice.
+        for i in bstart..st.cf_mbc limit 64 {
+            let bt = st.ops[st.cf_mbreak[i]] % wire.radix;
+            st.ops[st.cf_mbreak[i]] = bt + after * wire.radix;
+        }
+        st.ops[pos] = wire.mendloop + (lp + 1) * wire.radix;
+        st.cf_mbc = bstart;
+        st.cf_mlsp = st.cf_mlsp - 1;
+    }
+    0
+}
+
+// Literal (kind 1): intern the value into the constant pool, deduplicating with a
+// bounded scan (the scan bound is the pool capacity; the live-count guard skips
+// unfilled slots), then schedule `Const(index)`.
+fn push_literal(p: Word) -> Word {
+    push_emit(wire.konst + intern_int(ast.args[p]) * wire.radix)
+}
+
+// Intern an Int `value` into the constant pool, deduplicating among Int (tag-0) entries, and
+// return its pool index. The shared interning core for `push_literal`/`push_const_value` and the
+// `IsEnum` discriminant operand; the tag-aware dedup keeps Int and StaticStr entries distinct even
+// when an Int value equals a StaticStr's intern id.
+fn intern_int(value: Word) -> Word {
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 0 {
+            st.dup_idx = i;
+        }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 0;
+        st.pool_count = st.pool_count + 1;
+    }
+    idx
+}
+
+// Intern a StaticStr (the lexer intern `id` of the string content) into the pool, deduplicating
+// among StaticStr (tag-1) entries, and return its pool index. The shared core for `push_strlit`
+// and the `IsEnum` enum-name/variant-name operands.
+fn intern_str(id: Word) -> Word {
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == id andalso st.pool_tag[i] == 1 {
+            st.dup_idx = i;
+        }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = id;
+        st.pool_tag[st.pool_count] = 1;
+        st.pool_count = st.pool_count + 1;
+    }
+    idx
+}
+
+// Intern a Bool `value` (0 false, 1 true) into the constant pool, deduplicating among Bool (tag-2)
+// entries, and return its pool index. Used by `push_struct_eq` for the field-wise comparison's
+// false/true results (the reference bakes them as `ConstValue::Bool`, not Int).
+fn intern_bool(value: Word) -> Word {
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 2 {
+            st.dup_idx = i;
+        }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 2;
+        st.pool_count = st.pool_count + 1;
+    }
+    idx
+}
+
+// StrLit (kind 38): a string literal. Intern its content (the lexer intern id in `args`) as a
+// StaticStr pool entry and schedule `Const(index)`. The host resolves the id to the string bytes.
+fn push_strlit(p: Word) -> Word {
+    push_emit(wire.konst + intern_str(ast.args[p]) * wire.radix)
+}
+
+// FloatLit (kind 82): a Float pool entry, tag 3, whose value is the literal's interned
+// text, deduplicated by that text. The host converts the text to the `f64`.
+fn push_floatlit(p: Word) -> Word {
+    let id = ast.args[p];
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == id andalso st.pool_tag[i] == 3 { st.dup_idx = i; }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = id;
+        st.pool_tag[st.pool_count] = 3;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
+// Local (kind 2): schedule GetLocal(slot).
+fn push_local(p: Word) -> Word {
+    push_emit(wire.getlocal + ast.args[p] * wire.radix)
+}
+
+// BinOp (kind 3): post-order schedule. The operator code selects the op word and
+// whether the result needs the two-word `PopN(2)` fixup:
+//   1 Add -> CheckedAdd (5) + PopN   2 Mul -> CheckedMul,0 (4) + PopN
+//   3 Sub -> CheckedSub (8) + PopN; division and remainder use total outcomes.
+//   6 Eq -> CmpEq (11) .. 11 GtEq -> CmpGe (16), i.e. tag opc+5
+//   12 band -> BitAnd (24), 13 bor -> BitOr (25), 14 bxor -> BitXor (26), tag opc+12
+// Word and Byte division dispatch zero-divisor outcomes. Float discards outcomes;
+// Fixed remainder retains its explicit zero-divisor dispatch.
+fn push_binop(p: Word) -> Word {
+    let opc = ast.args[p] % 64;
+    let legacy_division = ast.args[p] >= 64;
+    if opc == 29 {
+    if ast.kinds[ast.rhs[p]] == 1 {
+        // ShrL (logical right shift), CONSTANT amount (the rhs is a Literal): `Shr` is arithmetic
+        // (sign-preserving), so the sign-extended high bits are masked off with
+        // `band ((1 << (word_bits - k)) - 1)`, k the constant amount. Emission: value, Const(k) [the
+        // rhs Literal], Shr, Const(mask), BitAnd. word_bits is 8 * 8 = 64. The mask Const is a DEFERRED
+        // int (push_int_const) so it interns AFTER k regardless of what the value emits before it.
+        // The mask (1 << (64 - k)) - 1 is computed as ((1 << (63 - k)) - 1) * 2 + 1: this avoids both
+        // `1 << 63` (which would set the sign bit so the following checked `- 1` traps at k = 1) and a
+        // 19-digit literal (which the self-host lexer's integer parse would overflow), while producing
+        // the identical value for every k in 1..63.
+        let k = ast.args[ast.rhs[p]];
+        let mask = ((1 lsl (63 - k)) - 1) * 2 + 1;
+        push_emit(wire.bitand);
+        push_int_const(mask);
+        push_emit(wire.shr);
+        push_visit(ast.rhs[p]);
+        push_visit(ast.lhs[p])
+    } else {
+        // ShrL, VARIABLE amount: the mask depends on k at run time, so spill the value and the amount
+        // to two fresh temps (t0 = value, t1 = amount) and branch on k == 0 (a zero shift is the
+        // identity; the runtime mask `1 << (64 - k)` would otherwise mask to a full-width no-op).
+        // Else compute `(value asr k) band ((1 << (64 - k)) - 1)` at run time. Emission mirrors the
+        // reference: GetLocal t0/t1, k==0 test (If value Else ...), then Shr and the runtime mask
+        // (Const 1, Const 64, GetLocal t1, CheckedSub, Shl, Const 1, CheckedSub, BitAnd). The mask
+        // constants (0, 1, 64) are DEFERRED (push_int_const) so they intern in emission order and
+        // interleave correctly with any constants the amount operand itself emits (e.g. the `1` of a
+        // compound `a lsr (k + 1)` interns before the k==0 test's `0`).
+        push_work(wire.lsrvalue, p);
+        push_visit(ast.lhs[p])
+    }
+    } else {
+    // Arithmetic and bitwise are explicit; the wildcard covers the comparisons
+    // (6..11 -> CmpEq..CmpGe, i.e. opc + 5).
+    let opw = match opc {
+        1 => wire.checkedadd,
+        2 => wire.checkedmul,
+        3 => wire.checkedsub,
+        4 => if legacy_division { wire.divop } else { wire.checkeddiv },
+        5 => if legacy_division { wire.modop } else { wire.checkedmod },
+        12 => wire.bitand,
+        13 => wire.bitor,
+        14 => wire.bitxor,
+        27 => wire.shl,
+        37 => wire.shl,
+        28 => wire.shr,
+        33 => wire.cmpne,
+        _ => opc + 5,
+    };
+    if opc < 4 {
+        push_emit(wire.popn + 2 * wire.radix);
+    }
+    if (opc == 4 orelse opc == 5) andalso legacy_division andalso ast.args[p] / 64 == 5 {
+        push_emit(wire.popn + 2 * wire.radix);
+    }
+    if (opc == 4 orelse opc == 5) andalso (not legacy_division orelse ast.args[p] / 64 == 4) {
+        // Forward order is checked-op, flag==3, If Trap EndIf, PopN(high).
+        // Preserve the wrapping low result for every nonzero-divisor outcome.
+        push_emit(wire.popn + wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.trap + 5 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.cmpeq);
+        push_int_const(3);
+    }
+    push_emit(opw);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+    }
+}
+
+private data checked_emit { arm: Word, offset: Word, old: Word, new: Word, inspect: Word }
+
+// Checked node 77 owns three result locals and an ordered outcome dispatch.
+// Pattern constants are deferred. A checked shift multiplier is interned before
+// its left operand, matching the reference compiler's explicit pool order.
+fn push_checked_pattern(value: Word, slot: Word) -> Word {
+    push_emit(wire.mif); push_emit(wire.cmpeq);
+    push_int_const(value); push_emit(wire.getlocal + slot * wire.radix)
+}
+fn push_checked_arm_result(p: Word) -> Word {
+    if ast.kinds[p] == 5 {
+        push_work(13, ast.rhs[p]); push_work(wire.bindlocal, ast.args[p]); push_visit(ast.lhs[p])
+    } else {
+        if ast.lhs[p] > 0 { push_emit(wire.mendif); }
+        push_emit(wire.mbreak); push_visit(ast.rhs[p]);
+        if ast.lhs[p] > 0 { push_emit(wire.mif); push_visit(ast.lhs[p] - 1); }
+        0
+    }
+}
+// An unconditional arm, flagged 1, omits its class test and the If that test opens.
+fn push_checked_arm(arm: Word, flag: Word, scalar: Word, unconditional: Word) -> Word {
+    let meta = ast.match_parts[arm]; let class = meta % 4;
+    if unconditional == 0 { push_emit(wire.mendif); }
+    if (meta / 8) % 2 == 1 { push_emit(wire.mendif); }
+    if (meta / 16) % 2 == 1 { push_emit(wire.mendif); }
+    push_work(13, ast.match_parts[arm + 3]);
+    if (meta / 16) % 2 == 1 { push_checked_pattern(ast.match_parts[arm + 2], flag + 1); }
+    if (meta / 8) % 2 == 1 {
+        // Scalar code 16 marks a handled write, whose invalid_index literal tests the offset slot.
+        let slot = if scalar == 16 { checked_emit.offset } else {
+            if (scalar == 3 andalso (class == 1 orelse class == 2))
+            orelse (scalar >= 8 andalso class == 1) { flag + 2 } else { flag + 1 } };
+        push_checked_pattern(ast.match_parts[arm + 1], slot);
+    }
+    if unconditional == 1 { 0 } else { push_checked_pattern(class, flag) }
+}
+fn push_checked(p: Word) -> Word {
+    if ast.kinds[ast.lhs[p]] == 15 { push_checked_store(p) } else {
+    if ast.kinds[ast.lhs[p]] == 31 orelse ast.kinds[ast.lhs[p]] == 13 { push_checked_index(p) } else { push_checked_arithmetic(p) } }
+}
+// Whether some ok arm of a handled write binds old (f+1) or new (f+6). Each arm result is
+// at most two binding wrappers around its node 78.
+fn store_binds(p: Word, flag: Word) -> Word {
+    checked_emit.old = 0; checked_emit.new = 0;
+    checked_emit.arm = ast.match_parts[ast.args[p] + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1;
+        checked_emit.inspect = ast.match_parts[at + 3];
+        for j in 0..2 limit 2 {
+            if ast.kinds[checked_emit.inspect] == 5 {
+                let source = ast.args[ast.lhs[checked_emit.inspect]] % 65536;
+                if source == flag + 1 { checked_emit.old = 1; }
+                if source == flag + 6 { checked_emit.new = 1; }
+                checked_emit.inspect = ast.rhs[checked_emit.inspect];
+            }
+        }
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    0
+}
+// A handled indexed write (node 77 over an IndexStore root). The index is probed and the
+// outcome held in the block f..f+6 (flag, old, four bound limbs, new) and the offset slot.
+// On success the old element is read when bound, the value is evaluated and written, and
+// the arms then dispatch as the handled read's do, on flag 0 for ok and 1 for
+// invalid_index. Without an unguarded catch-all invalid_index arm the dispatch ends in
+// the default Trap(8). See docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md for the
+// reference sequence this mirrors.
+fn push_checked_store(p: Word) -> Word {
+    let base = ast.args[p]; let flag = ast.match_parts[base] % 65536;
+    let root = ast.lhs[p]; let payload = ast.args[root];
+    let operand = payload % 281474976710656;
+    let kind = (payload / 281474976710656) % 8;
+    // The parser stores the offset slot plus one, apart from a bare write's slot.
+    let slot = payload / 2251799813685248 - 1;
+    let wide = operand / 16777216 > 65535;
+    store_binds(p, flag);
+    let binds_old = checked_emit.old == 1; let binds_new = checked_emit.new == 1;
+    push_emit(wire.mendloop); push_emit(wire.mbreak);
+    push_emit(wire.getlocal + flag * wire.radix);
+    if ast.match_parts[base + 3] band 2 == 0 {
+        push_emit(wire.trap + 8 * wire.radix);
+        for i in 0..4 limit 4 { push_emit(wire.getlocal + (flag + 5 - i) * wire.radix); }
+        push_emit(wire.getlocal + slot * wire.radix);
+    }
+    checked_emit.offset = slot;
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, 16, 0);
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.mendif);
+    push_emit(wire.popn + 6 * wire.radix);
+    push_emit(wire.setdataix + operand * wire.radix);
+    push_emit(wire.getlocal + slot * wire.radix);
+    if binds_new { push_emit(wire.setlocal + (flag + 6) * wire.radix); push_emit(wire.dup); }
+    push_visit(ast.lhs[root]);
+    if binds_old andalso not wide {
+        push_emit(wire.setlocal + (flag + 1) * wire.radix);
+        push_emit(wire.popn + 6 * wire.radix);
+        push_emit(wire.getdataix + operand * wire.radix);
+        if kind == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+        push_emit(wire.getlocal + slot * wire.radix);
+    }
+    push_emit(wire.mif); push_emit(wire.cmpeq); push_int_const(0);
+    push_emit(wire.getlocal + flag * wire.radix);
+    // Definite initialization. Each bound slot that the success branch alone would write is
+    // first written with the element's zero before the flag test, old before new, as the
+    // reference's `compile_data_index_store` does, so that every read in the arms follows a
+    // write on every path. The pushes are in reverse, since this list is emitted backwards.
+    // The zero is PushImmediate(4), followed by WordToByte for a Byte element, kind 2. The
+    // self-hosted compiler refuses a handled write on an element other than Word and Byte, as
+    // the bool case in `tests/indexed_write_handlers.rs` pins.
+    if binds_new {
+        push_emit(wire.setlocal + (flag + 6) * wire.radix);
+        if kind == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    }
+    if binds_old andalso not wide {
+        push_emit(wire.setlocal + (flag + 1) * wire.radix);
+        if kind == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    }
+    if wide { if binds_old { push_emit(wire.setlocal + (flag + 1) * wire.radix); } else { push_emit(wire.popn + 1 * wire.radix); } }
+    push_emit(wire.setlocal + slot * wire.radix);
+    for i in 0..4 limit 4 { push_emit(wire.setlocal + (flag + 2 + i) * wire.radix); }
+    // The reference always declares the block of seven, so its last slot counts in the frame
+    // even when new is unbound and no instruction names it.
+    if not binds_new { push_work(14, flag + 6); }
+    push_emit(wire.setlocal + flag * wire.radix);
+    push_write_probe(operand, kind);
+    push_visit(ast.rhs[root])
+}
+fn push_checked_arithmetic(p: Word) -> Word {
+    let base = ast.args[p]; let packed = ast.match_parts[base];
+    let flag = packed % 65536; let scalar = packed / 65536;
+    let root = ast.lhs[p]; let op = ast.args[root] % 64;
+    let unary = ast.kinds[root] == 10;
+    let shift = not unary andalso op == 37;
+    let constant = if shift { intern_int(1 lsl ast.args[ast.rhs[root]]) } else { 0 };
+    // The outcome classes that can arise, as the reference's admissibility table gives them
+    // for Word and Byte, bit 1 for overflow and bit 2 for underflow. When unguarded
+    // catch-all arms cover all of them and no zero-divisor trap is pending, the reference
+    // drops the last arm's class test and the wrapping default, as
+    // typecheck::checked_wrap_default_reachable decides. The last arm is the first in the
+    // list, which is built by prepending, and its meta is below 4 when it is unguarded and
+    // has no literal.
+    let arises = if unary { 2 } else { if op == 5 { 0 } else { if op == 4 {
+        if scalar == 3 { 2 } else { 0 }
+    } else { if scalar == 3 { 6 } else { if op == 3 { 4 } else { 2 } } } } };
+    let covered = ast.match_parts[base + 3];
+    let pending = if not unary andalso (op == 4 orelse op == 5) { 8 - (covered band 8) } else { 0 };
+    let last_meta = ast.match_parts[ast.match_parts[base + 1] - 1];
+    let unconditional = if arises - (arises band covered) + pending == 0 andalso last_meta < 4 { 1 } else { 0 };
+    push_emit(wire.mendloop);
+    if unconditional == 0 {
+        push_emit(wire.mbreak);
+        push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    }
+    if not unary andalso (op == 4 orelse op == 5) andalso ast.match_parts[base + 3] band 8 == 0 {
+        push_emit(wire.mendif); push_emit(wire.trap + 5 * wire.radix);
+        push_checked_pattern(3, flag);
+    }
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1;
+        push_checked_arm(at, flag, scalar, if i == 0 { unconditional } else { 0 });
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + (flag + 1) * wire.radix);
+    push_emit(wire.setlocal + (flag + 2) * wire.radix);
+    push_emit(wire.setlocal + flag * wire.radix);
+    let instruction = if unary { wire.checkedneg } else {
+        match op { 1 => wire.checkedadd, 2 => wire.checkedmul, 3 => wire.checkedsub,
+            4 => wire.checkeddiv, 37 => wire.checkedmul, _ => wire.checkedmod }
+    };
+    push_emit(instruction);
+    if not unary {
+        if shift { push_emit(wire.konst + constant * wire.radix); } else { push_visit(ast.rhs[root]); }
+    }
+    push_visit(ast.lhs[root])
+}
+fn push_checked_index(p: Word) -> Word {
+    let base = ast.args[p]; let packed = ast.match_parts[base];
+    let flag = packed % 65536; let scalar = packed / 65536;
+    let root = ast.lhs[p];
+    push_emit(wire.mendloop); push_emit(wire.mbreak);
+    push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    if ast.match_parts[base + 3] band 2 == 0 {
+        push_emit(wire.trap + 8 * wire.radix);
+        for i in 0..4 limit 4 { push_emit(wire.getlocal + (flag + 6 - i) * wire.radix); }
+        push_emit(wire.getlocal + (flag + 2) * wire.radix);
+    }
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar + 8, 0);
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + (flag + 1) * wire.radix);
+    push_emit(wire.setlocal + (flag + 2) * wire.radix);
+    for i in 0..4 limit 4 { push_emit(wire.setlocal + (flag + 3 + i) * wire.radix); }
+    push_emit(wire.setlocal + flag * wire.radix);
+    if ast.kinds[root] == 13 {
+        push_work(wire.rawemit, wire.getdataix + (ast.args[root] % 281474976710656) * wire.radix);
+        if scalar == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    } else {
+        push_work(wire.rawemit, wire.getindex + scalar * wire.radix);
+        push_visit(ast.rhs[root]);
+    }
+    push_visit(ast.lhs[root])
+}
+fn push_checked_binding(p: Word) -> Word {
+    push_emit(wire.getlocal + (ast.args[p] % 65536) * wire.radix)
+}
+
+// ByteBinOp (kind 44): a bitwise op on two Byte operands, promote-operate-truncate. Each operand is
+// widened (ByteToWord), the op runs on words (BitAnd/BitOr/BitXor), and the result is truncated
+// (WordToByte). args = the OpCode (band 12 / bor 13 / bxor 14); lhs/rhs the operands.
+fn push_byte_binop(p: Word) -> Word {
+    let opc = ast.args[p];
+    let opw = match opc {
+        12 => wire.bitand,
+        13 => wire.bitor,
+        14 => wire.bitxor,
+        _ => wire.bitand,
+    };
+    push_emit(wire.wordtobyte);
+    push_emit(opw);
+    // Each operand is widened (ByteToWord). A LITERAL operand is a Word constant that must first be
+    // coerced to a Byte (WordToByte) before the widen, so a `byte band 15` masks against the Byte
+    // value of the constant -- a Byte variable is already a Byte and skips the coercion.
+    push_emit(wire.bytetoword);
+    if ast.kinds[ast.rhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
+    push_visit(ast.rhs[p]);
+    push_emit(wire.bytetoword);
+    if ast.kinds[ast.lhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
+    push_visit(ast.lhs[p])
+}
+
+// ByteArith (kind 45): an arithmetic op on two Byte operands, lowered to the UNCHECKED op with no
+// PopN or overflow guard (a Byte sum/product cannot overflow the word it is computed in). args = the
+// OpCode (add 1 / mul 2 / sub 3); lhs/rhs the operands. A LITERAL operand is coerced to a Byte
+// (WordToByte); a Byte variable is left as-is (arithmetic keeps operands narrow, no widen).
+fn push_byte_arith(p: Word) -> Word {
+    // 1024 above the operator marks a Float operation, which the reference lowers to the
+    // same unchecked ops and, for `/`, to Div.
+    let opc = ast.args[p] % 1024;
+    let opw = match opc {
+        1 => wire.addop,
+        2 => wire.mulop,
+        3 => wire.subop,
+        4 => wire.divop,
+        5 => wire.modop,
+        _ => wire.addop,
+    };
+    // A Float `/` and `%` leave the outcome words of the legacy polymorphic ops, which the
+    // reference discards with `PopN(2)`.
+    if opc == 4 orelse opc == 5 { push_emit(wire.popn + 2 * wire.radix); }
+    push_emit(opw);
+    if ast.kinds[ast.rhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
+    push_visit(ast.rhs[p]);
+    if ast.kinds[ast.lhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
+    push_visit(ast.lhs[p])
+}
+
+// ByteShift (kind 60): a shift on a Byte operand, promote-operate-truncate. The value is widened
+// (ByteToWord), shifted at word width, and the result truncated (WordToByte); the shift amount (rhs)
+// is a plain Const, NOT widened (it is a shift count, not a Byte value). args = the OpCode
+// (Shl 27 / Shr 28 / ShrL 29); lhs the value, rhs the constant amount. `lsr` (ShrL) additionally
+// masks off the sign-extended high bits, exactly as the Word case does (see `push_binop` opc 29),
+// with the same overflow-free mask and DEFERRED int interning.
+fn push_byte_shift(p: Word) -> Word {
+    let opc = ast.args[p];
+    push_emit(wire.wordtobyte);
+    if opc == 29 {
+        let k = ast.args[ast.rhs[p]];
+        let mask = ((1 lsl (63 - k)) - 1) * 2 + 1;
+        push_emit(wire.bitand);
+        push_int_const(mask);
+        push_emit(wire.shr);
+    } else {
+        let opw = if opc == 28 {
+            wire.shr
+        } else {
+            wire.shl
+        };
+        push_emit(opw);
+    }
+    push_visit(ast.rhs[p]);
+    push_emit(wire.bytetoword);
+    push_visit(ast.lhs[p])
+}
+
+// If-expression (kind 4): emit the condition ops, an If marker, the then-branch
+// ops, an Else marker, the else-branch ops, then EndIf. The If/Else targets are
+// backpatched in `emit_op`. Node args tags cond by else presence, lhs/rhs are branches. Push in
+// reverse so the LIFO drain emits them in order.
+fn push_if(p: Word) -> Word {
+    push_emit(wire.endif);
+    push_visit(ast.rhs[p]);
+    push_emit(wire.els);
+    push_visit(ast.lhs[p]);
+    push_emit(wire.iff);
+    // Reconstruct tags an omitted else with -(condition + 1).
+    let cond = if ast.args[p] < 0 { 0 - ast.args[p] - 1 } else { ast.args[p] };
+    push_visit(cond)
+}
+
+// LetIn (kind 5): `let <slot> = <value>; <cont>`. Emit the value ops,
+// SetLocal(slot), then the continuation ops. Allocate the binding after its value
+// so initializer temporaries retain their reference allocation order.
+// Node: args = slot, lhs = value, rhs = continuation.
+fn push_letin(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_work(wire.bindlocal, ast.args[p]);
+    push_visit(ast.lhs[p])
+}
+
+// UnaryNot (kind 6): emit the operand ops then a single Not (tag 20). lhs = operand.
+fn push_not(p: Word) -> Word {
+    push_emit(wire.lnot);
+    push_visit(ast.lhs[p])
+}
+
+// Bnot (node kind 65): unary bitwise NOT, lowered to `a bxor -1`. Emission: the operand, Const(-1),
+// BitXor. The -1 is a DEFERRED int (push_int_const), interned at emission (its own pool entry, before
+// nothing since the operand emits first). The node carries its single operand in `lhs`.
+fn push_bnot(p: Word) -> Word {
+    push_emit(wire.bitxor);
+    push_int_const(0 - 1);
+    push_visit(ast.lhs[p])
+}
+
+// ByteBnot (node kind 66): Byte bitwise NOT, promote-operate-truncate. The operand is widened
+// (ByteToWord), XORed with -1, and truncated (WordToByte). Emission: operand, ByteToWord, Const(-1),
+// BitXor, WordToByte.
+fn push_byte_bnot(p: Word) -> Word {
+    push_emit(wire.wordtobyte);
+    push_emit(wire.bitxor);
+    push_int_const(0 - 1);
+    push_emit(wire.bytetoword);
+    push_visit(ast.lhs[p])
+}
+
+// The reference allocates each logical-shift temporary after its operand.
+fn lsr_value(p: Word) -> Word {
+    let t0 = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1; st.extra_slots = st.extra_slots + 1;
+    emit_physical(wire.setlocal + t0 * wire.radix);
+    push_work(wire.lsrcount, p + t0 * wire.pack);
+    push_visit(ast.rhs[p])
+}
+fn lsr_count(packed: Word) -> Word {
+    let t0 = packed / wire.pack;
+    let t1 = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1; st.extra_slots = st.extra_slots + 1;
+    emit_physical(wire.setlocal + t1 * wire.radix);
+        push_emit(wire.endif);
+        push_emit(wire.bitand);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_int_const(1);
+        push_emit(wire.shl);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+        push_int_const(64);
+        push_int_const(1);
+        push_emit(wire.shr);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+        push_work(wire.physicalemit, wire.getlocal + t0 * wire.radix);
+        push_emit(wire.els);
+        push_work(wire.physicalemit, wire.getlocal + t0 * wire.radix);
+        push_emit(wire.iff);
+        push_emit(wire.cmpeq);
+        push_int_const(0);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+    0
+}
+
+// Andor (node kind 68): eager boolean `and`/`or`. `args` = is_or (0 = and, 1 = or). Both spill the
+// left operand to a fresh temp t, evaluate the right (the then-value, left on the stack), then a
+// value-If tests the condition (t for `and`; Not(t) for `or`) with an empty then-branch (the right
+// value stays) and an else-branch `PopN(1); Const(elsebool)` (elsebool = false for `and`, true for
+// `or`). Emission: value(left), SetLocal(t), value(right), GetLocal(t), [Not], If, Else, PopN(1),
+// Const(elsebool), EndIf. The temp is allocated at visit time so an outer `and`/`or` gets the lower
+// slot. The else-value Const DEFERS via push_bool (interned in emission order).
+fn push_andor(p: Word) -> Word {
+    let is_or = ast.args[p];
+    let t = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1;
+    st.extra_slots = st.extra_slots + 1;
+    push_emit(wire.endif);
+    push_bool(is_or);
+    push_emit(wire.popn + 1 * wire.radix);
+    push_emit(wire.els);
+    push_emit(wire.iff);
+    if is_or == 1 {
+        push_emit(wire.lnot);
+    }
+    push_work(wire.physicalemit, wire.getlocal + t * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_work(wire.physicalemit, wire.setlocal + t * wire.radix);
+    push_visit(ast.lhs[p])
+}
+
+// Cast (kind 26): `<operand> as <target>`. `args` is the target -- 1 for `Byte`,
+// 0 for the widening to `Word`, or match_parts base plus two for an enum cast.
+// lhs is the operand. An enum cast's rhs is its variant count.
+//
+// **THIS EMITTED `ByteToWord` UNCONDITIONALLY**, on the stated assumption that the
+// stages only ever cast `Byte as Word`. True of the stage corpus and false of the
+// language: `7 as Byte` lowered to a widening, which is a SILENT MISCOMPILE rather
+// than a refusal. The direction was not available here because `parse.kel`
+// discarded the target type name; it now carries it in the payload.
+// A refinement check (kind 85), Order 6. A refined newtype's constructor over a value the
+// compiler cannot evaluate tests the predicate, chunk `args`, at run time, keeping the value
+// and trapping when the predicate fails, in the reference's order: the value, `Dup`,
+// `Call(predicate, 1)`, `If`, `Else`, `Trap(0)`, `EndIf`.
+fn push_refinement(p: Word) -> Word {
+    push_emit(wire.endif);
+    push_emit(wire.trap);
+    push_emit(wire.els);
+    push_emit(wire.iff);
+    push_emit(wire.call + (ast.args[p] + 65536) * wire.radix);
+    push_emit(wire.dup);
+    push_visit(ast.lhs[p])
+}
+
+fn push_cast(p: Word) -> Word {
+    if ast.args[p] >= 2 {
+        push_enum_dispatch(p, ast.args[p] - 2, 4)
+    } else {
+    if ast.args[p] == 1 {
+        push_emit(wire.wordtobyte);
+    } else {
+        push_emit(wire.bytetoword);
+    }
+    push_visit(ast.lhs[p])
+    }
+}
+
+// UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
+// lhs = operand.
+fn push_neg(p: Word) -> Word {
+    // An arg of 1 marks a Float operand, which the reference negates with the unchecked
+    // Neg and no outcome words. Any other negation is the checked form.
+    if ast.args[p] == 1 { push_emit(wire.negop); } else {
+    push_emit(wire.popn + 2 * wire.radix);
+    push_emit(wire.checkedneg); }
+    push_visit(ast.lhs[p])
+}
+
+// DataRead (kind 11): read a scalar data field. Schedule GetData(slot); args is the
+// data slot (its index in the module's data layout).
+fn push_data_read(p: Word) -> Word {
+    push_emit(wire.getdata + ast.args[p] * wire.radix)
+}
+
+// DataAssignIn (kind 12): `<data-slot> = <value>; <cont>`. Like a LetIn but the
+// value is stored to a data slot with SetData rather than to a local, and it binds
+// no name so it does not add to local_count. Node: args = data slot, lhs = value,
+// rhs = continuation.
+fn push_data_assign(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_emit(wire.setdata + ast.args[p] * wire.radix);
+    push_visit(ast.lhs[p])
+}
+
+// IndexRead (kind 13): read `d.arr[i]`. Emit the index ops, then GetDataIndexed
+// with base and length in 24-bit lanes followed by the scalar fallback kind.
+// Node: args = base + len*2^24 + kind*2^48, lhs = index expression.
+fn push_index_read(p: Word) -> Word {
+    let kind = ast.args[p] / 281474976710656;
+    push_emit(wire.popn + 5 * wire.radix); push_emit(wire.mendif);
+    push_emit(wire.trap + 8 * wire.radix); push_emit(wire.mif);
+    push_emit(wire.cmpeq); push_int_const(1);
+    push_emit(wire.getdataix + (ast.args[p] % 281474976710656) * wire.radix);
+    if kind == 2 { push_emit(wire.wordtobyte); }
+    push_emit(wire.pushimm + (if kind == 2 orelse kind == 3 { 4 } else { 0 }) * wire.radix);
+    push_visit(ast.lhs[p])
+}
+
+// The bound probe of an indexed write, scheduled after its offset. `operand` packs
+// base + len*2^24 and `kind` is the element's scalar code. A length that fits the
+// sixteen-bit BoundsCheck operand probes without reading. A longer field has only the
+// twenty-four-bit GetDataIndexed, which reads the element beneath the offset, after the
+// element fallback the read path also pushes.
+fn push_write_probe(operand: Word, kind: Word) -> Word {
+    if operand / 16777216 <= 65535 {
+        push_emit(wire.boundscheck + (operand / 16777216) * wire.radix)
+    } else {
+        push_emit(wire.getdataix + operand * wire.radix);
+        if kind == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + (if kind == 2 orelse kind == 3 { 4 } else { 0 }) * wire.radix)
+    }
+}
+
+// IndexAssignIn (kind 14): `d.arr[i] = v; <cont>`. The index is evaluated and probed
+// before the value, and an invalid index takes the default Trap(8) without evaluating
+// the value (operator ruling 2026-10-21). The offset waits in a local while the value
+// is evaluated, because SetDataIndexed pops the index above the value. Its result is
+// already known to be success, so its six words are dropped. Node: args = base +
+// len*2^24 + kind*2^48, lhs = IndexStore node (arg = offset slot, lhs = value, rhs =
+// index), rhs = continuation.
+fn push_index_assign(p: Word) -> Word {
+    let store = ast.lhs[p];
+    let slot = ast.args[store];
+    let operand = ast.args[p] % 281474976710656;
+    push_visit(ast.rhs[p]);
+    push_emit(wire.popn + 6 * wire.radix);
+    push_emit(wire.setdataix + operand * wire.radix);
+    push_emit(wire.getlocal + slot * wire.radix);
+    push_visit(ast.lhs[store]);
+    if operand / 16777216 > 65535 { push_emit(wire.popn + 1 * wire.radix); }
+    push_emit(wire.setlocal + slot * wire.radix);
+    push_emit(wire.popn + 4 * wire.radix);
+    push_emit(wire.mendif);
+    push_emit(wire.trap + 8 * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_int_const(1);
+    push_write_probe(operand, ast.args[p] / 281474976710656);
+    push_visit(ast.rhs[store])
+}
+
+// Unit payload 3 marks a written `()` for type checking. Payload 0 marks a
+// synthesized continuation. Both emit the existing PushImmediate(0); 1 and 2
+// retain the boolean immediate encoding.
+fn push_unit(p: Word) -> Word {
+    let value = if ast.args[p] == 3 { 0 } else { ast.args[p] };
+    push_emit(wire.pushimm + value * wire.radix)
+}
+
+// ExprStmtIn (kind 21): `<expr>; <cont>`. Emit the expression ops, then PopN(1) to
+// discard the expression's value, then the continuation. This is how a bare call
+// statement and a statement-form `if` (both `Stmt::Expr`) lower. lhs = expression,
+// rhs = continuation.
+fn push_exprstmt(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_emit(wire.popn + 1 * wire.radix);
+    push_visit(ast.lhs[p])
+}
+
+// ForIn (kind 16): `for i in start..limit { body } <cont>`. Emits, in order: the
+// start ops and SetLocal(i), the limit ops and SetLocal(limit), the Loop marker,
+// the condition (i >= limit) and BreakIf, the body ops (which end in the block's
+// Unit, PushImmediate(0)) and PopN(1), the increment (i + 1) and SetLocal(i), the
+// EndLoop marker, then the continuation. The loop var and limit are two locals, so
+// local_count grows by two. args = the 7-word for_parts entry start; rhs = the
+// continuation. Pushed in reverse so the drain emits them in order.
+fn push_forin(p: Word) -> Word {
+    let fp = ast.args[p];
+    let i_slot = ast.for_parts[fp];
+    // A negative end slot marks `for x in xs` over an array, whose reference lowering
+    // stores the end before the counter.
+    let swapped = if ast.for_parts[fp + 1] < 0 { 1 } else { 0 };
+    let lim_slot = if swapped == 1 { 0 - ast.for_parts[fp + 1] - 1 } else { ast.for_parts[fp + 1] };
+    let start = ast.for_parts[fp + 2];
+    let limit = ast.for_parts[fp + 3];
+    let cond = ast.for_parts[fp + 4];
+    let body = ast.for_parts[fp + 5];
+    let incr = ast.for_parts[fp + 6];
+    let cont = ast.rhs[p];
+    push_visit(cont);
+    push_emit(wire.endloop);                    // EndLoop
+    push_emit(wire.setlocal + i_slot * wire.radix);       // SetLocal(i)  (store the increment)
+    push_visit(incr);                 // i + 1
+    push_emit(wire.popn + 1 * wire.radix);            // PopN(1)  (discard the body's unit)
+    push_visit(body);                 // body ops, ending in PushImmediate(0)
+    push_emit(wire.breakif);                    // BreakIf(exit)
+    push_visit(cond);                 // i >= limit
+    push_emit(wire.loopop);                    // Loop(exit)
+    if swapped == 1 {
+        push_emit(wire.setlocal + i_slot * wire.radix);   // SetLocal(i)
+        push_visit(start);                                // start value
+        push_emit(wire.setlocal + lim_slot * wire.radix); // SetLocal(limit)
+        push_visit(limit)                                 // limit value, first
+    } else {
+    push_emit(wire.setlocal + lim_slot * wire.radix);     // SetLocal(limit)
+    push_visit(limit);                // limit value
+    push_emit(wire.setlocal + i_slot * wire.radix);       // SetLocal(i)
+    push_visit(start)                 // start value
+    }
+}
+
+// ForLimit (kind 23): `for i in start..end limit CAP { body } <cont>` in the bare
+// form (no `on` block), reproducing the reference lowering byte for byte. The
+// runtime range does not bound iteration; a compile-time counter `ctr` from 0 to
+// CAP does (the canonical header the verifier reads). The exit reason rides in
+// `oc` (0 LIMIT default, 1 OK, 2 BREAK); after the loop the count==cap boundary
+// and an unhandled break are reclassified to OK, then an outcome still LIMIT
+// traps as LoopLimitExceeded. The five locals (loop var, end, counter, cap,
+// outcome) grow local_count by five. The counter header is a conditional
+// `mbreakif`, the range exit an unconditional `mbreak`, both patched to the loop
+// exit by `mendloop`; the post-loop tests are bare `mif`/`mendif`. args = the
+// limit_parts entry start; rhs = the continuation. Node 74 also carries an outcome
+// descriptor in lhs. See src/compiler.rs `compile_for_limit`.
+fn push_forlimit(p: Word) -> Word {
+    let base = ast.args[p];
+    let var = ast.limit_parts[base];
+    let end_slot = ast.limit_parts[base + 1];
+    let ctr = ast.limit_parts[base + 2];
+    let cap_slot = ast.limit_parts[base + 3];
+    let oc = ast.limit_parts[base + 4];
+    let start = ast.limit_parts[base + 5];
+    let end = ast.limit_parts[base + 6];
+    let body = ast.limit_parts[base + 7];
+    let cap = ast.limit_parts[base + 8];
+    let zero = ast.limit_parts[base + 9];
+    let one = ast.limit_parts[base + 10];
+    let two = ast.limit_parts[base + 11];
+    let cont = ast.rhs[p];
+    // Pushed in reverse; the drain emits the forward sequence.
+    push_visit(cont);
+    if ast.kinds[p] == 74 { push_outcome_dispatch(p, oc); } else {
+    // LIMIT dispatch: if oc == 0 { Trap }.
+    push_emit(wire.mendif);
+    push_emit(wire.trap + wire.looplimit * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_visit(zero);
+    push_emit(wire.getlocal + oc * wire.radix);
+    // break -> ok reclassify: if oc == 2 { oc = 1 }.
+    push_emit(wire.mendif);
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(one);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_visit(two);
+    push_emit(wire.getlocal + oc * wire.radix);
+    }
+    // boundary fixup: if oc == 0 { if var >= end { oc = 1 } }.
+    push_emit(wire.mendif);
+    push_emit(wire.mendif);
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(one);
+    push_emit(wire.mif);
+    push_emit(wire.cmpge);
+    push_emit(wire.getlocal + end_slot * wire.radix);
+    push_emit(wire.getlocal + var * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_visit(zero);
+    push_emit(wire.getlocal + oc * wire.radix);
+    // EndLoop, then the counter and loop-var increments (emitted before it).
+    push_emit(wire.mendloop);
+    push_emit(wire.setlocal + ctr * wire.radix);
+    push_emit(wire.popn + 2 * wire.radix);
+    push_emit(wire.checkedadd);
+    push_visit(one);
+    push_emit(wire.getlocal + ctr * wire.radix);
+    push_emit(wire.setlocal + var * wire.radix);
+    push_emit(wire.popn + 2 * wire.radix);
+    push_emit(wire.checkedadd);
+    push_visit(one);
+    push_emit(wire.getlocal + var * wire.radix);
+    // body ops then PopN(1).
+    push_emit(wire.popn + 1 * wire.radix);
+    push_visit(body);
+    // range exit: if var >= end { oc = 1; Break }.
+    push_emit(wire.mendif);
+    push_emit(wire.mbreak);
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(one);
+    push_emit(wire.mif);
+    push_emit(wire.cmpge);
+    push_emit(wire.getlocal + end_slot * wire.radix);
+    push_emit(wire.getlocal + var * wire.radix);
+    // counter header: if ctr >= cap { Break } (BreakIf).
+    push_emit(wire.mbreakif);
+    push_emit(wire.cmpge);
+    push_emit(wire.getlocal + cap_slot * wire.radix);
+    push_emit(wire.getlocal + ctr * wire.radix);
+    push_emit(wire.mloop);
+    // local inits: oc = 0, cap = CAP, ctr = 0, end = <end>, var = <start>.
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(zero);
+    push_emit(wire.setlocal + cap_slot * wire.radix);
+    push_visit(cap);
+    push_emit(wire.setlocal + ctr * wire.radix);
+    push_visit(zero);
+    push_emit(wire.setlocal + end_slot * wire.radix);
+    push_visit(end);
+    push_emit(wire.setlocal + var * wire.radix);
+    push_visit(start)
+}
+
+// Schedule LIMIT, OK, BREAK in reference order, independently of source order.
+fn push_outcome_dispatch(p: Word, oc: Word) -> Word {
+    let base = ast.lhs[p];
+    for j in 0..3 limit 3 {
+        let kind = 2 - j; let arm = ast.match_parts[base + kind];
+        if arm > 0 orelse kind == 0 {
+            push_emit(wire.mendif);
+            if arm > 0 { push_visit(arm - 1); } else { push_emit(wire.trap + wire.looplimit * wire.radix); }
+            push_emit(wire.mif); push_emit(wire.cmpeq);
+            push_int_const(kind); push_emit(wire.getlocal + oc * wire.radix);
+        }
+    }
+    if ast.match_parts[base + 2] == 0 {
+        push_emit(wire.mendif); push_emit(wire.setlocal + oc * wire.radix);
+        push_int_const(1); push_emit(wire.mif); push_emit(wire.cmpeq);
+        push_int_const(2); push_emit(wire.getlocal + oc * wire.radix);
+    }
+    0
+}
+// The optional binding has already allocated its slot. Relocate source-ordered
+// anonymous temporaries until this arm finishes, restoring an enclosing arm's bias.
+fn push_outcome_arm(p: Word) -> Word {
+    st.arm_saved[st.arm_depth] = st.arm_bias; st.arm_depth = st.arm_depth + 1;
+    st.arm_bias = ast.param_count + st.let_count - ast.args[p] % 65536 - st.extra_slots;
+    push_work(12, 0);
+    if ast.lhs[p] > 0 {
+        push_emit(wire.endif);
+        if ast.args[p] / 65536 == 0 { push_emit(wire.trap + wire.looplimit * wire.radix); }
+        push_emit(wire.els);
+    }
+    push_emit(wire.popn + 1 * wire.radix); push_visit(ast.rhs[p]);
+    if ast.lhs[p] > 0 { push_emit(wire.iff); push_visit(ast.lhs[p] - 1); }
+    0
+}
+
+// Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
+// with the two Call operands packed as chunk + count*65536. args = chunk index,
+// lhs = args_start (into call_args), rhs = arg count. Push EMIT Call first, then
+// the args in reverse so arg0 ends up on top.
+fn push_call(p: Word) -> Word {
+    let chunk = ast.args[p];
+    let count = ast.rhs[p];
+    let start = ast.lhs[p];
+    push_emit(wire.call + (chunk + count * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// NativeCall (kind 81): a call to a `use`-imported host function. Emit the arguments
+// left to right, then CallVerifiedNative(index, count | 0x80), packed as
+// index + (count + 128) * 65536. The flag reifies a host failure as a value and a flag
+// beneath it, and the default handling follows, as the reference's
+// `emit_host_error_default_trap` writes it: a flag of one traps with HostError (code 9),
+// otherwise the value remains. args = native index, lhs = args_start, rhs = count.
+fn push_native_call(p: Word) -> Word {
+    let index = ast.args[p] % 65536;
+    let call_tag = if ast.args[p] / 65536 == 1 { wire.callext } else { wire.callnative };
+    let count = ast.rhs[p];
+    let start = ast.lhs[p];
+    push_emit(wire.mendif);
+    push_emit(wire.trap + 9 * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_int_const(1);
+    push_emit(call_tag + (index + (count + 128) * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// StructInit (kind 27): a flat struct construction `P { f: e, ... }`. Emit each field
+// expression left to right, then NewComposite(Flat{Struct, count, byte_size}), exactly
+// like a Call but with the composite op and its two operands packed as count +
+// byte_size*65536. args = the total packed byte size, lhs = the field-expression start
+// (into call_args, reused), rhs = the field count. Fields arrive in declaration order.
+// Only a flat all-scalar struct is lowered this increment; the byte size is supplied by
+// the layout, not computed here.
+fn push_struct_init(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcomposite + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// ArrayLit (kind 17): an array literal `[a, b, c]`. Emit each element expression left to
+// right, then NewComposite(Flat{Array, count, byte_size}) -- exactly like a struct
+// construction but the Array composite kind (op tag 50 `newcompositearray` rather than 46).
+// args = the packed byte size, lhs = the element-expression start (into call_args), rhs = the
+// element count.
+fn push_array_lit(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcompositearray + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// EnumInit (kind 18): a flat enum construction `E::V(payload...)`. Emit the child ops (the
+// discriminant literal first, then the payload expressions, all positional) then a
+// NewComposite(Flat{Enum, count, byte_size}) (op tag 51), packed `count + byte_size*65536`,
+// exactly like an array literal but the Enum composite kind.
+fn push_enum_init(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcompositeenum + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// TupleInit (kind 19): a flat tuple construction `(a, b, ...)`. Emit the element ops (positional)
+// then a NewComposite(Flat{Tuple, count, byte_size}) (op tag 52), packed `count + byte_size*65536`,
+// exactly like an array literal but the Tuple composite kind.
+fn push_tuple_init(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcompositetuple + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// FieldAccess (kind 28): a flat struct field read `obj.f`. Emit the object ops, then
+// GetField(Flat{offset, kind}) (op tag 47), the two operands packed as
+// `offset + kind*65536` where `kind` is the field's ScalarKind tag (Int 3, Bool 1, ...).
+// args = the packed offset+kind, lhs = the object expression. The baked byte offset and
+// kind come from the struct layout on the node, as the reference bakes them.
+fn push_field_access(p: Word) -> Word {
+    push_emit(wire.getfield + ast.args[p] * wire.radix);
+    push_visit(ast.lhs[p]);
+    0
+}
+
+// TupleField (kind 37): a flat tuple field read `t.N`. Emit the tuple value ops (the parameter
+// Local, in lhs) then GetTupleField(Flat{offset, kind}) (op tag 53), packed offset + kind*65536,
+// exactly like a struct GetField but the tuple op. The parser's internal variant 6 is the
+// payload field of a single-variant enum `let` pattern, GetEnumField(Flat), and 8 plus a
+// composite variant its nested form, GetEnumField(FlatNested), operator ruling of 2026-10-31.
+fn push_tuple_field(p: Word) -> Word {
+    let a = ast.args[p];
+    let v = a / 4294967296;
+    push_emit(if v >= 8 { wire.getenumfieldnested + (a - 8 * 4294967296) * wire.radix } else {
+        if v == 6 { wire.getenumfield + (a - 6 * 4294967296) * wire.radix } else { wire.gettuplefield + a * wire.radix } });
+    push_visit(ast.lhs[p]);
+    0
+}
+
+// FieldAccessNested (kind 30): a flat-nested struct field read `obj.f` where `f` is an array
+// (or nested composite) -- the whole field's bytes are extracted as a composite value. Emit
+// the object ops, then GetField(FlatNested{offset, size, variant}) (op tag 48), the operands
+// packed as offset + size*65536 + variant*2^32 (variant Array = 1). args = that packing, lhs =
+// the object. Foundation for `obj.xs[i]` (an ArrIndex over this value).
+fn push_field_access_nested(p: Word) -> Word {
+    push_emit(wire.getfieldnested + ast.args[p] * wire.radix);
+    push_visit(ast.lhs[p]);
+    0
+}
+
+// ArrIndex (kind 31): a flat array-element read `obj.xs[i]`. Emit the array-value ops (the
+// FieldAccessNested child), then the index ops, then GetIndex(Flat{element kind}) (op tag 49,
+// operand the ScalarKind tag). args = the element kind, lhs = the array value, rhs = the index.
+fn push_arrindex(p: Word) -> Word {
+    push_emit(wire.getindex + ast.args[p] * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p]);
+    0
+}
+
+// ArrIndexNested (kind 43): a flat-nested array-element read `ps[i]` where each element is a
+// composite (a struct). Emit the array-value ops (the Local), the index ops, then
+// GetIndex(FlatNested{size, variant}) (op tag 56), operand packed size + variant*65536. args = that
+// packing, lhs = the array value, rhs = the index. A following field access reads into the result.
+fn push_arrindex_nested(p: Word) -> Word {
+    push_emit(wire.getindexnested + ast.args[p] * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p]);
+    0
+}
+
+// Intern a raw constant value into the pool (deduplicating, like push_literal) and schedule
+// its `Const(index)`. Used where a constant has no Literal node, such as a `break`'s outcome
+// code.
+fn push_const_value(value: Word) -> Word {
+    push_emit(wire.konst + intern_int(value) * wire.radix)
+}
+
+// Break (kind 29): a user `break;` statement inside a `for .. limit` loop. The reference
+// records the loop's exit reason before jumping, so this emits `Const(LOOP_OUTCOME_BREAK)`
+// (the outcome VALUE 2, which the reference `compile_for_limit` stamps at a break),
+// `SetLocal(oc)` (the loop's outcome slot, baked on the node as args), an unconditional
+// `Break` (an `mbreak`, patched to the loop exit by the enclosing `mendloop` like the loop's
+// own range exit), then the continuation. args = the outcome slot, lhs = the continuation (the
+// rest of the block, an implicit Unit when the break is a block's last statement). Pushed in
+// reverse so the drain emits them in order.
+fn push_break(p: Word) -> Word {
+    push_visit(ast.lhs[p]);
+    push_emit(wire.mbreak);
+    // A bare loop's `break`, marked 2^20 by the parser, records no outcome.
+    if ast.args[p] >= 1048576 { 0 } else {
+        push_emit(wire.setlocal + ast.args[p] * wire.radix);
+        push_const_value(2)
+    }
+}
+
+// Andalso (kind 8): left, Dup, If, PopN(1), right, Else, EndIf. The If/Else markers
+// backpatch to the EndIf for this shape. lhs = left, rhs = right.
+fn push_andalso(p: Word) -> Word {
+    push_emit(wire.endif);
+    push_emit(wire.els);
+    push_visit(ast.rhs[p]);
+    push_emit(wire.popn + 1 * wire.radix);
+    push_emit(wire.iff);
+    push_emit(wire.dup);
+    push_visit(ast.lhs[p])
+}
+
+// Orelse (kind 9): as Andalso with a Not inserted after the Dup.
+fn push_orelse(p: Word) -> Word {
+    push_emit(wire.endif);
+    push_emit(wire.els);
+    push_visit(ast.rhs[p]);
+    push_emit(wire.popn + 1 * wire.radix);
+    push_emit(wire.iff);
+    push_emit(wire.lnot);
+    push_emit(wire.dup);
+    push_visit(ast.lhs[p])
+}
+
+// A guarded arm stores guard/result in node 71. False guards continue at the
+// next arm; the Break belongs inside the guard's If. Items are pushed in reverse.
+fn push_match_result(result: Word) -> Word {
+    if ast.kinds[result] == 71 {
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_visit(ast.rhs[result]);
+        push_emit(wire.mif);
+        push_visit(ast.lhs[result])
+    } else {
+        push_emit(wire.mbreak);
+        push_visit(result)
+    }
+}
+
+// Match (kind 22): `match scrutinee { lit0 => r0, .., _ => rw }` over an integer
+// scrutinee with literal-integer arms and a wildcard default, mirroring the
+// reference lowering. It stashes the scrutinee in a fresh temp local, wraps the
+// arms in a virtual loop, tests each arm with `GetLocal(temp) Const(lit) CmpEq
+// If(fail)`, emits the arm result and an unconditional `Break`, then closes the
+// arm with `EndIf`; the wildcard result and its `Break` follow, then a dead
+// `Trap(NoMatchingArm)` tail and `EndLoop`. The `If`/`EndIf`, `Loop`/`EndLoop`,
+// and `Break` markers are backpatched in `emit_op` through the match control-flow
+// stacks. The temp occupies one local, so `local_count` grows by one. Node: args =
+// the match_parts entry start, lhs = scrutinee, rhs = arm count. The entry holds
+// the temp slot at [0], the wildcard result node at [1], then arm_count pairs of
+// (literal node, result node) from [2]. Pushed in reverse so the drain emits
+// forward. Negative pattern indices denote ordered wildcard arms; node 71 wraps a guard.
+fn push_match(p: Word) -> Word {
+    let base = ast.args[p];
+    let temp = ast.match_parts[base];
+    let wc = ast.match_parts[base + 1];
+    let n = ast.rhs[p];
+    let scrut = ast.lhs[p];
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + wire.nomatch * wire.radix);
+    if wc >= 0 { push_match_result(wc); }
+    // Push the arms in reverse (arm n-1 first) so the LIFO drain emits arm 0 first.
+    // The scan bound is the match_parts capacity; the guard selects the live arms.
+    for j in 0..n limit 64 {
+        let k = n - 1 - j;
+        let pattern = ast.match_parts[base + 2 + 2 * k];
+        if pattern >= 0 { push_emit(wire.mendif); }
+        push_match_result(ast.match_parts[base + 3 + 2 * k]);
+        if pattern >= 0 {
+            push_emit(wire.mif);
+            push_emit(wire.cmpeq);
+            push_visit(pattern);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + temp * wire.radix);
+    push_visit(scrut)
+}
+
+// Schedule an IsEnum emit as a PROCESS-TIME work item (kind 3): stash (ename, vname, disc) in the
+// isenum scratch and push a kind-3 item indexing it. The interning is deferred to when the item is
+// processed during the forward walk (see walk_step), so the enum/variant/disc pool entries land
+// interleaved with each arm's result constants -- interning at push time would run in reverse and
+// diverge from the reference pool.
+fn push_enum_isenum(ename: Word, vname: Word, disc: Word) -> Word {
+    st.isenum_e[st.isenum_ctr] = ename;
+    st.isenum_v[st.isenum_ctr] = vname;
+    st.isenum_d[st.isenum_ctr] = disc;
+    st.stack[st.sp] = wire.emitisenum + st.isenum_ctr * wire.item;
+    st.sp = st.sp + 1;
+    st.isenum_ctr = st.isenum_ctr + 1;
+    0
+}
+
+// EnumMatch (kind 39): an enum-value match, the IsEnum virtual loop. Mirrors push_match but the
+// per-arm test is `GetLocal(temp), IsEnum(ename, vname, disc), SetLocal(test), PopN(1),
+// GetLocal(test)` and there is no wildcard (all-variant arms, Trap fallback). match_parts holds
+// [temp][ename][twenty words per arm], with test and payload slots allocated by parse.
+// A negative variant name denotes an ordered wildcard, which allocates no test slot.
+// Each result may be wrapped by a guarded-arm node. A final wildcard uses the trailer.
+fn push_enum_match(p: Word) -> Word {
+    push_enum_dispatch(p, ast.args[p], wire.nomatch)
+}
+
+// Match and enum-to-Word casts share variant dispatch, with distinct fallback traps.
+fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
+    let temp = ast.match_parts[base];
+    let ename = ast.match_parts[base + 1];
+    let n = ast.rhs[p];
+    let scrut = ast.lhs[p];
+    let haswc = ast.match_parts[base + 2 + n * 20];
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + trap_kind * wire.radix);
+    // A `_` wildcard's result and Break emit after the variant arms and before the Trap (pushed
+    // here so the LIFO walk emits them in that order).
+    if haswc == 1 {
+        push_match_result(ast.match_parts[base + 2 + n * 20 + 1]);
+    }
+    for j in 0..n limit 64 {
+        let k = n - 1 - j;
+        let armb = base + 2 + k * 20;
+        let vname = ast.match_parts[armb];
+        let disc = ast.match_parts[armb + 1];
+        let result = ast.match_parts[armb + 2];
+        let pc = ast.match_parts[armb + 3];
+        let testslot = ast.match_parts[armb + 4];
+        if vname >= 0 {
+            push_emit(wire.mendif);
+        }
+        push_match_result(result);
+        // Payload binds emit after the If and before the result: per field, GetLocal(temp),
+        // GetEnumField(..), SetLocal(bindslot). Pushed in reverse field order so the LIFO walk emits
+        // field 0 first. A SCALAR field (kind 0-7) emits GetEnumField(Flat{offset, kind}); a STRUCT
+        // field (kind >= 100, the sentinel `100 + struct byte size`) emits GetEnumField(FlatNested
+        // {offset, size, Struct = 2}) via the getenumfieldnested op, extracting the whole nested
+        // struct so a following field read into the bound value resolves.
+        for fj in 0..pc limit 4 {
+            let f = pc - 1 - fj;
+            let off = ast.match_parts[armb + 5 + f * 3];
+            let kind = ast.match_parts[armb + 5 + f * 3 + 1];
+            let slot = ast.match_parts[armb + 5 + f * 3 + 2];
+            push_emit(wire.setlocal + slot * wire.radix);
+            // A composite payload uses a sentinel kind that encodes both the nested-composite
+            // variant and its byte size: an ARRAY element is `40000 + size` (variant 1), a TUPLE is
+            // `30000 + size` (variant 0), a STRUCT is `100 + size` (variant 2). Each emits
+            // GetEnumField(FlatNested{offset, size, variant}); a scalar (kind 0-7) the plain Flat.
+            if kind >= 40000 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 40000) * 65536 + 1 * 4294967296) * wire.radix);
+            } else {
+            if kind >= 30000 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 30000) * 65536 + 0 * 4294967296) * wire.radix);
+            } else {
+            if kind >= 100 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 100) * 65536 + 2 * 4294967296) * wire.radix);
+            } else {
+                push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            } } }
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
+        if vname >= 0 {
+            push_emit(wire.mif);
+            push_emit(wire.getlocal + testslot * wire.radix);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.setlocal + testslot * wire.radix);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + temp * wire.radix);
+    push_visit(scrut)
+}
+
+// StructEq (kind 48): `struct == struct` as a field-wise comparison loop. match_parts holds
+// [ta][tb][count][per field: offset, kind]. Store both operands in the two temps, then loop: for
+// each field compare `a.f == b.f`; on the first mismatch break false, else after all fields break
+// true. The Loop/Break/If markers are backpatched by `emit_op`. Two temps grow the frame.
+fn push_struct_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let count = ast.match_parts[base + 2];
+    // The `!=` flag rides just past the field list: `a != b` is the `==` loop then a `Not`. The
+    // accessor flag follows it: a tuple comparison reads fields with GetTupleField, a struct with
+    // GetField (both take the same offset+kind*65536 operand).
+    let is_ne = ast.match_parts[base + 3 + count * 2];
+    let acc = if ast.match_parts[base + 3 + count * 2 + 1] == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfield
+    };
+    // Pre-intern the results in the reference's pool order (false before true): the reference emits
+    // the false (mismatch) Const first, so it takes the lower pool index. `push_emit` runs in reverse
+    // (LIFO), so interning here -- not at push time -- keeps the pool order correct.
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for fj in 0..count limit 64 {
+        let f = count - 1 - fj;
+        let off = ast.match_parts[base + 3 + f * 2];
+        let kind = ast.match_parts[base + 3 + f * 2 + 1];
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        push_emit(acc + (off + kind * 65536) * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(acc + (off + kind * 65536) * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// Emit a STRUCT-payload variant field of an `enum == enum`: the op-57 nested extract of both sides
+// into the two fresh temps r2/l2, then an inner struct-eq loop over their scalar sub-fields, negated
+// to break the outer variant loop on inequality. Mirrors the reference `emit_enum_fieldwise_eq`
+// composed with `emit_composite_fieldwise_eq`, and structurally matches `push_struct_eq_nested`'s
+// nested-struct block (op 57 for the enum-payload extract in place of op 48). match_parts at `foff`:
+// [off, kind, subcount, r2, l2, subcount*(sub_off, sub_kind)]. The four bools are DEFERRED (push_bool)
+// like the rest of `push_enum_eq`, so the pool order follows forward emission (no eager pre-pass);
+// factored out to keep `push_enum_eq` under the op-table capacity.
+fn push_enum_struct_payload_loop(foff: Word, off: Word, kind: Word, ta: Word, tb: Word) -> Word {
+    let subcount = ast.match_parts[foff + 2];
+    let r2 = ast.match_parts[foff + 3];
+    let l2 = ast.match_parts[foff + 4];
+    // The nested extract operand: byte offset, struct byte size (kind - 100), FlatNested variant 2.
+    let extp = off + (kind - 100) * 65536 + 2 * 4294967296;
+    // Outer negate/break (emitted last, so pushed first): Not, If, Const(false), Break, EndIf.
+    push_emit(wire.mendif);
+    push_emit(wire.mbreak);
+    push_bool(0);
+    push_emit(wire.mif);
+    push_emit(wire.lnot);
+    // Inner struct-eq loop tail: after the sub-fields, Const(true), Break, EndLoop.
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_bool(1);
+    // Inner struct-eq sub-fields, in reverse (forward is s = 0..subcount): GetLocal(l2), GetField,
+    // GetLocal(r2), GetField, CmpEq, Not, If, Const(false), Break, EndIf.
+    for sj in 0..subcount limit 64 {
+        let s = subcount - 1 - sj;
+        let sp = ast.match_parts[foff + 5 + s * 2] + ast.match_parts[foff + 5 + s * 2 + 1] * 65536;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_bool(0);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        push_emit(wire.getfield + sp * wire.radix);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.getfield + sp * wire.radix);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    push_emit(wire.mloop);
+    // The nested extract of both operands into r2/l2 (emitted first, so pushed last).
+    push_emit(wire.setlocal + l2 * wire.radix);
+    push_emit(wire.setlocal + r2 * wire.radix);
+    push_emit(wire.getenumfieldnested + extp * wire.radix);
+    push_emit(wire.getlocal + tb * wire.radix);
+    push_emit(wire.getenumfieldnested + extp * wire.radix);
+    push_emit(wire.getlocal + ta * wire.radix)
+}
+
+// EnumEq (kind 51): `enum == enum` (or `!=`) for an enum whose variants carry only scalar payload,
+// lowered to a variant-iterating comparison loop. Store both operands in two temps (ta = left,
+// tb = right), then loop once over the variants: per variant, peek-test the left temp with `IsEnum`;
+// if it is this variant, peek-test the right; both this variant -> compare each scalar payload field
+// (GetEnumField/CmpEq, first mismatch breaks false) then break true; right a different variant ->
+// break false; left not this variant -> try the next. A well-typed value always matches a variant,
+// so the loop tail traps (EnumVariantUnmapped = 4). match_parts holds [ta, tb, ename_id, vcount,
+// then per variant vname_id, disc, fcount, fcount*(offset, kind), then the != flag].
+//
+// Pool interning is DEFERRED to emission time: the IsEnum ops go through `push_enum_isenum` (which
+// interns the enum name, variant name, and discriminant when the item is processed in the forward
+// walk) and the true/false result Consts through `push_bool`. A forward pre-pass records each
+// variant's variable-stride offset in `eq_voff` for the reverse emission walk, but interns nothing.
+// Deferring is what lets a LITERAL operand match: `e == E::A()` constructs its right operand first,
+// emitting the variant discriminant Const, so that discriminant must intern ahead of the loop's own
+// IsEnum discriminant -- pre-interning at push time runs in reverse and would place them wrong. For
+// a both-locals `a == b` (no operand constants) the deferred order equals the old pre-interned one:
+// per variant the IsEnum's (name, variant, disc), then the result Consts, whose order still follows
+// emission -- a payload first variant emits its in-field-loop `false` before the post-loop `true`,
+// a unit variant the reverse.
+fn push_enum_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let ename = ast.match_parts[base + 2];
+    let vcount = ast.match_parts[base + 3];
+    // Forward pre-pass: record each variant's variable-stride offset (for the reverse emission
+    // walk) and advance to the `!=` flag. No interning here -- the pool is built at emission time.
+    st.eq_cur = base + 4;
+    for v in 0..vcount limit 64 {
+        st.eq_voff[v] = st.eq_cur;
+        let fcount = ast.match_parts[st.eq_cur + 2];
+        st.eq_cur = st.eq_cur + 3;
+        // Fields are variable-length: a scalar is 2 words (off, kind); a STRUCT payload (kind >= 100)
+        // is 5 + subcount*2 -- (off, kind, subcount, r2, l2) then subcount*(sub_off, sub_kind).
+        for f in 0..fcount limit 32 {
+            let kind = ast.match_parts[st.eq_cur + 1];
+            st.eq_cur = st.eq_cur + 2;
+            if kind >= 100 {
+                let subcount = ast.match_parts[st.eq_cur];
+                st.eq_cur = st.eq_cur + 3 + subcount * 2;
+            }
+        }
+    }
+    // The `!=` flag rides just past the variant list: `a != b` is the `==` loop then a `Not`.
+    let is_ne = ast.match_parts[st.eq_cur];
+    // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + 4 * wire.radix);
+    for vj in 0..vcount limit 64 {
+        let v = vcount - 1 - vj;
+        let voff = st.eq_voff[v];
+        let fcount = ast.match_parts[voff + 2];
+        let vname = ast.match_parts[voff];
+        let disc = ast.match_parts[voff + 1];
+        // Fields are variable-length (a STRUCT payload is 5 + subcount*2), and the emission below runs
+        // in reverse, so a forward pass records each field's match_parts offset. A struct-payload
+        // field also reserves its two extract temps in the frame (mirroring the reference next_slot).
+        st.eq_fcur2 = voff + 3;
+        for f in 0..fcount limit 32 {
+            st.eq_foff[f] = st.eq_fcur2;
+            let fkind = ast.match_parts[st.eq_fcur2 + 1];
+            st.eq_fcur2 = st.eq_fcur2 + 2;
+            if fkind >= 100 {
+                st.eq_fcur2 = st.eq_fcur2 + 3 + ast.match_parts[st.eq_fcur2] * 2;
+            }
+        }
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_bool(0);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_bool(1);
+        // The payload fields compare in the "both this variant" block, in forward order, so they are
+        // pushed in reverse. A SCALAR field (kind < 100): GetLocal(ta), GetEnumField, GetLocal(tb),
+        // GetEnumField, CmpEq, Not, If, Const(false), Break, EndIf (a mismatch breaks false; else fall
+        // to the next field). A STRUCT-payload field (kind >= 100): the op-57 nested extract plus an
+        // inner struct-eq loop, factored into `push_enum_struct_payload_loop` (keeps this chunk under
+        // the op-table capacity).
+        for fj in 0..fcount limit 32 {
+            let f = fcount - 1 - fj;
+            let foff = st.eq_foff[f];
+            let off = ast.match_parts[foff];
+            let kind = ast.match_parts[foff + 1];
+            if kind >= 100 {
+                push_enum_struct_payload_loop(foff, off, kind, ta, tb);
+            } else {
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_bool(0);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + tb * wire.radix);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + ta * wire.radix);
+            }
+        }
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_enum_isenum(ename, vname, disc);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_enum_isenum(ename, vname, disc);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// ArrayEq (kind 54): `array == array` (or `!=`) as a per-element comparison loop. match_parts holds
+// [ta, tb, count, kind, is_ne]. Store both operands in two temps, then loop: for each element index
+// e compare `a[e] == b[e]` via GetIndex; on the first mismatch break false, else after all elements
+// break true. The pool is pre-interned in the reference's order: the element index constants
+// 0..count-1 (in order), THEN the false and true result constants.
+fn push_array_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let count = ast.match_parts[base + 2];
+    let kind = ast.match_parts[base + 3];
+    let is_ne = ast.match_parts[base + 4];
+    for e in 0..count limit 256 {
+        st.eq_vidx[e] = intern_int(e);
+    }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    if kind == 2 orelse kind == 3 { intern_int(1); }
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for ej in 0..count limit 256 {
+        let e = count - 1 - ej;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        // tb's element read (forward-second), then ta's (forward-first): GetLocal, Const(e), GetIndex.
+        push_emit(wire.getindex + kind * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindex + kind * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// ArrayOfStructEq (kind 62): `[P; N] == [P; N]` (or `!=`). match_parts holds
+// [ta, tb, arrcount, arrsize, fieldcount, per field: offset, kind, is_ne]. Store both arrays in two
+// temps, then UNROLL per element: extract a[e]/b[e] as structs (GetIndex(FlatNested{arrsize, Struct}),
+// wire operand `arrsize + 2*65536`) into a per-element inner temp pair (inner_b = ta + 1 + 2*e,
+// inner_a = ta + 2 + 2*e), run an inner struct-eq field loop (break false on the first field mismatch,
+// true if all fields match), and if that element result is false break the OUTER loop false; after all
+// elements break true. Frame grows by 2 (outer) + 2*arrcount (inner pairs). The pool is pre-interned
+// in the reference order: the element index constants 0..arrcount-1 (in order), THEN false, true.
+fn push_array_of_struct_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let arrcount = ast.match_parts[base + 2];
+    let arrsize = ast.match_parts[base + 3];
+    let fieldcount = ast.match_parts[base + 4];
+    // The element field list is the recursive `seb` grammar, so it is VARIABLE length: a nested block
+    // occupies a 5-word header plus its own sub-forest. Walk it to find where the trailing flags sit,
+    // rather than assuming the old fixed `fieldcount * 2`. This walk also counts the per-element
+    // nested temp pairs via count_temps=1, which is what the stride below needs.
+    let seb_end = struct_forest_end(base + 5, fieldcount, 1);
+    let estride = 2 + st.forest_temps;
+    let is_ne = ast.match_parts[seb_end];
+    // is_tuple selects the accessor: a tuple element reads fields with GetTupleField and extracts with
+    // a FlatNested Tuple (variant 0); a struct element uses GetField and FlatNested Struct (variant 2).
+    let is_tuple = ast.match_parts[seb_end + 1];
+    let acc = if is_tuple == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfield
+    };
+    let nvar = if is_tuple == 1 {
+        0
+    } else {
+        2
+    };
+    // Per-element temp stride: the element pair, plus a pair for every nested block anywhere in the
+    // element's subtree (counted by the walk above), because the reference allocates each element's
+    // temps interleaved rather than grouping all element pairs first.
+    for e in 0..arrcount limit 64 {
+        st.eq_vidx[e] = intern_int(e);
+    }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    intern_int(1);
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for ej in 0..arrcount limit 64 {
+        let e = arrcount - 1 - ej;
+        let inner_b = ta + 1 + e * estride;
+        let inner_a = ta + 2 + e * estride;
+        // After the inner loop: negate its result and, if the element compared unequal, break the
+        // OUTER loop false.
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.mendloop);
+        // Inner struct-eq field loop over the element: break true once all fields match.
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        // The element's sub-fields go through the shared reverse-DFS emitter rather than a flat
+        // scalar loop. For an all-scalar element this is byte-identical to the previous inline loop:
+        // the seb scalar sub-field grammar `(off, kind)` is exactly this record's field-list layout,
+        // so frame 0 walks the same pairs and emits the same blocks. Routing through it is what lets
+        // a COMPOSITE element sub-field (kind >= 100) descend, which the inline loop could not
+        // express -- see `docs/decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`.
+        push_struct_eq_subfields(
+            base + 5,
+            fieldcount,
+            inner_a,
+            inner_b,
+            acc,
+            false_idx,
+            true_idx,
+            e * estride,
+        );
+        push_emit(wire.mloop);
+        // Extract a[e] then b[e] as the composite element into the inner temp pair.
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + nvar * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + nvar * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// ArrayOfArrayEq (node kind 67): `[[T; N]; M] == [[T; N]; M]` (or `!=`). The array-of-struct per-element
+// outer unroll with an inner SCALAR array-eq loop: extract a[e]/b[e] as inner arrays (GetIndex
+// (FlatNested Array), variant 1) into the inner pair, compare their N elements (per element:
+// GetLocal, Const(j), GetIndex(Flat innerkind), CmpEq), break outer false on element inequality; break
+// true after all. match_parts: [ta, tb, M, arrsize, N, innerkind, is_ne]. Pool: the element index
+// constants 0..max(M,N)-1 (shared by both loops), then false, true.
+fn push_array_of_array_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let m = ast.match_parts[base + 2];
+    let arrsize = ast.match_parts[base + 3];
+    let innercount = ast.match_parts[base + 4];
+    let innerkind = ast.match_parts[base + 5];
+    let is_ne = ast.match_parts[base + 6];
+    let maxc = if m > innercount {
+        m
+    } else {
+        innercount
+    };
+    for c in 0..maxc limit 256 {
+        st.eq_vidx[c] = intern_int(c);
+    }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    intern_int(1);
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for ej in 0..m limit 64 {
+        let e = m - 1 - ej;
+        let inner_b = ta + 1 + 2 * e;
+        let inner_a = ta + 2 + 2 * e;
+        // After the inner array-eq loop: negate; break OUTER false if this element compared unequal.
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.mendloop);
+        // Inner scalar array-eq loop over the extracted inner arrays: break true once all match.
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        for jj in 0..innercount limit 256 {
+            let j = innercount - 1 - jj;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getindex + innerkind * wire.radix);
+            push_emit(wire.konst + st.eq_vidx[j] * wire.radix);
+            push_emit(wire.getlocal + inner_b * wire.radix);
+            push_emit(wire.getindex + innerkind * wire.radix);
+            push_emit(wire.konst + st.eq_vidx[j] * wire.radix);
+            push_emit(wire.getlocal + inner_a * wire.radix);
+        }
+        push_emit(wire.mloop);
+        // Extract a[e] then b[e] as inner arrays into the inner temp pair.
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 1 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 1 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// ArrayOfEnumEq (kind 16): `[E; N] == [E; N]` (or `!=`). Composes `push_array_of_struct_eq`'s outer
+// per-element unroll with `push_enum_eq`'s inner variant-dispatch loop. match_parts:
+// [ta, tb, arrcount, arrsize, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind),
+// is_ne]. Per element: extract a[e]/b[e] as enums (GetIndex(FlatNested{arrsize, Enum}), wire operand
+// `arrsize + 3*65536`) into the inner pair (inner_b = ta+1+2*e, inner_a = ta+2+2*e), run the inner
+// enum-eq loop over that pair (deferred interning: IsEnum via push_enum_isenum, result Consts via
+// push_bool), and if the element compared unequal break the OUTER loop false; break true after all.
+// Only the element index constants are pre-interned (0..arrcount-1); everything else defers, matching
+// the reference pool [indices, then the enum name/variant/disc and result bools].
+fn push_array_of_enum_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let arrcount = ast.match_parts[base + 2];
+    let arrsize = ast.match_parts[base + 3];
+    let ename = ast.match_parts[base + 4];
+    let vcount = ast.match_parts[base + 5];
+    // Forward pre-pass: record each variant's variable-stride offset and find the `!=` flag.
+    st.eq_cur = base + 6;
+    for v in 0..vcount limit 64 {
+        st.eq_voff[v] = st.eq_cur;
+        let fcount = ast.match_parts[st.eq_cur + 2];
+        st.eq_cur = st.eq_cur + 3 + fcount * 2;
+    }
+    let is_ne = ast.match_parts[st.eq_cur];
+    for e in 0..arrcount limit 64 {
+        st.eq_vidx[e] = intern_int(e);
+    }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    intern_int(1);
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_bool(1);
+    for ej in 0..arrcount limit 64 {
+        let e = arrcount - 1 - ej;
+        let inner_b = ta + 1 + 2 * e;
+        let inner_a = ta + 2 + 2 * e;
+        // After the inner enum-eq loop: negate; if the element compared unequal, break OUTER false.
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_bool(0);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        // Inner enum-eq variant-dispatch loop over the extracted element pair.
+        push_emit(wire.mendloop);
+        push_emit(wire.trap + 4 * wire.radix);
+        for vj in 0..vcount limit 64 {
+            let v = vcount - 1 - vj;
+            let voff = st.eq_voff[v];
+            let fcount = ast.match_parts[voff + 2];
+            let vname = ast.match_parts[voff];
+            let disc = ast.match_parts[voff + 1];
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_bool(0);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_bool(1);
+            for fj in 0..fcount limit 32 {
+                let f = fcount - 1 - fj;
+                let off = ast.match_parts[voff + 3 + f * 2];
+                let kind = ast.match_parts[voff + 3 + f * 2 + 1];
+                push_emit(wire.mendif);
+                push_emit(wire.mbreak);
+                push_bool(0);
+                push_emit(wire.mif);
+                push_emit(wire.lnot);
+                push_emit(wire.cmpeq);
+                push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+                push_emit(wire.getlocal + inner_b * wire.radix);
+                push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+                push_emit(wire.getlocal + inner_a * wire.radix);
+            }
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mif);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + inner_b * wire.radix);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mif);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + inner_a * wire.radix);
+        }
+        push_emit(wire.mloop);
+        // Extract a[e] then b[e] as enums into the inner temp pair.
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 3 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 3 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// Emit the variant-dispatch inner loop for a nested ENUM field of a struct-eq-nested, over the
+// extracted temps l2 (left) / r2 (right). Factored out of `push_struct_eq_nested` to keep that
+// chunk under the op-table capacity. Mirrors `push_enum_eq` op-for-op with l2/r2 in place of ta/tb
+// and EAGER interning (the caller's pre-pass replayed the pool order), so it composes with the
+// struct-eq pre-interned false/true. seb variant layout at foff:
+// [1, off, size, 3, r2, l2, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind)].
+fn push_nested_enum_loop(ename: Word, vcount: Word, vbase: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
+    st.eq_cur = vbase;
+    for v in 0..vcount limit 64 {
+        st.eq_voff[v] = st.eq_cur;
+        let fc = ast.match_parts[st.eq_cur + 2];
+        st.eq_cur = st.eq_cur + 3 + fc * 2;
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + 4 * wire.radix);
+    for vj in 0..vcount limit 64 {
+        let v = vcount - 1 - vj;
+        let voff = st.eq_voff[v];
+        let vname = ast.match_parts[voff];
+        let disc = ast.match_parts[voff + 1];
+        let fcount = ast.match_parts[voff + 2];
+        let isen = wire.isenum + (intern_str(ename) + intern_str(vname) * 1024 + intern_int(disc) * 1048576) * wire.radix;
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        for fj in 0..fcount limit 32 {
+            let f = fcount - 1 - fj;
+            let off = ast.match_parts[voff + 3 + f * 2];
+            let kind = ast.match_parts[voff + 3 + f * 2 + 1];
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + r2 * wire.radix);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + l2 * wire.radix);
+        }
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(isen);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(isen);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    push_emit(wire.mloop)
+}
+
+// Walk the sub-field forest of `subcount` fields starting at `start` in match_parts, striding over
+// arbitrarily-nested struct sub-fields ([off, 100+size, subcount, r2, l2, fields...] = 5 + its own
+// forest), and return the end offset. When `count_temps` is 1, count two scratch slots per nested struct in `forest_temps`
+// (its r2/l2 extract temps). The records are laid preorder, so one linear walk with a remaining-fields
+// stack visits the whole forest. Non-recursive (R4); the loop cap bounds the total field count.
+fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
+    st.forest_temps = 0;
+    st.cs_cur = start;
+    st.cs_rem[0] = subcount;
+    st.cs_sp = 1;
+    for i in 0..2048 limit 2048 {
+        if st.cs_sp > 0 {
+            let top = st.cs_sp - 1;
+            if st.cs_rem[top] == 0 {
+                st.cs_sp = st.cs_sp - 1;
+            } else {
+                st.cs_rem[top] = st.cs_rem[top] - 1;
+                if ast.match_parts[st.cs_cur + 1] >= 100 {
+                    if count_temps == 1 {
+                        st.forest_temps = st.forest_temps + 2;
+                    }
+                    if ast.match_parts[st.cs_cur + 1] >= 50000 {
+                        // An ENUM block: [off, 50000+size, vcount, r2, l2, ename, per variant
+                        // (vname, disc, fcount, fcount*(off, kind))]. Stride it, and in mode 2 replay
+                        // its constant order exactly as the depth-1 enum field's eager pass does.
+                        let evc = ast.match_parts[st.cs_cur + 2];
+                        let ename = ast.match_parts[st.cs_cur + 5];
+                        st.cs_walk = st.cs_cur + 6;
+                        for ev in 0..evc limit 64 {
+                            let fc = ast.match_parts[st.cs_walk + 2];
+                            if count_temps == 2 {
+                                intern_str(ename);
+                                intern_str(ast.match_parts[st.cs_walk]);
+                                intern_int(ast.match_parts[st.cs_walk + 1]);
+                                for efj in 0..fc limit 32 {
+                                    intern_bool(0);
+                                }
+                                intern_bool(1);
+                                intern_bool(0);
+                            }
+                            st.cs_walk = st.cs_walk + 3 + fc * 2;
+                        }
+                        st.cs_cur = st.cs_walk;
+                    } else {
+                    if ast.match_parts[st.cs_cur + 1] >= 40000 {
+                        // An ARRAY block is a FIXED 6 words [off, 40000+size, acount, r2, l2, akind]
+                        // with no sub-field forest, so it strides past rather than pushing a frame.
+                        // Mode 2 additionally interns its element index constants, which the
+                        // reference pre-interns ahead of false/true.
+                        if count_temps == 2 {
+                            for ai in 0..ast.match_parts[st.cs_cur + 2] limit 256 {
+                                intern_int(ai);
+                            }
+                        }
+                        st.cs_cur = st.cs_cur + 6;
+                    } else {
+                    st.cs_rem[st.cs_sp] = ast.match_parts[st.cs_cur + 2];
+                    st.cs_cur = st.cs_cur + 5;
+                    st.cs_sp = st.cs_sp + 1;
+                    } }
+                } else {
+                    st.cs_cur = st.cs_cur + 2;
+                }
+            }
+        }
+    }
+    st.cs_cur
+}
+
+// The end offset of a nested-struct sub-field block at `off` ([off, 100+size, subcount, r2, l2,
+// fields...]): its 5-word header plus its sub-field forest.
+fn nested_end(off: Word) -> Word {
+    if ast.match_parts[off + 1] >= 50000 {
+        struct_forest_end(off, 1, 0)
+    } else {
+    if ast.match_parts[off + 1] >= 40000 {
+        off + 6
+    } else {
+        struct_forest_end(off + 5, ast.match_parts[off + 2], 0)
+    } }
+}
+
+// Record each DIRECT sub-field offset of a frame's sub-field list (at `sbase`, `subcount` fields) into
+// es_sfoff[f*64 + s], striding over nested sub-fields with `nested_end`, so the reverse emission pass
+// can locate each variable-stride sub-field.
+fn es_compute_sfoff(f: Word, sbase: Word, subcount: Word) -> Word {
+    let fb = f * 64;
+    st.es_walk = sbase;
+    for s in 0..subcount limit 64 {
+        st.es_sfoff[fb + s] = st.es_walk;
+        if ast.match_parts[st.es_walk + 1] >= 100 {
+            st.es_walk = nested_end(st.es_walk);
+        } else {
+            st.es_walk = st.es_walk + 2;
+        }
+    }
+    0
+}
+
+// Emit the inner comparison loop body of a nested struct/tuple field's sub-fields, over the container
+// temps l2 (left) / r2 (right). A sub-field is variable length: a SCALAR sub-field [sub_off, sub_kind
+// < 100] compares GetField(subacc)/CmpEq; a DEPTH-2 nested-struct sub-field [sub_off, 100+size,
+// subcount, r2', l2', subcount*(subsub_off, subsub_kind)] extracts both sides with GetFieldNested
+// (op 48) into two fresh temps and runs an inner struct-eq loop over its scalar sub-sub-fields, then
+// negates to break the parent loop on inequality. Factored out of `push_struct_eq_nested` to keep that
+// chunk under the op-table capacity (`eq/2level_struct`). Pool: `false_idx`/`true_idx` are shared with
+// the caller (dedup'd), so no new constants -- the eager pre-pass already interned false then true.
+// `tempbias` is added to a nested sub-field's r2'/l2' temps. It is 0 for every caller whose sub-field
+// list is emitted once. The ARRAY caller reuses ONE sub-field list across all elements, but the
+// reference allocates each element's temps interleaved (element pair, then that element's nested
+// pairs, then the next element), so the seb stores element 0's temps and the array caller passes
+// `e * stride` to shift them onto element `e`.
+// The per-element compare body of a SCALAR array block, over the extracted array temps l2/r2. Emits
+// (in reverse) `l2[e] == r2[e]` per element with GetIndex, breaking false on the first mismatch. Byte
+// -identical to the depth-1 array field emission it mirrors; factored so both share one form.
+fn push_arr_scalar_inner(acount: Word, akind: Word, l2: Word, r2: Word, false_idx: Word) -> Word {
+    for ej in 0..acount limit 256 {
+        let e = acount - 1 - ej;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        push_emit(wire.getindex + akind * wire.radix);
+        push_emit(wire.konst + intern_int(e) * wire.radix);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.getindex + akind * wire.radix);
+        push_emit(wire.konst + intern_int(e) * wire.radix);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    0
+}
+
+// A Tuple parent needs the private marker even when the nested variant is Tuple zero.
+fn nested_access_operand(accessor: Word, operand: Word) -> Word {
+    if accessor == wire.gettuplefield andalso operand < 4294967296 { operand + 4 * 4294967296 } else { operand }
+}
+
+fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word, tempbias: Word) -> Word {
+    // Frame 0: the given sub-field list, container (l2, r2), accessor `subacc`, no suffix.
+    st.es_sbase[0] = sbase;
+    st.es_subcount[0] = subcount;
+    st.es_l[0] = l2;
+    st.es_r[0] = r2;
+    st.es_acc[0] = subacc;
+    st.es_has_suffix[0] = 0;
+    es_compute_sfoff(0, sbase, subcount);
+    st.es_cur[0] = subcount - 1;
+    st.es_sp = 1;
+    // Reverse-DFS: process the top frame's sub-fields in reverse; a scalar emits its compare block, a
+    // nested struct emits the outer negate/break + loop trailer and PUSHES a child frame (its loop
+    // head + extract deferred as the child's suffix). When a frame's cursor falls below 0 it is
+    // drained: emit its suffix (if any) and pop. The loop cap bounds the frame/field traffic.
+    for i in 0..4096 limit 4096 {
+        if st.es_sp > 0 {
+            let top = st.es_sp - 1;
+            if st.es_cur[top] < 0 {
+                if st.es_has_suffix[top] == 1 {
+                    // The suffix extract reads the child OUT OF ITS PARENT container, so its accessor
+                    // follows the PARENT frame's kind, not the child's: a tuple parent extracts with
+                    // GetTupleField (whose FlatNested operand form is shared with the flat one), a
+                    // struct parent with GetFieldNested. This is what admits a struct element of a
+                    // struct field's tuple (`struct S { t: (P, Word) }`). A frame carrying a suffix
+                    // always has a parent, since frame 0 is created with `es_has_suffix` 0; the
+                    // `top > 0` guard keeps the index provably in range regardless.
+                    let pacc = if top > 0 {
+                        st.es_acc[top - 1]
+                    } else {
+                        wire.getfield
+                    };
+                    let sfxacc = if pacc == wire.gettuplefield {
+                        wire.gettuplefield
+                    } else {
+                        wire.getfieldnested
+                    };
+                    push_emit(wire.mloop);
+                    push_emit(wire.setlocal + st.es_l[top] * wire.radix);
+                    push_emit(wire.setlocal + st.es_r[top] * wire.radix);
+                    push_emit(sfxacc + nested_access_operand(sfxacc, st.es_sfx_extp[top]) * wire.radix);
+                    push_emit(wire.getlocal + st.es_sfx_pr[top] * wire.radix);
+                    push_emit(sfxacc + nested_access_operand(sfxacc, st.es_sfx_extp[top]) * wire.radix);
+                    push_emit(wire.getlocal + st.es_sfx_pl[top] * wire.radix);
+                }
+                st.es_sp = st.es_sp - 1;
+            } else {
+                let s = st.es_cur[top];
+                st.es_cur[top] = st.es_cur[top] - 1;
+                let fb = top * 64;
+                let soff = st.es_sfoff[fb + s];
+                let sub_off = ast.match_parts[soff];
+                let sub_kind = ast.match_parts[soff + 1];
+                if sub_kind >= 100 {
+                    // A nested-struct sub-field: emit the outer negate/break and the inner loop
+                    // trailer, then PUSH a child frame over its sub-fields (extracted into r2p/l2p; the
+                    // loop head + extract are the child's suffix, emitted on completion).
+                    let r2p = ast.match_parts[soff + 3] + tempbias;
+                    let l2p = ast.match_parts[soff + 4] + tempbias;
+                    // The sentinel range names the block's KIND: 30000+size is a TUPLE (extract with
+                    // FlatNested variant Tuple 0, compare its elements with GetTupleField), 100+size
+                    // a STRUCT (variant 2, GetField). Same convention the enum-payload records use.
+                    if sub_kind >= 50000 {
+                        // An ENUM block: the variant-dispatch loop, then this block's loop-open and
+                        // extract (FlatNested variant Enum, 3). No child frame.
+                        let eextp = sub_off + (sub_kind - 50000) * 65536 + 3 * 4294967296;
+                        let pacc = if st.es_acc[top] == wire.gettuplefield {
+                            wire.gettuplefield
+                        } else {
+                            wire.getfieldnested
+                        };
+                        push_emit(wire.mendif);
+                        push_emit(wire.mbreak);
+                        push_emit(wire.konst + false_idx * wire.radix);
+                        push_emit(wire.mif);
+                        push_emit(wire.lnot);
+                        push_nested_enum_loop(
+                            ast.match_parts[soff + 5],
+                            ast.match_parts[soff + 2],
+                            soff + 6,
+                            l2p,
+                            r2p,
+                            false_idx,
+                            true_idx,
+                        );
+                        // `push_nested_enum_loop` emits its own loop-open, so do NOT add another
+                        // here (the struct/tuple/array blocks do, because their bodies do not).
+                        push_emit(wire.setlocal + l2p * wire.radix);
+                        push_emit(wire.setlocal + r2p * wire.radix);
+                        push_emit(pacc + eextp * wire.radix);
+                        push_emit(wire.getlocal + st.es_r[top] * wire.radix);
+                        push_emit(pacc + eextp * wire.radix);
+                        push_emit(wire.getlocal + st.es_l[top] * wire.radix);
+                    } else {
+                    if sub_kind >= 40000 {
+                        // An ARRAY block: no child frame. Emit the element loop inline, then this
+                        // block's own loop-open + extract, then consume the slot in the parent.
+                        let acount = ast.match_parts[soff + 2];
+                        let akind = ast.match_parts[soff + 5];
+                        let aextp = sub_off + (sub_kind - 40000) * 65536 + 1 * 4294967296;
+                        let pacc = if st.es_acc[top] == wire.gettuplefield {
+                            wire.gettuplefield
+                        } else {
+                            wire.getfieldnested
+                        };
+                        push_emit(wire.mendif);
+                        push_emit(wire.mbreak);
+                        push_emit(wire.konst + false_idx * wire.radix);
+                        push_emit(wire.mif);
+                        push_emit(wire.lnot);
+                        push_emit(wire.mendloop);
+                        push_emit(wire.mbreak);
+                        push_emit(wire.konst + true_idx * wire.radix);
+                        push_arr_scalar_inner(acount, akind, l2p, r2p, false_idx);
+                        push_emit(wire.mloop);
+                        push_emit(wire.setlocal + l2p * wire.radix);
+                        push_emit(wire.setlocal + r2p * wire.radix);
+                        push_emit(pacc + aextp * wire.radix);
+                        push_emit(wire.getlocal + st.es_r[top] * wire.radix);
+                        push_emit(pacc + aextp * wire.radix);
+                        push_emit(wire.getlocal + st.es_l[top] * wire.radix);
+                        st.es_cur[top] = st.es_cur[top];
+                    } else {
+                    let is_tup_block = if sub_kind >= 30000 { 1 } else { 0 };
+                    let bsize = if is_tup_block == 1 {
+                        sub_kind - 30000
+                    } else {
+                        sub_kind - 100
+                    };
+                    let bvar = if is_tup_block == 1 {
+                        0
+                    } else {
+                        2
+                    };
+                    let bacc = if is_tup_block == 1 {
+                        wire.gettuplefield
+                    } else {
+                        wire.getfield
+                    };
+                    let extp = sub_off + bsize * 65536 + bvar * 4294967296;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.mendloop);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + true_idx * wire.radix);
+                    let child = st.es_sp;
+                    st.es_sbase[child] = soff + 5;
+                    st.es_subcount[child] = ast.match_parts[soff + 2];
+                    st.es_l[child] = l2p;
+                    st.es_r[child] = r2p;
+                    st.es_acc[child] = bacc;
+                    st.es_has_suffix[child] = 1;
+                    st.es_sfx_extp[child] = extp;
+                    st.es_sfx_pl[child] = st.es_l[top];
+                    st.es_sfx_pr[child] = st.es_r[top];
+                    es_compute_sfoff(child, soff + 5, ast.match_parts[soff + 2]);
+                    st.es_cur[child] = ast.match_parts[soff + 2] - 1;
+                    st.es_sp = st.es_sp + 1;
+                    } }
+                } else {
+                    let sp = sub_off + sub_kind * 65536;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.cmpeq);
+                    push_emit(st.es_acc[top] + sp * wire.radix);
+                    push_emit(wire.getlocal + st.es_r[top] * wire.radix);
+                    push_emit(st.es_acc[top] + sp * wire.radix);
+                    push_emit(wire.getlocal + st.es_l[top] * wire.radix);
+                }
+            }
+        }
+    }
+    0
+}
+
+// Emit the per-element body of a struct-element ARRAY field of a struct-eq-nested (`eq/struct_arrayofstruct`),
+// over the extracted array temps l2 (left) / r2 (right). The caller's wrapper mloop/mendloop is the OUTER
+// per-element loop; per element e this extracts a[e]/b[e] as structs (getindexnested FlatNested Struct,
+// variant 2) into an inner temp pair (right = l2+1+2e, left = l2+2+2e, monotonic after the array's r2/l2)
+// and runs an inner struct-eq field loop, negated to break the outer loop on inequality. It is
+// `push_array_of_struct_eq`'s per-element body over l2/r2; false_idx/true_idx and the element-index
+// constants are pre-interned by the caller's eager pre-pass (dedup here). Factored out of
+// `push_struct_eq_nested` to keep that chunk under the op-table capacity. seb at foff:
+// [1, ext_off, ext_size, 1, r2, l2, acount, 100+arrsize, fcount, fcount*(off, kind)].
+fn push_arr_of_struct_inner(foff: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
+    let acount = ast.match_parts[foff + 6];
+    let arrsize = ast.match_parts[foff + 7] - 100;
+    let fcount = ast.match_parts[foff + 8];
+    for ej in 0..acount limit 256 {
+        let e = acount - 1 - ej;
+        let inner_b = l2 + 1 + 2 * e;
+        let inner_a = l2 + 2 + 2 * e;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.mendloop);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        for fj in 0..fcount limit 64 {
+            let ff = fcount - 1 - fj;
+            let eoff = ast.match_parts[foff + 9 + ff * 2];
+            let ekind = ast.match_parts[foff + 9 + ff * 2 + 1];
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getfield + (eoff + ekind * 65536) * wire.radix);
+            push_emit(wire.getlocal + inner_b * wire.radix);
+            push_emit(wire.getfield + (eoff + ekind * 65536) * wire.radix);
+            push_emit(wire.getlocal + inner_a * wire.radix);
+        }
+        push_emit(wire.mloop);
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 2 * 65536) * wire.radix);
+        push_emit(wire.konst + intern_int(e) * wire.radix);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 2 * 65536) * wire.radix);
+        push_emit(wire.konst + intern_int(e) * wire.radix);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    0
+}
+
+// StructEqNestedNode (kind 59): a `struct == struct` (or `!=`) where a field is a nested struct.
+// match_parts holds [ta, tb, topcount, <tagged top-level fields>, is_ne]: a scalar field is
+// [0, offset, kind]; a nested-struct field is [1, ext_off, ext_size, variant, r2, l2, subcount,
+// subcount*(sub_off, sub_kind)]. A scalar field compares GetField/CmpEq; a nested field extracts
+// both sides (GetFieldNested) into two fresh temps and runs an inner comparison loop, then negates
+// its result to break the outer loop on inequality. Pool: false then true (like the flat path).
+fn push_struct_eq_nested(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let topcount = ast.match_parts[base + 2];
+    // Forward pass: record each top-level field's offset and count the nested fields' temps. An
+    // array field (variant 1) is a fixed 8 slots [1, ext_off, ext_size, 1, r2, l2, count, kind]; a
+    // struct/tuple field is 7 + subcount*2; a scalar field is 3.
+    st.se_cur = base + 3;
+    for f in 0..topcount limit 64 {
+        st.se_foff[f] = st.se_cur;
+        if ast.match_parts[st.se_cur] == 0 {
+            st.se_cur = st.se_cur + 3;
+        } else {
+            if ast.match_parts[st.se_cur + 3] == 1 {
+                // Array field. A scalar-element array is a fixed 8 slots [1, off, size, 1, r2, l2,
+                // count, kind]. A struct-element array (`eq/struct_arrayofstruct`, sentinel
+                // `slot+7 >= 100`) is [1, off, size, 1, r2, l2, acount, 100+arrsize, fcount] then
+                // fcount*(off, kind) = 9 + fcount*2, and reserves 2*acount per-element inner temps.
+                if ast.match_parts[st.se_cur + 7] >= 100 {
+                    st.se_cur = st.se_cur + 9 + ast.match_parts[st.se_cur + 8] * 2;
+                } else {
+                    st.se_cur = st.se_cur + 8;
+                }
+            } else {
+            if ast.match_parts[st.se_cur + 3] == 3 {
+                // Enum field: header(6) + ename + vcount = 8, then per variant 3 + fcount*2.
+                let vc = ast.match_parts[st.se_cur + 7];
+                st.eq_cur = st.se_cur + 8;
+                for v in 0..vc limit 64 {
+                    let fc = ast.match_parts[st.eq_cur + 2];
+                    st.eq_cur = st.eq_cur + 3 + fc * 2;
+                }
+                st.se_cur = st.eq_cur;
+            } else {
+                // Struct/tuple nested field: [1, ext_off, ext_size, variant, r2, l2, subcount] then a
+                // variable-length sub-field list. `struct_forest_end` walks the whole (arbitrarily
+                // nested) sub-field forest, adding 2 to `let_count` per nested struct (its r2/l2 extract
+                // temps) and returning the end offset.
+                let subcount = ast.match_parts[st.se_cur + 6];
+                st.se_cur = struct_forest_end(st.se_cur + 7, subcount, 1);
+            } }
+        }
+    }
+    let is_ne = ast.match_parts[st.se_cur];
+    // 1 when the TOP-LEVEL container is a tuple: swap only the top-level field accessors to
+    // GetTupleField (op 53). One slot past is_ne. The inner sub-field accessors are unchanged.
+    let is_tuple = ast.match_parts[st.se_cur + 1];
+    // Pre-intern the pool in the reference's emission order by replaying it field by field: a scalar
+    // field interns false; a nested struct/tuple field false then true; an array field its element
+    // index constants 0..count-1 then false then true. `intern_*` dedups, so first-occurrence order
+    // is what fixes the pool (the interleave of array index constants with the bools is field-order
+    // dependent, exactly like the reference).
+    for f in 0..topcount limit 64 {
+        let foff = st.se_foff[f];
+        if ast.match_parts[foff] == 0 {
+            intern_bool(0);
+        } else {
+            if ast.match_parts[foff + 3] == 1 {
+                for i in 0..ast.match_parts[foff + 6] limit 256 {
+                    intern_int(i);
+                }
+                intern_bool(0);
+                intern_bool(1);
+            } else {
+            if ast.match_parts[foff + 3] == 3 {
+                // Enum field: replay the variant-dispatch inner loop's constant order EAGERLY so the
+                // pool matches the reference (no literal operand occurs in `s1 == s2`, so deferral is
+                // unneeded). Per variant: the IsEnum triple (ename, vname, disc), then per scalar
+                // payload field a false, then true, then false -- exactly `push_enum_eq`'s emission.
+                let ename = ast.match_parts[foff + 6];
+                let vc = ast.match_parts[foff + 7];
+                st.eq_cur = foff + 8;
+                for v in 0..vc limit 64 {
+                    let vname = ast.match_parts[st.eq_cur];
+                    let disc = ast.match_parts[st.eq_cur + 1];
+                    let fc = ast.match_parts[st.eq_cur + 2];
+                    intern_str(ename);
+                    intern_str(vname);
+                    intern_int(disc);
+                    for fj in 0..fc limit 32 {
+                        intern_bool(0);
+                    }
+                    intern_bool(1);
+                    intern_bool(0);
+                    st.eq_cur = st.eq_cur + 3 + fc * 2;
+                }
+            } else {
+                // A nested struct/tuple field: any ARRAY block inside its forest pre-interns its
+                // element indices first, matching the reference's eager order, then false, then true.
+                struct_forest_end(foff + 7, ast.match_parts[foff + 6], 2);
+                intern_bool(0);
+                intern_bool(1);
+            } }
+        }
+    }
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    // The two TOP-LEVEL accessors, selected once by the container kind: for a tuple container a
+    // scalar element reads GetTupleField (op 53) and a nested element extracts with GetTupleField
+    // (the FlatNested operand form is shared); for a struct container they are GetField (47) and
+    // GetFieldNested (48). The INNER sub-field accessors below are independent of this.
+    let topfieldacc = if is_tuple == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfield
+    };
+    let topnestacc = if is_tuple == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfieldnested
+    };
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for fj in 0..topcount limit 64 {
+        let f = topcount - 1 - fj;
+        let foff = st.se_foff[f];
+        if ast.match_parts[foff] == 0 {
+            // Scalar top-level field: the same block as the flat path (accessor `topfieldacc`).
+            let packed = ast.match_parts[foff + 1] + ast.match_parts[foff + 2] * 65536;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(topfieldacc + packed * wire.radix);
+            push_emit(wire.getlocal + tb * wire.radix);
+            push_emit(topfieldacc + packed * wire.radix);
+            push_emit(wire.getlocal + ta * wire.radix);
+        } else {
+            // Nested field: extract both sides into r2/l2, run the inner loop, negate, break.
+            let extp = ast.match_parts[foff + 1] + ast.match_parts[foff + 2] * 65536 + ast.match_parts[foff + 3] * 4294967296;
+            let r2 = ast.match_parts[foff + 4];
+            let l2 = ast.match_parts[foff + 5];
+            let variant = ast.match_parts[foff + 3];
+            // The sub-field accessor follows the extract variant: Tuple (0) -> GetTupleField,
+            // Struct (2) -> GetField (an Array (1) uses the GetIndex element loop below). This is the
+            // INNER accessor and is unaffected by the top-level container kind.
+            let subacc = if variant == 0 {
+                wire.gettuplefield
+            } else {
+                wire.getfield
+            };
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            if variant == 3 {
+                // Enum field: the variant-dispatch inner loop, factored into `push_nested_enum_loop`
+                // to keep this chunk under the op-table capacity.
+                push_nested_enum_loop(
+                    ast.match_parts[foff + 6],
+                    ast.match_parts[foff + 7],
+                    foff + 8,
+                    l2,
+                    r2,
+                    false_idx,
+                    true_idx,
+                );
+            } else {
+            push_emit(wire.mendloop);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + true_idx * wire.radix);
+            if variant == 1 {
+                let acount = ast.match_parts[foff + 6];
+                if ast.match_parts[foff + 7] >= 100 {
+                    // Struct-element array (`eq/struct_arrayofstruct`): per element, extract a[e]/b[e]
+                    // as structs and run an inner struct-eq field loop. Factored into
+                    // `push_arr_of_struct_inner` to keep this chunk under the op-table capacity
+                    // (mirrors `push_nested_enum_loop` / `push_struct_eq_subfields`).
+                    push_arr_of_struct_inner(foff, l2, r2, false_idx, true_idx);
+                } else {
+                // Array-of-scalar element inner loop: per element e compare l2[e] == r2[e] via GetIndex.
+                let akind = ast.match_parts[foff + 7];
+                for ej in 0..acount limit 256 {
+                    let e = acount - 1 - ej;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.cmpeq);
+                    push_emit(wire.getindex + akind * wire.radix);
+                    push_emit(wire.konst + intern_int(e) * wire.radix);
+                    push_emit(wire.getlocal + r2 * wire.radix);
+                    push_emit(wire.getindex + akind * wire.radix);
+                    push_emit(wire.konst + intern_int(e) * wire.radix);
+                    push_emit(wire.getlocal + l2 * wire.radix);
+                }
+                }
+            } else {
+                let subcount = ast.match_parts[foff + 6];
+                push_struct_eq_subfields(foff + 7, subcount, l2, r2, subacc, false_idx, true_idx, 0);
+            }
+            push_emit(wire.mloop);
+            }
+            push_emit(wire.setlocal + l2 * wire.radix);
+            push_emit(wire.setlocal + r2 * wire.radix);
+            push_emit(topnestacc + nested_access_operand(topnestacc, extp) * wire.radix);
+            push_emit(wire.getlocal + tb * wire.radix);
+            push_emit(topnestacc + nested_access_operand(topnestacc, extp) * wire.radix);
+            push_emit(wire.getlocal + ta * wire.radix);
+        }
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// YieldExpr (kind 24): `yield <expr>` emits the expression ops then `Yield`.
+// lhs = the yielded expression.
+fn push_yield(p: Word) -> Word {
+    push_emit(wire.yieldop);
+    push_visit(ast.lhs[p])
+}
+
+// Parser slots identify bindings and parser-allocated temporaries. Extra temporaries
+// introduced during emission occupy physical slots without consuming parser identities.
+fn reset_local_slots() -> Word {
+    for i in 0..2048 limit 2048 { st.local_slots[i] = 0; }
+    st.extra_slots = 0; st.arm_bias = 0; st.arm_depth = 0;
+    0
+}
+// Grow the frame when a parser-owned slot is emitted. Reserving its parent early
+// would place compiler-created operand temporaries after that parent.
+fn mapped_local(slot: Word) -> Word {
+    if slot < ast.param_count { slot } else {
+        if st.local_slots[slot] == 0 { st.local_slots[slot] = slot + st.extra_slots + st.arm_bias + 1; }
+        let used = st.local_slots[slot] - ast.param_count;
+        if used > st.let_count { st.let_count = used; }
+        st.local_slots[slot] - 1
+    }
+}
+fn emit_physical(word: Word) -> Word {
+    let tag = word % wire.radix;
+    if st.in_head == 1 andalso (tag == wire.getlocal orelse tag == wire.setlocal) {
+        let slot = word / wire.radix;
+        // A literal head reads its parameters in place and holds no copies, so its window
+        // starts at `head_base` with the guard's temporaries rather than after copies.
+        if st.head_lit == 1 andalso slot < ast.param_count { emit_op(word) } else {
+        let bias = if slot < ast.param_count { 0 } else { st.head_bias };
+        let shift = if st.head_lit == 1 { ast.param_count } else { 0 };
+        emit_op(tag + (slot + st.head_base + bias - shift) * wire.radix) }
+    } else { emit_op(word) }
+}
+fn bind_local(slot: Word) -> Word {
+    let physical = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1;
+    st.local_slots[slot] = physical + 1;
+    emit_physical(wire.setlocal + physical * wire.radix)
+}
+
+// Head ranges retain relative slots. Allocate their windows in emission order so
+// guard and body temporaries precede the next head's parameter copies.
+fn push_work(kind: Word, payload: Word) -> Word {
+    st.stack[st.sp] = kind + payload * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+fn begin_head(hb: Word) -> Word {
+    let pc = ast.head_parts[hb];
+    st.head_base = st.head_next; st.head_bias = 0; st.head_guard = 0;
+    st.in_head = 1; st.let_count = 0; reset_local_slots();
+    st.head_lit = if ast.head_parts[hb + 1] == 2 { 1 } else { 0 };
+    push_work(wire.headend, 0);
+    if ast.head_parts[hb + 1] >= 1 {
+        push_emit(wire.mendif);
+        push_emit(wire.ret);
+        push_work(wire.headbody, ast.head_parts[hb + 3]);
+        push_emit(wire.mif);
+        push_visit(ast.head_parts[hb + 2]);
+    } else {
+        push_emit(wire.ret);
+        push_work(wire.headbody, ast.head_parts[hb + 3]);
+    }
+    // Mode 2, a literal head, binds no variable, so it copies no parameter.
+    if st.head_lit == 0 {
+    for ij in 0..pc limit 32 {
+        let i = pc - 1 - ij;
+        push_work(wire.rawemit, wire.setlocal + (st.head_base + i) * wire.radix);
+        push_work(wire.rawemit, wire.getlocal + i * wire.radix);
+    }
+    }
+    0
+}
+fn begin_head_body(node: Word) -> Word {
+    st.head_guard = st.let_count; st.head_bias = st.head_guard; st.let_count = 0;
+    reset_local_slots();
+    push_visit(node)
+}
+fn end_head() -> Word {
+    let copies = if st.head_lit == 1 { 0 } else { ast.param_count };
+    st.head_next = st.head_base + copies + st.head_guard + st.let_count;
+    st.head_lit = 0;
+    st.let_count = st.head_next - ast.param_count;
+    st.in_head = 0;
+    0
+}
+fn push_multihead(p: Word) -> Word {
+    let base = ast.args[p]; let n = ast.rhs[p];
+    st.head_next = ast.param_count;
+    push_emit(wire.trap + wire.nomatchhead * wire.radix);
+    // The head capacity, raised from 16 with reconstruct.kel's head arrays. This loop held
+    // 64 until a 65-head function tripped it.
+    for hj in 0..n limit 128 {
+        push_work(wire.headbegin, base + (n - 1 - hj) * 4);
+    }
+    0
+}
+
+// Phase 0: seed the work-stack with the body's block root. A block is a `LetIn`
+// chain (or a bare expression) in the node forest, so no statement-array
+// pre-seeding is needed; the walk expands the chain. Yields the PENDING 0.
+fn seed_step() -> Word {
+    // A `loop` function opens the productive-divergent stream with a `Stream`
+    // marker before the body ops (the body's value is discarded and the stream
+    // resets, see `drain_return`).
+    if ast.category == wire.catloop {
+        emit_op(wire.stream);
+    }
+    push_visit(ast.root);
+    st.started = 1;
+    0
+}
+
+// Phase 1: process one work item. An EMIT appends to the op buffer; a VISIT
+// dispatches to the handler for the node's kind. Yields the PENDING 0.
+fn walk_step() -> Word {
+    st.sp = st.sp - 1;
+    let item = st.stack[st.sp];
+    let ikind = item % wire.item;
+    let payload = item / wire.item;
+    if ikind == wire.emit {
+        let tag = payload % wire.radix;
+        if tag == wire.getlocal orelse tag == wire.setlocal {
+            emit_physical(tag + mapped_local(payload / wire.radix) * wire.radix);
+        } else { emit_op(payload); }
+    }
+    if ikind == 12 {
+        st.arm_depth = st.arm_depth - 1; st.arm_bias = st.arm_saved[st.arm_depth];
+    }
+    if ikind == wire.physicalemit { emit_physical(payload); }
+    if ikind == wire.bindlocal { bind_local(payload); }
+    if ikind == 13 { push_checked_arm_result(payload); }
+    // Map a parser-owned slot without emitting it, so the frame covers a reserved slot that
+    // no instruction names.
+    if ikind == 14 { mapped_local(payload); }
+    if ikind == wire.lsrvalue { lsr_value(payload); }
+    if ikind == wire.lsrcount { lsr_count(payload); }
+    if ikind == wire.rawemit { emit_raw(payload); }
+    if ikind == wire.headbegin { begin_head(payload); }
+    if ikind == wire.headbody { begin_head_body(payload); }
+    if ikind == wire.headend { end_head(); }
+    if ikind == wire.emitisenum {
+        // Intern the enum name, variant name, and discriminant NOW (in the forward walk order),
+        // then emit the IsEnum op with the three pool indices packed.
+        let ename_pool = intern_str(st.isenum_e[payload]);
+        let vname_pool = intern_str(st.isenum_v[payload]);
+        let disc_pool = intern_int(st.isenum_d[payload]);
+        emit_op(wire.isenum + (ename_pool + vname_pool * 1024 + disc_pool * 1048576) * wire.radix);
+    }
+    if ikind == wire.emitbool {
+        // A deferred Const, interned NOW (in the forward walk order) then emitted. `payload` 0/1 is a
+        // bool value; `payload` >= 2 is a deferred INT indexing `defer_int[payload - 2]`.
+        if payload < 2 {
+            let bool_pool = intern_bool(payload);
+            emit_op(wire.konst + bool_pool * wire.radix);
+        } else {
+            let int_pool = intern_int(st.defer_int[payload - 2]);
+            emit_op(wire.konst + int_pool * wire.radix);
+        }
+    }
+    if ikind == wire.visit {
+        // Dispatch on the node kind. Written as a plain `match` on the kind field
+        // rather than the `|>` pipe sugar so the stage stays within the grammar the
+        // self-hosted parser bridges (the pipe desugars to exactly this `match`).
+        match ast.kinds[payload] {
+            1 => push_literal(payload),
+            2 => push_local(payload),
+            3 => push_binop(payload),
+            44 => push_byte_binop(payload),
+            45 => push_byte_arith(payload),
+            60 => push_byte_shift(payload),
+            4 => push_if(payload),
+            5 => push_letin(payload),
+            6 => push_not(payload),
+            65 => push_bnot(payload),
+            66 => push_byte_bnot(payload),
+            68 => push_andor(payload),
+            7 => push_call(payload),
+            81 => push_native_call(payload),
+            8 => push_andalso(payload),
+            9 => push_orelse(payload),
+            10 => push_neg(payload),
+            11 => push_data_read(payload),
+            12 => push_data_assign(payload),
+            13 => push_index_read(payload),
+            14 => push_index_assign(payload),
+            16 => push_forin(payload),
+            20 => push_unit(payload),
+            21 => push_exprstmt(payload),
+            // An `assert` statement compiles to its continuation alone, as the reference
+            // compiles an assertion out of a release build, Order 6.
+            83 => push_visit(ast.rhs[payload]),
+            22 => push_match(payload),
+            23 => push_forlimit(payload),
+            74 => push_forlimit(payload),
+            75 => push_outcome_arm(payload),
+            76 => push_local(payload),
+            77 => push_checked(payload),
+            80 => push_checked_binding(payload),
+            24 => push_yield(payload),
+            25 => push_multihead(payload),
+            26 => push_cast(payload),
+            85 => push_refinement(payload),
+            27 => push_struct_init(payload),
+            28 => push_field_access(payload),
+            29 => push_break(payload),
+            30 => push_field_access_nested(payload),
+            31 => push_arrindex(payload),
+            17 => push_array_lit(payload),
+            18 => push_enum_init(payload),
+            19 => push_tuple_init(payload),
+            37 => push_tuple_field(payload),
+            38 => push_strlit(payload),
+            82 => push_floatlit(payload),
+            39 => push_enum_match(payload),
+            48 => push_struct_eq(payload),
+            51 => push_enum_eq(payload),
+            54 => push_array_eq(payload),
+            62 => push_array_of_struct_eq(payload),
+            67 => push_array_of_array_eq(payload),
+            64 => push_array_of_enum_eq(payload),
+            59 => push_struct_eq_nested(payload),
+            43 => push_arrindex_nested(payload),
+            _ => 0,
+        };
+    }
+    0
+}
+
+// Phase 2: the walk is done; append Return to close the op stream. Yields the
+// PENDING 0.
+fn drain_return() -> Word {
+    // A `loop` function closes its body by discarding the body value and
+    // resetting the stream (`PopN(1); Reset`) rather than returning; an `fn` or
+    // `yield` function returns.
+    if ast.category == wire.catloop {
+        st.ops[st.op_count] = wire.popn + 1 * wire.radix;
+        st.op_count = st.op_count + 1;
+        st.ops[st.op_count] = wire.reset;
+        st.op_count = st.op_count + 1;
+    }
+    // Categories 0 (`fn`) and 1 (single-head `yield`) close with `Return`. A
+    // multiheaded function (category 3) emits nothing here: each head carries its
+    // own `Return` and the dispatch ends in `Trap(NoMatchingHead)`.
+    if ast.category < wire.catloop {
+        st.ops[st.op_count] = wire.ret;
+        st.op_count = st.op_count + 1;
+    }
+    st.ret_done = 1;
+    0
+}
+
+// Phase 3: stream one resolved op word from the buffer.
+fn drain_buffer() -> Word {
+    let w = st.ops[st.emit_cursor];
+    st.emit_cursor = st.emit_cursor + 1;
+    w
+}
+
+// Phase 4: the constant-pool size (raw Word).
+fn drain_count() -> Word {
+    st.count_done = 1;
+    st.pool_count
+}
+
+// Phase 5: stream one constant-pool value (raw Word).
+fn drain_pool() -> Word {
+    let v = st.pool[st.pool_cursor];
+    st.pool_cursor = st.pool_cursor + 1;
+    v
+}
+
+// Phase 5b: stream one constant-pool tag (0 Int, 1 StaticStr), after all the values, so the host
+// builds the right ConstValue per entry.
+fn drain_tags() -> Word {
+    let t = st.pool_tag[st.tag_cursor];
+    st.tag_cursor = st.tag_cursor + 1;
+    t
+}
+
+// Phase 6: the local-frame size, parameters plus one slot per `let`.
+fn drain_header() -> Word {
+    st.header_done = 1;
+    ast.param_count + st.let_count
+}
+
+// Phase 2b: copy each private struct read that a later write can reach while its value is
+// live, the rule of `src/compiler/alias_copy.rs` run over the finished op buffer. A private
+// struct read pushes a handle into the slot's persistent body, which a later `SetData`
+// overwrites in place. The reference decides over its own copy-free ops, which equal this
+// buffer, so the two decide alike. A copy is four ops inserted after the `GetData`, and every
+// jump target past an insertion moves with it. Yields the PENDING 0.
+private data dcopy {
+    done: Word, reads: Word, at: [Word; 64], size: [Word; 64],
+    found: Word, q: Word, stop: Word, verdict: Word, last: Word, skipped: Word,
+    open: [Word; 32], open_n: Word, c: Word, shift: Word,
+}
+
+// The flat byte size of private struct slot `slot`, or 0 when the slot is not one.
+fn dc_size_of(slot: Word) -> Word {
+    dcopy.found = 0;
+    for j in 0..ast.dc_count limit 64 {
+        if ast.dc_slot[j] == slot { dcopy.found = ast.dc_size[j]; }
+    }
+    dcopy.found
+}
+
+// A view keeps the alias, a FlatNested field, tuple element or payload read.
+fn dc_is_view(w: Word) -> Word {
+    let tag = w % wire.radix; let opd = w / wire.radix;
+    if tag == wire.getfieldnested orelse tag == wire.getenumfieldnested
+        orelse (tag == wire.gettuplefield andalso opd >= 4294967296 andalso opd / 4294967296 != 5) { 1 } else { 0 }
+}
+
+// A dead end leaves nothing that refers to the body. It is a Flat scalar read, a flat
+// NewComposite, which copies a nested element's bytes, or a SetData to another slot.
+fn dc_is_dead_end(w: Word, lo: Word) -> Word {
+    let tag = w % wire.radix; let opd = w / wire.radix;
+    if tag == wire.getfield orelse tag == wire.getenumfield
+        orelse (tag == wire.gettuplefield andalso opd < 4294967296)
+        orelse tag == wire.newcomposite orelse tag == wire.newcompositearray
+        orelse tag == wire.newcompositeenum orelse tag == wire.newcompositetuple
+        orelse (tag == wire.setdata andalso opd != lo) { 1 } else { 0 }
+}
+
+// A hazard may write slot `lo`. It is an overlapping SetData or SetDataIndexed, a call or
+// a yield.
+fn dc_is_hazard(w: Word, lo: Word) -> Word {
+    let tag = w % wire.radix; let opd = w / wire.radix;
+    if (tag == wire.setdata andalso opd == lo)
+        orelse (tag == wire.setdataix andalso opd % 16777216 <= lo andalso lo < opd % 16777216 + opd / 16777216)
+        orelse tag == wire.call orelse tag == wire.callnative orelse tag == wire.callext
+        orelse tag == wire.yieldop { 1 } else { 0 }
+}
+
+// A forward jump, every jump tag but the two `EndLoop` back-edges.
+fn dc_is_jump(tag: Word) -> Word {
+    if tag == wire.iff orelse tag == wire.els orelse tag == wire.mif orelse tag == wire.mbreak
+        orelse tag == wire.breakif orelse tag == wire.mbreakif { 1 } else { 0 }
+}
+
+// Any op whose operand is an op position.
+fn dc_is_target(tag: Word) -> Word {
+    if dc_is_jump(tag) == 1 orelse tag == wire.loopop orelse tag == wire.mloop
+        orelse tag == wire.endloop orelse tag == wire.mendloop { 1 } else { 0 }
+}
+
+// The first position at or after `from` that is not a view, skipping at most sixteen.
+fn dc_skip_views(from: Word) -> Word {
+    dcopy.q = from; dcopy.stop = 0;
+    for v in 0..16 limit 16 {
+        if dcopy.stop == 0 andalso dcopy.q < st.op_count andalso dc_is_view(st.ops[dcopy.q]) == 1 {
+            dcopy.q = dcopy.q + 1;
+        } else { dcopy.stop = 1; }
+    }
+    dcopy.q
+}
+
+// The local rule for a read at `at` of slot `lo` bound by the SetLocal(k) at `def`.
+fn dc_local(at: Word, lo: Word, def: Word, k: Word) -> Word {
+    dcopy.verdict = 0; dcopy.last = def; dcopy.skipped = 16777216; dcopy.open_n = 0;
+    for i in 0..st.op_count limit 8192 {
+        let w = st.ops[i]; let tag = w % wire.radix; let opd = w / wire.radix;
+        if i < def {
+            if (tag == wire.getlocal orelse tag == wire.setlocal) andalso opd == k { dcopy.verdict = 1; }
+            if dc_is_jump(tag) == 1 andalso opd > def andalso opd < dcopy.skipped { dcopy.skipped = opd; }
+        }
+        if i > def {
+            if dcopy.open_n > 0 andalso dcopy.open[dcopy.open_n - 1] <= i { dcopy.open_n = dcopy.open_n - 1; }
+            if tag == wire.loopop orelse tag == wire.mloop {
+                if dcopy.open_n >= 32 { dcopy.verdict = 1; } else {
+                    dcopy.open[dcopy.open_n] = opd; dcopy.open_n = dcopy.open_n + 1;
+                }
+            }
+            if tag == wire.setlocal andalso opd == k { dcopy.verdict = 1; }
+            if tag == wire.getlocal andalso opd == k {
+                let q = dc_skip_views(i + 1);
+                if q >= st.op_count { dcopy.verdict = 1; } else {
+                    if dc_is_dead_end(st.ops[q], lo) == 0 { dcopy.verdict = 1; }
+                }
+                let end = if dcopy.open_n > 0 { dcopy.open[0] - 1 } else { q };
+                if end > dcopy.last { dcopy.last = end; }
+                if q > dcopy.last { dcopy.last = q; }
+            }
+        }
+    }
+    if dcopy.skipped <= dcopy.last { dcopy.verdict = 1; }
+    if dcopy.verdict == 0 {
+        let end = if dcopy.last < st.op_count { dcopy.last } else { st.op_count - 1 };
+        for h in at..end + 1 limit 8192 {
+            if dc_is_hazard(st.ops[h], lo) == 1 { dcopy.verdict = 1; }
+        }
+    }
+    dcopy.verdict
+}
+
+// Whether the read whose value is on top before position `at`, of slot `lo`, needs a copy.
+fn dc_needs_copy(at: Word, lo: Word) -> Word {
+    let q = dc_skip_views(at);
+    if q >= st.op_count { 1 } else {
+        let w = st.ops[q];
+        if dc_is_dead_end(w, lo) == 1 { 0 } else {
+            if w % wire.radix == wire.setlocal { dc_local(at, lo, q, w / wire.radix) } else { 1 }
+        }
+    }
+}
+
+// The position `t` names after the copies are inserted, four more per copied read before it.
+fn dc_moved(t: Word) -> Word {
+    dcopy.shift = 0;
+    for r in 0..dcopy.reads limit 64 {
+        if dcopy.at[r] < t { dcopy.shift = dcopy.shift + 4; }
+    }
+    t + dcopy.shift
+}
+
+// Insert the copies, moving each op from the end down so that no unmoved op is overwritten.
+fn dc_insert() -> Word {
+    let n = st.op_count;
+    dcopy.c = dcopy.reads;
+    for jj in 0..n limit 8192 {
+        let j = n - 1 - jj;
+        if dcopy.c > 0 andalso dcopy.at[dcopy.c - 1] >= j { dcopy.c = dcopy.c - 1; }
+        let dst = j + 4 * dcopy.c;
+        let w = st.ops[j];
+        let tag = w % wire.radix;
+        st.ops[dst] = if dc_is_target(tag) == 1 { tag + dc_moved(w / wire.radix) * wire.radix } else { w };
+        if dcopy.c < dcopy.reads andalso dcopy.at[dcopy.c] == j {
+            let size = dcopy.size[dcopy.c];
+            st.ops[dst + 1] = wire.newcompositearray + (1 + size * 65536) * wire.radix;
+            st.ops[dst + 2] = wire.pushimm + 4 * wire.radix;
+            st.ops[dst + 3] = wire.getindexnested + (size + 2 * 65536) * wire.radix;
+            st.ops[dst + 4] = wire.popn + 6 * wire.radix;
+        }
+    }
+    st.op_count = n + 4 * dcopy.reads;
+    0
+}
+
+fn dc_pass() -> Word {
+    dcopy.done = 1;
+    dcopy.reads = 0;
+    for i in 0..st.op_count limit 8192 {
+        let w = st.ops[i];
+        if w % wire.radix == wire.getdata andalso dc_size_of(w / wire.radix) > 0 {
+            if dc_needs_copy(i + 1, w / wire.radix) == 1 {
+                if dcopy.reads >= 64 { ast.dc_refuse = 1; } else {
+                    dcopy.at[dcopy.reads] = i; dcopy.size[dcopy.reads] = dc_size_of(w / wire.radix);
+                    dcopy.reads = dcopy.reads + 1;
+                }
+            }
+        }
+    }
+    if st.op_count + 4 * dcopy.reads > 8192 { ast.dc_refuse = 1; }
+    if dcopy.reads > 0 andalso ast.dc_refuse == 0 { dc_insert(); }
+    0
+}
+
+// The phase machine is a multiheaded `yield` function: one head per phase,
+// selected by a `when` guard. The heads are tried top to bottom and the first
+// satisfied guard wins, so the guard order is the phase order. Each head yields
+// directly the result of its phase step; the seed, walk, and return steps return
+// the PENDING 0. Guards read only `data` fields and comparisons, never call a
+// function, as the guard grammar requires. Because every path through this
+// function yields, it yields on every one of its paths.
+fn emit_next(resume: Word) -> Word when st.started == 0 {
+    seed_step()
+}
+
+fn emit_next(resume: Word) -> Word when st.sp > 0 {
+    walk_step()
+}
+
+fn emit_next(resume: Word) -> Word when st.ret_done == 0 {
+    drain_return()
+}
+
+fn emit_next(resume: Word) -> Word when dcopy.done == 0 {
+    dc_pass()
+}
+
+fn emit_next(resume: Word) -> Word when st.emit_cursor < st.op_count {
+    drain_buffer()
+}
+
+fn emit_next(resume: Word) -> Word when st.count_done == 0 {
+    drain_count()
+}
+
+fn emit_next(resume: Word) -> Word when st.pool_cursor < st.pool_count {
+    drain_pool()
+}
+
+fn emit_next(resume: Word) -> Word when st.tag_cursor < st.pool_count {
+    drain_tags()
+}
+
+fn emit_next(resume: Word) -> Word when st.header_done == 0 {
+    drain_header()
+}
+
+fn emit_next(resume: Word) -> Word {
+    0
+}
+
+// The loop delegates its single yield to `emit_next`. Because `emit_next` yields
+// on every path, the productivity obligation is satisfied by delegation, and the
+// runtime propagates the callee's yield up as the loop's suspension. The yield
+// contract (Word in, Word out) matches, so the yield transparently reaches the
+// host.
+private data relocate { result: Word, hits: Word, bad: Word, }
+fn relocate_data_arg() -> Word {
+    if ast.relocate_count < 0 orelse ast.relocate_count > 640 orelse ast.relocate_kind < 11 orelse ast.relocate_kind > 14 orelse ast.relocate_arg < 0 { 0 - 1 } else {
+        let indexed = ast.relocate_kind >= 13;
+        let base = if indexed { ast.relocate_arg % 16777216 } else { ast.relocate_arg };
+        // Reads and, since the index-first write (2026-10-21), stores carry the element kind
+        // at 2^48. A kind lane other than 0, 2 and 3 is refused rather than masked.
+        let scalar = if indexed { ast.relocate_arg / 281474976710656 } else { 0 };
+        let width = if indexed { (ast.relocate_arg / 16777216) % 16777216 } else { 1 };
+        relocate.result = 0; relocate.hits = 0; relocate.bad = 0;
+        if base >= 16777216 orelse width <= 0 orelse width >= 16777216
+            orelse (scalar != 0 andalso scalar != 2 andalso scalar != 3) { relocate.bad = 1; }
+        for i in 0..ast.relocate_count limit 1024 {
+            let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
+            if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {
+                if base >= start andalso base - start < length {
+                    relocate.hits = relocate.hits + 1;
+                    if width > length - (base - start) { relocate.bad = 1; } else {
+                        let prefix = if indexed { (ast.relocate_arg / 16777216) * 16777216 } else { 0 };
+                        relocate.result = prefix + target + (base - start);
+                    }
+                }
+            }
+        }
+        if relocate.bad == 0 andalso relocate.hits == 1 { relocate.result } else { 0 - 1 }
+    }
+}
+loop main(resume: Word) -> Word {
+    if ast.relocate_mode == 1 { yield relocate_data_arg() } else { yield emit_next(resume) }
+}

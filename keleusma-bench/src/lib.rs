@@ -761,13 +761,13 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
     },
     OpcodeSpec {
         name: "Div",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Div, Op::PopN(1)],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Div, Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Mod",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Mod, Op::PopN(1)],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Mod, Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },

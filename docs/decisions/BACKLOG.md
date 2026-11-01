@@ -565,7 +565,7 @@ The compiler emits a specialised inline bytecode sequence per `(operation, N)`. 
 
 | Operation | Algorithm | Linear / quadratic | Approximate op count at N = 4 |
 |-----------|-----------|--------------------|-------------------------------|
-| `+`, `-` | N-step cascade. Each digit: `Op::CheckedAdd` (or Sub), unpack `(high, low, flag)`, fold the carry / borrow into the next digit. | Linear in N | ~50 |
+| `+`, `-` | N-step cascade. Each digit: `Op::CheckedAdd` (or Sub), unpack `(low, high, flag)`, fold the carry / borrow into the next digit. | Linear in N | ~50 |
 | `==`, `!=` | N digit-wise equality reduction via the existing `Op::Eq` and AND. | Linear in N | ~30 |
 | `<`, `<=`, `>`, `>=` | Compare from most-significant to least-significant digit. The top digit is signed; lower digits are unsigned. Break on first inequality. | Linear in N | ~80 |
 | `*` | Schoolbook: N² partial products via `Op::CheckedMul`, each depositing `(high, low)` at adjacent digit positions, then a carry-propagation pass. The result is truncated to Multiword<N>; full 2N width requires a separate widening multiply op not in this spec. | Quadratic in N | ~250 |
@@ -579,7 +579,7 @@ The per-digit cascade must propagate the **unsigned** carry and borrow, not the 
 
 ### Why no new opcodes are needed
 
-- The checked-arithmetic opcodes (`Op::CheckedAdd` / Sub / Mul / Div / Mod) already produce the `(high, low, flag)` triple that the cascade consumes. The pattern-arm `ok` / `overflow` / `underflow` dispatch surfaces the flag through bytecode without an extra opcode.
+- The checked-arithmetic opcodes (`Op::CheckedAdd` / Sub / Mul / Div / Mod) already produce the `(low, high, flag)` triple that the cascade consumes. The pattern-arm `ok` / `overflow` / `underflow` dispatch surfaces the flag through bytecode without an extra opcode.
 - `Op::ArrayIndex` and `Op::NewArray` handle the internal array storage.
 - Local slots and `Op::GetLocal` / `Op::SetLocal` carry the intermediate carries, borrows, and partial products between digit steps.
 - `Op::If` and `Op::Loop` are sufficient for the comparison short-circuit, the Knuth D adjustment step, and the variable shift loop.
@@ -1387,6 +1387,30 @@ Three items deferred during the V0.2.1 CLI runner work that are not specific to 
 - The Generic `Result<T, E>` decision is in the V0.3.x language-extension territory; it interacts with monomorphisation and with the host-native marshalling surface.
 - The `shell::read_lines` decision is contingent on a dynamic-length Array type or a script-side string-splitting native; either is a separate decision.
 
+## B31a. Two defects that made `run-tasks` unable to run any task (Fixed 2026-09-23)
+
+Found by writing the subcommand's **first integration test**. Neither had test coverage,
+and either alone ended the runner within a second of start.
+
+1. **The arena was moved after a `&'static` reference into it was taken.** `load_task`
+   built an `Arena` by value, handed the virtual machine a reference derived from that
+   local, and then moved the arena into the returned `Task`, which was moved again into
+   the task vector. The safety comment reasoned that the arena was kept alive, which was
+   true and insufficient: **moving it invalidates the address.** It presented as an arena
+   reporting forty-eight bytes of capacity and every task failing on its first composite
+   allocation. The arena is now boxed, so it keeps one heap address however often its
+   owner moves.
+
+2. **A yielded tuple was decoded without the arena.** Since B28 a yielded tuple's body is
+   flat and arena-resident, so the context-free decode could not read it and the
+   scheduler treated every task as having "yielded a non-tuple value" and finished it.
+   The decode now resolves against the task's arena, with the widths taken from the
+   module rather than from the host's `i64`.
+
+**Why they survived.** `run-tasks` had no integration test at all. The regression guard
+is `a_task_loads_and_keeps_running`, which is non-vacuous: reintroducing the first defect
+fails it in under two seconds.
+
 ## B31. run-tasks deferred work
 
 Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implementation. Each was explicitly marked deferred in the design proposal (`docs/architecture/RUN_TASKS.md`) and none blocks V0.2.1 landing. This entry consolidates the items into a durable backlog record and gives each a tracking row that survives REVERSE_PROMPT rewrites.
@@ -1396,7 +1420,7 @@ Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implem
 | 1 | Manifest signing | The TOML manifest itself is unsigned. Tasks declared in the manifest reference per-task bytecode artefacts that can be independently signed and verified, but the manifest's task list, restart limits, and per-task policy is plain text. A manifest signing scheme would Ed25519-sign the manifest body and require the runner to verify before scheduling tasks. | Operators deploying to environments where the manifest itself is a tamper target. |
 | 2 | Per-task isolation through OS primitives | Tasks share the runner process's address space, file descriptors, and OS-level permissions. Per-OS isolation primitives (Linux namespaces, FreeBSD jails, OpenBSD `pledge`/`unveil`, macOS sandbox profiles, Windows job objects) would scope a task's OS-visible side effects. Substantial per-OS work because each platform's primitive set has different semantics. | Operators running mixed-trust task sets in a single runner. |
 | 3 | Dynamic task addition | Tasks are declared statically in the manifest and the manifest is read once at startup. A control socket or a `kernel::add_task` native would let a running task add new tasks at runtime. | Operators whose workload shape includes spawning sub-tasks in response to events. |
-| 4 | Hot reload via SIGHUP | A SIGHUP handler is installed but performs no action. Hot reload would re-read the manifest, gracefully drain removed tasks, and start added tasks without restarting the runner process. Highest-leverage item in this list per the V0.2.1 close-out assessment. | Operators who want to update task configuration without process restart. |
+| 4 | Hot reload via SIGHUP | **FIRST SLICE LANDED 2026-09-23.** SIGHUP now re-reads and re-parses the manifest and applies what needs no lifecycle change: the scheduler-wide `tick_interval` and `shutdown_grace`, which are read inside the dispatch loop, and each task's restart policy, which is consulted only when a task restarts, matched by name. A manifest that cannot be read or parsed leaves the runner running on its previous configuration and reports the refusal; that property has its own tests. Changes the slice cannot make are REPORTED as deferred rather than silently ignored: adding or removing a task, a changed bytecode path or arena capacity, a changed period or priority, and any change to the event-id map. **What remains** is the lifecycle half the original entry describes -- draining removed tasks and starting added ones -- which needs the rebuild of a task's arena and virtual machine. | Operators who want to update task configuration without process restart. |
 | 5 | Priority levels and preemption | The cooperative scheduler treats all tasks as equal-priority and runs each dispatch to completion (or to a yield). Priority levels with preemption would let a high-priority task interrupt a low-priority task. Out of scope by design for the cooperative model; operators needing preemption write their own host. | Operators whose workload includes hard-real-time tasks alongside best-effort tasks. |
 | 6 | Soft resource caps beyond WCMU | The arena bounds per-task memory and the cooperative model bounds per-dispatch CPU. Neither bounds wall-clock task lifetime, cumulative output volume, or other operational ceilings. A kill-runaway-task cap would terminate a task that exceeds a declared lifetime budget. | Operators running untrusted task sets who want to prevent a misbehaving task from monopolising the runner. |
 | 7 | Typed event payloads | Events currently carry a single `Word` payload. A manifest-declared event schema would let tasks declare typed payloads (structs, tuples, enums) and have the kernel validate payload conformance at `post_event` time. | Operators with rich inter-task communication patterns. |
@@ -1812,13 +1836,13 @@ P3d-ii is implemented. A Float construct admits `+`, `-`, `*`, `/` (not `%` or u
 
 P3d-iii is implemented, completing P3. A Fixed construct admits `+`, `-`, `*`, `/`, `%`, and unary `-`. Fixed is signed, so its outcome admissibility mirrors Word (`+`, `-`, `*` overflow and underflow, unary `-` overflow, `/` overflow and zero divisor, `%` zero divisor), but its `overflow`/`underflow` arms bind a single result like Byte and Float rather than the high and low halves, and `nan` is inadmissible. The checked Fixed multiply and divide wrap an out-of-range result, matching the wrapping default of the other checked families, whereas the plain `FixedMul`/`FixedDiv` saturate. A zero divisor on `/` or `%` reifies as flag 3 carrying the numerator, and an unhandled zero divisor traps as a division by zero.
 
-The encoding is a unified one that adds no opcodes and keeps the count at 69. Only Q-format multiply and divide need the fraction-bit count, because only they carry a shift, namely a right shift after the multiply and a left shift of the dividend before the divide, whereas Q-format add, subtract, modulo, and negate preserve the scale and need no shift. The fraction-bit count is therefore a `u8` operand on the existing `CheckedMul` and `CheckedDiv` opcodes, where `0` denotes integer arithmetic and a positive count denotes Fixed, so zero fraction bits is exactly integer multiply or divide. Add, subtract, modulo, and negate stay zero-operand and dispatch on the operand type alone. The `u8` operand occupies one of the three inline operand bytes, so the parameterized opcodes remain ordinary inline instructions and never become pool-indexed. This encoding was chosen over distinct Fixed opcodes because it is the static, type-independent format selector that a radiation-hardened silicon decoder wants, and it keeps the integer and fixed-point datapaths unified around a single shift parameter. The initial implementation used two dedicated opcodes; they were refactored away into the parameterized form once the silicon-encoding tradeoff was settled.
+The encoding is a unified one that adds no opcodes and keeps the count at 69, which was the count when this was written; the later P4 `NewComposite` consolidation took it to 66, and this paragraph is a record of the P3d-iii decision rather than a statement about the current instruction set. Only Q-format multiply and divide need the fraction-bit count, because only they carry a shift, namely a right shift after the multiply and a left shift of the dividend before the divide, whereas Q-format add, subtract, modulo, and negate preserve the scale and need no shift. The fraction-bit count is therefore a `u8` operand on the existing `CheckedMul` and `CheckedDiv` opcodes, where `0` denotes integer arithmetic and a positive count denotes Fixed, so zero fraction bits is exactly integer multiply or divide. Add, subtract, modulo, and negate stay zero-operand and dispatch on the operand type alone. The `u8` operand occupies one of the three inline operand bytes, so the parameterized opcodes remain ordinary inline instructions and never become pool-indexed. This encoding was chosen over distinct Fixed opcodes because it is the static, type-independent format selector that a radiation-hardened silicon decoder wants, and it keeps the integer and fixed-point datapaths unified around a single shift parameter. The initial implementation used two dedicated opcodes; they were refactored away into the parameterized form once the silicon-encoding tradeoff was settled.
 
 The work landed across four commits: the dispatch-only ISA layer and the frontend for the dedicated-opcode form, then the parameterizing refactor and its documentation.
 
 With P3a through P3d complete, the entire checked-arithmetic redesign is done: optional arms with wrapping defaults, the `zero_divisor` outcome, per-operand-type admissibility, and the Byte, Float, and Fixed extensions across all four numeric operand types.
 
-P4 is implemented. The indexing construct `array[i] { ok(v) => ..., invalid_index(idx) => ... }` is the third member of the construct family and reuses the `Expr::Checked` node: when the guarded operation is an array index, the type checker routes to a dedicated path admitting only `ok` (binding the element type) and `invalid_index` (binding the offending index `Word`), with `ok` a mandatory catch-all and `invalid_index` optional. The lowering adds no opcode. The compiler synthesizes the bounds check from `Op::Len`, integer comparisons, and `Op::If`, computing an outcome flag and stashing the element when in range, then dispatches arms through the same virtual-loop machinery as the arithmetic construct. An unhandled out-of-bounds index re-issues the plain `Op::GetIndex`, which traps with the precise `VmError::IndexOutOfBounds(index, len)`, so the unhandled path keeps full diagnostic payload. This phase deliberately stays opcode-free, in contrast to P3d-iii, because a bounds check decomposes cleanly into existing instructions whereas the `Fixed` Q-format shift did not. The native out-of-bounds default (the element type's zero-or-lowest-valid value) is part of P8, which is gated on native code generation.
+P4 is implemented. The indexing construct `array[i] { ok(v) => ..., invalid_index(idx) => ... }` is the third member of the construct family and reuses the `Expr::Checked` node: when the guarded operation is an array index, the type checker routes to a dedicated path admitting only `ok` (binding the element type) and `invalid_index` (binding the offending index `Word`), with `ok` a mandatory catch-all and `invalid_index` optional. The lowering adds no opcode. The compiler synthesizes the bounds check from the array length, integer comparisons, and `Op::If`, computing an outcome flag and stashing the element when in range, then dispatches arms through the same virtual-loop machinery as the arithmetic construct. (This paragraph said `Op::Len` until 2026-09-04. It was accurate when written and became a live defect: a `Multiword` operand's length does not fold through the array-length helper, so the check fell back to that opcode over a flat body and the program loaded and then trapped. The length is now folded for every indexable type.) An unhandled out-of-bounds index re-issues the plain `Op::GetIndex`, which traps with the precise `VmError::IndexOutOfBounds(index, len)`, so the unhandled path keeps full diagnostic payload. This phase deliberately stays opcode-free, in contrast to P3d-iii, because a bounds check decomposes cleanly into existing instructions whereas the `Fixed` Q-format shift did not. The native out-of-bounds default (the element type's zero-or-lowest-valid value) is part of P8, which is gated on native code generation.
 
 P5 is implemented. The newtype-construction construct `Name(value) { ok(v) => ..., invalid_newtype(x) => ... }` is the fourth member of the family and reuses the `Expr::Checked` node: when the guarded operation constructs a newtype, the type checker routes to a dedicated path admitting only `ok` (binding the constructed newtype) and `invalid_newtype` (binding the underlying value the refinement rejected). The `invalid_newtype` arm is admissible only for a refined newtype, since a non-refined newtype's construction is total; the type checker tracks the refined names in a new `Ctx::refined_newtypes` set populated during refinement validation. The lowering adds no opcode. The compiler computes the underlying value, runs the refinement predicate when one exists, and branches on the result into an outcome flag (0 ok, 1 invalid newtype), then dispatches arms through the same virtual-loop machinery as the other constructs. An unhandled failure traps with `TrapKind::RefinementFailed`, the same fault a bare construction produces. The native default (the lowest-valid value, per the lowest-valid precedence) is part of P8, which is gated on native code generation.
 
@@ -2026,3 +2050,21 @@ Two lower-level items from Part IV of the review:
 - **Public-versus-internal `Value` separation.** Drawn from Rex's own documented debt (`issues/05`). Keeping the host-facing value type distinct from the internal representation before the surface grows avoids a later painful split. Open, medium effort.
 
 The review's bottom line is that the provenance-for-research thesis did not change Rex's trajectory, that Rex leads on editor tooling and onboarding docs and longevity, and that Keleusma leads on its own guarantee model, `no_std` fit, and test and comment density.
+
+
+## B42. First-class ring buffers managed by the compiler
+
+Requested by the operator on 2026-10-14. Keleusma should provide first-class
+ring buffer support managed by the compiler. The operator reaffirmed this request
+on 2026-10-15 and requested a commit and push of the current work.
+
+This remains an explicit operator requirement for future language work. The
+operator ruled on 2026-10-30 that it be scheduled now, a ruling relayed to the
+design's author by the commissioning session.
+
+Status is designed, not implemented. The design is
+[`RING_BUFFER_DESIGN.md`](./RING_BUFFER_DESIGN.md). It proposes `Ring<T, N>` as
+the type of a private or shared data field, lowered to `2 + N` data slots and
+existing opcodes with no new opcode and no wire change, and four increments, R1
+to R4, after items 5, 7 and 8. Decisions D1 to D7 in that document remain the
+operator's, and no release target is assigned.

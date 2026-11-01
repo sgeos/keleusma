@@ -4,7 +4,17 @@ use alloc::format;
 use alloc::string::String;
 // The `vec!` macro is used only by the test module; lib code uses the
 // fully-qualified `alloc::vec!`.
-#[cfg(test)]
+//
+// The cfg must MATCH THE TEST MODULE'S, which is
+// `all(test, feature = "compile", feature = "verify")`. Gated on `test` alone
+// this import is unused whenever those features are off, and the resulting
+// warning is invisible to the release gate: the gate's lint step denies
+// warnings but runs `--workspace`, where feature unification through
+// `keleusma-cli` turns `compile` and `verify` back on, while the step that
+// does reach the bare configuration is `cargo test`, which prints warnings and
+// passes. Each instrument is correct in its own scope and the union of the
+// scopes has a hole. Raised by the `v0.3.0` line, whose gate printed it.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -57,7 +67,13 @@ macro_rules! fp {
 }
 
 /// A runtime error from the Keleusma VM.
+///
+/// The enum is non-exhaustive, so a host that matches it must carry a
+/// wildcard arm. A variant added later then does not break the host's
+/// build. [`VmError::category`] gives the retry-or-halt split for any
+/// variant.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum VmError {
     /// The value stack was empty when a pop was attempted.
     StackUnderflow,
@@ -108,6 +124,10 @@ pub enum VmError {
     /// assertion's source location and message, when present, live in
     /// the chunk's strippable `AssertionContext` debug record.
     AssertionFailed,
+    /// A `for ... limit` loop reached its compile-time iteration cap
+    /// before its range was exhausted, and no `limit` outcome arm
+    /// handled the overrun.
+    LoopLimitExceeded,
     /// Structural verification failed at load time.
     VerifyError(String),
     /// Bytecode load failure encountered before verification could run,
@@ -126,6 +146,17 @@ pub enum VmError {
     /// resuming. Distinguished from [`VmError::InvalidBytecode`] to
     /// keep API misuse separate from corrupt or malformed bytecode.
     NotSuspended,
+    /// A native function asked the virtual machine to stop.
+    ///
+    /// Unlike [`VmError::NativeError`] and [`VmError::NativeErrorCode`],
+    /// which a script may catch through the native-error construct, this
+    /// error is never reified into the construct. It propagates out of the
+    /// call that ran the native, and its category is
+    /// [`VmErrorCategory::Halt`], so the host must call
+    /// [`Vm::reset_after_error`] before running the program again. A native
+    /// returns it when a host failure must end the run rather than be
+    /// recovered by the script. The message is the host's own diagnostic.
+    HostHalt(String),
 }
 
 impl From<crate::bytecode::LoadError> for VmError {
@@ -160,7 +191,7 @@ pub enum VmErrorCategory {
     /// programs must call [`Vm::reset_after_error`] before any
     /// further [`Vm::call`] or [`Vm::resume`]. Examples:
     /// `StackUnderflow`, `InvalidBytecode`, `VerifyError`,
-    /// `LoadError`, `OutOfArena`, `NotSuspended`.
+    /// `LoadError`, `OutOfArena`, `NotSuspended`, `HostHalt`.
     Halt,
     /// Recoverable script-side error. The script asked for something
     /// that the VM rejected; the host may surface the error to the
@@ -189,7 +220,8 @@ impl VmError {
             | VmError::VerifyError(_)
             | VmError::LoadError(_)
             | VmError::OutOfArena(_)
-            | VmError::NotSuspended => VmErrorCategory::Halt,
+            | VmError::NotSuspended
+            | VmError::HostHalt(_) => VmErrorCategory::Halt,
             // Soft script: the script's request was invalid at the
             // VM level, but the VM's invariants hold and the host
             // can ask the script to retry through `resume_err`.
@@ -202,7 +234,8 @@ impl VmError {
             | VmError::NoMatchingArm
             | VmError::CheckedArithNoArm
             | VmError::EnumVariantUnmapped
-            | VmError::AssertionFailed => VmErrorCategory::SoftScript,
+            | VmError::AssertionFailed
+            | VmError::LoopLimitExceeded => VmErrorCategory::SoftScript,
             // Soft host: a native returned an error. The host owns
             // the policy.
             VmError::NativeError(_) | VmError::NativeErrorCode { .. } => VmErrorCategory::SoftHost,
@@ -305,6 +338,45 @@ pub enum OverflowPolicy {
     Allow,
 }
 
+/// Host policy for language traps. Resource and host-contract guards remain active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrapPolicy {
+    /// Preserve ordinary execution, including explicit language traps.
+    #[default]
+    Allow,
+    /// Admit only a completed first-pass TrapFree classification.
+    /// Unsupported or unavailable analysis is rejected before execution.
+    RequireTrapFree,
+}
+
+/// Runtime operand-stack checking mode. Other contract guards remain active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionChecks {
+    /// Retain ordinary operand-pop underflow checks.
+    #[default]
+    Checked,
+    /// Run only after structural, depth, resource and trap-free proofs, which
+    /// establish that no operand-stack underflow check can fail on the certified
+    /// image. The checks themselves are retained, so a defect in the proof
+    /// surfaces as `VmError::StackUnderflow` rather than undefined behaviour.
+    /// Requires `TrapPolicy::RequireTrapFree`.
+    Proven,
+}
+
+// Not constructible by callers. It belongs to the VM's immutable current image.
+struct PopElisionProof;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionProofState {
+    Inactive,
+    Ready,
+    Prepared,
+    Yielded,
+    Reset,
+    Breakpoint,
+    Finished,
+    Poisoned,
+}
+
 /// Construction-time options for [`Vm::new_with_options`].
 ///
 /// The default options apply the strict overflow policy
@@ -315,6 +387,10 @@ pub struct VmOptions {
     /// Policy for handling WCET and WCMU bound overflow at the
     /// declared header level. See [`OverflowPolicy`].
     pub overflow_policy: OverflowPolicy,
+    /// Language-trap admission policy. This does not enable unchecked execution.
+    pub trap_policy: TrapPolicy,
+    /// Select actual proof-gated operand-pop check removal.
+    pub execution_checks: ExecutionChecks,
 }
 
 /// Non-fatal finding produced by [`Vm::new_with_options`] when an
@@ -369,6 +445,12 @@ pub struct NativeCtx<'a> {
     pub word_bytes: usize,
     /// The module's packed float byte width, paired with `word_bytes`.
     pub float_bytes: usize,
+    /// The module's packed ADDRESS byte width, which sizes an `Opaque` field.
+    /// Declared independently of `word_bytes`; they agree only by default.
+    pub addr_bytes: usize,
+    /// The VM's bytecode image, where a constant string in a composite
+    /// argument points. See [`crate::marshall::RefContext::rodata`].
+    pub rodata: &'a [u8],
 }
 
 impl<'a> NativeCtx<'a> {
@@ -380,11 +462,13 @@ impl<'a> NativeCtx<'a> {
             opaques: self.opaques,
             word_bytes: self.word_bytes,
             float_bytes: self.float_bytes,
+            addr_bytes: self.addr_bytes,
             // A native argument is materialised at the current epoch and read
             // synchronously within the call, before any RESET, so the current
             // arena epoch is the argument body's originating epoch (B28 P3
             // item 1).
             ref_epoch: self.arena.epoch(),
+            rodata: self.rodata,
         }
     }
 }
@@ -462,8 +546,12 @@ pub const DEFAULT_NATIVE_WCET: u32 = 10;
 /// `Vm::set_native_bounds`.
 pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 
-/// Default arena capacity in bytes when constructed via `Vm::new`. The host
-/// can override this by calling `Vm::new_with_arena_capacity`.
+/// Default arena capacity in bytes, for hosts that want a starting point.
+///
+/// `Vm::new` takes an already-constructed [`keleusma_arena::Arena`], so a host
+/// chooses the capacity by building the arena it wants and passing it in;
+/// there is no capacity-taking constructor. See
+/// [`auto_arena_capacity_for`] to size one from a module's own bounds.
 pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
 
 /// Minimum operand-stack capacity pre-reserved at `Vm::new`, in slots.
@@ -491,6 +579,36 @@ const MIN_FRAMES_RESERVE: usize = 1;
 fn stale_arena_body() -> VmError {
     VmError::InvalidBytecode(alloc::string::String::from(
         "flat composite body read after arena reset (stale)",
+    ))
+}
+
+/// The exclusive bound an indexed read reports in its diagnostic suffix. The
+/// suffix carries an unsigned 32-bit length, so a longer body is malformed.
+fn index_outcome_bound(len: usize) -> Result<u32, VmError> {
+    u32::try_from(len).map_err(|_| {
+        VmError::InvalidBytecode(alloc::string::String::from(
+            "array length exceeds the diagnostic representation",
+        ))
+    })
+}
+
+/// Fault when a shared-data access runs with no host buffer bound.
+///
+/// The buffer is bound by `enter_shared` for the duration of one
+/// `call_with_shared`/`resume_with_shared` and cleared on return, so the
+/// virtual machine retains no pointer into the host's borrow. Any entry point
+/// that resumes execution must therefore rebind it.
+///
+/// **This was a `panic!` (an `.expect`) until 2026-08-15, and it was reachable
+/// from safe public API on ordinary input**: `resume_from_breakpoint` called
+/// `run()` without rebinding, so the first shared read after a breakpoint stop
+/// aborted the process. A panic is not a [`VmError`], so a host driving a
+/// debugger could not catch it. Reported by the `v0.3.0` line. The entry point
+/// is fixed, and this is the defence in depth behind it — a fault a host can
+/// handle rather than an abort, for any future path that forgets to rebind.
+fn shared_buffer_not_bound(op: &str) -> VmError {
+    VmError::NativeError(alloc::format!(
+        "{op} ran with no shared-data buffer bound; drive a module with shared data through `call_with_shared`/`resume_with_shared`/`resume_from_breakpoint_with_shared` with a buffer of `shared_data_bytes()`"
     ))
 }
 
@@ -549,12 +667,74 @@ fn rewrap_flat_body<W: crate::word::Word, F: crate::float::Float>(
     }
 }
 
+/// Check a canonicalised host input against the flat shape its chunk
+/// signature declares.
+///
+/// The host builds a composite input as a value tree, and the VM packs it in
+/// the host's field order. The script reads it at offsets baked for the
+/// declared order. A body of another size or kind is therefore read by the
+/// wrong layout, which for a `Text` field would rebuild a string from a word
+/// that is not a pointer. This check refuses a tuple, struct or array input
+/// whose packed body differs in kind or byte length from the declaration, and
+/// a scalar where such a body is declared.
+///
+/// It does not establish that the layout matches. Two fields of equal width in
+/// the opposite order pack to the same size and pass, because the wire carries
+/// each body's kind and size and not its field layout. The host contract is
+/// that a composite input has the script's field order and field types, which
+/// `#[derive(KeleusmaType)]` upholds when the Rust declaration matches the
+/// script's. Enum inputs are not checked, because an unhandled variant may be
+/// represented as a scalar and its body length varies with the variant.
+fn check_host_composite_shape<W: crate::word::Word, F: crate::float::Float>(
+    value: &crate::bytecode::GenericValue<W, F>,
+    shape: &crate::bytecode::WireShape,
+    what: impl FnOnce() -> String,
+) -> Result<(), VmError> {
+    use crate::bytecode::{ArrayBody, GenericValue, StructBody, TupleBody, WireShape};
+    use crate::value_layout::CompositeKind;
+    let WireShape::Flat { kind, size } = *shape else {
+        return Ok(());
+    };
+    let declared = [
+        CompositeKind::Tuple,
+        CompositeKind::Array,
+        CompositeKind::Struct,
+    ]
+    .into_iter()
+    .find(|k| k.to_tag() == kind);
+    let Some(declared) = declared else {
+        return Ok(());
+    };
+    let got = match value {
+        GenericValue::Tuple(TupleBody::Flat(fc)) => Some((CompositeKind::Tuple, fc.byte_len())),
+        GenericValue::Array(ArrayBody::Flat(fc)) => Some((CompositeKind::Array, fc.byte_len())),
+        GenericValue::Struct(StructBody::Flat(fc)) => Some((CompositeKind::Struct, fc.byte_len())),
+        _ => None,
+    };
+    match got {
+        Some((k, len)) if k == declared && len == size as usize => Ok(()),
+        Some((k, len)) => Err(VmError::TypeError(format!(
+            "{} is declared as a {declared:?} body of {size} bytes, and the host value packed \
+             to a {k:?} body of {len} bytes; a host composite must have the script's field \
+             order and field types",
+            what()
+        ))),
+        None => Err(VmError::TypeError(format!(
+            "{} is declared as a {declared:?} body of {size} bytes, and the host value is {}; \
+             a host composite must have the script's field order and field types",
+            what(),
+            value.type_name()
+        ))),
+    }
+}
+
 fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
     use alloc::format;
     VmError::OutOfArena(format!(
         "arena exhausted while growing the {} (capacity {} bytes). \
          Increase the arena, or compute a sufficient size with \
-         `auto_arena_capacity_for` plus a host-side margin.",
+         `auto_arena_capacity_for`, or with `auto_arena_capacity_with_input_text` \
+         when a composite input carries text.",
         region, capacity
     ))
 }
@@ -566,7 +746,7 @@ fn out_of_arena_min(capacity: usize) -> VmError {
         "arena capacity of {} bytes is too small to pre-reserve the \
          operand-stack and call-frame minimums ({} slots and {} frames). \
          Increase the arena capacity, or compute a sufficient size with \
-         `auto_arena_capacity_for` plus a host-side margin.",
+         `auto_arena_capacity_for`.",
         capacity, MIN_STACK_RESERVE_SLOTS, MIN_FRAMES_RESERVE
     ))
 }
@@ -658,7 +838,7 @@ fn module_bottom_reservations(module: &crate::bytecode::Module) -> (usize, usize
 /// loop reads from these vectors directly through `chunk_op` to
 /// avoid the per-fetch discriminant match against the archived form.
 ///
-/// The buffer's framing is validated through `Module::access_bytes`.
+/// The buffer's framing is validated through `Module::validate_bytes`.
 /// The op decoding uses `op_from_archived` for each op slot. This is
 /// the same conversion that the previous hot-path fetch performed;
 /// pre-decoding amortizes its cost across the VM lifetime instead of
@@ -773,14 +953,16 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     // `op_record_count`; the records decode through the shared
     // operand pool.
     let sections = crate::wire_format::parse_wire_sections(bytes)?;
-    let archived = rkyv::access::<crate::wire_format::ArchivedWireAuxBody, rkyv::rancor::Error>(
-        sections.aux_body,
-    )
-    .map_err(|e| crate::bytecode::LoadError::Codec(alloc::format!("rkyv access failed: {}", e)))?;
-    let mut all_ops: Vec<Vec<Op>> = Vec::with_capacity(archived.chunks.len());
-    for chunk in archived.chunks.iter() {
-        let start = chunk.op_byte_offset.to_native() as usize;
-        let record_count = chunk.op_record_count.to_native() as usize;
+    let aux = crate::wire_schema::AuxView::parse(sections.aux_body).map_err(|e| {
+        crate::bytecode::LoadError::Codec(alloc::format!("aux body invalid: {:?}", e))
+    })?;
+    let mut all_ops: Vec<Vec<Op>> = Vec::with_capacity(aux.chunk_count());
+    for chunk_idx in 0..aux.chunk_count() {
+        let chunk = aux.module().chunk(chunk_idx).ok_or_else(|| {
+            crate::bytecode::LoadError::Codec(alloc::string::String::from("chunk index"))
+        })?;
+        let start = chunk.op_byte_offset as usize;
+        let record_count = chunk.op_record_count as usize;
         let byte_span = record_count
             .checked_mul(crate::wire_format::OPCODE_RECORD_BYTES)
             .ok_or_else(|| {
@@ -809,45 +991,116 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     Ok(all_ops)
 }
 
-/// Compute the exact arena capacity (excluding the persistent `data`
-/// region) that the bundled `i64`/`f64` runtime needs to construct and
-/// run the given module under the supplied native attestations.
+/// Compute the arena capacity (excluding the persistent `data` region) that
+/// the bundled `i64`/`f64` runtime needs to construct the given module, run it
+/// under the supplied native attestations, and receive its host inputs.
 ///
-/// Because the runtime now pre-allocates its entire bottom-region working
-/// set at construction (B28 P3 item 5, priority 1), the figure is the sum
-/// of every component, each sized to the real bundled-runtime footprint:
+/// Because the runtime pre-allocates its entire bottom-region working set at
+/// construction (B28 P3 item 5, priority 1), the figure is the sum of every
+/// component, each sized to the real bundled-runtime footprint.
 ///
-/// - the operand stack, `max_operand_slots * size_of::<Value>()`;
-/// - the call frames, `max_frame_depth * size_of::<CallFrame>()`;
-/// - the opaque registry, `aux_arena_bytes`;
-/// - the per-iteration arena heap, `max_heap_bytes`.
+/// - The operand stack, `max_operand_slots * size_of::<Value>()`.
+/// - The call frames, `max_frame_depth * size_of::<CallFrame>()`.
+/// - The opaque registry, `aux_arena_bytes`.
+/// - The per-iteration arena heap, `max_heap_bytes`.
+/// - The host inputs of the entry chunk, [`host_input_arena_bytes_for`] with
+///   no text allowance.
 ///
 /// The operand-slot and frame-depth components are floored at the same
 /// minimums the constructor applies (`MIN_STACK_RESERVE_SLOTS`,
-/// `MIN_FRAMES_RESERVE`) so the reported figure exactly matches the
-/// reservation the constructor makes, letting a host size its arena with
-/// zero margin. A host that needs headroom (for example to call a `Func`
-/// chunk whose stack exceeds the Stream worst case) is already covered:
-/// the footprint is the module-wide maximum over every chunk.
+/// `MIN_FRAMES_RESERVE`), so the first four components exactly match the
+/// reservation the constructor makes and the program's own peak.
+///
+/// **Host inputs are included.** A composite argument to the entry chunk, and
+/// a composite resume value, is copied into the arena's top region when it
+/// enters the virtual machine, and the copy stays until the next `Reset`. An
+/// arena of exactly the returned size therefore admits `call` and every
+/// `resume` up to each `Reset`, for inputs of the declared types whose
+/// composites contain no `Text`. A scalar input needs nothing, so a module
+/// whose entry takes and resumes with scalars gets the same figure as before
+/// the inputs were counted. [`host_input_arena_bytes_for`] documents how the
+/// input term is bounded and where it is conservative.
+///
+/// **Text inside a composite input.** An owned `Text` field inside a
+/// composite input is copied into the arena as well, and its length is the
+/// host's string, which the module cannot bound. A host that passes such
+/// inputs calls [`auto_arena_capacity_with_input_text`] with its own bound on
+/// the text bytes in any one input value.
+///
+/// **Why one function rather than a companion.** A host that constructs a
+/// virtual machine also calls its entry, and a composite input it passes
+/// needs the space whether or not the figure counts it. A figure that omits
+/// that space is not a size that works, and no realistic host wants the
+/// smaller figure. The host inputs are therefore part of this function. The
+/// one input the module cannot bound, text inside a composite, is the only
+/// reason for the companion, which takes the host's allowance for it.
+///
+/// **Native allocation is included.** The figure also adds
+/// [`crate::native_region::native_region_supplement_bytes`], the region a
+/// native compilation of the module reserves, on the operator's ruling of
+/// 2026-10-31 that one figure serve both routes. A host that runs only the
+/// virtual machine is over-provisioned by exactly that supplement, and a host
+/// that formerly added the native figure itself must stop, or it counts it
+/// twice.
+///
+/// **Not covered.** A direct call of a non-entry chunk through
+/// `Vm::call_function` copies its composite arguments too, and is not counted.
+/// An input whose declared shape is not flat, which the module records as
+/// `WireShape::Top`, is not counted. A host-built value that does not conform
+/// to its declared type can occupy more than the declared size. Repeated calls
+/// of a non-`Stream` entry with no intervening `Reset` accumulate their
+/// argument copies, since only `Reset` reclaims the top region.
 ///
 /// **Slot width.** This entry point uses the bundled runtime's
 /// `size_of::<GenericValue<i64, f64>>()`, the common case. A narrow
 /// `GenericVm<W, A, F>` has a different slot width; such hosts size their
 /// arena from [`verify::module_runtime_footprint`] multiplied by their own
-/// `size_of::<GenericValue<W, F>>()`. Note this is *not*
-/// `bytecode::VALUE_SLOT_SIZE_BYTES` (32), which under-states the real
-/// 64-bit-runtime slot; the binding admission check in [`GenericVm::new`]
-/// already uses the real `size_of`, so that constant governs only the
-/// compile-time advisory header.
+/// `size_of::<GenericValue<W, F>>()`, plus [`host_input_arena_bytes_for`].
+/// Note this is *not* `bytecode::VALUE_SLOT_SIZE_BYTES` (32), which
+/// under-states the real 64-bit-runtime slot; the binding admission check in
+/// [`GenericVm::new`] already uses the real `size_of`, so that constant
+/// governs only the compile-time advisory header.
 ///
 /// Available only when the `verify` feature is enabled because the
 /// computation routes through [`verify::module_runtime_footprint`]. Hosts
 /// that build without the verifier must size arenas through a build-time
 /// analysis instead.
+///
+/// # Errors
+///
+/// Returns `VmError::VerifyError` when the program's own footprint cannot be
+/// bounded, and when the entry resumes with a composite and the number of
+/// resumes before a `Reset` cannot be bounded, as
+/// [`verify::max_resumes_before_reset`] describes.
 #[cfg(feature = "verify")]
 pub fn auto_arena_capacity_for(
     module: &crate::bytecode::Module,
     native_wcmu: &[u32],
+) -> Result<usize, VmError> {
+    auto_arena_capacity_with_input_text(module, native_wcmu, 0)
+}
+
+/// [`auto_arena_capacity_for`] with a host allowance for `Text` inside
+/// composite inputs.
+///
+/// `text_bytes_per_input` is the host's bound on the total byte length of
+/// every owned `Text` field, at any depth, inside any one composite input
+/// value, whether an entry argument or a resume value. The allowance is added
+/// once for each composite input the arena can hold at once, as
+/// [`host_input_arena_bytes_for`] counts them. A bare `Text` argument or
+/// resume value that is not inside a composite is not copied and needs no
+/// allowance. A narrow-word module, whose word is narrower than a host
+/// pointer, keeps text-bearing composites boxed and does not copy their text,
+/// so the allowance only over-provisions there.
+///
+/// # Errors
+///
+/// As [`auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub fn auto_arena_capacity_with_input_text(
+    module: &crate::bytecode::Module,
+    native_wcmu: &[u32],
+    text_bytes_per_input: usize,
 ) -> Result<usize, VmError> {
     let footprint = verify::module_runtime_footprint(module, native_wcmu)
         .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
@@ -856,10 +1109,121 @@ pub fn auto_arena_capacity_for(
     let stack_bytes =
         slots.saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<i64, f64>>());
     let frame_bytes = frames.saturating_mul(core::mem::size_of::<CallFrame>());
+    let inputs = host_input_arena_bytes_for(module, text_bytes_per_input)?;
+    let native = crate::native_region::native_region_supplement_bytes(module) as usize;
     Ok(stack_bytes
         .saturating_add(frame_bytes)
         .saturating_add(module.aux_arena_bytes as usize)
-        .saturating_add(footprint.max_heap_bytes as usize))
+        .saturating_add(footprint.max_heap_bytes as usize)
+        .saturating_add(inputs)
+        .saturating_add(native))
+}
+
+/// Arena bytes that the host inputs of the module's entry chunk occupy at
+/// their peak between two `Reset`s, the input term of
+/// [`auto_arena_capacity_for`].
+///
+/// # What is copied
+///
+/// `Vm::call` copies each composite entry argument into the arena top region,
+/// and `Vm::resume` copies each composite resume value there, both through
+/// `GenericValue::into_arena_canonical`. The copy is the value's flat body,
+/// whose length for a value of the declared type is at most the
+/// `WireShape::Flat` size the module records in its signature table. A
+/// top-level enum may be smaller, being sized to its current variant. The top
+/// region allocates with one-byte alignment and no per-allocation header, so a
+/// body of `n` bytes costs exactly `n` bytes. A nested composite field is
+/// packed into its own body before its parent copies it, and the
+/// canonicalisation then moves the parent's body over the dead child bodies,
+/// so a value holds exactly its own flat size whatever its nesting depth.
+/// While it packs, its children and its own body coexist, so its transient
+/// peak is at most twice its flat size. An owned `Text` field is copied as its
+/// string bytes, which `text_bytes_per_input` stands for.
+///
+/// # The count
+///
+/// With `S_i` the flat size of each composite entry parameter, `R` the flat
+/// size of the entry's resume value when it is a composite, `t` the text
+/// allowance, and `Y` the bound from [`verify::max_resumes_before_reset`], the
+/// figure is the following.
+///
+/// ```text
+/// max(sum(S_i + t), R + t) + Y * (R + t) + max(max(S_i), R)
+/// ```
+///
+/// The first term is the input that starts a run. The first iteration of a
+/// `Stream` holds every entry argument, and a later iteration holds the one
+/// resume value delivered after the `Reset`, which `resume` writes into
+/// parameter slot zero. The second term is one resume value for each `Yield`
+/// the run can execute before its `Reset`, counted through loops and through
+/// `yield fn` callees. The third term is the transient of the one input being
+/// packed at any moment. A `Stream` entry resumes with its parameter's type,
+/// which the module records. A non-`Stream` entry records no resume shape, so
+/// for it only the entry arguments are counted, and a host that resumes it
+/// with a composite adds those values itself.
+///
+/// # Where it is conservative
+///
+/// The transient term is charged even when no input has a nested composite,
+/// in which case no transient arises. The resume count is a worst case over
+/// paths, as [`verify::max_resumes_before_reset`] describes. The program's
+/// own heap peak, which [`auto_arena_capacity_for`] adds separately, is
+/// assumed to coincide with the input peak, although the two may never be
+/// reached together.
+///
+/// # Errors
+///
+/// Returns `VmError::VerifyError` when the entry resumes with a composite and
+/// [`verify::max_resumes_before_reset`] cannot bound the resumes. A module
+/// with no entry point, or with no signature for its entry, returns zero,
+/// because the module records nothing to count.
+#[cfg(feature = "verify")]
+pub fn host_input_arena_bytes_for(
+    module: &crate::bytecode::Module,
+    text_bytes_per_input: usize,
+) -> Result<usize, VmError> {
+    use crate::bytecode::WireShape;
+    let Some(entry) = module.entry_point else {
+        return Ok(0);
+    };
+    let Some(signature) = module.signatures.get(entry) else {
+        return Ok(0);
+    };
+    let flat_size = |shape: &WireShape| match shape {
+        WireShape::Flat { size, .. } => Some(*size as usize),
+        WireShape::Top | WireShape::Scalar { .. } => None,
+    };
+    let mut entry_bytes: usize = 0;
+    let mut largest_body: usize = 0;
+    for size in signature.params.iter().filter_map(flat_size) {
+        entry_bytes = entry_bytes.saturating_add(size.saturating_add(text_bytes_per_input));
+        largest_body = largest_body.max(size);
+    }
+    let is_stream = module
+        .chunks
+        .get(entry)
+        .is_some_and(|c| c.block_type == BlockType::Stream);
+    let resume_body = if is_stream {
+        flat_size(&signature.resume)
+    } else {
+        None
+    };
+    let (start_bytes, resumes_bytes) = match resume_body {
+        Some(size) => {
+            largest_body = largest_body.max(size);
+            let per_resume = size.saturating_add(text_bytes_per_input);
+            let resumes = verify::max_resumes_before_reset(module, entry)
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+            (
+                entry_bytes.max(per_resume),
+                (resumes as usize).saturating_mul(per_resume),
+            )
+        }
+        None => (entry_bytes, 0),
+    };
+    Ok(start_bytes
+        .saturating_add(resumes_bytes)
+        .saturating_add(largest_body))
 }
 
 /// Bytecode storage for the VM.
@@ -911,6 +1275,102 @@ impl<'a> BytecodeStore<'a> {
 /// local alias for ergonomic call sites.
 pub type Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>;
 
+/// The auxiliary-body data the interpreter needs, resolved once per installed
+/// image.
+///
+/// # Why this exists
+///
+/// The `Vm` owns the bytecode image and an [`AuxView`](crate::wire_schema::AuxView)
+/// borrows from it, so a cached view would make the `Vm` self-referential.
+/// [`AuxOffsets`](crate::wire_schema::AuxOffsets) carries no borrow, so the view
+/// is rebuilt per access by slicing.
+///
+/// Rebuilding is cheap relative to a directory walk but **not** free: it
+/// reconstructs every sub-table. Profiling the self-hosted stage compiles showed
+/// `AuxView::from_offsets` dominating the interpreter's inner loop, because
+/// `module_word_bytes`, `chunk_local_count`, `chunk_op_count` and `chunk_count`
+/// each rebuilt all of it to read a single scalar. Those scalars cannot change
+/// while an image is installed, so they are resolved here instead.
+///
+/// # The invariant, and why it is a struct
+///
+/// The offsets and the scalars must describe **the same image**. A hot swap
+/// replaces the bytes, and there are three sites that install an image. Keeping
+/// the scalars in a separate `Vm` field would let one of those sites refresh the
+/// offsets and forget the scalars, which reads as a plausible value from the
+/// previous module rather than as a fault. Bundling them behind a single
+/// [`AuxResolved::resolve`] constructor makes that mistake unrepresentable.
+struct AuxResolved {
+    offsets: crate::wire_schema::AuxOffsets,
+    /// Base-2 log of the module's word width. `None` when the header is absent,
+    /// preserving each call site's own default rather than inventing one here.
+    word_bits_log2: Option<u8>,
+    /// Base-2 log of the module's float width. `None` as above.
+    float_bits_log2: Option<u8>,
+    /// Base-2 log of the module's ADDRESS width, which sizes an `Opaque`.
+    /// `None` as above. Carried separately from `word_bits_log2` because the
+    /// two are declared independently and coincide only by default.
+    addr_bits_log2: Option<u8>,
+    chunk_count: usize,
+    /// Size of the module's shared-data segment. Read once per host call by
+    /// `enter_shared`, which is frequent enough that rebuilding the whole view
+    /// for one scalar is the same waste as the per-op accessors above.
+    shared_data_bytes: u32,
+    /// Per-chunk opcode-record counts, indexed by chunk index.
+    op_record_counts: Vec<u32>,
+    /// Per-chunk local-slot counts, indexed by chunk index.
+    local_counts: Vec<u16>,
+    /// Per-chunk signatures, indexed by chunk index, which give the flat kind
+    /// and size of each parameter and of a resume value. Used to check a host
+    /// composite input against the declared shape. Empty when the image carries
+    /// no table or the table does not decode, in which case nothing is checked
+    /// here and the typed verifier, which decodes the same table, decides.
+    signatures: Vec<crate::bytecode::ChunkSignature>,
+}
+
+impl AuxResolved {
+    /// Resolves the offsets and reads the cached scalars from one image.
+    ///
+    /// # Errors
+    ///
+    /// Returns the schema error if the auxiliary body is malformed.
+    fn resolve(aux: &[u8]) -> Result<Self, crate::wire_schema::SchemaError> {
+        let offsets = crate::wire_schema::AuxOffsets::resolve(aux)?;
+        // Cannot fail: the offsets were just resolved from these exact bytes.
+        // Reported rather than unwrapped, so a future change that breaks that
+        // coupling surfaces as a load error and not as a panic in a release VM.
+        let view = crate::wire_schema::AuxView::from_offsets(aux, &offsets)
+            .ok_or(crate::wire_schema::SchemaError::BadRange)?;
+        let chunk_count = view.chunk_count();
+        let mut op_record_counts = Vec::with_capacity(chunk_count);
+        let mut local_counts = Vec::with_capacity(chunk_count);
+        for i in 0..chunk_count {
+            op_record_counts.push(view.op_record_count(i).unwrap_or(0));
+            local_counts.push(view.local_count(i).unwrap_or(0));
+        }
+        // The format fingerprint and the header flag bits are checked here,
+        // on the single path every load and hot swap takes, because the
+        // version check cannot help: `BYTECODE_VERSION` is held at 2 across
+        // releases by policy, so it admits every release that declares 2.
+        //
+        // Absent header: nothing to check. A header that is present but
+        // carries a stale fingerprint is refused rather than read under the
+        // wrong meaning.
+        view.check_format()?;
+        Ok(Self {
+            word_bits_log2: view.word_bits_log2(),
+            float_bits_log2: view.float_bits_log2(),
+            addr_bits_log2: view.addr_bits_log2(),
+            chunk_count,
+            shared_data_bytes: view.shared_data_bytes().unwrap_or(0),
+            op_record_counts,
+            local_counts,
+            signatures: crate::wire_schema::decode_signatures(aux).unwrap_or_default(),
+            offsets,
+        })
+    }
+}
+
 /// Parametric stack-based virtual machine. The type parameters
 /// model the runtime's word, address, and float widths so a host
 /// can construct a narrow-width runtime (`GenericVm<i16, u16, f32>`)
@@ -924,6 +1384,23 @@ pub struct GenericVm<
     F: crate::float::Float = f64,
 > {
     bytecode: BytecodeStore<'a>,
+    trap_policy: TrapPolicy,
+    execution_checks: ExecutionChecks,
+    pop_proof: Option<PopElisionProof>,
+    proof_state: ExecutionProofState,
+    elide_pops: bool,
+    /// Whether the last run ended in [`GenericVmState::Reset`]. A resume after a reset re-enters
+    /// the stream at `Stream + 1` with the input in slot 0 and nothing waiting for a value, so
+    /// [`Self::resume`] must not push the input as it does to complete a yield.
+    suspended_at_reset: bool,
+    #[cfg(test)]
+    pop_counts: (usize, usize),
+    #[cfg(test)]
+    panic_after_pop: bool,
+    /// Region offsets into the auxiliary body, plus the module-level scalars the
+    /// interpreter reads on its hot path, all resolved once when the image is
+    /// installed. See [`AuxResolved`].
+    aux_resolved: AuxResolved,
     /// Phantom marker for the script-visible address-width type
     /// parameter. No `GenericValue` variant carries an address
     /// payload, so `A` does not appear in any field directly.
@@ -941,13 +1418,15 @@ pub struct GenericVm<
     /// borrowed for each call (B28 item 2), not in the VM. The unified slot
     /// index space partitions into `[0, shared_slot_count)` (shared) and
     /// `[shared_slot_count, shared_slot_count + private_slot_count)`
-    /// (private, in the arena's persistent region).
-    shared_slot_count: u16,
+    /// (private, in the arena's persistent region). A `u32` so a module
+    /// with more than 64 K data slots (a large shared byte buffer) is
+    /// counted without saturation, matching the twenty-four-bit slot operands.
+    shared_slot_count: u32,
     /// Number of private slots. Cached at construction. Private
     /// slots live in the arena's persistent region starting at
     /// `arena.persistent_ptr()` and occupy
     /// `private_slot_count * size_of::<crate::bytecode::GenericValue<W, F>>()` bytes there.
-    private_slot_count: u16,
+    private_slot_count: u32,
     /// Host-owned dual-end bump-allocated arena. Borrowed for the
     /// lifetime of the VM. Native functions that allocate dynamic
     /// strings pass `vm.arena()` to [`crate::kstring::KString::alloc`].
@@ -978,6 +1457,13 @@ pub struct GenericVm<
     /// part of the verified bytecode, so it does not affect the
     /// declared WCET or WCMU bounds.
     fault_location: Option<(usize, usize)>,
+    /// The soft host error most recently reified by a native call, kept so
+    /// that an unhandled `Trap(HostError)` surfaces the host's own error,
+    /// message included, instead of a reconstruction from its `Word` code.
+    /// Every reified call overwrites it, a success clearing it, so it never
+    /// describes a call other than the latest. Holding the error moves the
+    /// host's allocation and performs none of its own.
+    reified_host_error: Option<VmError>,
     /// Cached load-time native classification check. Populated on
     /// the first `call` after natives are registered (or after
     /// `replace_module`). `None` means the check has not been run
@@ -1164,14 +1650,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// at an 8-byte aligned offset declared in the framing
     /// header. The bytes were validated at construction time,
     /// so `access_unchecked` is sound here.
-    fn archived(&self) -> &crate::wire_format::ArchivedWireAuxBody {
-        let bytes = self.bytecode.as_slice();
-        let aux_body_offset =
-            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
-        let aux_body_length =
-            u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
-        let aux = &bytes[aux_body_offset..aux_body_offset + aux_body_length];
-        unsafe { rkyv::access_unchecked::<crate::wire_format::ArchivedWireAuxBody>(aux) }
+    fn aux(&self) -> crate::wire_schema::AuxView<'_> {
+        let aux = Self::aux_body_slice(self.bytecode.as_slice());
+        // Cannot fail: `aux_offsets` was resolved and validated from these exact
+        // bytes when the image was installed, and the image is replaced only
+        // through `replace_module`, which re-resolves. A panic here would mean
+        // that invariant is broken -- which the previous `access_unchecked` would
+        // have answered with undefined behaviour instead.
+        crate::wire_schema::AuxView::from_offsets(aux, &self.aux_resolved.offsets)
+            .expect("aux offsets do not match the installed image")
+    }
+
+    /// Test-only accessor for the auxiliary-body slice. Gated like the only
+    /// test module that calls it, so a build without those features does not
+    /// carry it as dead code.
+    #[cfg(all(test, feature = "compile", feature = "verify"))]
+    pub(crate) fn aux_body_slice_for_test(bytes: &[u8]) -> &[u8] {
+        Self::aux_body_slice(bytes)
+    }
+
+    /// The auxiliary-body section of a framed image, per the framing header.
+    fn aux_body_slice(bytes: &[u8]) -> &[u8] {
+        let offset = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+        &bytes[offset..offset + length]
     }
 
     /// Deserialize the current bytecode to an owned `Module`.
@@ -1196,27 +1698,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Materialize the constant at `(chunk_idx, idx)` from archived storage.
     fn chunk_const(&self, chunk_idx: usize, idx: usize) -> crate::bytecode::GenericValue<W, F> {
-        let chunk = &self.archived().chunks[chunk_idx];
         // A non-empty top-level string constant loads as a rodata-backed `KStr`
         // pointing directly at the immortal bytecode image, not an owned
         // `StaticStr` heap copy (B28 P3 item 4). This is zero-copy (no per-load
         // allocation) and WCET-flat (no construction-time scan), the 6502/NES
-        // "bake the ROM address" model. An empty string returns an owned empty
-        // `StaticStr`, both to avoid resting on the non-null guarantee of the
-        // archived empty-string pointer and because an empty body needs no
-        // handle. A composite constant that contains strings still materialises
+        // "bake the ROM address" model. Under the v2 format the bytes come from
+        // `AuxView::chunk_const_str_bytes`, which returns a subslice of the
+        // image -- the single accessor the whole borrowed-view design exists to
+        // preserve. An empty string returns an owned empty `StaticStr`, because
+        // an empty body needs no handle and a zero-length pointer should not be
+        // relied upon. A composite constant that contains strings still materialises
         // through `value_from_archived` below; its string leaves become owned
         // `StaticStr` there, which the flat packer copies into the arena as a
         // genuinely-owned (host-like) string.
-        if let crate::bytecode::ArchivedConstValue::StaticStr(s) = &chunk.constants[idx] {
-            let bytes = s.as_str().as_bytes();
+        // Built ONCE and reused by both reads below. The string probe runs on
+        // every constant load, so a second `self.aux()` on the value path meant
+        // rebuilding every sub-table twice per scalar load.
+        let aux = self.aux();
+        if let Some(bytes) = aux.chunk_const_str_bytes(chunk_idx, idx) {
             if bytes.is_empty() {
                 return crate::bytecode::GenericValue::StaticStr(alloc::string::String::new());
             }
             let addr = bytes.as_ptr() as usize;
             let len = bytes.len();
-            // SAFETY: `addr` addresses `len` valid UTF-8 bytes inside
-            // `self.bytecode`, the immortal bytecode image the VM owns for its
+            // SAFETY: `addr` addresses `len` bytes inside `self.bytecode`, the
+            // immortal bytecode image the VM owns for its
             // whole lifetime and which only a hot swap replaces. The bytes are
             // read-only and the handle is never written through. The address
             // lies outside the arena's ephemeral region, so `addr_is_live`
@@ -1246,11 +1752,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Materialise constants at the module-declared scalar widths so a
         // constant tuple's flat body matches the offsets the compiler
         // baked into its access instructions (B28 P2).
-        crate::bytecode::value_from_archived(
-            &chunk.constants[idx],
-            self.module_word_bytes(),
-            self.module_float_bytes(),
-        )
+        // Not pooled: materialise this ONE constant from the already-validated
+        // table. This must not go through `decode_constant_pool`, which re-parses
+        // the artifact and materialises every constant in the module to return
+        // one -- quadratic here, and measured at a better than thirty-fold
+        // slowdown on a real stage compile. `chunk_const_value` walks the single
+        // constant's subtree, so a scalar touches one record.
+        let word_bytes = self.module_word_bytes();
+        let float_bytes = self.module_float_bytes();
+        match aux.chunk_const_value(chunk_idx, idx) {
+            Some(Ok(v)) => crate::bytecode::GenericValue::from_const(&v, word_bytes, float_bytes),
+            _ => crate::bytecode::GenericValue::Unit,
+        }
     }
 
     /// Number of ops in the chunk. V0.2.0 Phase 7c reads the
@@ -1258,14 +1771,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// the no-longer-present `ops` vector; the ops themselves
     /// live in the opcode stream section.
     fn chunk_op_count(&self, chunk_idx: usize) -> usize {
-        self.archived().chunks[chunk_idx]
-            .op_record_count
-            .to_native() as usize
+        self.aux_resolved
+            .op_record_counts
+            .get(chunk_idx)
+            .copied()
+            .unwrap_or(0) as usize
     }
 
     /// Local-variable slot count for the chunk (includes parameters).
     fn chunk_local_count(&self, chunk_idx: usize) -> u16 {
-        self.archived().chunks[chunk_idx].local_count.to_native()
+        self.aux_resolved
+            .local_counts
+            .get(chunk_idx)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Module-wide word-width exponent. Used by the checked-
@@ -1273,7 +1792,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// `low` result when the bytecode declares a word size smaller
     /// than the runtime supports (cross-architecture portability).
     fn word_bits_log2(&self) -> u8 {
-        self.archived().word_bits_log2
+        self.aux_resolved.word_bits_log2.unwrap_or(6)
     }
 
     /// Module-declared word width in bytes. Used by the B28 flat
@@ -1281,13 +1800,152 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// width the compiler baked offsets against, so the runtime and
     /// the artefact agree regardless of the runtime `Word` width.
     fn module_word_bytes(&self) -> usize {
-        (1usize << self.archived().word_bits_log2) / 8
+        (1usize << self.aux_resolved.word_bits_log2.unwrap_or(6)) / 8
+    }
+
+    /// Round a freshly computed float to the width the module's header declares.
+    ///
+    /// # The defect this closes
+    ///
+    /// The header declares a float width. **Storage honoured it and arithmetic
+    /// did not.** Three sites in [`crate::bytecode`] narrow a declared
+    /// four-byte float through `f32` on the way into and out of a composite
+    /// field, and no site narrowed an arithmetic result. A value therefore
+    /// rounded when it passed through a composite field and did not when it
+    /// stayed on the operand stack, so the same expression yielded two answers
+    /// depending on whether an intermediate was stored.
+    ///
+    /// **This was never confined to `narrow-float-32`.**
+    /// `Self::check_runtime_widths` rejects only bytecode declaring *wider*
+    /// than the runtime and admits narrower on purpose, so a stock build with
+    /// no features loading a module that declares a 32-bit float computed in
+    /// `f64`. The feature is how it was noticed, not what caused it.
+    ///
+    /// # Why computing wide and rounding here is sound
+    ///
+    /// **`2p + 2` answers two different questions and they must not be
+    /// conflated.** Doing so is what produced a wrong recommendation between
+    /// the two development lines, so both appear here with their question
+    /// attached.
+    ///
+    /// ## One: arithmetic equivalence. ALWAYS IN FORCE.
+    ///
+    /// Computing an operation in a wider format and rounding once equals
+    /// computing it natively at the target, provided the **computing** format
+    /// carries at least `2p + 2` significand bits for target precision `p`.
+    /// `f64` supplies 53; an `f32` target needs 50, `binary16` needs 24, OFP8
+    /// `E5M2` needs 8.
+    ///
+    /// This is what licenses this whole function, and it does not depend on how
+    /// the narrowing is implemented. The margin at `f32` is 3 and at `binary16`
+    /// is 29 -- **figures about equivalence, not budgets for anything else.**
+    ///
+    /// ## Two: conversion double rounding. NOT IN FORCE HERE.
+    ///
+    /// If an implementation narrowed through an intermediate format, the
+    /// two-step result matches the one-step result only when that
+    /// **intermediate** carries `2p + 2`. Reaching `binary16` via `f32` is 24
+    /// against exactly 24 -- **margin zero, which is a reason not to chain
+    /// rather than a budget to spend.** Reaching it via `bfloat16` is 8 against
+    /// 24 and is excluded, which is the case a blanket "never chain" rule would
+    /// have been dropped as over-broad before it ever caught.
+    ///
+    /// **This function narrows directly from the value computed in `f64`, so
+    /// this question does not arise at all**: a single rounding raises no
+    /// double-rounding question and there is no margin to erode. The condition
+    /// is recorded because it is the guard for any future implementation that
+    /// must chain -- hardware with no direct path, or a reused routine.
+    ///
+    /// That is also what makes the differential against the native backend
+    /// meaningful rather than coincidentally agreeing: it lowers natively at
+    /// `f32` where the code generator has the type, so the two constructions
+    /// differ and this condition is why they must still agree exactly.
+    ///
+    /// The equivalence covers addition, subtraction, multiplication, division
+    /// and square root. It does **not** extend to fused operations or
+    /// transcendentals, and it assumes the intermediate neither overflows nor
+    /// underflows.
+    ///
+    /// # Two facts this rests on, measured rather than assumed
+    ///
+    /// **Rust does not contract a multiply feeding an add.** On rustc 1.98.0 /
+    /// `aarch64-apple-darwin`, at `-O` and at `-C opt-level=3 -C
+    /// target-cpu=native`, plain `a * b + c` emits no fused instruction while
+    /// `a.mul_add(b, c)` emits exactly one in the same compilation unit, on a
+    /// target where the fused instruction is baseline. Contraction would erase
+    /// the per-operation rounding this function performs.
+    ///
+    /// **The round trip survives optimisation.** `(x as f32) as f64` emits both
+    /// conversions at `-C opt-level=3`. Had it been folded away, the rounding
+    /// would have vanished while every equal-width test stayed green.
+    ///
+    /// # Where this is called, and where it deliberately is not
+    ///
+    /// `Op::Sub` and `Op::Mul` reach this through
+    /// [`Self::binary_arith`]; `Op::Add`, `Op::Div`, `Op::Mod` and `Op::Neg`
+    /// have their own inline float arms and do not. **Patching only
+    /// `binary_arith` would cover two of six operations while appearing to
+    /// cover all of them**, and the difference is invisible at the default
+    /// width where this function is the identity.
+    ///
+    /// Not called for `Op::FloatToInt` (produces an `Int`), for the four
+    /// `Float(0.0)` filler pushes in the checked paths (exact literals, not
+    /// arithmetic results), or for the comparison arm (produces an `Ordering`).
+    ///
+    /// `Op::Neg` and `Op::Mod` are exact at every current width and so are the
+    /// identity here. They are routed anyway: the cost is nothing, and the
+    /// alternative is a per-site exactness argument that must be re-derived
+    /// whenever a rung is added to the ladder, failing silently at exactly the
+    /// sites nobody rechecked.
+    #[cfg(feature = "floats")]
+    fn narrow_float(&self, v: F) -> F {
+        match self.aux_resolved.float_bits_log2.unwrap_or(6) {
+            // Declared width meets or exceeds the runtime's, so there is
+            // nothing to round to. A declaration *wider* than the runtime was
+            // already refused by `check_runtime_widths` at load.
+            n if n >= <F as crate::float::Float>::BITS_LOG2 => v,
+            // binary32.
+            5 => <F as crate::float::Float>::from_f64(
+                <F as crate::float::Float>::to_f64(v) as f32 as f64
+            ),
+            // ZERO IS NOT A FLOAT WIDTH. `Target::embedded_8` and
+            // `Target::embedded_16` declare `float_bits_log2: 0` alongside
+            // `has_floats: false`; it is the no-floats sentinel, not a one-bit
+            // format, and the field's own documentation says it is honoured
+            // only when `has_floats` is true. Such a module executes no float
+            // operation, so this arm should be unreachable -- but it returns
+            // the value rather than asserting, because a debug assertion here
+            // would fire on a perfectly valid narrow-target module.
+            0 => v,
+            // Unreachable BY CONSTRUCTION rather than by inspection: the
+            // load-time refusal consults
+            // `float_width_narrowing_is_implemented`, and so does this arm's
+            // assertion, so the two cannot disagree about which widths are
+            // implemented. Reaching here would mean computing wide while
+            // declaring narrow, which is the defect this function removes.
+            other => {
+                debug_assert!(
+                    !crate::bytecode::float_width_narrowing_is_implemented(other),
+                    "float_bits_log2 = {other} is declared implemented but has no narrowing arm"
+                );
+                v
+            }
+        }
     }
 
     /// Module-declared float width in bytes. The companion of
     /// [`Self::module_word_bytes`] for floating-point fields.
     fn module_float_bytes(&self) -> usize {
-        (1usize << self.archived().float_bits_log2) / 8
+        (1usize << self.aux_resolved.float_bits_log2.unwrap_or(6)) / 8
+    }
+
+    /// Module-declared ADDRESS width in bytes, which sizes an `Opaque`.
+    ///
+    /// Separate from [`Self::module_word_bytes`] because the two widths are
+    /// declared independently; they agree at eight bytes by default, which is
+    /// why sizing an `Opaque` by the word width was latent rather than broken.
+    fn module_addr_bytes(&self) -> usize {
+        (1usize << self.aux_resolved.addr_bits_log2.unwrap_or(6)) / 8
     }
 
     /// The discriminant and padded-body payload size for `variant` of enum
@@ -1296,17 +1954,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// such enum (a built-in like `Option`, or a host type absent from the
     /// program's enums).
     fn enum_variant_layout(&self, type_name: &str, variant: &str) -> Option<(i64, usize)> {
-        for el in self.archived().enum_layouts.iter() {
-            if el.type_name.as_str() == type_name {
-                let min_payload = el.min_payload.to_native() as usize;
-                let disc = el
-                    .variants
-                    .iter()
-                    .find(|v| v.name.as_str() == variant)
-                    .map(|v| v.disc.to_native())
-                    .unwrap_or(0);
-                return Some((disc, min_payload));
+        // Names are compared as BYTES against the artifact rather than being
+        // decoded to `String` first: the accessor hands back slices aliasing the
+        // image, so a lookup allocates nothing.
+        let aux = self.aux();
+        for i in 0..aux.enum_layout_count() {
+            if aux.enum_type_name(i) != Some(type_name.as_bytes()) {
+                continue;
             }
+            let min_payload = aux.enum_min_payload(i).unwrap_or(0) as usize;
+            let count = aux.enum_variant_count(i).unwrap_or(0) as usize;
+            let mut disc = 0;
+            for v in 0..count {
+                if let Some((name, d)) = aux.enum_variant(i, v)
+                    && name == variant.as_bytes()
+                {
+                    disc = d;
+                    break;
+                }
+            }
+            return Some((disc, min_payload));
         }
         None
     }
@@ -1390,26 +2057,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Test whether a chunk index is in range.
     fn chunk_count(&self) -> usize {
-        self.archived().chunks.len()
+        self.aux_resolved.chunk_count
     }
 
     /// Look up a native function name by index. Returns `None` if out of bounds.
     fn native_name(&self, idx: usize) -> Option<alloc::string::String> {
         use alloc::string::ToString;
-        self.archived()
-            .native_names
-            .get(idx)
-            .map(|s| s.as_str().to_string())
+        let aux = self.aux();
+        let bytes = aux.native_name_bytes(idx)?;
+        core::str::from_utf8(bytes).ok().map(|s| s.to_string())
     }
 
     /// Read a string-typed constant. Returns `None` if not a string.
     fn chunk_const_str(&self, chunk_idx: usize, idx: usize) -> Option<alloc::string::String> {
         use alloc::string::ToString;
-        let chunk = &self.archived().chunks[chunk_idx];
-        match &chunk.constants[idx] {
-            crate::bytecode::ArchivedConstValue::StaticStr(s) => Some(s.as_str().to_string()),
-            _ => None,
-        }
+        let aux = self.aux();
+        let bytes = aux.chunk_const_str_bytes(chunk_idx, idx)?;
+        core::str::from_utf8(bytes).ok().map(|s| s.to_string())
     }
 
     /// Look up a struct template's type name and field names.
@@ -1422,12 +2086,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         alloc::vec::Vec<alloc::string::String>,
     ) {
         use alloc::string::ToString;
-        let template = &self.archived().chunks[chunk_idx].struct_templates[idx];
-        let type_name = template.type_name.as_str().to_string();
-        let field_names: alloc::vec::Vec<_> = template
-            .field_names
-            .iter()
-            .map(|s| s.as_str().to_string())
+        let aux = self.aux();
+        let utf8 = |b: Option<&[u8]>| -> alloc::string::String {
+            b.and_then(|x| core::str::from_utf8(x).ok())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let type_name = utf8(aux.template_type_name(chunk_idx, idx));
+        let count = aux.template_field_count(chunk_idx, idx).unwrap_or(0) as usize;
+        let field_names: alloc::vec::Vec<_> = (0..count)
+            .map(|f| utf8(aux.template_field_name(chunk_idx, idx, f)))
             .collect();
         (type_name, field_names)
     }
@@ -1518,7 +2186,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     });
                     // Rewrite the declared field to the auto-compute
                     // sentinel so the downstream serializer and the
-                    // load-time overflow check in `Module::access_bytes`
+                    // load-time overflow check in `Module::validate_bytes`
                     // do not re-reject the module. The warning preserves
                     // the original overflow signal for the host.
                     module.wcet_cycles = 0;
@@ -1546,6 +2214,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
             }
         }
+        Self::enforce_trap_policy(&module, options.trap_policy)?;
         // Structural verification and resource-bound verification.
         // Gated behind the `verify` feature; when the feature is
         // off, `Vm::new_with_options` behaves like
@@ -1574,8 +2243,208 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             )
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         }
-        let vm = Self::construct(module, arena)?;
+        let mut vm = Self::construct(module, arena)?;
+        vm.trap_policy = options.trap_policy;
+        if options.execution_checks == ExecutionChecks::Proven {
+            vm.set_execution_checks(ExecutionChecks::Proven)?;
+        }
         Ok((vm, warnings))
+    }
+
+    fn enforce_trap_policy(module: &Module, policy: TrapPolicy) -> Result<(), VmError> {
+        match policy {
+            TrapPolicy::Allow => return Ok(()),
+            TrapPolicy::RequireTrapFree => {}
+        }
+        #[cfg(feature = "verify")]
+        {
+            match crate::trap_analysis::classify_traps(module) {
+                Ok(crate::trap_analysis::TrapVerdict::TrapFree) => Ok(()),
+                Ok(verdict) => Err(VmError::VerifyError(format!(
+                    "trap policy requires TrapFree, got {verdict:?}"
+                ))),
+                Err(error) => Err(VmError::VerifyError(format!(
+                    "trap policy proof unavailable: {error}"
+                ))),
+            }
+        }
+        #[cfg(not(feature = "verify"))]
+        {
+            let _ = module;
+            Err(VmError::VerifyError(String::from(
+                "trap policy requires verification support",
+            )))
+        }
+    }
+
+    /// Current host language-trap policy. It is not a bytecode-supplied claim.
+    pub fn trap_policy(&self) -> TrapPolicy {
+        self.trap_policy
+    }
+
+    /// Change policy only after proving that the current image satisfies it.
+    /// A failure preserves the existing policy and coroutine state. Apply this
+    /// before the first call when loading through a constructor without options.
+    /// RequireTrapFree cannot be enabled without the verification feature, even
+    /// on a VM created through an unsafe trust-skip route.
+    pub fn set_trap_policy(&mut self, policy: TrapPolicy) -> Result<(), VmError> {
+        if policy == TrapPolicy::Allow && self.execution_checks == ExecutionChecks::Proven {
+            return Err(VmError::VerifyError(String::from(
+                "disable proven execution before allowing traps",
+            )));
+        }
+        match policy {
+            TrapPolicy::Allow => {}
+            TrapPolicy::RequireTrapFree => {
+                let module = Module::from_bytes(self.bytecode.as_slice())?;
+                Self::enforce_trap_policy(&module, policy)?;
+            }
+        }
+        self.trap_policy = policy;
+        Ok(())
+    }
+
+    /// Configure a freshly loaded instance before exposing it for execution.
+    /// This also works with borrowed, signed and trust-skip constructors.
+    pub fn with_trap_policy(mut self, policy: TrapPolicy) -> Result<Self, VmError> {
+        self.set_trap_policy(policy)?;
+        Ok(self)
+    }
+
+    fn prove_pop_elision(
+        module: &Module,
+        arena: &keleusma_arena::Arena,
+        policy: TrapPolicy,
+        checks: ExecutionChecks,
+    ) -> Result<Option<PopElisionProof>, VmError> {
+        if checks == ExecutionChecks::Checked {
+            return Ok(None);
+        }
+        if policy != TrapPolicy::RequireTrapFree {
+            return Err(VmError::VerifyError(String::from(
+                "proven execution requires RequireTrapFree policy",
+            )));
+        }
+        Self::enforce_trap_policy(module, policy)?;
+        #[cfg(feature = "verify")]
+        {
+            crate::verify_execution::verify_pop_elision(module)
+                .map_err(|e| VmError::VerifyError(format!("operand-pop proof: {e:?}")))?;
+            verify::verify_resource_bounds_with_natives_and_value_slot_bytes(
+                module,
+                arena.capacity(),
+                &[],
+                core::mem::size_of::<crate::bytecode::GenericValue<W, F>>() as u32,
+            )
+            .map_err(|e| VmError::VerifyError(format!("operand-pop resources: {e:?}")))?;
+            Ok(Some(PopElisionProof))
+        }
+        #[cfg(not(feature = "verify"))]
+        {
+            let _ = arena;
+            Err(VmError::VerifyError(String::from(
+                "proven execution requires verification support",
+            )))
+        }
+    }
+
+    fn prove_image(
+        bytes: &[u8],
+        decoded: &[Vec<Op>],
+        arena: &keleusma_arena::Arena,
+        policy: TrapPolicy,
+        checks: ExecutionChecks,
+    ) -> Result<Option<PopElisionProof>, VmError> {
+        if checks == ExecutionChecks::Checked {
+            return Ok(None);
+        }
+        let module = Module::from_bytes(bytes)?;
+        if module.chunks.len() != decoded.len()
+            || module
+                .chunks
+                .iter()
+                .zip(decoded)
+                .any(|(chunk, ops)| chunk.ops != *ops)
+        {
+            return Err(VmError::VerifyError(String::from(
+                "instruction cache differs from the proof image",
+            )));
+        }
+        Self::prove_pop_elision(&module, arena, policy, checks)
+    }
+
+    /// Configured operand-pop checking mode. Proven mode still retains type,
+    /// lifetime, allocation and host-contract guards.
+    pub fn execution_checks(&self) -> ExecutionChecks {
+        self.execution_checks
+    }
+
+    /// Enable proof-gated pops on a fresh or explicitly reset instance.
+    /// All required proofs run even for a trust-skip or borrowed instance.
+    /// An error or panic poisons proven reentry until `reset_after_error`.
+    pub fn set_execution_checks(&mut self, checks: ExecutionChecks) -> Result<(), VmError> {
+        // No public configuration call owns a live shared-buffer borrow.
+        self.shared_buf.clear();
+        match checks {
+            ExecutionChecks::Checked => {
+                self.elide_pops = false;
+                self.pop_proof = None;
+                self.execution_checks = checks;
+                if self.proof_state == ExecutionProofState::Poisoned {
+                    self.shared_buf.clear();
+                }
+                self.proof_state = ExecutionProofState::Inactive;
+            }
+            ExecutionChecks::Proven => {
+                if self.started || !self.frames.is_empty() || !self.stack.is_empty() {
+                    return Err(VmError::VerifyError(String::from(
+                        "enable proven execution before calling or after reset_after_error",
+                    )));
+                }
+                let proof = Self::prove_image(
+                    self.bytecode.as_slice(),
+                    &self.decoded_ops,
+                    self.arena,
+                    self.trap_policy,
+                    checks,
+                )?;
+                self.pop_proof = proof;
+                self.execution_checks = checks;
+                self.proof_state = ExecutionProofState::Ready;
+                self.elide_pops = false;
+            }
+        }
+        Ok(())
+    }
+
+    /// Configure proof-gated execution before the first call.
+    pub fn with_execution_checks(mut self, checks: ExecutionChecks) -> Result<Self, VmError> {
+        self.set_execution_checks(checks)?;
+        Ok(self)
+    }
+
+    fn begin_proven_entry(&mut self, allowed: &[ExecutionProofState]) -> Result<(), VmError> {
+        self.elide_pops = false;
+        if self.execution_checks == ExecutionChecks::Proven {
+            if self.proof_state == ExecutionProofState::Poisoned {
+                self.shared_buf.clear();
+            }
+            if self.pop_proof.is_none() || !allowed.contains(&self.proof_state) {
+                return Err(VmError::VerifyError(String::from(
+                    "proven execution cannot enter from this state; use the matching resume method or reset_after_error",
+                )));
+            }
+            // Poison before any argument preparation, allocation or user-value drop.
+            // Unwinding therefore cannot leave a resumable execution-state proof.
+            self.proof_state = ExecutionProofState::Poisoned;
+        }
+        Ok(())
+    }
+
+    fn prepare_proven_run(&mut self) {
+        if self.execution_checks == ExecutionChecks::Proven {
+            self.proof_state = ExecutionProofState::Prepared;
+        }
     }
 
     /// Create a VM that runs structural verification but skips WCET and
@@ -1634,6 +2503,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// `.rodata`. Runs full verification including resource bounds.
     #[cfg(feature = "verify")]
     pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        Self::load_bytes_with_options(bytes, arena, VmOptions::default()).map(|(vm, _)| vm)
+    }
+
+    /// Load serialized bytes with explicit overflow and language-trap policies.
+    #[cfg(feature = "verify")]
+    pub fn load_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         // Signed bytecode requires either the `signatures` cargo
         // feature plus a trust matrix (use `Vm::load_signed_bytes`)
         // or a build that explicitly skips verification (use
@@ -1655,7 +2534,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             )));
         }
         let module = Module::from_bytes(bytes)?;
-        Self::new(module, arena)
+        Self::new_with_options(module, arena, options)
     }
 
     /// Load a signed module from serialized bytecode bytes,
@@ -1692,6 +2571,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         arena: &'arena keleusma_arena::Arena,
         verifying_keys: &[ed25519_dalek::VerifyingKey],
     ) -> Result<Self, VmError> {
+        Self::load_signed_bytes_with_options(bytes, arena, verifying_keys, VmOptions::default())
+            .map(|(vm, _)| vm)
+    }
+
+    /// Verify signatures and load with explicit overflow and trap policies.
+    #[cfg(all(feature = "signatures", feature = "verify"))]
+    pub fn load_signed_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let signed = crate::wire_format::header_requires_signature(bytes);
         if signed {
             crate::wire_format::verify_module_signature(bytes, verifying_keys)
@@ -1714,11 +2605,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if was_signed {
             module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
         }
-        let mut vm = Self::new(module, arena)?;
+        let (mut vm, warnings) = Self::new_with_options(module, arena, options)?;
         for key in verifying_keys {
             vm.verifying_keys.push(*key);
         }
-        Ok(vm)
+        Ok((vm, warnings))
     }
 
     /// Load a signed module and skip resource-bounds verification.
@@ -1791,6 +2682,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         verifying_keys: &[ed25519_dalek::VerifyingKey],
         decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
     ) -> Result<Self, VmError> {
+        Self::load_encrypted_signed_bytes_with_options(
+            bytes,
+            arena,
+            verifying_keys,
+            decryption_key,
+            VmOptions::default(),
+        )
+        .map(|(vm, _)| vm)
+    }
+
+    /// Authenticate, decrypt and load with explicit overflow and trap policies.
+    #[cfg(all(feature = "signatures", feature = "encryption", feature = "verify"))]
+    pub fn load_encrypted_signed_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let encrypted = crate::wire_format::header_requires_encryption(bytes);
         if !encrypted {
             return Err(VmError::from(crate::bytecode::LoadError::Codec(
@@ -1818,11 +2728,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if was_signed {
             module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
         }
-        let mut vm = Self::new(module, arena)?;
+        let (mut vm, warnings) = Self::new_with_options(module, arena, options)?;
         for key in verifying_keys {
             vm.verifying_keys.push(*key);
         }
-        Ok(vm)
+        Ok((vm, warnings))
     }
 
     /// Load a signed-and-encrypted module and skip resource-bounds
@@ -1891,14 +2801,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// The body of the framed bytecode must be 8-byte aligned within the
     /// slice. The runtime validates the framing in place via
-    /// [`Module::access_bytes`] and deserializes the archived form via
+    /// [`Module::validate_bytes`] and deserializes the archived form via
     /// `rkyv::deserialize`. Compared to [`Vm::load_bytes`], this path
     /// skips the body copy that arbitrary unaligned slices require.
     ///
     /// Hosts that wish to execute bytecode directly from `.rodata` or
     /// from a flash region typically arrange alignment through linker
     /// scripts or by wrapping the buffer in `rkyv::util::AlignedVec`.
-    /// See the documentation on [`Module::access_bytes`] for the
+    /// See the documentation on [`Module::validate_bytes`] for the
     /// alignment contract.
     ///
     /// True zero-copy execution against `&ArchivedModule` is the next
@@ -1907,8 +2817,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// deserialized owned `Module`.
     #[cfg(feature = "verify")]
     pub fn view_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        Self::view_bytes_with_options(bytes, arena, VmOptions::default()).map(|(vm, _)| vm)
+    }
+
+    /// View serialized bytes with explicit overflow and language-trap policies.
+    #[cfg(feature = "verify")]
+    pub fn view_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let module = Module::view_bytes(bytes)?;
-        Self::new(module, arena)
+        Self::new_with_options(module, arena, options)
     }
 
     /// Load a module from an aligned byte slice and skip resource
@@ -1930,7 +2850,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Construct a VM that borrows bytecode directly from `bytes` without
     /// any deserialization. True zero-copy execution.
     ///
-    /// Validates the framing through [`Module::access_bytes`] and stores
+    /// Validates the framing through [`Module::validate_bytes`] and stores
     /// the slice. The execution loop reads from `&ArchivedModule` for
     /// every op-fetch and constant-load via the archived converters. No
     /// owned `Module` is materialized at any point.
@@ -1972,40 +2892,46 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // offset and length from. Validating the stripped slice while storing
         // the unstripped one was the desync that drove `rkyv::access_unchecked`
         // over a mis-located region (V0.2.1 security audit, findings 8 and 15).
-        // `access_bytes` and `decode_all_ops` strip again internally, an
+        // `validate_bytes` and `decode_all_ops` strip again internally, an
         // idempotent no-op on already-stripped bytes.
         let bytes = crate::wire_format::strip_shebang_prefix(bytes);
         // V0.2.0 Phase 7c routes zero-copy through the wire
-        // format. `access_bytes` validates the framing and
+        // format. `validate_bytes` validates the framing and
         // returns the archived auxiliary body slice; we use the
         // same slice (via `archived()` after construction)
         // throughout the VM lifetime.
-        let archived = Module::access_bytes(bytes)?;
+        // Validates framing, magic, CRC, version and widths.
+        Module::validate_bytes(bytes)?;
         // B16 step 8: width validation against this VM's W/A/F
         // trait parameters. The wire-format header carries the
         // declared widths at bytes 12 (word), 13 (address), and
         // 14 (float).
         Self::check_runtime_widths(bytes[12], bytes[13], bytes[14])?;
-        // Determine data segment slot counts from the archived
-        // auxiliary body. The data layout structure is shared
-        // with the legacy format; only the chunk-ops separation
-        // is new.
-        let (shared_count, private_count) = match archived.data_layout.as_ref() {
-            None => (0u16, 0u16),
-            Some(dl) => {
-                let mut shared = 0u16;
-                let mut private_ = 0u16;
-                for slot in dl.slots.iter() {
-                    match slot.visibility {
-                        crate::bytecode::ArchivedSlotVisibility::Shared => {
-                            shared = shared.saturating_add(1);
-                        }
-                        crate::bytecode::ArchivedSlotVisibility::Private => {
-                            private_ = private_.saturating_add(1);
+        // Determine data segment slot counts from the auxiliary body.
+        let (shared_count, private_count) = {
+            let aux_bytes = Self::aux_body_slice(bytes);
+            let view = crate::wire_schema::AuxView::parse(aux_bytes)
+                .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+            match view.data_layout() {
+                None => (0u32, 0u32),
+                Some(dl) => {
+                    let mut shared = 0u32;
+                    let mut private_ = 0u32;
+                    // Iterates RECORDS and adds each run, not logical slots:
+                    // `slot(i)` takes a record index, and a slot table is now
+                    // run-length encoded. Counting one per record would
+                    // undercount an array by its element count.
+                    for i in 0..dl.slot_record_count() {
+                        let Some(slot) = dl.slot(i) else { continue };
+                        let run = u32::from(slot.run);
+                        if slot.visibility == crate::wire_schema::visibility_tag::SHARED {
+                            shared = shared.saturating_add(run);
+                        } else {
+                            private_ = private_.saturating_add(run);
                         }
                     }
+                    (shared, private_)
                 }
-                (shared, private_)
             }
         };
         let private_storage_bytes =
@@ -2020,19 +2946,32 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if private_count > 0 {
             let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             // Private slots initialize from the module's `.data`-section
-            // initializer table (scalar zero or `= literal`); a slot with no
-            // entry, or a module predating the table, falls back to `Unit`.
-            let word_bytes = (1usize << archived.word_bits_log2) / 8;
-            let float_bytes = (1usize << archived.float_bits_log2) / 8;
-            let inits = archived
-                .data_layout
-                .as_ref()
-                .map(|dl| dl.private_init.as_slice());
+            // initializer table, a scalar zero or `= literal` or a composite's
+            // zero, which `persist_seeded_private_composites` moves into the
+            // pool below. A slot with no entry, or a module predating the
+            // table, falls back to `Unit`.
+            let aux_bytes = Self::aux_body_slice(bytes);
+            let word_bytes = (1usize << bytes[12]) / 8;
+            let float_bytes = (1usize << bytes[14]) / 8;
+            // The private-slot initialisers are a constant pool like any other,
+            // reached through the range the data layout records.
+            let inits: alloc::vec::Vec<crate::bytecode::ConstValue> =
+                match crate::wire_schema::AuxView::parse(aux_bytes)
+                    .ok()
+                    .and_then(|v| v.data_layout())
+                    .map(|dl| dl.private_init_range())
+                {
+                    Some(range) => crate::wire_schema::decode_constant_pool(aux_bytes, range)
+                        .unwrap_or_default(),
+                    None => alloc::vec::Vec::new(),
+                };
             for i in 0..private_count as usize {
-                let value = match inits.and_then(|s| s.get(i)) {
-                    Some(cv) => {
-                        crate::bytecode::value_from_archived::<W, F>(cv, word_bytes, float_bytes)
-                    }
+                let value = match inits.get(i) {
+                    Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
+                        cv,
+                        word_bytes,
+                        float_bytes,
+                    ),
                     None => crate::bytecode::GenericValue::Unit,
                 };
                 // SAFETY: same justification as in `Vm::construct`.
@@ -2057,8 +2996,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         frames
             .try_reserve(MIN_FRAMES_RESERVE)
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
+        // Resolve and validate the aux regions once, here. Every later read
+        // rebuilds a view from these offsets by slicing.
+        let aux_resolved = AuxResolved::resolve(Self::aux_body_slice(bytes))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Borrowed(bytes),
+            trap_policy: TrapPolicy::Allow,
+            execution_checks: ExecutionChecks::Checked,
+            pop_proof: None,
+            proof_state: ExecutionProofState::Inactive,
+            elide_pops: false,
+            suspended_at_reset: false,
+            #[cfg(test)]
+            pop_counts: (0, 0),
+            #[cfg(test)]
+            panic_after_pop: false,
+            aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
@@ -2071,6 +3025,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             breakpoints: alloc::vec::Vec::new(),
             skip_breakpoint_at: None,
             fault_location: None,
+            reified_host_error: None,
             native_classifications_verified: false,
             ephemeral_opaques: ArenaVec::new_in(arena.bottom_handle()),
             reserved_operand_slots: MIN_STACK_RESERVE_SLOTS,
@@ -2086,6 +3041,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // composite const load is allocation-free here too; the build reads
         // only the trusted archived constant pool (B28 P3 item 2, Increment 2).
         vm.build_const_pool();
+        // As the owned path does, move each composite private initializer into
+        // its pool slot.
+        vm.persist_seeded_private_composites()?;
         Ok(vm)
     }
 
@@ -2124,6 +3082,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 <A as crate::address::Address>::BITS_LOG2,
             )));
         }
+        // binary16 (4) and OFP8 E5M2 (3) are real formats the ladder intends to
+        // reach, and neither has software rounding here yet. Admitting such a
+        // module would mean computing in `f64` while declaring a narrow float,
+        // which is exactly the defect `narrow_float` exists to remove; doing it
+        // for two rungs while fixing it for a third would be worse than not
+        // starting. Refused rather than approximated.
+        //
+        // **The refusal names 3 and 4 specifically, and must.** A blanket
+        // "narrower than 32 bits" rejection would refuse every module built for
+        // `Target::embedded_8` or `Target::embedded_16`, which declare
+        // `float_bits_log2: 0` alongside `has_floats: false`. Zero is the
+        // no-floats sentinel, not a one-bit format.
+        if !crate::bytecode::float_width_narrowing_is_implemented(float_bits_log2) {
+            return Err(VmError::VerifyError(alloc::format!(
+                "bytecode declares float_bits_log2 = {float_bits_log2} ({}-bit floats), which this \
+                 runtime does not implement: arithmetic at that width needs software rounding that \
+                 does not exist yet, and admitting the module would compute in a wider format while \
+                 declaring a narrow one",
+                1u32 << float_bits_log2,
+            )));
+        }
         if float_bits_log2 > <F as crate::float::Float>::BITS_LOG2 {
             return Err(VmError::VerifyError(alloc::format!(
                 "bytecode declares float_bits_log2 = {} but this Vm runs at float_bits_log2 = {} (chosen Float type is narrower than the bytecode requires)",
@@ -2160,25 +3139,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // slots first in the unified slot index space, so the
         // partition reduces to a count.
         let (shared_count, private_count) = match module.data_layout.as_ref() {
-            None => (0u16, 0u16),
+            None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u16;
-                let mut private_ = 0u16;
+                let mut shared = 0u32;
+                let mut private_ = 0u32;
                 for slot in &dl.slots {
                     match slot.visibility {
                         crate::bytecode::SlotVisibility::Shared => {
-                            shared = shared.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout shared slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            shared = shared
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout shared slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                         crate::bytecode::SlotVisibility::Private => {
-                            private_ = private_.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout private slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            private_ = private_
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout private slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                     }
                 }
@@ -2210,8 +3195,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // the old occupant. The arena's persistent region is freshly zeroed
         // when first resized, but those zero bytes are not a valid `Value`, so
         // write through `write` not assignment. A scalar slot receives its
-        // baked zero or `= literal`; a composite slot, a slot with no entry, or
-        // a module predating the table falls back to `Unit` (write-before-read).
+        // baked zero or `= literal`. A composite slot receives its type's zero,
+        // materialised here at the module's widths and moved into the
+        // persistent composite pool once the VM exists, by
+        // `persist_seeded_private_composites`, as a hot swap's seed is. A slot
+        // with no entry, or a module predating the table, falls back to `Unit`.
         if private_count > 0 {
             let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             let inits = module
@@ -2219,9 +3207,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .as_ref()
                 .map(|dl| dl.private_init.as_slice())
                 .unwrap_or(&[]);
+            let word_bytes = (1usize << module.word_bits_log2) / 8;
+            let float_bytes = (1usize << module.float_bits_log2) / 8;
             for i in 0..private_count as usize {
                 let value = match inits.get(i) {
-                    Some(cv) => crate::bytecode::GenericValue::<W, F>::scalar_from_const(cv),
+                    Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
+                        cv,
+                        word_bytes,
+                        float_bytes,
+                    ),
                     None => crate::bytecode::GenericValue::Unit,
                 };
                 // SAFETY: `i` is within the slot count just
@@ -2253,8 +3247,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let ephemeral_opaques = pre_sized_bottom_vec::<
             alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
         >(arena, reserve_opaque)?;
+        let aux_resolved = AuxResolved::resolve(Self::aux_body_slice(&aligned))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Owned(aligned),
+            trap_policy: TrapPolicy::Allow,
+            execution_checks: ExecutionChecks::Checked,
+            pop_proof: None,
+            proof_state: ExecutionProofState::Inactive,
+            elide_pops: false,
+            suspended_at_reset: false,
+            #[cfg(test)]
+            pop_counts: (0, 0),
+            #[cfg(test)]
+            panic_after_pop: false,
+            aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
@@ -2267,6 +3274,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             breakpoints: alloc::vec::Vec::new(),
             skip_breakpoint_at: None,
             fault_location: None,
+            reified_host_error: None,
             native_classifications_verified: false,
             ephemeral_opaques,
             reserved_operand_slots: reserve_slots,
@@ -2281,6 +3289,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Materialise scalar const composites into the VM-owned rodata pool
         // now that the bytecode image is in place (B28 P3 item 2, Increment 2).
         vm.build_const_pool();
+        // Move each composite private initializer into its pool slot, so that a
+        // read before the program's first write sees its type's zero rather than
+        // the empty-slot `Unit` (definite initialization, option (b)).
+        vm.persist_seeded_private_composites()?;
         Ok(vm)
     }
 
@@ -2314,13 +3326,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// composite slot, neither of which has a table entry. The table is sorted
     /// ascending by slot, so this binary-searches it.
     fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
-        let dl = self.archived().data_layout.as_ref()?;
+        let aux = self.aux();
+        let dl = aux.data_layout()?;
         let slot_u16 = u16::try_from(slot).ok()?;
-        let table = &dl.private_composite_layout;
-        table
-            .binary_search_by_key(&slot_u16, |e| e.slot.to_native())
-            .ok()
-            .map(|i| table[i].offset.to_native() as usize)
+        // The table is sorted ascending by slot and `validate_data_layout`
+        // proves it, so a binary search is available -- but the table holds at
+        // most one entry per private composite slot, so a scan is both simpler
+        // and bounded by the same count the search would be.
+        for i in 0..dl.private_composite_count() {
+            let e = dl.private_composite(i)?;
+            if e.slot == slot_u16 {
+                return Some(e.offset as usize);
+            }
+        }
+        None
     }
 
     /// The exclusive upper bound of the private-composite pool region that
@@ -2344,12 +3363,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .arena
             .persistent_capacity()
             .saturating_sub(private_storage);
-        let Some(dl) = self.archived().data_layout.as_ref() else {
+        let aux = self.aux();
+        let Some(dl) = aux.data_layout() else {
             return pool;
         };
-        dl.private_composite_layout
-            .iter()
-            .map(|e| e.offset.to_native() as usize)
+        (0..dl.private_composite_count())
+            .filter_map(|i| dl.private_composite(i))
+            .map(|e| e.offset as usize)
             .filter(|&o| o > rel_offset)
             .min()
             .unwrap_or(pool)
@@ -2359,17 +3379,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// composite body length)` copied out of the archived table so the borrow
     /// of the bytecode image does not outlive the read (B28 item 2).
     fn shared_layout_entry(&self, slot: usize) -> (usize, u8, usize) {
-        let dl = self
-            .archived()
-            .data_layout
-            .as_ref()
+        let aux = self.aux();
+        let dl = aux
+            .data_layout()
             .expect("shared slot access requires a data layout");
-        let e = &dl.shared_layout[slot];
-        (
-            e.offset.to_native() as usize,
-            e.kind,
-            e.len.to_native() as usize,
-        )
+        let e = dl
+            .shared_slot(slot)
+            .expect("shared slot index within the declared layout");
+        (e.offset as usize, e.kind, e.len as usize)
     }
 
     /// Read a shared slot in place from the borrowed host buffer (B28 item 2).
@@ -2389,7 +3406,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let buf = self
             .shared_buf
             .bytes()
-            .expect("read_shared_from_buffer called with an active buffer");
+            .ok_or_else(|| shared_buffer_not_bound("read_shared_from_buffer"))?;
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
             let sk = ScalarKind::from_tag(kind)
                 .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
@@ -2481,7 +3498,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let buf = self
                 .shared_buf
                 .bytes_mut()
-                .expect("write_shared_to_buffer called with an active buffer");
+                .ok_or_else(|| shared_buffer_not_bound("write_shared_to_buffer"))?;
             value.write_scalar_le(buf, offset, wb, fb)?;
             Ok(())
         } else {
@@ -2514,7 +3531,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let buf = self
                 .shared_buf
                 .bytes_mut()
-                .expect("write_shared_to_buffer called with an active buffer");
+                .ok_or_else(|| shared_buffer_not_bound("write_shared_to_buffer"))?;
             buf[offset..offset + body.len()].copy_from_slice(&body);
             Ok(())
         }
@@ -2563,14 +3580,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 ));
             }
             let base = self.arena.persistent_ptr().as_ptr();
+            let src = bytes.as_ptr();
             // SAFETY: `dst_off + len <= persistent_capacity`, so the destination
-            // lies wholly within the persistent region. It is disjoint from the
-            // source (the value's arena-top or inline body) because the
-            // compiler assigns each private composite slot a distinct pool
-            // offset and the persistent region is a different arena range, so
-            // the copy does not overlap.
+            // lies wholly within the persistent region, and the source is the
+            // `len` resolved bytes of the value's body. The two may overlap. A
+            // value read from this slot and written straight back, which
+            // verified bytecode can express as `GetData(s); SetData(s)`, is a
+            // handle to this very body, and a view of part of it can be written
+            // over the whole. `copy` permits overlap, where `copy_nonoverlapping`
+            // would make that write undefined behaviour. `bytes` is not used
+            // after the copy.
             let dst = unsafe { base.add(dst_off) };
-            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len) };
+            unsafe { core::ptr::copy(src, dst, len) };
             let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, len);
             // SAFETY: `dst` is a freshly written, non-null pointer into the
             // persistent region addressing `len` initialised bytes.
@@ -2610,11 +3631,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // local `pool`/`templates` are written here, then moved into
             // `self` once the borrow ends, avoiding an aliasing conflict with
             // the `&self.bytecode` that `archived()` holds.
-            let chunks = &self.archived().chunks;
-            for chunk in chunks.iter() {
+            // Decode each chunk's constant pool once, here, at construction.
+            // This is a build step, not a per-access path, so decoding to owned
+            // values costs one pass rather than anything on the hot path.
+            let aux_bytes = Self::aux_body_slice(self.bytecode.as_slice());
+            let ranges: alloc::vec::Vec<(u32, u32)> = {
+                let aux = self.aux();
+                (0..aux.chunk_count())
+                    .filter_map(|i| aux.module().chunk(i))
+                    .map(|c| (c.consts_first, c.consts_count))
+                    .collect()
+            };
+            let pools = crate::wire_schema::decode_constant_pools(aux_bytes, &ranges)
+                .unwrap_or_else(|_| ranges.iter().map(|_| alloc::vec::Vec::new()).collect());
+            for constants in &pools {
                 let mut row: alloc::vec::Vec<Option<crate::bytecode::GenericValue<W, F>>> =
-                    alloc::vec::Vec::with_capacity(chunk.constants.len());
-                for c in chunk.constants.iter() {
+                    alloc::vec::Vec::with_capacity(constants.len());
+                for c in constants {
                     row.push(Self::pool_const_template(c, wbytes, fbytes, &mut pool));
                 }
                 templates.push(row);
@@ -2636,14 +3669,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// is then returned as an `Arena` body. An empty composite body needs no
     /// handle and is left to the direct path.
     fn pool_const_template(
-        c: &crate::bytecode::ArchivedConstValue,
+        c: &crate::bytecode::ConstValue,
         word_bytes: usize,
         float_bytes: usize,
         pool: &mut alloc::vec::Vec<alloc::boxed::Box<[u8]>>,
     ) -> Option<crate::bytecode::GenericValue<W, F>> {
-        use crate::bytecode::{
-            ArchivedConstValue as A, ArrayBody, EnumBody, StructBody, TupleBody,
-        };
+        use crate::bytecode::{ArrayBody, ConstValue as A, EnumBody, StructBody, TupleBody};
         // Only a composite constant can carry a flat body; a scalar or string
         // constant short-circuits without the packing cost.
         if !matches!(
@@ -2659,7 +3690,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // boxed direct path. An empty body needs no pooled allocation and is
         // left to the direct path (it materialises as the always-valid `Empty`
         // body).
-        let bytes = crate::bytecode::const_flat_bytes(c, word_bytes, float_bytes)?;
+        let bytes = crate::bytecode::const_flat_bytes_owned(c, word_bytes, float_bytes)?;
         if bytes.is_empty() {
             return None;
         }
@@ -2733,7 +3764,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// Matches [`shared_data_bytes_for`] computed from the same module.
     pub fn shared_data_bytes(&self) -> usize {
-        self.archived().shared_data_bytes.to_native() as usize
+        self.aux_resolved.shared_data_bytes as usize
     }
 
     /// Read a scalar shared field out of a host-owned buffer between runs
@@ -2791,12 +3822,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         value: crate::bytecode::GenericValue<W, F>,
     ) -> Result<(), VmError> {
         self.check_host_shared_slot(buf, slot)?;
-        let (offset, kind, _len) = self.shared_layout_entry(slot);
+        let (offset, kind, len) = self.shared_layout_entry(slot);
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0 {
-            return Err(VmError::NativeError(format!(
-                "shared slot {} is a composite; composite shared fields are written from the script, not the per-slot host API",
-                slot
-            )));
+            // A discriminant-only flat enum occupies a single word that holds the
+            // variant discriminant, byte-identical to a `Word` slot. The host may
+            // therefore seed such a field with the discriminant integer, so an
+            // enum-typed shared array (a token stream keyed by an `enum TokenKind`)
+            // can be filled through the ordinary per-slot API. Any other composite
+            // (a payload-carrying enum, a struct, a tuple, or an array) still carries
+            // fields the per-slot scalar write cannot express and must be written from
+            // a script or seeded whole with `marshal_shared_into`.
+            let composite_kind = crate::value_layout::CompositeKind::from_tag(
+                kind & !crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG,
+            );
+            let is_unit_enum = composite_kind == Some(crate::value_layout::CompositeKind::Enum)
+                && len == self.module_word_bytes();
+            if !(is_unit_enum && matches!(value, crate::bytecode::GenericValue::Int(_))) {
+                return Err(VmError::NativeError(format!(
+                    "shared slot {} is a composite; only a discriminant-only enum accepts a host discriminant write, larger composites are written from the script or with marshal_shared_into",
+                    slot
+                )));
+            }
         }
         value.write_scalar_le(
             buf,
@@ -2823,9 +3869,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         buf: &mut [u8],
     ) -> Result<(), VmError> {
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
-        self.check_shared_marshal_layout::<T>(buf, wb, fb)?;
-        <T as crate::marshall::KeleusmaType<W, F>>::to_flat_bytes(value, buf, wb, fb)
+        self.check_shared_marshal_layout::<T>(buf, wb, fb, ab)?;
+        <T as crate::marshall::KeleusmaType<W, F>>::to_flat_bytes(value, buf, wb, fb, ab)
     }
 
     /// Read a host value mirroring the whole `shared data` segment from the
@@ -2836,9 +3883,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         buf: &[u8],
     ) -> Result<T, VmError> {
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
-        self.check_shared_marshal_layout::<T>(buf, wb, fb)?;
-        <T as crate::marshall::KeleusmaType<W, F>>::from_flat_bytes(buf, wb, fb)
+        self.check_shared_marshal_layout::<T>(buf, wb, fb, ab)?;
+        <T as crate::marshall::KeleusmaType<W, F>>::from_flat_bytes(buf, wb, fb, ab)
     }
 
     /// Validate that `T`'s flat layout matches the module's shared segment and
@@ -2850,15 +3898,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         buf: &[u8],
         wb: usize,
         fb: usize,
+        ab: usize,
     ) -> Result<(), VmError> {
         let need = self.shared_data_bytes();
-        let have = <T as crate::marshall::KeleusmaType<W, F>>::flat_byte_size(wb, fb).ok_or_else(
-            || {
+        let have = <T as crate::marshall::KeleusmaType<W, F>>::flat_byte_size(wb, fb, ab)
+            .ok_or_else(|| {
                 VmError::TypeError(String::from(
                     "host type is not flat-eligible for shared-data marshalling",
                 ))
-            },
-        )?;
+            })?;
         if have != need {
             return Err(VmError::TypeError(format!(
                 "host type flat size {} does not match module's shared_data_bytes {}",
@@ -2926,19 +3974,40 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     where
         T: crate::marshall::KeleusmaType<W, F>,
     {
-        let ctx = crate::marshall::RefContext {
+        T::from_value_ctx(value, &self.ref_context_for(value))
+    }
+
+    /// The resolution context [`Self::decode`] uses for `value`, for a host that decodes through
+    /// [`crate::marshall::KeleusmaType::from_value_ctx`] itself.
+    ///
+    /// It carries this VM's arena, opaque registry, packed widths and bytecode image, and the
+    /// originating epoch of `value`'s composite body, or the current epoch for any other value.
+    /// A context a host assembles field by field cannot otherwise name the bytecode image, and
+    /// one built with an empty image refuses a constant string.
+    pub fn ref_context_for(
+        &self,
+        value: &crate::bytecode::GenericValue<W, F>,
+    ) -> crate::marshall::RefContext<'_> {
+        crate::marshall::RefContext {
             arena: self.arena,
             opaques: &self.ephemeral_opaques,
             word_bytes: self.module_word_bytes(),
             float_bytes: self.module_float_bytes(),
+            addr_bytes: self.module_addr_bytes(),
             // A decoded value may be held across a RESET (a returned or
             // yielded composite). Reattach the composite body's originating
             // epoch so a flat Text field resolves Stale after a reset rather
             // than dereferencing reclaimed memory; a non-composite value
             // carries its own epoch and ignores this (B28 P3 item 1).
             ref_epoch: value.flat_ref_epoch().unwrap_or_else(|| self.arena.epoch()),
-        };
-        T::from_value_ctx(value, &ctx)
+            rodata: self.bytecode_image(),
+        }
+    }
+
+    /// The loaded bytecode image, where a constant string packed into a flat body points. It is
+    /// the value of [`crate::marshall::RefContext::rodata`] for this VM.
+    pub fn bytecode_image(&self) -> &[u8] {
+        self.bytecode.as_slice()
     }
 
     /// Reset the arena's top region and advance the epoch, leaving
@@ -3012,6 +4081,32 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let _ = self
             .ephemeral_opaques
             .try_reserve_exact(self.reserved_opaque_capacity);
+        Ok(())
+    }
+
+    /// Push the total indexed-read outcome: the element or its placeholder,
+    /// the index, the four byte limbs of the unsigned 32-bit bound, lowest
+    /// first, and the invalid-index flag. Every `GetIndex` form shares this
+    /// layout, which `Trap(IndexOutOfBounds)` consumes.
+    fn push_index_outcome(
+        &mut self,
+        value: crate::bytecode::GenericValue<W, F>,
+        index: W,
+        bound: u32,
+        invalid: bool,
+    ) -> Result<(), VmError> {
+        sp!(self, value);
+        sp!(self, crate::bytecode::GenericValue::Int(index));
+        for byte in bound.to_le_bytes() {
+            sp!(
+                self,
+                crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(byte as i8)))
+            );
+        }
+        sp!(
+            self,
+            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+        );
         Ok(())
     }
 
@@ -3194,8 +4289,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 
     /// Read a flat scalar field at `offset` of kind `kind` from a resolved
-    /// composite body, resolving an `Opaque` field's stored `word_bytes`
-    /// index back to its `Arc` through the ephemeral registry (B28 P3).
+    /// composite body, resolving an `Opaque` field's stored registry index
+    /// back to its `Arc` through the ephemeral registry (B28 P3). That index
+    /// occupies the width `ScalarKind::Opaque` gives it, which is the ADDRESS
+    /// width; this doc comment said `word_bytes` while the layout had already
+    /// moved to the address width, and the code matched the comment.
     /// Non-reference kinds delegate to `read_scalar_le`.
     ///
     /// Returns an error if an opaque index does not resolve. A well-formed
@@ -3213,16 +4311,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         use crate::value_layout::ScalarKind;
         if matches!(kind, ScalarKind::Opaque) {
-            let index = match crate::bytecode::GenericValue::<W, F>::read_scalar_le(
-                bytes,
-                offset,
-                ScalarKind::Int,
-                word_bytes,
-                float_bytes,
-            )? {
-                crate::bytecode::GenericValue::Int(w) => w.to_i64() as usize,
-                _ => unreachable!("read_scalar_le with Int kind yields Int"),
-            };
+            // The field's width is whatever the LAYOUT says it is, which sizes
+            // an opaque by the ADDRESS width. Reading it as a word disagreed
+            // with the offsets the compiler bakes from that same layout on any
+            // target whose word and address widths differ. The index is read
+            // UNSIGNED: it is a registry position, and sign-extending it from a
+            // narrow field would produce a nonsensical index rather than a
+            // clean resolve failure.
+            let field =
+                ScalarKind::Opaque.size_in_bytes(word_bytes, float_bytes, self.module_addr_bytes());
+            let mut buf = [0u8; 8];
+            let src = field
+                .checked_add(offset)
+                .filter(|_| field <= buf.len())
+                .and_then(|end| bytes.get(offset..end))
+                .ok_or_else(|| {
+                    VmError::InvalidBytecode(alloc::string::String::from(
+                        "flat opaque field read out of bounds",
+                    ))
+                })?;
+            buf[..field].copy_from_slice(src);
+            let index = u64::from_le_bytes(buf) as usize;
             // B33: push the POD index form rather than resolving the `Arc`,
             // so the operand stack holds no global-heap pointer. The `Arc` is
             // materialised from the index only at a host boundary (native
@@ -3316,8 +4425,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks and clears both arena ends. The volatile
         // state is cleared as a side effect.
-        let _ = self.full_reset_arena_internal();
+        self.elide_pops = false;
+        if self.execution_checks == ExecutionChecks::Proven {
+            self.proof_state = ExecutionProofState::Poisoned;
+        }
+        self.shared_buf.clear();
+        let reset = self.full_reset_arena_internal();
         self.started = false;
+        if reset.is_ok() && self.pop_proof.is_some() {
+            self.proof_state = ExecutionProofState::Ready;
+        }
     }
 
     /// Replace the current module with a new one as a hot code update.
@@ -3343,7 +4460,40 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Dialogue type compatibility between the old and new modules is
     /// the host's responsibility. The VM does not check it because
     /// dialogue types are erased at the bytecode level.
+    ///
+    /// # Trust matrix
+    ///
+    /// With the `signatures` feature, a VM with any registered verifying
+    /// key refuses this in-memory swap with
+    /// [`crate::bytecode::LoadError::InvalidSignature`]. An in-memory
+    /// [`Module`] carries no signature, so admitting it would let any
+    /// caller install unsigned code around the matrix that
+    /// `replace_module_from_bytes` enforces. A host that means to swap an
+    /// in-memory module calls `clear_verifying_keys` first, which states
+    /// that intent. Both exist only under `signatures`, so they are named
+    /// here rather than linked, which keeps the documentation building
+    /// without that feature.
     pub fn replace_module(
+        &mut self,
+        new_module: Module,
+        initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
+    ) -> Result<(), VmError> {
+        self.refuse_unsigned_swap_under_trust()?;
+        self.replace_module_schema_checked(new_module, initial_data)
+    }
+
+    /// Refuse an in-memory hot swap while a trust matrix is registered.
+    fn refuse_unsigned_swap_under_trust(&self) -> Result<(), VmError> {
+        #[cfg(feature = "signatures")]
+        if !self.verifying_keys.is_empty() {
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
+        }
+        Ok(())
+    }
+
+    /// The schema-checked swap shared by [`Self::replace_module`] and the
+    /// authenticated [`Self::replace_module_from_bytes`].
+    fn replace_module_schema_checked(
         &mut self,
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
@@ -3360,7 +4510,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // call [`Vm::replace_module_unchecked`] instead, which
         // bypasses this check and leaves the existing
         // size-and-arena verification as the only guard.
-        let current_hash: u32 = self.archived().schema_hash.to_native();
+        let current_hash: u32 = self.aux().schema_hash().unwrap_or(0);
         if current_hash != new_module.schema_hash {
             return Err(VmError::VerifyError(format!(
                 "schema mismatch on hot swap: current module schema_hash = {:#x}, new module schema_hash = {:#x}. Use `Vm::replace_module_unchecked` to force the swap if the data layout change is intentional.",
@@ -3381,12 +4531,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// `unchecked` names the safety opt-out, not memory safety. The
     /// VM continues to enforce structural verification and resource
-    /// bounds; only the schema-hash sanity check is bypassed.
+    /// bounds; only the schema-hash sanity check is bypassed. It does
+    /// not bypass the trust matrix, which refuses it as it refuses
+    /// [`Self::replace_module`].
     pub fn replace_module_unchecked(
         &mut self,
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
     ) -> Result<(), VmError> {
+        self.refuse_unsigned_swap_under_trust()?;
         self.replace_module_inner(new_module, initial_data)
     }
 
@@ -3430,8 +4583,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // the self-asserted flag bit.
             return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
         }
-        let new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
-        self.replace_module(new_module, initial_data)
+        let mut new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        // Authentication is complete. The internal image has no signature
+        // extension, while the retained trust matrix governs later byte loads.
+        // This mirrors initial signed construction and avoids serializing a
+        // signature-required flag without its authenticated envelope.
+        new_module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        self.replace_module_schema_checked(new_module, initial_data)
     }
 
     /// Register a verifying key with the VM's trust matrix.
@@ -3476,6 +4634,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
     ) -> Result<(), VmError> {
+        Self::enforce_trap_policy(&new_module, self.trap_policy)?;
         // B16 step 8: the new module's declared widths must match
         // the runtime's W/A/F trait parameters, same as Vm::new.
         // Without this the hot-swap path would re-introduce the
@@ -3509,25 +4668,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // host-owned buffer supplied at the next call, not a hot-swap input
         // (B28 item 2).
         let (new_shared, new_private) = match new_module.data_layout.as_ref() {
-            None => (0u16, 0u16),
+            None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u16;
-                let mut private_ = 0u16;
+                let mut shared = 0u32;
+                let mut private_ = 0u32;
                 for slot in &dl.slots {
                     match slot.visibility {
                         crate::bytecode::SlotVisibility::Shared => {
-                            shared = shared.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout shared slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            shared = shared
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout shared slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                         crate::bytecode::SlotVisibility::Private => {
-                            private_ = private_.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout private slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            private_ = private_
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout private slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                     }
                 }
@@ -3565,12 +4730,50 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `private_slot_count` stale and made `Drop` double-drop the slots
         // (V0.2.1 security audit, finding 5: hot-swap double-drop /
         // use-after-free).
+        // The working set `Vm::new` would reserve for the new module must fit the arena. The swap
+        // re-reserves it after its reset and degrades to on-demand growth when it cannot, so
+        // without this check a swap the constructor would refuse was admitted and then failed on
+        // the first push past the arena. The reservations are made in order from the reset
+        // bottom, and each element size is a multiple of eight, so their byte sum is what
+        // construction needs. Checked before any state changes, so a refusal keeps the running
+        // module.
+        let (reserve_slots, reserve_frames, reserve_opaque) =
+            module_bottom_reservations(&new_module);
+        let working_set = reserve_slots
+            .saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<W, F>>())
+            .saturating_add(reserve_frames.saturating_mul(core::mem::size_of::<CallFrame>()))
+            .saturating_add(reserve_opaque.saturating_mul(core::mem::size_of::<
+                alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
+            >()));
+        if working_set > self.arena.dual_headed_capacity() {
+            return Err(VmError::OutOfArena(format!(
+                "the new module's working set ({working_set} bytes for {reserve_slots} operand slots, {reserve_frames} frames and {reserve_opaque} opaque entries) does not fit the arena's {} dual-headed bytes; Vm::new would refuse it, so the swap is refused and the running module kept",
+                self.arena.dual_headed_capacity()
+            )));
+        }
         let bytes = new_module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
         let decoded_ops = decode_all_ops(aligned.as_slice())?;
+        let new_proof = Self::prove_image(
+            &aligned,
+            &decoded_ops,
+            self.arena,
+            self.trap_policy,
+            self.execution_checks,
+        )?;
+        let new_aux = AuxResolved::resolve(Self::aux_body_slice(&aligned))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+        self.shared_buf.clear();
+        self.elide_pops = false;
+        self.pop_proof = None;
+        if self.execution_checks == ExecutionChecks::Proven {
+            self.proof_state = ExecutionProofState::Poisoned;
+        }
 
-        // Commit point: every step below is infallible.
+        // Commit point. Returned validation errors have already been handled.
+        // Host-owned values can still unwind from Drop, so the proof is revoked
+        // and each old slot remains initialized before invoking its destructor.
         // Drop the old private slots. Each was initialised at
         // construction or at a prior hot swap and may hold owned
         // resources whose destructor must run.
@@ -3579,31 +4782,59 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let base =
                 self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             for i in 0..old_private_count {
-                // SAFETY: every old private slot held a valid
-                // `Value` initialised through `write_data_slot`
-                // or `Vm::construct`. `drop_in_place` runs the
-                // destructor in place; the bytes are then
-                // uninitialised and ready for `ptr::write`.
-                unsafe {
-                    core::ptr::drop_in_place(base.add(i));
-                }
+                // SAFETY: this slot contains an initialized value. Replace it
+                // with Unit before dropping the old owner so unwinding cannot
+                // leave a dangling value for the VM destructor to drop again.
+                let old =
+                    unsafe { core::ptr::replace(base.add(i), crate::bytecode::GenericValue::Unit) };
+                drop(old);
             }
         }
         // The host-supplied initial values are exactly the new module's
         // private slots; shared slots live in the borrowed buffer.
-        let private_init = initial_data;
+        //
+        // A host seeds `Unit` to mean "no value", as every host did before
+        // composite private fields had initializers. Such a seed takes the new
+        // module's own load-time initializer instead, so that a hot swap keeps
+        // the guarantee construction gives, that no private slot with an
+        // initializer starts as the empty-slot `Unit` (definite
+        // initialization, option (b)). Any other seed is written as given.
+        let new_word_bytes = (1usize << new_module.word_bits_log2) / 8;
+        let new_float_bytes = (1usize << new_module.float_bits_log2) / 8;
+        let new_inits = new_module
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.private_init.as_slice())
+            .unwrap_or(&[]);
+        let private_init: Vec<crate::bytecode::GenericValue<W, F>> = initial_data
+            .into_iter()
+            .enumerate()
+            .map(|(i, seeded)| match (&seeded, new_inits.get(i)) {
+                (crate::bytecode::GenericValue::Unit, Some(cv))
+                    if *cv != crate::bytecode::ConstValue::Unit =>
+                {
+                    crate::bytecode::GenericValue::<W, F>::from_const(
+                        cv,
+                        new_word_bytes,
+                        new_float_bytes,
+                    )
+                }
+                _ => seeded,
+            })
+            .collect();
 
         // Recompute the bottom-region footprint for the new module so the
         // `full_reset_arena_internal` below re-reserves the operand stack,
         // frames, and registry to the swapped-in module's exact worst case
         // rather than the retired module's (B28 P3 item 5, priority 1).
-        let (reserve_slots, reserve_frames, reserve_opaque) =
-            module_bottom_reservations(&new_module);
         self.reserved_operand_slots = reserve_slots;
         self.reserved_frame_depth = reserve_frames;
         self.reserved_opaque_capacity = reserve_opaque;
         // Install the new bytecode image and decoded ops built above (before
         // the drop), so the swap is transactional.
+        // Re-resolve against the new image: the offsets and the bytes must stay
+        // together, and a hot swap replaces the bytes.
+        self.aux_resolved = new_aux;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
         self.shared_slot_count = new_shared;
@@ -3653,7 +4884,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks before clearing both ends. The
         // persistent region is preserved through the reset.
-        let _ = self.full_reset_arena_internal();
+        let reset = self.full_reset_arena_internal();
+        if self.execution_checks == ExecutionChecks::Proven && reset.is_err() {
+            return Err(VmError::VerifyError(String::from(
+                "arena reset could not establish execution-state proof",
+            )));
+        }
         // Rebuild the const pool for the swapped-in module (B28 P3 item 2,
         // Increment 2). The old templates referenced the retired image's
         // constants and the old pool boxes; rebuilding reassigns both fields,
@@ -3662,8 +4898,47 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // can reference a freed box at the moment it is dropped (and a dropped
         // `Flat(Arena)` handle reads no bytes in any case).
         self.build_const_pool();
+        self.persist_seeded_private_composites()?;
         self.started = false;
+        self.pop_proof = new_proof;
+        if self.pop_proof.is_some() {
+            self.proof_state = ExecutionProofState::Ready;
+        }
 
+        Ok(())
+    }
+
+    /// Move each composite in the private slots a hot swap was seeded with into the persistent
+    /// composite pool, as `SetData` stores one.
+    ///
+    /// The swap writes its `initial_data` straight into the slots and then clears the pool and
+    /// resets the arena, so a seeded composite was left either boxed, which the module's
+    /// flat-baked field reads refuse, or as a handle into arena memory the reset reclaimed. Each
+    /// is now canonicalised into the fresh arena and persisted at its slot's pool offset. A
+    /// scalar is left as written.
+    fn persist_seeded_private_composites(&mut self) -> Result<(), VmError> {
+        let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        let ab = self.module_addr_bytes();
+        for i in 0..self.private_slot_count as usize {
+            let slot = self.shared_slot_count as usize + i;
+            if self.private_composite_pool_offset(slot).is_none() {
+                continue;
+            }
+            // SAFETY: `i` is within the private slot array the swap just initialised, and the
+            // value is replaced by `Unit` before it is moved out, so no slot is left aliased.
+            let seeded =
+                unsafe { core::ptr::replace(base.add(i), crate::bytecode::GenericValue::Unit) };
+            if matches!(seeded, crate::bytecode::GenericValue::Unit) {
+                continue;
+            }
+            let arena = self.arena;
+            let flat = seeded
+                .into_arena_canonical(wb, fb, ab, arena)
+                .map_err(|_| out_of_arena_push("seeded private composite", arena.capacity()))?;
+            self.write_data_slot(slot, flat)?;
+        }
         Ok(())
     }
 
@@ -3834,6 +5109,37 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     func(args)
                 },
             ),
+            classification: NativeClassification::External,
+            max_invocations_per_iteration: Some(max_invocations_per_iteration),
+        });
+    }
+
+    /// Register an external native as a closure that receives the native context, the form
+    /// [`Self::register_native_with_ctx_closure`] gives a verified native.
+    ///
+    /// A host whose natives are values of its own language, a Python callable for example,
+    /// cannot express them as the `fn` pointer [`Self::register_external_native`] takes, and an
+    /// external native that marshals a composite argument needs the context. The attestation
+    /// and the classification are those of [`Self::register_external_native`].
+    pub fn register_external_native_with_ctx_closure<Func>(
+        &mut self,
+        name: &str,
+        func: Func,
+        max_invocations_per_iteration: u32,
+    ) where
+        Func: for<'b> Fn(
+                &NativeCtx<'b>,
+                &[crate::bytecode::GenericValue<W, F>],
+            ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
+            + 'static,
+    {
+        self.native_classifications_verified = false;
+        self.natives.retain(|e| e.name != name);
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: Box::new(func),
             classification: NativeClassification::External,
             max_invocations_per_iteration: Some(max_invocations_per_iteration),
         });
@@ -4062,12 +5368,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     )));
                 }
             };
-            // Skip names that have no registration yet; the call-
-            // site dispatch surfaces them as `InvalidBytecode`
-            // when the bytecode reaches that site.
+            // A call site naming an unregistered native is a host-contract
+            // fault detectable before execution, so it is rejected here
+            // rather than when execution reaches the site (operator ruling
+            // of 2026-10-20). Registering a native clears the cached
+            // verdict, so a host that registers after a rejection is
+            // checked again.
             let entry = match self.natives.iter().find(|e| e.name == native_name) {
                 Some(e) => e,
-                None => continue,
+                None => {
+                    return Err(VmError::VerifyError(format!(
+                        "native `{}` is called by the module but not registered",
+                        native_name
+                    )));
+                }
             };
             let entry_external = entry.classification == NativeClassification::External;
             if entry_external != expected_external {
@@ -4156,12 +5470,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         args: &[crate::bytecode::GenericValue<W, F>],
     ) -> Result<GenericVmState<W, F>, VmError> {
         let entry = self
-            .archived()
-            .entry_point
-            .as_ref()
-            .map(|e| e.to_native() as usize)
+            .aux()
+            .module()
+            .entry_point()
             .ok_or_else(|| VmError::InvalidBytecode(String::from("no entry point")))?;
-        self.call_function(entry, args)
+        self.call_function_after_enter(entry, args)
     }
 
     /// Capture the host shared-data buffer for the current call (B28 item 2).
@@ -4175,7 +5488,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// forwards. Cleared before the entry point returns so no captured pointer
     /// outlives the host's borrow.
     fn enter_shared(&mut self, shared: &mut [u8]) -> Result<(), VmError> {
-        let need = self.archived().shared_data_bytes.to_native() as usize;
+        let need = self.aux_resolved.shared_data_bytes as usize;
         if shared.len() != need {
             return Err(VmError::NativeError(format!(
                 "shared data buffer is {} bytes but the module declares {}; drive a module with shared data through `call_with_shared`/`resume_with_shared` with a buffer of `shared_data_bytes()`",
@@ -4197,6 +5510,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         chunk_idx: usize,
         args: &[crate::bytecode::GenericValue<W, F>],
     ) -> Result<GenericVmState<W, F>, VmError> {
+        // This entry has no buffer argument. Internal calls with an active
+        // borrow use call_function_after_enter instead. Clear even after unwind.
+        self.shared_buf.clear();
+        self.call_function_after_enter(chunk_idx, args)
+    }
+
+    fn call_function_after_enter(
+        &mut self,
+        chunk_idx: usize,
+        args: &[crate::bytecode::GenericValue<W, F>],
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.begin_proven_entry(&[ExecutionProofState::Ready, ExecutionProofState::Finished])?;
         // Native-classification check runs lazily before any
         // execution. The first call after natives are registered
         // (or after a hot swap) walks every native-call site and
@@ -4204,11 +5529,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // the host's registered classification. Subsequent calls
         // skip the walk because the result is cached.
         self.verify_native_classifications()?;
-        let archived = self.archived();
-        let chunk = archived.chunks.get(chunk_idx).ok_or_else(|| {
+        let aux = self.aux();
+        let chunk = aux.module().chunk(chunk_idx).ok_or_else(|| {
             VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
         })?;
-        let local_count = chunk.local_count.to_native() as usize;
+        let local_count = chunk.local_count as usize;
         let param_count = chunk.param_count as usize;
 
         // Validate the argument count up front. Passing too few
@@ -4217,10 +5542,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // first use site with a confusing TypeError. Failing here
         // gives the host a clear signal that the call signature
         // is wrong before any bytecode runs.
+        let chunk_name = aux
+            .module()
+            .chunk_name(chunk_idx)
+            .and_then(|b| core::str::from_utf8(b).ok())
+            .unwrap_or("<chunk>");
         if args.len() != param_count {
             return Err(VmError::TypeError(format!(
                 "function `{}` expected {} argument{}, got {}",
-                chunk.name.as_str(),
+                chunk_name,
                 param_count,
                 if param_count == 1 { "" } else { "s" },
                 args.len()
@@ -4233,12 +5563,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `Value`; primitive types accept only their matching
         // variant. The early rejection produces a clearer error
         // than the eventual TypeError at the first use site.
-        for (i, (arg, tag)) in args.iter().zip(chunk.param_types.iter()).enumerate() {
-            let tag = crate::bytecode::TypeTag::from_archived(tag);
+        for (i, arg) in args.iter().enumerate() {
+            let Some(tag) = aux.param_type(chunk_idx, i) else {
+                break;
+            };
             if !tag.admits(arg) {
                 return Err(VmError::TypeError(format!(
                     "function `{}` parameter {} expected {}, got {}",
-                    chunk.name.as_str(),
+                    chunk_name,
                     i,
                     tag.name(),
                     arg.type_name()
@@ -4257,12 +5589,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // returned unchanged.
         let arena = self.arena;
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
             let arg = self
                 .correct_native_enum_hints(arg.clone())
-                .into_arena_canonical(wb, fb, arena)
+                .into_arena_canonical(wb, fb, ab, arena)
                 .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
+            if let Some(shape) = self
+                .aux_resolved
+                .signatures
+                .get(chunk_idx)
+                .and_then(|sig| sig.params.get(i))
+            {
+                check_host_composite_shape(&arg, shape, || {
+                    let name = self
+                        .aux()
+                        .module()
+                        .chunk_name(chunk_idx)
+                        .and_then(|b| core::str::from_utf8(b).ok())
+                        .map(String::from)
+                        .unwrap_or_else(|| String::from("<chunk>"));
+                    format!("function `{name}` parameter {i}")
+                })?;
+            }
             // Intern a host-supplied opaque argument to the POD index form
             // before it reaches the operand stack (B33).
             let arg = self.intern_opaque_arcs(arg);
@@ -4283,7 +5633,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             }
         );
         self.started = true;
-
+        self.prepare_proven_run();
         self.run()
     }
 
@@ -4360,6 +5710,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         &mut self,
         input: crate::bytecode::GenericValue<W, F>,
     ) -> Result<GenericVmState<W, F>, VmError> {
+        self.begin_proven_entry(&[ExecutionProofState::Yielded, ExecutionProofState::Reset])?;
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
@@ -4371,24 +5722,64 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // through unchanged.
         let arena = self.arena;
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
         let input = self
             .correct_native_enum_hints(input)
-            .into_arena_canonical(wb, fb, arena)
+            .into_arena_canonical(wb, fb, ab, arena)
             .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
+        if let Some(base_frame) = self.frames.first().copied()
+            && let Some(sig) = self.aux_resolved.signatures.get(base_frame.chunk_idx)
+        {
+            check_host_composite_shape(&input, &sig.resume, || {
+                format!("the resume value of chunk {}", base_frame.chunk_idx)
+            })?;
+        }
         // Intern a host-supplied opaque resume value to the POD index form (B33).
         let input = self.intern_opaque_arcs(input);
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
-        if let Some(base_frame) = self.frames.first().copied() {
-            let archived = self.archived();
-            let chunk = &archived.chunks[base_frame.chunk_idx];
-            let block_type = match &chunk.block_type {
-                crate::bytecode::ArchivedBlockType::Stream => BlockType::Stream,
-                crate::bytecode::ArchivedBlockType::Reentrant => BlockType::Reentrant,
-                crate::bytecode::ArchivedBlockType::Func => BlockType::Func,
-            };
-            let param_count = chunk.param_count;
+        //
+        // The slot written is that of the INNERMOST stream frame, the `loop`
+        // whose body is running. Until 2026-10-31 it was always the base
+        // frame. A `loop` may call a `loop`, and the callee never returns, so
+        // its `Reset` restarts the callee in place with the caller's frame
+        // beneath it. `Reset` clears every local of the resetting frame, its
+        // parameter included, so writing the base frame left the callee's
+        // parameter `Unit` on every iteration after the first. The
+        // definite-initialization verifier in `src/verify_init.rs` assumes
+        // the opposite, that each resume writes slot 0 of the stream chunk
+        // that reset, so the callee read a slot the verifier had proven
+        // written. A tuple built from it then faulted with `flat scalar codec:
+        // OutOfBounds` or stored zeros. Without delegation the innermost
+        // stream frame is the base frame, so nothing changes for such a
+        // program. See `tests/delegated_loop_reset.rs`.
+        //
+        // The parameter type check below is therefore made against the
+        // callee's own parameter type. The type checker refuses a delegated
+        // `loop` whose parameter type differs from the entry loop's, so this
+        // check is a second line of defence for a module that reaches the
+        // virtual machine without that check, and a mismatch surfaces here as
+        // a `TypeError` at the resume boundary.
+        let stream_frame = {
+            let aux = self.aux();
+            self.frames
+                .iter()
+                .rev()
+                .copied()
+                .find(|f| aux.module().chunk_block_type(f.chunk_idx) == Some(BlockType::Stream))
+        };
+        if let Some(base_frame) = stream_frame.or_else(|| self.frames.first().copied()) {
+            let aux = self.aux();
+            let block_type = aux
+                .module()
+                .chunk_block_type(base_frame.chunk_idx)
+                .unwrap_or(BlockType::Func);
+            let param_count = aux
+                .module()
+                .chunk(base_frame.chunk_idx)
+                .map(|c| c.param_count)
+                .unwrap_or(0);
             if block_type == BlockType::Stream && param_count > 0 {
                 // Validate the resume value against the loop's
                 // parameter type. The yield expression inside the
@@ -4398,12 +5789,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 // the host a clear signal at the resume boundary
                 // rather than a confusing TypeError when the body
                 // first uses the resumed value.
-                if let Some(tag) = chunk.param_types.first() {
-                    let tag = crate::bytecode::TypeTag::from_archived(tag);
-                    if !tag.admits(&input) {
+                if let Some(tag) = aux.param_type(base_frame.chunk_idx, 0)
+                    && !tag.admits(&input)
+                {
+                    {
+                        let name = aux
+                            .module()
+                            .chunk_name(base_frame.chunk_idx)
+                            .and_then(|b| core::str::from_utf8(b).ok())
+                            .unwrap_or("<chunk>");
                         return Err(VmError::TypeError(format!(
                             "loop `{}` resume expected {}, got {}",
-                            chunk.name.as_str(),
+                            name,
                             tag.name(),
                             input.type_name()
                         )));
@@ -4413,8 +5810,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 self.stack[base] = input.clone();
             }
         }
-        // Push the input value onto the stack (it becomes the yield expression result).
-        sp!(self, input);
+        // Push the input value onto the stack, where it becomes the yield expression's result.
+        // After a reset there is no yield to complete. The body restarts at `Stream + 1` with the
+        // input already in slot 0, and a pushed copy would sit beneath the iteration unread, one
+        // slot above the operand-stack bound the verifier computed for it.
+        if !self.suspended_at_reset {
+            sp!(self, input);
+        }
+        self.prepare_proven_run();
         self.run()
     }
 
@@ -4464,7 +5867,58 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// suspension or completion. Unlike [`resume`](Self::resume) this
     /// pushes no value, since a breakpoint is not a yield. Returns
     /// [`VmError::NotSuspended`] if the VM is not in a suspended state.
+    ///
+    /// # Modules that declare shared data
+    ///
+    /// This entry point binds no host buffer, so it is usable only on a module
+    /// whose `shared_data_bytes` is zero. On a module with shared data it
+    /// returns [`VmError::NativeError`]; use
+    /// [`resume_from_breakpoint_with_shared`](Self::resume_from_breakpoint_with_shared)
+    /// instead.
+    ///
+    /// **Until 2026-08-15 it did not reject, and the first shared read after
+    /// the breakpoint stop PANICKED**, which a host driving a debugger could
+    /// not catch. Reported by the `v0.3.0` line, whose case is worth keeping in
+    /// mind for the blast radius: all ten self-hosted stage sources declare
+    /// shared data, so every one of them aborted on the first step.
     pub fn resume_from_breakpoint(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        // Checked BEFORE the suspension test so a shared-data module gets the
+        // actionable diagnostic rather than `NotSuspended`, which would send a
+        // host looking at its call sequence instead of at the missing buffer.
+        if self.aux_resolved.shared_data_bytes != 0 {
+            return Err(VmError::NativeError(alloc::format!(
+                "resume_from_breakpoint binds no shared-data buffer but the module declares {} bytes; use `resume_from_breakpoint_with_shared` with a buffer of `shared_data_bytes()`",
+                self.aux_resolved.shared_data_bytes
+            )));
+        }
+        self.resume_from_breakpoint_after_enter()
+    }
+
+    /// Like [`resume_from_breakpoint`](Self::resume_from_breakpoint), but the
+    /// host lends its shared-data buffer for the duration of the step, exactly
+    /// as [`call_with_shared`](Self::call_with_shared) and
+    /// [`resume_with_shared`](Self::resume_with_shared) do.
+    ///
+    /// This is the entry point a debugger uses on a module with shared data.
+    /// The buffer must be exactly `shared_data_bytes()` long, or empty for a
+    /// module that declares none. It is cleared before returning, so the
+    /// virtual machine retains no reference past the call and the host may
+    /// swap, mutate, or drop the buffer between steps.
+    pub fn resume_from_breakpoint_with_shared(
+        &mut self,
+        shared: &mut [u8],
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.enter_shared(shared)?;
+        let result = self.resume_from_breakpoint_after_enter();
+        self.shared_buf.clear();
+        result
+    }
+
+    /// The shared step of both breakpoint-resume entry points, factored so the
+    /// buffer-binding decision lives at the boundary and the resume logic
+    /// exists once. Mirrors the `call_after_enter`/`resume_after_enter` shape.
+    fn resume_from_breakpoint_after_enter(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        self.begin_proven_entry(&[ExecutionProofState::Breakpoint])?;
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
@@ -4472,6 +5926,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // suppress it once so the op executes rather than re-triggering.
         let frame = *self.frames.last().ok_or(VmError::NotSuspended)?;
         self.skip_breakpoint_at = Some((frame.chunk_idx, frame.ip));
+        self.prepare_proven_run();
         self.run()
     }
 
@@ -4500,9 +5955,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// or after `strip`). Decoded on demand; this is a cold path used
     /// only when a host resolves a fault, so it is not cached.
     fn chunk_debug_pool(&self, chunk_idx: usize) -> Option<crate::debug_meta::DebugPool> {
-        let chunk = self.archived().chunks.get(chunk_idx)?;
-        let bytes = chunk.debug_pool_bytes.as_ref()?;
-        crate::debug_meta::DebugPool::decode(bytes.as_slice()).ok()
+        let aux = self.aux();
+        let bytes = aux.module().chunk_debug_bytes(chunk_idx)?;
+        crate::debug_meta::DebugPool::decode(bytes).ok()
     }
 
     /// Resolve the most recent fault to a [`FaultSource`] through the
@@ -4567,9 +6022,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// On a successful outcome the field is cleared, so it is `Some`
     /// only after a fault.
     fn run(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        if self.execution_checks == ExecutionChecks::Proven {
+            if self.pop_proof.is_none() || self.proof_state != ExecutionProofState::Prepared {
+                return Err(VmError::VerifyError(String::from(
+                    "missing execution-state proof",
+                )));
+            }
+            self.proof_state = ExecutionProofState::Poisoned;
+            self.elide_pops = true;
+        }
         let result = self.run_inner();
-        if result.is_ok() {
+        self.elide_pops = false;
+        self.suspended_at_reset = matches!(result, Ok(GenericVmState::Reset));
+        if let Ok(state) = &result {
             self.fault_location = None;
+            if self.execution_checks == ExecutionChecks::Proven {
+                self.proof_state = match state {
+                    GenericVmState::Yielded(_) => ExecutionProofState::Yielded,
+                    GenericVmState::Reset => ExecutionProofState::Reset,
+                    GenericVmState::BreakpointHit { .. } => ExecutionProofState::Breakpoint,
+                    GenericVmState::Finished(_) => ExecutionProofState::Finished,
+                };
+            }
         }
         result
     }
@@ -4682,28 +6156,64 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     self.write_data_slot(idx, val)?;
                 }
                 Op::GetDataIndexed(base, len) => {
+                    let fallback = self.pop()?;
+                    if !matches!(
+                        fallback,
+                        crate::bytecode::GenericValue::Int(_)
+                            | crate::bytecode::GenericValue::Byte(_)
+                            | crate::bytecode::GenericValue::Unit
+                    ) {
+                        return Err(VmError::TypeError(String::from(
+                            "indexed read fallback must be Word, Byte or Unit",
+                        )));
+                    }
                     let index = match self.pop()? {
                         crate::bytecode::GenericValue::Int(n) => n,
-                        other => {
-                            return Err(VmError::TypeError(format!(
-                                "GetDataIndexed expected Int index, got {}",
-                                other.type_name()
+                        _ => {
+                            return Err(VmError::TypeError(String::from(
+                                "indexed read expects a Word index",
                             )));
                         }
                     };
-                    if index.to_i64() < 0 || index.to_i64() >= len as i64 {
-                        return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
-                    }
-                    let slot = base as usize + index.to_i64() as usize;
-                    let total = self.data_len();
-                    if slot >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "GetDataIndexed slot {} out of bounds",
-                            slot
+                    let first = usize::try_from(base).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed read base exceeds the host representation",
+                        ))
+                    })?;
+                    let count = usize::try_from(len).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed read length exceeds the host representation",
+                        ))
+                    })?;
+                    if first
+                        .checked_add(count)
+                        .is_none_or(|end| end > self.data_len())
+                    {
+                        return Err(VmError::InvalidBytecode(String::from(
+                            "indexed read span exceeds the data segment",
                         )));
                     }
-                    let val = self.read_data_slot(slot)?;
-                    sp!(self, val);
+                    let offset = index.to_i64();
+                    let invalid = offset < 0 || offset >= i64::from(len);
+                    let value = if invalid {
+                        fallback
+                    } else {
+                        self.read_data_slot(first + offset as usize)?
+                    };
+                    sp!(self, value);
+                    sp!(self, crate::bytecode::GenericValue::Int(index));
+                    for byte in len.to_le_bytes() {
+                        sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(
+                                byte as i8
+                            )))
+                        );
+                    }
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+                    );
                 }
                 Op::SetDataIndexed(base, len) => {
                     let index = match self.pop()? {
@@ -4715,31 +6225,46 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if index.to_i64() < 0 || index.to_i64() >= len as i64 {
-                        return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
-                    }
-                    // `write_data_slot` persists a flat composite element into
-                    // the persistent composite pool at the element slot's
-                    // compiler-baked offset (B28 item 2 step 6A); an
-                    // array-of-composite element therefore survives RESET in
-                    // place with no global-heap owned body. A scalar element is
-                    // stored directly.
                     let val = self.pop()?;
-                    let slot = base as usize + index.to_i64() as usize;
+                    let first = usize::try_from(base).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed store base exceeds the host representation",
+                        ))
+                    })?;
+                    let count = usize::try_from(len).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed store length exceeds the host representation",
+                        ))
+                    })?;
                     let total = self.data_len();
-                    if slot >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "SetDataIndexed slot {} out of bounds",
-                            slot
+                    if first.checked_add(count).is_none_or(|end| end > total) {
+                        return Err(VmError::InvalidBytecode(String::from(
+                            "indexed store span exceeds the data segment",
                         )));
                     }
-                    self.write_data_slot(slot, val)?;
+                    let invalid = index.to_i64() < 0 || index.to_i64() >= i64::from(len);
+                    if !invalid {
+                        // The checked span and index make this addition in range.
+                        // Existing scalar and composite storage checks remain in force.
+                        self.write_data_slot(first + index.to_i64() as usize, val)?;
+                    }
+                    sp!(self, crate::bytecode::GenericValue::Int(index));
+                    for byte in len.to_le_bytes() {
+                        sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(
+                                byte as i8
+                            )))
+                        );
+                    }
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+                    );
                 }
+
                 Op::BoundsCheck(bound) => {
-                    // Peek the top of the stack; trap if it is not a
-                    // non-negative `Int` strictly less than `bound`.
-                    // The stack is not modified.
-                    let top = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let top = self.peek_operand()?;
                     let value = match top {
                         crate::bytecode::GenericValue::Int(n) => *n,
                         other => {
@@ -4749,9 +6274,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if value.to_i64() < 0 || value.to_i64() >= bound as i64 {
-                        return Err(VmError::IndexOutOfBounds(value.to_i64(), bound as usize));
+                    let invalid = value.to_i64() < 0 || value.to_i64() >= i64::from(bound);
+                    for byte in u32::from(bound).to_le_bytes() {
+                        sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(
+                                byte as i8
+                            )))
+                        );
                     }
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+                    );
                 }
 
                 Op::Add => {
@@ -4786,7 +6321,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         (
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Float(x + y)),
+                        ) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Float(self.narrow_float(x + y))
+                        ),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot add {} and {}",
@@ -4798,82 +6336,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 Op::Sub => self.binary_arith(|a: W, b: W| a.wrapping_sub(b), |a: F, b: F| a - b)?,
                 Op::Mul => self.binary_arith(|a: W, b: W| a.wrapping_mul(b), |a: F, b: F| a * b)?,
-                Op::Div => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Int(_),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) if y == W::default() => {
-                            return Err(VmError::DivisionByZero);
-                        }
-                        (
-                            crate::bytecode::GenericValue::Int(x),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Int(x.wrapping_div(y))),
-                        (
-                            crate::bytecode::GenericValue::Byte(_),
-                            crate::bytecode::GenericValue::Byte(0),
-                        ) => return Err(VmError::DivisionByZero),
-                        (
-                            crate::bytecode::GenericValue::Byte(x),
-                            crate::bytecode::GenericValue::Byte(y),
-                        ) => {
-                            sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_div(y)));
-                        }
-                        #[cfg(feature = "floats")]
-                        (
-                            crate::bytecode::GenericValue::Float(x),
-                            crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Float(x / y)),
-                        (a, b) => {
-                            return Err(VmError::TypeError(format!(
-                                "cannot divide {} by {}",
-                                a.type_name(),
-                                b.type_name()
-                            )));
-                        }
-                    }
-                }
-                Op::Mod => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Int(_),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) if y == W::default() => {
-                            return Err(VmError::DivisionByZero);
-                        }
-                        (
-                            crate::bytecode::GenericValue::Int(x),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Int(x.wrapping_rem(y))),
-                        (
-                            crate::bytecode::GenericValue::Byte(_),
-                            crate::bytecode::GenericValue::Byte(0),
-                        ) => return Err(VmError::DivisionByZero),
-                        (
-                            crate::bytecode::GenericValue::Byte(x),
-                            crate::bytecode::GenericValue::Byte(y),
-                        ) => {
-                            sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_rem(y)));
-                        }
-                        #[cfg(feature = "floats")]
-                        (
-                            crate::bytecode::GenericValue::Float(x),
-                            crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Float(x % y)),
-                        (a, b) => {
-                            return Err(VmError::TypeError(format!(
-                                "cannot modulo {} by {}",
-                                a.type_name(),
-                                b.type_name()
-                            )));
-                        }
-                    }
-                }
                 Op::Neg => {
                     // Consolidation B narrowed `Op::Neg` away from
                     // `Int` operands. The compiler emits
@@ -4889,7 +6351,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                         #[cfg(feature = "floats")]
                         crate::bytecode::GenericValue::Float(x) => {
-                            sp!(self, crate::bytecode::GenericValue::Float(-x))
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(self.narrow_float(-x))
+                            )
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -5028,9 +6493,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // Truncate stack to just the locals.
                     self.stack.truncate(reset_base + local_count);
 
-                    // Reset both arena bump pointers (R32). Host-allocated
-                    // dynamic strings and other arena values are reclaimed
-                    // here.
+                    // Reset the TOP arena region only. Host-allocated dynamic
+                    // strings and other short-lived scratch are reclaimed here.
+                    //
+                    // NOT both bump pointers, which this comment claimed until
+                    // 2026-08-10. `reset_arena_internal` calls
+                    // `reset_top_unchecked()`; resetting both ends is
+                    // `full_reset_arena_internal`, which `Op::Reset` does not
+                    // call. The distinction is load-bearing: the persistent
+                    // region is NOT reclaimed, which is exactly why private
+                    // composite data survives `RESET`. The `v0.3.0` session
+                    // reasoned from the wrong version of this for an hour, and
+                    // a lowering built on it would re-initialise private data
+                    // every iteration.
                     let _ = self.reset_arena_internal();
                     // Drop ephemeral opaque references reachable from the
                     // arena bodies just reclaimed (B28 P3); their `Drop`
@@ -5069,11 +6544,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // callee's local-slot count (an arity mismatch). Both
                     // return a clean error instead of panicking or wrapping
                     // to a wild frame base.
-                    let new_base = self
-                        .stack
-                        .len()
-                        .checked_sub(arg_count as usize)
-                        .ok_or(VmError::StackUnderflow)?;
+                    let new_base = self.operand_start(arg_count as usize)?;
                     let extra = called_local_count
                         .checked_sub(arg_count as usize)
                         .ok_or_else(|| {
@@ -5139,7 +6610,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::Dup => {
-                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?.clone();
+                    let val = self.peek_operand()?.clone();
                     sp!(self, val);
                 }
 
@@ -5153,9 +6624,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     use crate::bytecode::NewCompositeOperand as NCO;
                     use crate::value_layout::CompositeKind as CK;
                     let count = operand.count() as usize;
-                    if self.stack.len() < count {
-                        return Err(VmError::StackUnderflow);
-                    }
+                    let start = self.operand_start(count)?;
                     let arena = self.arena;
                     // Drain the operands without materialising them to owned
                     // `Inline` bodies. The flat path packs them directly into
@@ -5165,28 +6634,32 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // which stores the operands as separate values, materialises
                     // them (B28 P3 item 5 C-residual 3b).
                     let mut values: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - count..).collect();
+                        self.stack.drain(start..).collect();
                     let wb = self.module_word_bytes();
+                    let ab = self.module_addr_bytes();
                     let fb = self.module_float_bytes();
                     // Intern opaque fields on the flat construction path
                     // (B28 P3). Decide flatness first. A struct/enum Flat
                     // operand is flat by the compiler's decision, which the
-                    // named type makes reliable, so an opaque field is flat
-                    // (interned). Tuple and array are value-driven and their
-                    // access form is recovered by the compiler's lightweight
-                    // inference, which cannot recover an opaque element type;
-                    // to keep construction and access in agreement, an opaque
-                    // element keeps the tuple/array boxed (`flat_field_size`
-                    // is `None` for `Opaque`, so a tuple holding one is not
-                    // flattened). On the flat path each `Opaque` is replaced
-                    // by its registry index packed as a word.
-                    // A struct/enum Flat operand is flat by the compiler's
-                    // decision, which the named type makes reliable, so its
-                    // reference fields are flat. Tuple and array are
-                    // value-driven and keep a reference element boxed
-                    // (opaque via `flat_field_size` being `None`, text via
-                    // the explicit exclusion), because their access form is
-                    // recovered by lightweight inference (B28 P3).
+                    // named type makes reliable, so its reference fields are
+                    // flat. Tuple and array are value-driven: an opaque
+                    // element IS flat-eligible (`flat_tuple_element_with_refs`
+                    // admits both the host `Arc` and the internal index form,
+                    // and `tests/flat_ref_tuple.rs` pins that a tuple and an
+                    // array holding one flatten), while a text element stays
+                    // boxed below the host pointer width.
+                    //
+                    // On the flat path each `Opaque` becomes its registry
+                    // index, packed at the width the LAYOUT gives
+                    // `ScalarKind::Opaque` -- the ADDRESS width, not a word.
+                    // The index was formerly rewritten to a one-word `Int`
+                    // here, which put every field after an opaque at an offset
+                    // the compiler-baked access disagreed with wherever the two
+                    // widths are selected apart. An earlier form of this
+                    // comment claimed an opaque element kept a tuple boxed
+                    // because `flat_field_size` answered `None`; the tests
+                    // above show it did not, so the claim is removed rather
+                    // than carried forward.
                     let flat = match operand {
                         NCO::Flat {
                             kind: CK::Struct | CK::Enum,
@@ -5200,29 +6673,35 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // compiler bakes, so construction and access agree.
                         NCO::Flat { .. } => values
                             .iter()
-                            .all(|v| crate::bytecode::flat_tuple_element_with_refs(v, wb, fb)),
+                            .all(|v| crate::bytecode::flat_tuple_element_with_refs(v, wb, fb, ab)),
                         NCO::Boxed { .. } => false,
                     };
                     if flat {
                         for v in values.iter_mut() {
                             match v {
-                                // An opaque on the stack is the POD registry
-                                // index (B33); convert it to the one-word `Int`
-                                // the packer writes, with no re-intern.
-                                crate::bytecode::GenericValue::OpaqueRef(idx) => {
-                                    *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
-                                        *idx as i64,
-                                    ));
-                                }
+                                // An opaque on the stack is already the POD
+                                // registry index (B33) and is packed in that
+                                // form, with no re-intern.
+                                //
+                                // It is deliberately NOT rewritten to an `Int`
+                                // here. An `Int` field is one WORD wide, while
+                                // the layout sizes `ScalarKind::Opaque` by the
+                                // ADDRESS width, and the compiler bakes every
+                                // field offset from that layout. Collapsing the
+                                // index to an `Int` made the packer advance by a
+                                // word and put every later field at an offset
+                                // the baked access disagreed with. The default
+                                // target makes the two widths equal, so the
+                                // disagreement was invisible there and appeared
+                                // only where they are selected apart.
+                                crate::bytecode::GenericValue::OpaqueRef(_) => {}
                                 // Defensive: a raw `Opaque` `Arc` reaching the
                                 // pack path (not via the operand stack, which
                                 // carries `OpaqueRef`) interns to its index.
                                 crate::bytecode::GenericValue::Opaque(arc) => {
                                     let idx =
                                         self.intern_ephemeral_opaque(alloc::sync::Arc::clone(arc));
-                                    *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
-                                        idx as i64,
-                                    ));
+                                    *v = crate::bytecode::GenericValue::OpaqueRef(idx as u32);
                                 }
                                 // A genuinely-owned `StaticStr` (a host-supplied
                                 // string, not a constant load, which now arrives
@@ -5263,7 +6742,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             NCO::Boxed { .. } => 0usize,
                         };
                         let packed = crate::bytecode::GenericValue::pack_flat_in_arena(
-                            &values, min_bytes, wb, fb, arena,
+                            &values, min_bytes, wb, fb, ab, arena,
                         )
                         .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
                         let kind = operand.kind();
@@ -5450,17 +6929,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let idx = i.to_i64();
                             match (elem, &body) {
                                 (ArrayElem::Boxed, ArrayBody::Boxed(arr)) => {
-                                    let len = arr.len();
-                                    if idx < 0 || idx as usize >= len {
-                                        return Err(VmError::IndexOutOfBounds(idx, len));
-                                    }
-                                    sp!(self, arr[idx as usize].clone());
+                                    // Total read (Order 3, 2026-10-24). A boxed
+                                    // element has no flat layout to zero-fill,
+                                    // so an invalid index pushes `Unit`, as an
+                                    // indexed data read does for a composite.
+                                    // No compiler-generated code reads it.
+                                    let bound = index_outcome_bound(arr.len())?;
+                                    let invalid = idx < 0 || idx >= i64::from(bound);
+                                    let val = if invalid {
+                                        crate::bytecode::GenericValue::Unit
+                                    } else {
+                                        arr[idx as usize].clone()
+                                    };
+                                    self.push_index_outcome(val, i, bound, invalid)?;
                                 }
                                 (ArrayElem::Flat { kind }, ArrayBody::Flat(fc)) => {
                                     let wb = self.module_word_bytes();
                                     let fb = self.module_float_bytes();
                                     let ep = fc.ref_epoch();
-                                    let esize = kind.size_in_bytes(wb, fb);
+                                    let esize =
+                                        kind.size_in_bytes(wb, fb, self.module_addr_bytes());
                                     let bytes =
                                         fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                     match bytes.len().checked_div(esize) {
@@ -5477,6 +6965,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                             let val =
                                                 self.read_flat_scalar(bytes, 0, kind, wb, fb, ep)?;
                                             sp!(self, val);
+                                        }
+                                        Some(len) if elem.has_bounds_outcome() => {
+                                            if bytes.len() % esize != 0 {
+                                                return Err(VmError::InvalidBytecode(
+                                                    String::from(
+                                                        "array body is not a multiple of its element stride",
+                                                    ),
+                                                ));
+                                            }
+                                            let bound = index_outcome_bound(len)?;
+                                            // Compare before converting to usize so a wide Word cannot
+                                            // wrap into a valid address on a narrower host.
+                                            let invalid = idx < 0 || idx >= i64::from(bound);
+                                            let val = if invalid {
+                                                if kind == crate::value_layout::ScalarKind::Byte {
+                                                    crate::bytecode::GenericValue::Byte(0)
+                                                } else {
+                                                    crate::bytecode::GenericValue::Int(
+                                                        W::from_i64_wrap(0),
+                                                    )
+                                                }
+                                            } else {
+                                                self.read_flat_scalar(
+                                                    bytes,
+                                                    idx as usize * esize,
+                                                    kind,
+                                                    wb,
+                                                    fb,
+                                                    ep,
+                                                )?
+                                            };
+                                            self.push_index_outcome(val, i, bound, invalid)?;
                                         }
                                         Some(len) => {
                                             if idx < 0 || idx as usize >= len {
@@ -5502,15 +7022,48 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // viewed in place (B28 P3 item 5 C-residual
                                     // 3b).
                                     let len = fc.byte_len().checked_div(esize).unwrap_or(0);
-                                    if idx < 0 || idx as usize >= len {
-                                        return Err(VmError::IndexOutOfBounds(idx, len));
-                                    }
-                                    let off = idx as usize * esize;
-                                    let val = crate::bytecode::GenericValue::flat_nested_field(
-                                        fc, off, esize, variant, self.arena,
-                                    )
-                                    .map_err(|_| stale_arena_body())?;
-                                    sp!(self, val);
+                                    // Total read (Order 3, 2026-10-24). An
+                                    // invalid index pushes a zero-filled
+                                    // placeholder of the element's size, so any
+                                    // access to it, even from hand-built code,
+                                    // stays inside its body. Its allocation is
+                                    // the op's accounted heap cost. No
+                                    // compiler-generated code reads it.
+                                    let bound = index_outcome_bound(len)?;
+                                    let invalid = idx < 0 || idx >= i64::from(bound);
+                                    let val = if invalid {
+                                        let zeroed =
+                                            crate::flat_value::FlatComposite::build_in_arena(
+                                                self.arena,
+                                                esize,
+                                                |bytes| {
+                                                    bytes.fill(0);
+                                                    Ok(())
+                                                },
+                                            )
+                                            .map_err(|_| {
+                                                out_of_arena_push(
+                                                    "index placeholder",
+                                                    self.arena.capacity(),
+                                                )
+                                            })?
+                                            .ok_or_else(|| {
+                                                VmError::InvalidBytecode(String::from(
+                                                    "index placeholder could not be built",
+                                                ))
+                                            })?;
+                                        crate::bytecode::GenericValue::flat_nested_field(
+                                            &zeroed, 0, esize, variant, self.arena,
+                                        )
+                                        .map_err(|_| stale_arena_body())?
+                                    } else {
+                                        let off = idx as usize * esize;
+                                        crate::bytecode::GenericValue::flat_nested_field(
+                                            fc, off, esize, variant, self.arena,
+                                        )
+                                        .map_err(|_| stale_arena_body())?
+                                    };
+                                    self.push_index_outcome(val, i, bound, invalid)?;
                                 }
                                 // Construction and access agree on the body
                                 // representation by static type, so a form
@@ -5685,12 +7238,43 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.pop()?;
                     match val {
                         // A boxed array reports its element count directly.
-                        // A flat array does not store its length in the
-                        // bytes, but array length is a fixed-size, compile-
-                        // time constant the compiler folds to a literal (it
-                        // never emits `Op::Len` on an array), so a flat body
-                        // here is a mis-compilation rather than a script
-                        // error.
+                        // A flat array does not store its length in the bytes.
+                        //
+                        // **THE COMPILER HAS NO EMISSION SITE FOR `Op::Len`**
+                        // as of 2026-09-04. Both sites that had one -- the
+                        // for-in bound and the checked-index bounds check --
+                        // now fold the length from the operand's type or fail
+                        // with a compile error. This refusal is therefore a
+                        // defence against a corrupt or hand-built module, not
+                        // against the compiler.
+                        //
+                        // **This is NOT a claim that the opcode is
+                        // unreachable.** This comment has been wrong in both
+                        // directions already: it first said the compiler never
+                        // emits `Op::Len` while the compiler did, and the
+                        // correction to that is what found the trap. What is
+                        // claimed here is only what a test checks --
+                        // `tests/len_flat_array_hazard.rs` scans the compiler
+                        // for the emission form and drives every iterable form
+                        // that can carry an array type -- and the scan's reach
+                        // is stated in that file rather than assumed.
+                        //
+                        // History, because it is what makes the refusal worth
+                        // keeping. `static_for_in_length` had no `Expr::If`
+                        // arm, so `for x in if c { a } else { b }` fell through
+                        // to a dynamic path and emitted this opcode; `verify()`
+                        // accepted the module, and what held the trap shut was
+                        // the resource-bound check refusing a loop with no
+                        // statically extractable bound -- a refusal in the
+                        // LIFTABLE category of the conservative-verification
+                        // taxonomy. Reported by the `v0.3.0` line, whose
+                        // backend refuses `Op::Len` deliberately.
+                        //
+                        // A second site was NOT latent: the checked-index
+                        // bounds check over a `Multiword` compiled, verified,
+                        // loaded, and trapped here with no lifted refusal
+                        // required. Its length is now folded from the
+                        // multi-word width.
                         crate::bytecode::GenericValue::Array(
                             crate::bytecode::ArrayBody::Boxed(arr),
                         ) => {
@@ -5782,7 +7366,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let val = self.peek_operand()?;
                     let matches = match val {
                         // Boxed: compare the type and variant names.
                         crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed(
@@ -5844,7 +7428,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         .ok_or_else(|| {
                             VmError::InvalidBytecode(String::from("type const not string"))
                         })?;
-                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let val = self.peek_operand()?;
                     let matches = match val {
                         crate::bytecode::GenericValue::Struct(
                             crate::bytecode::StructBody::Boxed(b),
@@ -5871,9 +7455,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match val {
                         crate::bytecode::GenericValue::Int(i) => sp!(
                             self,
-                            crate::bytecode::GenericValue::Float(
+                            crate::bytecode::GenericValue::Float(self.narrow_float(
                                 <F as crate::float::Float>::from_f64(i.to_i64() as f64)
-                            )
+                            ))
                         ),
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -6077,10 +7661,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let a = self.pop()?;
                     match (a, b) {
                         (
-                            crate::bytecode::GenericValue::Fixed(_),
+                            crate::bytecode::GenericValue::Fixed(x),
                             crate::bytecode::GenericValue::Fixed(y),
                         ) if y == W::default() => {
-                            return Err(VmError::DivisionByZero);
+                            // Zero divisor: reify as flag 3 (zero_divisor)
+                            // rather than faulting, the same outcome as a
+                            // Fixed `Mod`. The numerator goes in the low slot,
+                            // and the compiler's dispatch traps as
+                            // DivisionByZero when no handler is written.
+                            sp!(self, crate::bytecode::GenericValue::Fixed(x));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
                         }
                         (
                             crate::bytecode::GenericValue::Fixed(x),
@@ -6089,7 +7685,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // Q-format divide: extend the dividend to
                             // i128 and left-shift by frac_bits before
                             // dividing, so the result retains the
-                            // Q-format precision.
+                            // Q-format precision. Saturation is the
+                            // defined result and reports flag 0, so a
+                            // handler without an overflow arm still
+                            // receives it through `ok`.
                             let dividend = x.widen() << (frac_bits as u32);
                             let quotient = dividend / y.widen();
                             let bits = if quotient > <W as crate::word::Word>::MAX.widen() {
@@ -6100,6 +7699,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 <W as crate::word::Word>::from_wide_wrap(quotient)
                             };
                             sp!(self, crate::bytecode::GenericValue::Fixed(bits));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(0)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -6124,6 +7730,74 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // division by zero produces.
                         Some(TrapKind::ZeroDivisor) => VmError::DivisionByZero,
                         Some(TrapKind::AssertionFailed) => VmError::AssertionFailed,
+                        Some(TrapKind::LoopLimitExceeded) => VmError::LoopLimitExceeded,
+                        Some(TrapKind::IndexOutOfBounds) => {
+                            let mut bound = 0_u32;
+                            for byte in (0..4).rev() {
+                                let limb = match self.pop()? {
+                                    crate::bytecode::GenericValue::Int(n) => n.to_i64() as u8,
+                                    _ => {
+                                        return Err(VmError::TypeError(String::from(
+                                            "bounds trap expects Word limbs",
+                                        )));
+                                    }
+                                };
+                                bound |= u32::from(limb) << (byte * 8);
+                            }
+                            let index = match self.pop()? {
+                                crate::bytecode::GenericValue::Int(n) => n.to_i64(),
+                                _ => {
+                                    return Err(VmError::TypeError(String::from(
+                                        "bounds trap expects a Word index",
+                                    )));
+                                }
+                            };
+                            let bound = usize::try_from(bound).map_err(|_| {
+                                VmError::InvalidBytecode(String::from(
+                                    "bounds trap length exceeds the host representation",
+                                ))
+                            })?;
+                            VmError::IndexOutOfBounds(index, bound)
+                        }
+                        // An unhandled host failure surfaces the host's own
+                        // error when the popped code is the one the latest
+                        // reified call reported. Otherwise, as for hand-built
+                        // bytecode, the code alone is reported.
+                        Some(TrapKind::HostError) => {
+                            let code = match self.pop()? {
+                                crate::bytecode::GenericValue::Int(n) => n.to_i64(),
+                                _ => {
+                                    return Err(VmError::TypeError(String::from(
+                                        "host-error trap expects a Word code",
+                                    )));
+                                }
+                            };
+                            match self.reified_host_error.take() {
+                                Some(e @ VmError::NativeErrorCode { code: c, .. })
+                                    if <W as crate::word::Word>::from_i64_wrap(c).to_i64()
+                                        == code =>
+                                {
+                                    e
+                                }
+                                Some(VmError::NativeErrorCode { .. }) | None => {
+                                    VmError::NativeErrorCode {
+                                        code,
+                                        message: alloc::format!(
+                                            "unhandled host error with code {}",
+                                            code
+                                        ),
+                                    }
+                                }
+                                Some(e) if code == -1 => e,
+                                Some(_) => VmError::NativeErrorCode {
+                                    code,
+                                    message: alloc::format!(
+                                        "unhandled host error with code {}",
+                                        code
+                                    ),
+                                },
+                            }
+                        }
                         None => VmError::InvalidBytecode(alloc::format!(
                             "Op::Trap carried an unknown trap-kind code {}",
                             kind_code
@@ -6178,7 +7852,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // result is finite, an infinity, or NaN,
                             // classified into the flag. The result is
                             // the low slot; the high slot is unused.
-                            let r = x + y;
+                            let r = self.narrow_float(x + y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6260,7 +7934,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
                         ) => {
-                            let r = x - y;
+                            let r = self.narrow_float(x - y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6346,7 +8020,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
                         ) => {
-                            let r = x * y;
+                            let r = self.narrow_float(x * y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6444,7 +8118,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::CheckedDiv(frac_bits) => {
+                Op::Div | Op::CheckedDiv(_) => {
+                    let frac_bits = match op {
+                        Op::CheckedDiv(bits) => bits,
+                        _ => 0,
+                    };
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -6471,32 +8149,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
                         ) => {
-                            // Only `i64::MIN / -1` overflows. The
-                            // true result is `2^63`, which in i128
-                            // is (high=0, low=i64::MIN). All other
-                            // divisions fit in `Word`; the wrapped
-                            // quotient becomes the low slot and the
-                            // high slot is zero.
+                            // Classify at the module's declared width, including
+                            // a narrow module running on a wider host Word.
                             let r = x.widen() / y.widen();
-                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
-                                && r <= <W as crate::word::Word>::MAX.widen()
-                            {
-                                0
-                            } else if r > <W as crate::word::Word>::MAX.widen() {
-                                1
-                            } else {
-                                2
-                            };
+                            let (low, high, flag) =
+                                checked_arith_outputs::<W>(r, self.word_bits_log2());
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
+                            sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
                         (
                             crate::bytecode::GenericValue::Byte(x),
@@ -6536,7 +8196,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // yields a signed infinity (x != 0) or NaN
                             // (0 / 0), classified into the flag. There
                             // is no zero-divisor trap for floats.
-                            let r = x / y;
+                            let r = self.narrow_float(x / y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6605,7 +8265,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::CheckedMod => {
+                Op::Mod | Op::CheckedMod => {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -6710,6 +8370,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        #[cfg(feature = "floats")]
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) if matches!(op, Op::Mod) => {
+                            let r = self.narrow_float(x % y);
+                            let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
+                            sp!(self, crate::bytecode::GenericValue::Float(r));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(
+                                    <F as crate::float::Float>::from_f64(0.0)
+                                )
+                            );
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(W::from_i64_wrap(flag))
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "Op::CheckedMod expects Word, Byte, or Fixed operands, got {} and {}",
@@ -6743,10 +8422,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 Op::PopN(n) => {
                     let count = n as usize;
-                    if self.stack.len() < count {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    let new_len = self.stack.len() - count;
+                    let new_len = self.operand_start(count)?;
                     self.stack.truncate(new_len);
                 }
                 Op::BitAnd => {
@@ -6899,12 +8575,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ))
                         })?;
                     let wb = self.module_word_bytes();
+                    let ab = self.module_addr_bytes();
                     let fb = self.module_float_bytes();
                     let ctx = NativeCtx {
                         arena: self.arena,
                         opaques: &self.ephemeral_opaques,
                         word_bytes: wb,
                         float_bytes: fb,
+                        addr_bytes: ab,
+                        rodata: self.bytecode.as_slice(),
                     };
                     let result = (entry.func)(&ctx, &args);
                     if reify {
@@ -6924,7 +8603,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // boxed is returned unchanged.
                                 let v = self
                                     .correct_native_enum_hints(v)
-                                    .into_arena_canonical(wb, fb, arena)
+                                    .into_arena_canonical(wb, fb, ab, arena)
                                     .map_err(|_| {
                                         out_of_arena_push("native result", arena.capacity())
                                     })?;
@@ -6933,6 +8612,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // is the POD `OpaqueRef` index (B33).
                                 let v = self.intern_opaque_arcs(v);
                                 // Success: value, then flag 0.
+                                self.reified_host_error = None;
                                 sp!(self, v);
                                 sp!(self, crate::bytecode::GenericValue::Int(W::default()));
                             }
@@ -6946,6 +8626,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // no code; surface the sentinel -1.
                                     _ => -1,
                                 };
+                                self.reified_host_error = Some(e);
                                 sp!(
                                     self,
                                     crate::bytecode::GenericValue::Int(
@@ -6968,7 +8649,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // already-flat, or reference-bearing boxed value.
                         let v = self
                             .correct_native_enum_hints(result?)
-                            .into_arena_canonical(wb, fb, arena)
+                            .into_arena_canonical(wb, fb, ab, arena)
                             .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
                         // Intern host `Opaque(Arc)` values to the POD index
                         // form for the operand stack (B33).
@@ -6980,8 +8661,41 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
+    // Proven execution keeps every operand-length check. The proof establishes
+    // that none of these checks can fail on the certified image, which is what
+    // the timing analysis relies on. It does not license unchecked access: an
+    // error in `verify::op_depth_effect` would turn a defined `StackUnderflow`
+    // into undefined behaviour, and the project admits platform-specific
+    // behaviour but never undefined behaviour (operator ruling, 2026-10-20).
+    // Agreement between that table and the runtime is pinned per opcode by
+    // `vm::operand_effect_agreement_tests` in `src/vm_operand_effect_tests.rs`.
+    fn operand_start(&self, count: usize) -> Result<usize, VmError> {
+        self.stack
+            .len()
+            .checked_sub(count)
+            .ok_or(VmError::StackUnderflow)
+    }
+
+    fn peek_operand(&self) -> Result<&crate::bytecode::GenericValue<W, F>, VmError> {
+        self.stack.last().ok_or(VmError::StackUnderflow)
+    }
+
     fn pop(&mut self) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
-        self.stack.pop().ok_or(VmError::StackUnderflow)
+        #[cfg(test)]
+        {
+            if self.elide_pops {
+                self.pop_counts.1 = self.pop_counts.1.wrapping_add(1);
+            } else {
+                self.pop_counts.0 = self.pop_counts.0.wrapping_add(1);
+            }
+        }
+        let result = self.stack.pop().ok_or(VmError::StackUnderflow);
+        #[cfg(test)]
+        if self.panic_after_pop && result.is_ok() {
+            self.panic_after_pop = false;
+            panic!("injected panic after operand consumption");
+        }
+        result
     }
 
     fn binary_arith<IntOp, FloatOp>(
@@ -7029,7 +8743,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             }
             #[cfg(feature = "floats")]
             (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => {
-                sp!(self, crate::bytecode::GenericValue::Float(float_op(x, y)))
+                sp!(
+                    self,
+                    crate::bytecode::GenericValue::Float(self.narrow_float(float_op(x, y)))
+                )
             }
             (a, b) => {
                 return Err(VmError::TypeError(format!(
@@ -7233,6 +8950,53 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
 
+    /// `CheckedAdd` pushes low, high, flag — pinned by execution, not by prose.
+    ///
+    /// Raised by the parallel `v0.3.0` session, which read `Op::CheckedAdd`'s
+    /// doc comment (then claiming high, low, flag), read `PopN`'s, predicted that
+    /// an uncaptured `a + b` would evaluate to the HIGH word, and found it
+    /// evaluates to the low word. The comment was wrong; the implementation was
+    /// right.
+    ///
+    /// The order is load-bearing. An uncaptured `a + b` lowers to
+    /// `CheckedAdd; PopN(2)`, which discards flag and high and leaves low.
+    ///
+    /// Verified by swapping the two pushes in `Op::CheckedAdd` and re-running:
+    /// `add(2, 3)` then returns 0. A first draft of this comment claimed the
+    /// small cases would survive a swap and only the wide case could catch it.
+    /// That was wrong, and the control is what showed it — swapping the pushes
+    /// also swaps which slots `PopN(2)` discards, so the surviving value becomes
+    /// the high word and every case fails, not just the wide one.
+    ///
+    /// The `i64::MAX` case stays regardless. It is the only one that pins the
+    /// wrapping semantics of the low word rather than merely which slot survives.
+    #[test]
+    fn uncaptured_addition_yields_the_low_word_not_the_high() {
+        fn add(a: i64, b: i64) -> i64 {
+            let src = "fn main(a: Word, b: Word) -> Word { a + b }";
+            let module =
+                compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+            let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let mut vm = Vm::new(module, &arena).expect("verify");
+            match vm.call(&[Value::Int(a), Value::Int(b)]).expect("run") {
+                VmState::Finished(Value::Int(n)) => n,
+                other => panic!("unexpected VM state {other:?}"),
+            }
+        }
+
+        assert_eq!(add(2, 3), 5);
+        assert_eq!(add(-7, 3), -4);
+        // The discriminating case. The true sum needs 65 bits, so its high word
+        // is non-zero and its low word wraps. Reading the high word here would
+        // return 1 rather than i64::MIN.
+        assert_eq!(
+            add(i64::MAX, 1),
+            i64::MIN,
+            "uncaptured addition returned the high word; CheckedAdd's push order \
+             or the PopN(2) that follows it has changed"
+        );
+    }
+
     #[test]
     fn vm_error_category_three_way_split() {
         // Sanity-check that each VmError variant maps to the
@@ -7310,7 +9074,7 @@ mod tests {
     #[test]
     fn fault_location_records_trapping_op_and_maps_to_source() {
         // A division by a runtime zero traps inside a `let` statement;
-        // the VM records the faulting op (the Div), which now carries an
+        // the VM records the faulting Trap, which carries an
         // exact SourceSpan at the operator site (B29 items 2/3), so the
         // fault resolves exactly to the division sub-expression.
         let module = compile_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
@@ -7327,7 +9091,7 @@ mod tests {
             .expect("the fault maps to the division sub-expression");
         assert!(
             src.exact,
-            "the Div op carries an exact operator-site SourceSpan"
+            "the Trap carries an exact operator-site SourceSpan"
         );
     }
 
@@ -10066,14 +11830,32 @@ mod tests {
     }
 
     #[test]
-    fn exponential_text_concat_rejected_at_safe_constructor() {
-        // The FAQ exponential-string-concat example expressed as a
-        // Stream block, which is the form subject to the per-iteration
-        // WCMU bound. Sixty doublings of a 1-byte string allocate
-        // more than u32::MAX bytes cumulatively. The text-size
-        // abstract interpretation pass saturates the chunk's heap
-        // bound; the WCMU resource-bounds check rejects the module
-        // because the bound exceeds any feasible arena capacity.
+    fn exponential_text_concat_is_rejected() {
+        // The FAQ exponential-string-concat example: sixty doublings of a one-byte string, whose
+        // cumulative allocation exceeds `u32::MAX` bytes.
+        //
+        // # THE GATE MOVED, AND THE PROPERTY IT GUARDED IS TEMPORARILY UNREACHABLE
+        //
+        // This asserted a rejection at the SAFE CONSTRUCTOR: the text-size abstract interpretation
+        // saturated the chunk's heap bound and the worst-case-memory check refused the module.
+        // That gate is no longer reached, because `Text + Text` is now refused by the type checker
+        // -- it had no runtime implementation, so admitting it produced a program that verified and
+        // could not run.
+        //
+        // **So the worst-case-memory rejection this test was written for is currently untested**,
+        // and saying so is the point of this comment. It is not lost to a regression; it is
+        // unreachable because the expression that reached it is refused earlier.
+        //
+        // # WHEN `Text<N>` LANDS, THIS MUST BE REVISITED RATHER THAN LEFT
+        //
+        // Bounded composition restores concatenation, and the interesting part is that this
+        // example then fails EARLIER STILL and for a better reason. Each `let s = s + s` shadows
+        // with a doubled capacity -- `Text<1>`, `Text<2>`, `Text<4>` -- so sixty doublings demand
+        // `Text<2^60>`, which the const arithmetic cannot represent. The FAQ example becomes a
+        // TYPE error rather than a resource one, refused before any analysis runs.
+        //
+        // At that point restore a resource-bound case that the type system cannot pre-empt, or the
+        // worst-case-memory path loses its exponential witness entirely.
         let mut src =
             alloc::string::String::from("loop main(input: Word) -> Text {\n    let s = \"a\";\n");
         for _ in 0..60 {
@@ -10082,12 +11864,14 @@ mod tests {
         src.push_str("    let _ = yield s;\n    s\n}\n");
         let tokens = tokenize(&src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
-        let module = compile(&program).expect("compile error");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let err = Vm::new(module, &arena)
-            .err()
-            .expect("expected rejection from exponential text growth");
-        assert!(matches!(err, VmError::VerifyError(_)));
+
+        let err = compile(&program)
+            .expect_err("exponential text growth must be rejected somewhere; it now compiles");
+        assert!(
+            err.message.contains("text concatenation is not available"),
+            "rejected, but not by the concatenation refusal this now expects: {}",
+            err.message
+        );
     }
 
     // -- For-in over array expressions --
@@ -10210,6 +11994,60 @@ mod tests {
         match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn host_writes_discriminant_only_enum_shared_field() {
+        // A discriminant-only enum is a single word holding its discriminant, so the
+        // host may seed an enum-typed shared field with the discriminant integer and the
+        // script matches it by variant. This lets an enum-keyed token stream be filled
+        // through the ordinary per-slot host API.
+        let src = "\
+            enum Tk { Aa = 1, Bb = 2, Cc = 21 }\n\
+            shared data d { sel: Tk }\n\
+            fn main() -> Word { match d.sel { Tk::Aa => 100, Tk::Bb => 200, Tk::Cc => 300, _ => 0 } }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        // Seed the enum-typed slot with the raw discriminant 21 (Cc).
+        vm.set_shared(&mut shared, 0, Value::Int(21))
+            .expect("host may write a discriminant-only enum field");
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(300)),
+            other => panic!("expected Finished(Int(300)), got {:?}", other),
+        }
+        // A non-integer value is still rejected for the enum slot.
+        assert!(
+            vm.set_shared(&mut shared, 0, Value::None).is_err(),
+            "only an integer discriminant may seed an enum slot"
+        );
+    }
+
+    #[test]
+    fn multiple_private_and_const_data_blocks_run() {
+        // Private and const data cross no host boundary, so a program may declare several
+        // named blocks of each (R28 relaxed). The block-name-qualified layout keeps them
+        // distinct: two const blocks fold their fields, two private blocks each get their
+        // own arena slots, and all read back correctly.
+        let src = "\
+            const data a { one: Word = 1 }\n\
+            const data b { two: Word = 2 }\n\
+            private data p { x: Word }\n\
+            private data q { y: Word }\n\
+            fn main() -> Word { p.x = 10; q.y = 20; a.one + b.two + p.x + q.y }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let module = compile(&program).expect("compile multi-block");
+        let need = required_persistent_capacity_for(&module);
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(33)),
+            other => panic!("expected Finished(Int(33)), got {other:?}"),
         }
     }
 
@@ -10930,57 +12768,74 @@ mod tests {
     )))]
     #[test]
     fn bytecode_golden_bytes_for_main_returning_one() {
-        // Pin the exact serialized form of a minimal Keleusma program
-        // under the V0.2.0 wire format (Phase 7c).
+        // Pin the exact serialized form of a minimal Keleusma program under
+        // wire format v2 (the V0.2.3 auxiliary-body cutover).
         //
         // Source: `fn main() -> Word { 1 }`
         //
         // Layout: 64-byte framing header + opcode stream (8 bytes:
-        // PushImmediate(5) + Return as 4-byte records) + empty
-        // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
-        // Total length: 316 bytes.
+        // PushImmediate(5) + Return as 4-byte records) + empty operand pool +
+        // the v2 auxiliary body at offset 72, length 912 + 4-byte CRC.
+        // Total length: 988 bytes. `BYTECODE_VERSION` is 2, little-endian at
+        // byte four; the operator authorised the bump on 2026-08-06 because the
+        // substrate itself changed. A version-1 artifact is now rejected on the
+        // version check rather than accepted and then mis-read.
         //
-        // The aux body grew by the optional per-chunk
-        // `WireChunk::debug_pool_bytes` field added for B29 (strippable
-        // debug metadata) and again for the `ConstValue::Enum`
-        // `discriminant: Option<i64>` field added for B28 P2 (flat-enum
-        // constants), and again for the `DataLayout::shared_layout` table of
-        // the B28 item 2 shared-data re-architecture (the no-new-opcode
-        // per-shared-slot layout): rkyv reserves space for the wider
-        // `ArchivedDataLayout` inside `Option<DataLayout>` even when it is
-        // `None`, which accounted for the increase to 252 bytes, and again for
-        // the `DataLayout::private_composite_layout` table of B28 item 2 step
-        // 6A (the linker-style fixed-address placement of every private
-        // composite slot, array elements included): rkyv reserves one more
-        // `ArchivedVec` (8 bytes) in the inline `ArchivedDataLayout` even when
-        // `None`, raising the total to 260 bytes, and again for the
-        // `WireAuxBody::enum_layouts` table (B37 / audit finding 25 follow-up:
-        // the per-enum variant-discriminant and padded-body sizes that let the
-        // runtime make a native-returned enum's flat body type-driven), whose
-        // empty `ArchivedVec` adds 8 more bytes for a total of 268, and again
-        // for the `WireAuxBody::signatures` table (A.2.1 Phase 2b: the typed
-        // operand-stack verifier's per-chunk parameter, return, and resume
-        // flat-shape descriptors), which for this one-chunk module carries one
-        // signature (no parameters, a scalar `Word` return, `Top` resume),
-        // raising the total to 300 bytes, and again for the
-        // `WireAuxBody::native_return_shapes` table (A.2.1 native-result
-        // seeding), whose empty `ArchivedVec` adds 8 more bytes for a total of
-        // 308. Per B28 the format may change freely without a BYTECODE_VERSION
-        // bump (no production traction; programs are recompiled).
+        // The auxiliary body opens with the `XUAK` prologue, triplicated at
+        // offsets 0, 16 and 32 and read by majority-of-three vote, followed by
+        // the region directory, likewise triplicated: 15 regions at 16 bytes
+        // each, so 720 of the 912 bytes. Adding the 48-byte prologue block,
+        // roughly 84% of the auxiliary body is framing and redundancy, leaving
+        // 144 bytes of payload.
+        //
+        // That ratio is a property of the format, not a defect, and it is worth
+        // stating because a minimal program is the worst case for it. The
+        // per-region directory cost is FIXED in the number of regions, not the
+        // data volume, so a module with one chunk and one constant pays it in
+        // full while a real module amortizes it across thousands of records.
+        //
+        // The expected bytes were regenerated at the cutover, deliberately and
+        // with operator assent, since the encoding changed wholesale. The
+        // round-trip below is the part that cannot be satisfied by regenerating:
+        // it loads the golden bytes and EXECUTES them.
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 240, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
-            1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0,
-            0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-            3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 1, 0, 0, 0, 224, 255,
-            255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 144, 255, 255, 255, 0,
-            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 122, 91, 139,
-            23
+            75, 69, 76, 69, 2, 0, 64, 0, 220, 3, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 144, 3,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 88, 85, 65, 75, 255, 254, 2, 0,
+            15, 0, 0, 0, 128, 156, 85, 98, 88, 85, 65, 75, 255, 254, 2, 0, 15, 0, 0, 0, 128, 156,
+            85, 98, 88, 85, 65, 75, 255, 254, 2, 0, 15, 0, 0, 0, 128, 156, 85, 98, 22, 0, 0, 0, 96,
+            0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25,
+            0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 35, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 0, 0, 0, 98, 0, 0, 0, 4,
+            0, 0, 0, 0, 0, 0, 0, 18, 0, 0, 0, 102, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0,
+            104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 23, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 104, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 104, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106,
+            0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 112, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17,
+            0, 0, 0, 113, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 96, 0, 0, 0, 2, 0, 0, 0, 0,
+            0, 0, 0, 24, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 98, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 98,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 0, 0, 0, 98, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 18,
+            0, 0, 0, 102, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 20, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 104, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0,
+            0, 104, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106, 0, 0, 0, 6, 0, 0, 0, 0, 0,
+            0, 0, 16, 0, 0, 0, 112, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 113, 0, 0, 0, 1,
+            0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 96, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 98,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32,
+            0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 33, 0, 0, 0, 98, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 18, 0, 0, 0, 102, 0, 0, 0,
+            2, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0,
+            104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 30, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 104, 0, 0, 0, 2, 0,
+            0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 112,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 113, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 225, 99, 39, 67, 3, 0, 0, 0, 0, 0, 0, 0, 1,
+            0, 0, 0, 0, 0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
+            0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 1, 109, 97, 105, 110, 0, 0, 0, 0, 0, 0, 0,
+            0, 4, 0, 0, 0, 181, 46, 184, 102
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -11005,7 +12860,7 @@ mod tests {
     fn bytecode_view_bytes_runs_aligned_input() {
         // Compile, serialize, and copy into an AlignedVec to obtain an
         // aligned slice. view_bytes validates in place via
-        // Module::access_bytes and deserializes without the AlignedVec
+        // Module::validate_bytes and deserializes without the AlignedVec
         // copy that load_bytes performs internally.
         let src = "fn main() -> Word { 7 + 35 }";
         let tokens = tokenize(src).expect("lex");
@@ -11030,7 +12885,7 @@ mod tests {
         // before deserialization. Unaligned input is therefore
         // handled gracefully without requiring the caller to align
         // the buffer. The zero-copy alignment contract is preserved
-        // by the distinct `Module::access_bytes` and
+        // by the distinct `Module::validate_bytes` and
         // `Vm::view_bytes_zero_copy` entry points; this test pins
         // the owned-decode tolerance.
         let src = "fn main() -> Word { 1 }";
@@ -11134,21 +12989,28 @@ mod tests {
     fn bytecode_archived_value_round_trip_matches_owned() {
         // value_from_archived materializes an owned Value from an
         // archived Value. Verify constants survive the round trip.
-        use crate::bytecode::value_from_archived;
         let src = "fn main() -> Word { 42 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let archived: &crate::wire_format::ArchivedWireAuxBody =
-            Module::access_bytes(&aligned).expect("access");
-        let main_chunk = &archived.chunks[0];
-        for (i, archived_val) in main_chunk.constants.iter().enumerate() {
+        // No `AlignedVec`: the v2 auxiliary body is byte-addressed, so the
+        // 8-byte alignment the rkyv archive required is gone.
+        Module::validate_bytes(&bytes).expect("validate");
+        let aux =
+            crate::wire_schema::AuxView::parse(crate::vm::Vm::aux_body_slice_for_test(&bytes))
+                .expect("aux view");
+        let count = aux.const_count(0).expect("chunk 0") as usize;
+        assert_eq!(count, module.chunks[0].constants.len());
+        for i in 0..count {
             // The bundled runtime is i64/f64, eight-byte scalars; the
             // into_value comparand uses the same widths (B28 P2).
-            let owned = value_from_archived(archived_val, 8, 8);
+            let decoded = crate::wire_schema::decode_constant_pool(
+                crate::vm::Vm::aux_body_slice_for_test(&bytes),
+                (aux.module().chunk(0).unwrap().consts_first + i as u32, 1),
+            )
+            .expect("decode");
+            let owned = crate::bytecode::Value::from_const(&decoded[0], 8, 8);
             let original = module.chunks[0].constants[i].clone().into_value();
             assert_eq!(
                 owned, original,
@@ -11159,28 +13021,25 @@ mod tests {
     }
 
     #[test]
-    fn bytecode_access_bytes_returns_archived_view() {
-        // access_bytes returns a borrowed `ArchivedWireAuxBody`
-        // under the V0.2.0 wire format. The archived form
-        // preserves the chunk count, the entry point, and the
-        // word and address sizes through native conversions.
+    fn bytecode_validate_bytes_admits_a_borrowed_view() {
+        // The v2 counterpart of the old `validate_bytes` test. `validate_bytes`
+        // checks framing without deserializing, and `AuxView` then reads the
+        // chunk count and declared widths straight out of the image -- with no
+        // alignment requirement, which the rkyv archive did impose.
         let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let archived: &crate::wire_format::ArchivedWireAuxBody =
-            Module::access_bytes(&aligned).expect("access");
-        assert_eq!(archived.chunks.len(), 2);
+
+        Module::validate_bytes(&bytes).expect("validate");
+        let aux =
+            crate::wire_schema::AuxView::parse(crate::vm::Vm::aux_body_slice_for_test(&bytes))
+                .expect("aux view");
+        assert_eq!(aux.chunk_count(), 2);
         assert_eq!(
-            archived.word_bits_log2,
-            crate::bytecode::RUNTIME_WORD_BITS_LOG2
-        );
-        assert_eq!(
-            archived.addr_bits_log2,
-            crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2
+            aux.word_bits_log2(),
+            Some(crate::bytecode::RUNTIME_WORD_BITS_LOG2)
         );
     }
 
@@ -12127,6 +13986,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Warn,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12142,6 +14002,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Warn,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12159,6 +14020,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Allow,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12173,6 +14035,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Warn,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12276,6 +14139,99 @@ mod tests {
         match vm.call(&[]).expect("call") {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    /// The reproducer the `v0.3.0` line reported, which PANICKED before
+    /// 2026-08-15.
+    ///
+    /// `resume_from_breakpoint` called `run()` without rebinding the host
+    /// shared-data buffer that `call_with_shared` binds at entry and clears on
+    /// return, so the first shared read reached an `.expect` and aborted. A
+    /// panic is not a `VmError`, so a host driving a debugger could not catch
+    /// it, and every one of the ten self-hosted stage sources declares shared
+    /// data.
+    ///
+    /// The fault must be the SPECIFIC one, not merely a fault: returning
+    /// `NotSuspended` here would send a host looking at its call sequence
+    /// rather than at the missing buffer, so the check runs before the
+    /// suspension test and the message names the method to use instead.
+    #[test]
+    fn resume_from_breakpoint_faults_rather_than_panics_on_a_shared_data_module() {
+        let module = build_module(
+            "shared data s { n: Word }\n\
+             loop main(resume: Word) -> Word {\n  s.n = s.n + 1;\n  yield s.n\n}",
+        );
+        let need = shared_data_bytes_for(&module);
+        assert_ne!(need, 0, "the reproducer must declare shared data");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        let mut shared = alloc::vec![0u8; need];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(0)])
+            .expect("call")
+        {
+            VmState::BreakpointHit { chunk: 0, op: 0 } => {}
+            other => panic!("expected BreakpointHit(0, 0), got {:?}", other),
+        }
+        match vm.resume_from_breakpoint() {
+            Err(VmError::NativeError(msg)) => {
+                assert!(
+                    msg.contains("resume_from_breakpoint_with_shared"),
+                    "the fault must name the method to use instead, got {msg:?}"
+                );
+            }
+            other => panic!("expected a NativeError naming the fix, got {:?}", other),
+        }
+    }
+
+    /// The working path for the same module, which is what makes the rejection
+    /// above a redirection rather than a refusal of the facility.
+    ///
+    /// The assertion is on the BUFFER as well as the state: a step that
+    /// returned `Yielded` while writing nothing would satisfy a state-only
+    /// check and would mean the buffer was never really bound.
+    #[test]
+    fn resume_from_breakpoint_with_shared_steps_and_writes_through_the_buffer() {
+        let module = build_module(
+            "shared data s { n: Word }\n\
+             loop main(resume: Word) -> Word {\n  s.n = s.n + 1;\n  yield s.n\n}",
+        );
+        let need = shared_data_bytes_for(&module);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        let mut shared = alloc::vec![0u8; need];
+        vm.call_with_shared(&mut shared, &[Value::Int(0)])
+            .expect("call");
+        match vm
+            .resume_from_breakpoint_with_shared(&mut shared)
+            .expect("resume through the buffer")
+        {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected Yielded(1), got {:?}", other),
+        }
+        assert_eq!(
+            shared[0], 1,
+            "the increment must be visible in the host's buffer, not only in the yielded value"
+        );
+    }
+
+    /// The must-not-fire half. A module with no shared data keeps working
+    /// through the bare entry point, so the new rejection is scoped to the
+    /// case that used to abort rather than narrowing the facility.
+    #[test]
+    fn resume_from_breakpoint_still_works_without_shared_data() {
+        let module = build_module("loop main(resume: Word) -> Word { yield resume + 1 }");
+        assert_eq!(shared_data_bytes_for(&module), 0);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        vm.call(&[Value::Int(0)]).expect("call");
+        match vm.resume_from_breakpoint().expect("resume") {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected Yielded(1), got {:?}", other),
         }
     }
 
@@ -13223,7 +15179,7 @@ mod tests {
         assert_eq!(dl.shared_layout[0].len, 0);
         // Slot 1: composite `(Word, Word)` at offset `wb`, body `2*wb` bytes,
         // tagged as a tuple via the composite flag plus the CompositeKind tag.
-        assert_eq!(dl.shared_layout[1].offset as u32, wb);
+        assert_eq!(dl.shared_layout[1].offset, wb);
         assert_eq!(
             dl.shared_layout[1].kind,
             crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG
@@ -13780,6 +15736,62 @@ mod tests {
         }
     }
 
+    /// The signature covers the auxiliary body, and therefore any parity plane.
+    ///
+    /// # Why this is a test and not an observation
+    ///
+    /// A parity plane is a region of the auxiliary body, and the signature
+    /// covers the whole framed buffer, so the plane is signed. **That is
+    /// inherited from a coincidence of layout and nothing enforces it.** A
+    /// change that moved the auxiliary body outside the signed span, or emitted
+    /// planes into a trailer, would leave an attacker able to supply a hostile
+    /// plane and steer the corrections a scrub applies. Under a
+    /// scrub-then-verify order the signature still refuses the result, so
+    /// integrity holds and it becomes an **availability** attack requiring no
+    /// key, against a mechanism installed to improve availability.
+    ///
+    /// # Why it flips a byte instead of comparing offsets
+    ///
+    /// Comparing the auxiliary-body span against the signed span is arithmetic
+    /// over two numbers this crate computes, so it would agree with itself if
+    /// both were wrong. Flipping a byte and requiring verification to FAIL
+    /// establishes coverage by execution.
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn the_signature_covers_the_auxiliary_body_where_a_parity_plane_would_live() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[77u8; 32]);
+        let verifying = signer.verifying_key();
+        let src = "signed fn main() -> Word { 21 + 21 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+
+        // CONTROL. The undamaged artifact must verify, or every assertion below
+        // passes against a signature that never verified in the first place.
+        crate::wire_format::verify_module_signature(&bytes, &[verifying])
+            .expect("CONTROL: the freshly signed artifact must verify");
+
+        let aux_start = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let aux_len = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+        assert!(
+            aux_len > 0 && aux_start + aux_len <= bytes.len(),
+            "the auxiliary body span must lie inside the artifact"
+        );
+
+        // Every byte of the auxiliary body is covered. A plane lives here.
+        for off in [aux_start, aux_start + aux_len / 2, aux_start + aux_len - 1] {
+            let mut damaged = bytes.clone();
+            damaged[off] ^= 0x01;
+            assert!(
+                crate::wire_format::verify_module_signature(&damaged, &[verifying]).is_err(),
+                "a flipped bit at auxiliary-body offset {off} did not break verification, so the \
+                 signature does not cover the region a parity plane occupies"
+            );
+        }
+    }
+
     #[cfg(all(feature = "signatures", feature = "encryption"))]
     #[test]
     fn load_encrypted_signed_bytes_executes_decrypted_module() {
@@ -14187,6 +16199,170 @@ mod tests {
             ),
             Err(other) => panic!("expected LoadError, got: {:?}", other),
             Ok(_) => panic!("expected error, got Ok(_)"),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "compile", feature = "verify", feature = "floats"))]
+#[path = "vm_operand_effect_tests.rs"]
+mod operand_effect_agreement_tests;
+
+#[cfg(all(test, feature = "compile", feature = "verify"))]
+mod proof_elision_tests {
+    extern crate std;
+    use super::*;
+    fn module() -> Module {
+        let ast = crate::parser::parse(
+            &crate::lexer::tokenize("fn main(x: Word) -> Word { x + 7 }").unwrap(),
+        )
+        .unwrap();
+        crate::compiler::compile(&ast).unwrap()
+    }
+    fn options(checks: ExecutionChecks) -> VmOptions {
+        VmOptions {
+            trap_policy: TrapPolicy::RequireTrapFree,
+            execution_checks: checks,
+            ..VmOptions::default()
+        }
+    }
+    #[test]
+    fn proof_elision_executes_proven_pops_and_preserves_results() {
+        for checks in [ExecutionChecks::Checked, ExecutionChecks::Proven] {
+            let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let (mut vm, _) = Vm::new_with_options(module(), &arena, options(checks)).unwrap();
+            assert!(matches!(
+                vm.call(&[Value::Int(3)]).unwrap(),
+                VmState::Finished(Value::Int(10))
+            ));
+            match checks {
+                ExecutionChecks::Checked => {
+                    assert!(vm.pop_counts.0 > 0);
+                    assert_eq!(vm.pop_counts.1, 0);
+                }
+                ExecutionChecks::Proven => {
+                    assert_eq!(vm.pop_counts.0, 0);
+                    assert!(vm.pop_counts.1 > 0);
+                }
+            }
+        }
+    }
+    #[test]
+    fn proof_elision_unwinding_poison_prevents_partial_frame_reentry() {
+        let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let (mut vm, _) =
+            Vm::new_with_options(module(), &arena, options(ExecutionChecks::Proven)).unwrap();
+        vm.panic_after_pop = true;
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.call(&[Value::Int(3)])));
+        assert!(outcome.is_err());
+        assert_eq!(vm.proof_state, ExecutionProofState::Poisoned);
+        assert!(vm.resume(Value::Int(0)).is_err());
+        assert!(vm.resume_from_breakpoint().is_err());
+        assert!(vm.call(&[Value::Int(3)]).is_err());
+        vm.reset_after_error();
+        assert!(matches!(
+            vm.call(&[Value::Int(3)]).unwrap(),
+            VmState::Finished(Value::Int(10))
+        ));
+    }
+    #[test]
+    fn proof_elision_rejects_an_instruction_cache_that_differs_from_its_image() {
+        let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module(), &arena)
+            .unwrap()
+            .with_trap_policy(TrapPolicy::RequireTrapFree)
+            .unwrap();
+        vm.decoded_ops[0][0] = Op::PopN(255);
+        assert!(vm.set_execution_checks(ExecutionChecks::Proven).is_err());
+        assert_eq!(vm.execution_checks(), ExecutionChecks::Checked);
+    }
+    #[test]
+    fn proof_elision_replacement_drop_unwind_leaves_initialized_slots() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        struct PanickingDrop(Arc<AtomicUsize>);
+        impl crate::opaque::HostOpaque for PanickingDrop {
+            fn type_name(&self) -> &'static str {
+                "PanickingDrop"
+            }
+        }
+        impl Drop for PanickingDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("host Drop panic");
+            }
+        }
+        let ast = crate::parser::parse(
+            &crate::lexer::tokenize(
+                "private data d { n: Word } fn main(x: Word) -> Word { d.n = x; d.n }",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let module = crate::compiler::compile(&ast).unwrap();
+        for checks in [ExecutionChecks::Checked, ExecutionChecks::Proven] {
+            let need = required_persistent_capacity_for(&module);
+            let mut arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+            arena.resize_persistent(need).unwrap();
+            let (mut vm, _) =
+                Vm::new_with_options(module.clone(), &arena, options(checks)).unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            vm.replace_module(
+                module.clone(),
+                vec![Value::Opaque(Arc::new(PanickingDrop(count.clone())))],
+            )
+            .unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                vm.replace_module(module.clone(), vec![Value::Int(0)])
+            }));
+            assert!(result.is_err());
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            if checks == ExecutionChecks::Proven {
+                assert!(vm.pop_proof.is_none());
+                assert_eq!(vm.proof_state, ExecutionProofState::Poisoned);
+                assert!(vm.call(&[Value::Int(1)]).is_err());
+            }
+            drop(vm);
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
+    }
+    #[test]
+    fn proof_elision_unwind_cannot_reuse_a_borrowed_shared_buffer() {
+        let ast = crate::parser::parse(
+            &crate::lexer::tokenize(
+                "shared data d { n: Word } fn main(x: Word) -> Word { d.n + x }",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let module = crate::compiler::compile(&ast).unwrap();
+        for route in 0..3 {
+            let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let (mut vm, _) =
+                Vm::new_with_options(module.clone(), &arena, options(ExecutionChecks::Proven))
+                    .unwrap();
+            let mut shared = vec![0; vm.shared_data_bytes()];
+            vm.panic_after_pop = true;
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || vm.call_with_shared(&mut shared, &[Value::Int(3)])
+                ))
+                .is_err()
+            );
+            drop(shared);
+            if route == 2 {
+                vm.replace_module(module.clone(), vec![]).unwrap();
+            }
+            if route > 0 {
+                vm.set_execution_checks(ExecutionChecks::Checked).unwrap();
+            }
+            assert!(vm.call_function(0, &[Value::Int(3)]).is_err());
+            vm.reset_after_error();
+            let mut fresh = vec![0; vm.shared_data_bytes()];
+            assert!(matches!(
+                vm.call_with_shared(&mut fresh, &[Value::Int(3)]).unwrap(),
+                VmState::Finished(Value::Int(3))
+            ));
         }
     }
 }

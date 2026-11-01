@@ -77,6 +77,12 @@ pub struct RefContext<'a> {
     pub word_bytes: usize,
     /// The module's float byte width, paired with `word_bytes`.
     pub float_bytes: usize,
+    /// The module's ADDRESS byte width, which sizes an `Opaque` field.
+    ///
+    /// Distinct from `word_bytes`: the two widths are declared independently
+    /// and coincide only in the default configuration, so an `Opaque` sized by
+    /// the word width was reading the wrong field wherever they differ.
+    pub addr_bytes: usize,
     /// The originating arena epoch of the flat composite being decoded
     /// (B28 P3 item 1). A flat `Text` field's `KString` is rebuilt against
     /// this epoch, not the current arena epoch, so a decode after a `RESET`
@@ -85,6 +91,67 @@ pub struct RefContext<'a> {
     /// non-composite decode it is the current arena epoch (a bare `KStr`
     /// carries its own epoch and ignores this field).
     pub ref_epoch: u64,
+    /// The VM's bytecode image, where a constant string packed into a flat
+    /// body points. A flat `Text` field is accepted only when its bytes lie
+    /// inside [`RefContext::arena`] or this image. A context with no image
+    /// passes an empty slice, which rejects constant strings rather than
+    /// trusting them.
+    pub rodata: &'a [u8],
+}
+
+/// Whether `[ptr, ptr + len)` lies wholly inside `[base, base + size)`,
+/// with every bound computed without overflow.
+fn range_within(ptr: usize, len: usize, base: usize, size: usize) -> bool {
+    let Some(start) = ptr.checked_sub(base) else {
+        return false;
+    };
+    start <= size && len <= size - start
+}
+
+/// Rebuild a flat `Text` field's `(ptr, len)` as a string, after checking
+/// that the pair names valid UTF-8 inside memory the context vouches for.
+///
+/// The two words are read from a flat body and are not trusted. A host may
+/// decode a body with a type whose layout differs from the body's own, and a
+/// malformed module may build one, so the words can be any integers. Building
+/// a `str` from them directly is undefined behaviour. The pair is accepted
+/// only when its bytes lie inside the arena or the bytecode image, both of
+/// which are initialised memory the VM owns, and are valid UTF-8. A failed
+/// check is a [`VmError::TypeError`]. A null pointer is screened by the
+/// caller, since a zero-filled body decodes to an empty string.
+pub(crate) fn checked_flat_text(
+    ptr: usize,
+    len: usize,
+    ref_epoch: u64,
+    arena: &keleusma_arena::Arena,
+    rodata: &[u8],
+) -> Result<crate::kstring::KString, VmError> {
+    let in_arena = range_within(
+        ptr,
+        len,
+        arena.persistent_ptr().as_ptr() as usize,
+        arena.capacity(),
+    );
+    let in_rodata = range_within(ptr, len, rodata.as_ptr() as usize, rodata.len());
+    if !in_arena && !in_rodata {
+        return Err(VmError::TypeError(alloc::string::String::from(
+            "flat Text field does not reference memory the VM owns",
+        )));
+    }
+    // SAFETY: the range lies inside the arena buffer or the bytecode image.
+    // The arena buffer is zero-initialised or a host `&mut [u8]`, and the
+    // image is a byte slice, so every byte is initialised. Nothing writes
+    // either region while this shared borrow of the VM lasts.
+    let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+    if core::str::from_utf8(bytes).is_err() {
+        return Err(VmError::TypeError(alloc::string::String::from(
+            "flat Text field is not valid UTF-8",
+        )));
+    }
+    // SAFETY: `ptr` is non-null, which the caller screened, and names `len`
+    // initialised UTF-8 bytes in VM-owned memory, checked above. The epoch
+    // check in `KString::get` still rejects a stale ephemeral reference.
+    Ok(unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ref_epoch) })
 }
 
 /// A type that can cross the host-script boundary.
@@ -153,8 +220,8 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     /// return its total flat body size, so it can be read from and written
     /// to a parent body inline. A type that returns `None` keeps the boxed
     /// representation and is not inlined.
-    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
-        Self::flat_field_kind().map(|k| k.size_in_bytes(word_bytes, float_bytes))
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
+        Self::flat_field_kind().map(|k| k.size_in_bytes(word_bytes, float_bytes, addr_bytes))
     }
 
     /// Reconstruct the Rust type from a flat byte slice that holds exactly
@@ -168,6 +235,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<Self, VmError> {
         match Self::flat_field_kind() {
             Some(kind) => {
@@ -198,10 +266,11 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let _ = ctx;
-        Self::from_flat_bytes(bytes, word_bytes, float_bytes)
+        Self::from_flat_bytes(bytes, word_bytes, float_bytes, addr_bytes)
     }
 
     /// Write this type's flat body into `dst` starting at offset 0 (B34), the
@@ -220,6 +289,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         dst: &mut [u8],
         word_bytes: usize,
         float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<(), VmError>
     where
         Self: Sized,
@@ -402,6 +472,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         _bytes: &[u8],
         _word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<Self, VmError> {
         // A flat Text field is a (ptr, len) arena reference; resolving it
         // needs the arena epoch. Direct the caller to the context path
@@ -434,6 +505,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         bytes: &[u8],
         word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let read_word = |o: usize| -> Result<usize, VmError> {
@@ -452,13 +524,12 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         if ptr == 0 {
             return Ok(alloc::string::String::new());
         }
-        // SAFETY: the (ptr, len) was packed from a KString issued under the
-        // composite body's originating epoch (`ctx.ref_epoch`). Rebuilding
-        // with that epoch (not the current arena epoch) means the `get`
-        // below dereferences the region only while the arena epoch still
-        // matches, and yields a clean Stale error once a RESET has advanced
-        // it (B28 P3 item 1).
-        let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ctx.ref_epoch) };
+        // The pair is checked before any `str` is built, because the host's
+        // type need not match the body's layout. It is rebuilt with the
+        // body's originating epoch (`ctx.ref_epoch`), not the current arena
+        // epoch, so the `get` below yields a clean Stale error once a RESET
+        // has advanced it (B28 P3 item 1).
+        let ks = checked_flat_text(ptr, len, ctx.ref_epoch, ctx.arena, ctx.rodata)?;
         ks.get(ctx.arena)
             .map(alloc::string::String::from)
             .map_err(|_| {
@@ -468,6 +539,74 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
             })
     }
 }
+
+// -- The agreed string ABI: a borrowed byte view (Option B) --
+
+/// Extract a borrowed string view from a native argument value.
+///
+/// This is the reader behind the agreed string marshalling contract recorded
+/// in `docs/decisions/STRING_ABI_OPTION_B.md`: a string-taking native observes
+/// a `&str` that borrows for the duration of the call, which is the same thing
+/// the ahead-of-time native backend hands its native (the address of a
+/// length-prefixed byte block). The owned [`alloc::string::String`] argument
+/// remains supported and is unchanged, but it is a virtual-machine-only
+/// convenience: no ahead-of-time lowering can produce an owned `String`
+/// without copying, so a native declared against `String` is not portable
+/// between the two embeddings.
+///
+/// Both string representations resolve without copying. A `StaticStr` borrows
+/// its owned buffer directly; a `KStr` borrows the arena region, exactly as
+/// `Vm::decode` reads it. A stale `KStr` (the arena was reset
+/// since the handle was issued) is a clean error rather than a dangling read.
+///
+/// The borrow is live only for the call, which is the same use-before-`resume`
+/// discipline that already governs every arena read at this boundary. The
+/// lifetime makes that discipline checked by the compiler rather than
+/// documented, which the owned path could not do.
+fn borrowed_str_arg<'a, W: Word, F: Float>(
+    v: &'a GenericValue<W, F>,
+    ctx: &RefContext<'a>,
+) -> Result<&'a str, VmError> {
+    match v {
+        GenericValue::StaticStr(s) => Ok(s.as_str()),
+        GenericValue::KStr(ks) => ks.get(ctx.arena).map_err(|_| {
+            VmError::TypeError(alloc::string::String::from(
+                "dynamic string is stale (arena reset since it was produced)",
+            ))
+        }),
+        other => Err(VmError::TypeError(format!(
+            "expected Text, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Marker occupying the `Args` position of [`IntoNativeFn`] and
+/// [`IntoFallibleNativeFn`] for a native with at least one borrowed argument.
+///
+/// It exists to keep the borrowed impl family from overlapping the owned one.
+/// `T` is a tuple of per-slot markers, [`OwnedArg`] or [`BorrowedStr`]. None of
+/// these types is ever constructed; they only make each argument shape a
+/// distinct type so the impls do not overlap. A borrowed slot's real lifetime
+/// is the call's, bound by the higher-ranked `Fn` bound on each impl.
+pub struct ByRef<T>(core::marker::PhantomData<T>);
+
+/// An owned argument slot inside a [`ByRef`] marker, carrying the Rust type
+/// the slot marshalls to through [`KeleusmaType`].
+///
+/// The slot kinds are wrapped in distinct local types rather than written as
+/// the bare argument types, because coherence must be able to see that two
+/// shapes differ. With a bare `&'static str` for a borrowed slot and a bare
+/// type parameter for an owned one, `(&'static str, B)` and `(A, &'static str)`
+/// unify at `A = B = &'static str`, and the overlap check reports a conflict
+/// it cannot discharge, since a downstream crate could in principle implement
+/// [`KeleusmaType`] for `&'static str`. `OwnedArg<A>` and [`BorrowedStr`] are
+/// distinct type constructors, so no substitution makes two shapes equal.
+pub struct OwnedArg<T>(core::marker::PhantomData<T>);
+
+/// A borrowed string argument slot inside a [`ByRef`] marker. See
+/// [`OwnedArg`] for why the slot kinds are wrapped.
+pub struct BorrowedStr;
 
 /// An opaque host reference is a flat pass-through: the host receives the
 /// `Arc` and downcasts it through [`dyn HostOpaque::downcast_ref`]. In a
@@ -517,6 +656,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
         _bytes: &[u8],
         _word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<Self, VmError> {
         Err(VmError::TypeError(alloc::string::String::from(
             "flat opaque field requires a resolution context; decode through Vm::decode",
@@ -526,11 +666,26 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
     fn from_flat_bytes_ctx(
         bytes: &[u8],
         word_bytes: usize,
-        _float_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
+        // The field is as wide as the LAYOUT makes it, which sizes an opaque
+        // by the address width; `flat_byte_size` above hands the caller that
+        // same figure, so reading a word here would ask for more bytes than the
+        // caller sliced whenever the two widths are selected apart.
+        let field = crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+        );
         let mut buf = [0u8; 8];
-        buf[..word_bytes].copy_from_slice(flat_subslice(bytes, 0, word_bytes)?);
+        if field > buf.len() {
+            return Err(VmError::TypeError(alloc::string::String::from(
+                "flat opaque field wider than eight bytes",
+            )));
+        }
+        buf[..field].copy_from_slice(flat_subslice(bytes, 0, field)?);
         let index = u64::from_le_bytes(buf) as usize;
         ctx.opaques.get(index).map(Arc::clone).ok_or_else(|| {
             VmError::InvalidBytecode(alloc::string::String::from(
@@ -589,7 +744,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             // `None` correctly (audit finding 25).
             GenericValue::Enum(crate::bytecode::EnumBody::Flat(fc)) => {
                 let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
-                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
+                Self::from_flat_bytes_ctx(
+                    bytes,
+                    ctx.word_bytes,
+                    ctx.float_bytes,
+                    ctx.addr_bytes,
+                    ctx,
+                )
             }
             GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
                 if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
@@ -624,13 +785,14 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
         //     1), matching the compiler's boxed access for `Option<non-flat>`.
         let wb = ctx.word_bytes;
         let fb = ctx.float_bytes;
+        let ab = ctx.addr_bytes;
         if matches!(self, Option::None) {
             return Ok(GenericValue::None);
         }
-        match Self::flat_byte_size(wb, fb) {
+        match Self::flat_byte_size(wb, fb, ab) {
             Some(size) => {
                 let fc = crate::flat_value::FlatComposite::build_in_arena(ctx.arena, size, |dst| {
-                    self.to_flat_bytes(dst, wb, fb).map_err(|_| ())
+                    self.to_flat_bytes(dst, wb, fb, ab).map_err(|_| ())
                 })
                 .map_err(|_| {
                     VmError::OutOfArena(alloc::string::String::from(
@@ -665,23 +827,25 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     // write that disc-tagged flat form, so a host struct with an `Option` field
     // round-trips through the shared-data buffer and a flat composite with an
     // `Option` field decodes at the host boundary.
-    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
-        Some(word_bytes + T::flat_byte_size(word_bytes, float_bytes)?)
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
+        Some(word_bytes + T::flat_byte_size(word_bytes, float_bytes, addr_bytes)?)
     }
 
     fn from_flat_bytes(
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<Self, VmError> {
         match read_flat_disc::<W, F>(bytes, word_bytes, float_bytes)? {
             0 => Ok(Option::None),
             1 => {
-                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes, addr_bytes)?;
                 Ok(Some(T::from_flat_bytes(
                     flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                 )?))
             }
             other => Err(VmError::TypeError(format!(
@@ -696,6 +860,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
         dst: &mut [u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<(), VmError> {
         match self {
             Option::None => {
@@ -707,11 +872,12 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             }
             Some(t) => {
                 write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes)?;
-                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes, addr_bytes)?;
                 t.to_flat_bytes(
                     &mut dst[word_bytes..word_bytes + psize],
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                 )?;
                 for b in dst[word_bytes + psize..].iter_mut() {
                     *b = 0;
@@ -725,16 +891,18 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         match read_flat_disc::<W, F>(bytes, word_bytes, float_bytes)? {
             0 => Ok(Option::None),
             1 => {
-                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes, addr_bytes)?;
                 Ok(Some(T::from_flat_bytes_ctx(
                     flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                     ctx,
                 )?))
             }
@@ -807,8 +975,9 @@ fn write_flat_disc<W: Word, F: Float>(
 fn option_payload_size<W: Word, F: Float, T: KeleusmaType<W, F>>(
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Result<usize, VmError> {
-    T::flat_byte_size(word_bytes, float_bytes).ok_or_else(|| {
+    T::flat_byte_size(word_bytes, float_bytes, addr_bytes).ok_or_else(|| {
         VmError::TypeError(alloc::string::String::from(
             "Option payload type is not flat-eligible",
         ))
@@ -883,31 +1052,36 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
             .into_iter()
             .map(|t| t.into_value_ctx(ctx))
             .collect::<Result<Vec<GenericValue<W, F>>, VmError>>()?;
-        GenericValue::array_in_arena(elems, ctx.word_bytes, ctx.float_bytes, ctx.arena).map_err(
-            |_| {
-                VmError::OutOfArena(alloc::string::String::from(
-                    "arena exhausted building a native array result",
-                ))
-            },
+        GenericValue::array_in_arena(
+            elems,
+            ctx.word_bytes,
+            ctx.float_bytes,
+            ctx.addr_bytes,
+            ctx.arena,
         )
+        .map_err(|_| {
+            VmError::OutOfArena(alloc::string::String::from(
+                "arena exhausted building a native array result",
+            ))
+        })
     }
 
-    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
-        Some(N * <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes)?)
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
+        Some(N * <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)?)
     }
 
     fn from_flat_bytes(
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<Self, VmError> {
-        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
-            || {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
+            .ok_or_else(|| {
                 VmError::TypeError(alloc::string::String::from(
                     "flat array element type is not flat-eligible",
                 ))
-            },
-        )?;
+            })?;
         // A zero-size element (`Unit`) stores no bytes, so the length is not
         // byte-derivable; trust the static `N`.
         let len = bytes.len().checked_div(esize).unwrap_or(N);
@@ -924,6 +1098,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 &bytes[lo..lo + esize],
                 word_bytes,
                 float_bytes,
+                addr_bytes,
             )?);
         }
         converted
@@ -936,17 +1111,22 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
         dst: &mut [u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<(), VmError> {
-        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
-            || {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
+            .ok_or_else(|| {
                 VmError::TypeError(alloc::string::String::from(
                     "flat array element type is not flat-eligible",
                 ))
-            },
-        )?;
+            })?;
         for (i, t) in self.into_iter().enumerate() {
             let lo = i * esize;
-            t.to_flat_bytes(&mut dst[lo..lo + esize], word_bytes, float_bytes)?;
+            t.to_flat_bytes(
+                &mut dst[lo..lo + esize],
+                word_bytes,
+                float_bytes,
+                addr_bytes,
+            )?;
         }
         Ok(())
     }
@@ -977,7 +1157,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 // B28 P3 item 5 C3). A stale body (read after a RESET) is a
                 // clean error, not a panic.
                 let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
-                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
+                Self::from_flat_bytes_ctx(
+                    bytes,
+                    ctx.word_bytes,
+                    ctx.float_bytes,
+                    ctx.addr_bytes,
+                    ctx,
+                )
             }
             other => Err(VmError::TypeError(format!(
                 "expected array, got {}",
@@ -990,15 +1176,15 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
-        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
-            || {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
+            .ok_or_else(|| {
                 VmError::TypeError(alloc::string::String::from(
                     "flat array element type is not flat-eligible",
                 ))
-            },
-        )?;
+            })?;
         let len = bytes.len().checked_div(esize).unwrap_or(N);
         if len != N {
             return Err(VmError::TypeError(format!(
@@ -1013,6 +1199,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 &bytes[lo..lo + esize],
                 word_bytes,
                 float_bytes,
+                addr_bytes,
                 ctx,
             )?);
         }
@@ -1093,6 +1280,7 @@ macro_rules! impl_tuple {
                     ::alloc::vec![$($name.into_value_ctx(__ctx)?,)*],
                     __ctx.word_bytes,
                     __ctx.float_bytes,
+                    __ctx.addr_bytes,
                     __ctx.arena,
                 )
                 .map_err(|_| {
@@ -1103,16 +1291,16 @@ macro_rules! impl_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables)]
-            fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
+            fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
                 let mut total = 0usize;
                 $(
-                    total += <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)?;
+                    total += <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)?;
                 )*
                 Some(total)
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
-            fn from_flat_bytes(bytes: &[u8], word_bytes: usize, float_bytes: usize)
+            fn from_flat_bytes(bytes: &[u8], word_bytes: usize, float_bytes: usize, addr_bytes: usize)
                 -> Result<Self, VmError>
             {
                 let mut offset = 0usize;
@@ -1120,12 +1308,12 @@ macro_rules! impl_tuple {
                 // offset advances in declaration order (B28 P2).
                 Ok(($(
                     {
-                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
                             .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes(
-                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, addr_bytes,
                         )?;
                         offset += size;
                         val
@@ -1134,7 +1322,7 @@ macro_rules! impl_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
-            fn to_flat_bytes(self, dst: &mut [u8], word_bytes: usize, float_bytes: usize)
+            fn to_flat_bytes(self, dst: &mut [u8], word_bytes: usize, float_bytes: usize, addr_bytes: usize)
                 -> Result<(), VmError>
             {
                 let ($($name,)*) = self;
@@ -1143,11 +1331,11 @@ macro_rules! impl_tuple {
                 // packed offset in declaration order (B34).
                 $(
                     {
-                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
                             .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
                                 "flat tuple field is not flat-eligible",
                             )))?;
-                        $name.to_flat_bytes(&mut dst[offset..offset + size], word_bytes, float_bytes)?;
+                        $name.to_flat_bytes(&mut dst[offset..offset + size], word_bytes, float_bytes, addr_bytes)?;
                         offset += size;
                     }
                 )*
@@ -1170,7 +1358,7 @@ macro_rules! impl_tuple {
                     }
                     GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
                         let bytes = fc.resolve(__ctx.arena).map_err(|_| crate::marshall::stale_flat_decode())?;
-                        Self::from_flat_bytes_ctx(bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx)
+                        Self::from_flat_bytes_ctx(bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx.addr_bytes, __ctx)
                     }
                     other => Err(VmError::TypeError(format!(
                         "expected tuple, got {}",
@@ -1180,18 +1368,18 @@ macro_rules! impl_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
-            fn from_flat_bytes_ctx(bytes: &[u8], word_bytes: usize, float_bytes: usize, __ctx: &RefContext<'_>)
+            fn from_flat_bytes_ctx(bytes: &[u8], word_bytes: usize, float_bytes: usize, addr_bytes: usize, __ctx: &RefContext<'_>)
                 -> Result<Self, VmError>
             {
                 let mut offset = 0usize;
                 Ok(($(
                     {
-                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
                             .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes_ctx(
-                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, __ctx,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, addr_bytes, __ctx,
                         )?;
                         offset += size;
                         val
@@ -1322,6 +1510,141 @@ impl_into_native_fn!(1; A: 0);
 impl_into_native_fn!(2; A: 0, B: 1);
 impl_into_native_fn!(3; A: 0, B: 1, C: 2);
 impl_into_native_fn!(4; A: 0, B: 1, C: 2, D: 3);
+
+// -- The borrowed-argument native family (the agreed string ABI, Option B) --
+//
+// A slot is `O` (owned, marshalled through `KeleusmaType` exactly as before)
+// or `R` (borrowed, a `&str` view resolved by `borrowed_str_arg`). One impl is
+// generated per shape, and only shapes with at least one `R` slot are
+// generated: the all-owned shapes are the pre-existing family above and
+// generating them again would overlap it.
+//
+// The shapes are enumerated explicitly rather than derived, because the
+// selection that makes this infer at a bare `register_fn` call site is the
+// CONCRETE `Fn` bound. Routing the slot types through an associated type
+// would make the argument marker unrecoverable from the closure's signature
+// (an associated type is not injective), and inference would fail. That was
+// measured before this family was written, not assumed.
+
+macro_rules! ref_slot_marker {
+    (O $name:ident) => { OwnedArg<$name> };
+    (R $name:ident) => { BorrowedStr };
+}
+
+macro_rules! ref_slot_param {
+    (O $name:ident) => { $name };
+    (R $name:ident) => { &'x str };
+}
+
+macro_rules! ref_slot_bind {
+    (O $name:ident, $args:ident, $idx:tt, $rc:ident) => {
+        <$name as KeleusmaType<W, FloatT>>::from_value_ctx(&$args[$idx], &$rc)?
+    };
+    (R $name:ident, $args:ident, $idx:tt, $rc:ident) => {
+        borrowed_str_arg(&$args[$idx], &$rc)?
+    };
+}
+
+macro_rules! impl_into_native_fn_ref {
+    ($arity:expr; ($($g:ident),*); $([$k:ident $n:ident $i:tt]),+) => {
+        impl<W: Word, FloatT: Float, Func, $($g,)* R>
+            IntoNativeFn<W, FloatT, ByRef<($(ref_slot_marker!($k $n),)+)>, R> for Func
+        where
+            Func: for<'x> Fn($(ref_slot_param!($k $n),)+) -> R + 'static,
+            $($g: KeleusmaType<W, FloatT>,)*
+            R: KeleusmaType<W, FloatT>,
+        {
+            #[allow(unused_variables, non_snake_case)]
+            fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
+                alloc::boxed::Box::new(
+                    move |__ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                        -> Result<GenericValue<W, FloatT>, VmError> {
+                        if args.len() != $arity {
+                            return Err(VmError::NativeError(format!(
+                                "native function expected {} argument(s), got {}",
+                                $arity,
+                                args.len()
+                            )));
+                        }
+                        let __rc = __ctx.ref_context();
+                        let _ = &__rc;
+                        // The borrowed arguments are extracted inline into the
+                        // call rather than bound to locals first, so the borrow
+                        // of `args` and of the arena plainly ends with the call.
+                        <R as KeleusmaType<W, FloatT>>::into_value_ctx(
+                            self($(ref_slot_bind!($k $n, args, $i, __rc),)+),
+                            &__rc,
+                        )
+                    },
+                )
+            }
+        }
+
+        impl<W: Word, FloatT: Float, Func, $($g,)* R>
+            IntoFallibleNativeFn<W, FloatT, ByRef<($(ref_slot_marker!($k $n),)+)>, R> for Func
+        where
+            Func: for<'x> Fn($(ref_slot_param!($k $n),)+) -> Result<R, VmError> + 'static,
+            $($g: KeleusmaType<W, FloatT>,)*
+            R: KeleusmaType<W, FloatT>,
+        {
+            #[allow(unused_variables, non_snake_case)]
+            fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
+                alloc::boxed::Box::new(
+                    move |__ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                        -> Result<GenericValue<W, FloatT>, VmError> {
+                        if args.len() != $arity {
+                            return Err(VmError::NativeError(format!(
+                                "native function expected {} argument(s), got {}",
+                                $arity,
+                                args.len()
+                            )));
+                        }
+                        let __rc = __ctx.ref_context();
+                        let _ = &__rc;
+                        self($(ref_slot_bind!($k $n, args, $i, __rc),)+)
+                            .and_then(|__r| {
+                                <R as KeleusmaType<W, FloatT>>::into_value_ctx(__r, &__rc)
+                            })
+                    },
+                )
+            }
+        }
+    };
+}
+
+// Arity 1: one shape.
+impl_into_native_fn_ref!(1; (); [R S0 0]);
+
+// Arity 2: three shapes.
+impl_into_native_fn_ref!(2; ();    [R S0 0], [R S1 1]);
+impl_into_native_fn_ref!(2; (B);   [R S0 0], [O B 1]);
+impl_into_native_fn_ref!(2; (A);   [O A 0], [R S1 1]);
+
+// Arity 3: seven shapes.
+impl_into_native_fn_ref!(3; ();      [R S0 0], [R S1 1], [R S2 2]);
+impl_into_native_fn_ref!(3; (C);     [R S0 0], [R S1 1], [O C 2]);
+impl_into_native_fn_ref!(3; (B);     [R S0 0], [O B 1], [R S2 2]);
+impl_into_native_fn_ref!(3; (A);     [O A 0], [R S1 1], [R S2 2]);
+impl_into_native_fn_ref!(3; (B, C);  [R S0 0], [O B 1], [O C 2]);
+impl_into_native_fn_ref!(3; (A, C);  [O A 0], [R S1 1], [O C 2]);
+impl_into_native_fn_ref!(3; (A, B);  [O A 0], [O B 1], [R S2 2]);
+
+// Arity 4: fifteen shapes.
+impl_into_native_fn_ref!(4; ();         [R S0 0], [R S1 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (D);        [R S0 0], [R S1 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (C);        [R S0 0], [R S1 1], [O C 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (B);        [R S0 0], [O B 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (A);        [O A 0], [R S1 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (C, D);     [R S0 0], [R S1 1], [O C 2], [O D 3]);
+impl_into_native_fn_ref!(4; (B, D);     [R S0 0], [O B 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (B, C);     [R S0 0], [O B 1], [O C 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (A, D);     [O A 0], [R S1 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, C);     [O A 0], [R S1 1], [O C 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (A, B);     [O A 0], [O B 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (B, C, D);  [R S0 0], [O B 1], [O C 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, C, D);  [O A 0], [R S1 1], [O C 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, B, D);  [O A 0], [O B 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, B, C);  [O A 0], [O B 1], [O C 2], [R S3 3]);
 
 // Tests live alongside the trait. Integration tests across vm.rs cover
 // register_fn registration end to end.
@@ -1515,12 +1838,29 @@ mod tests {
         }
     }
 
+    /// A context for the marshalling tests below.
+    ///
+    /// **The three widths are not read by any test that uses this**, which is
+    /// measured rather than assumed: perturbing `float_bytes` from 8 to 4
+    /// leaves all 18 marshall tests passing. These tests marshal strings and
+    /// check arity and length errors; none reaches a width-dependent path.
+    ///
+    /// Recorded because a survived perturbation is ambiguous on its own. "The
+    /// width is unread" and "nobody wrote the test that reads it" look
+    /// identical without the reason beside them, and the reason here is the
+    /// former.
+    ///
+    /// Prompted by the `v0.3.0` line, which found the same hard-coded pair on
+    /// its side under a comment asserting that a `Float` and a `Word` are both
+    /// eight bytes -- false under `narrow-float-32`, where a float is four.
     fn ctx(arena: &keleusma_arena::Arena) -> crate::vm::NativeCtx<'_> {
         crate::vm::NativeCtx {
             arena,
             opaques: &[],
             word_bytes: 8,
             float_bytes: 8,
+            addr_bytes: 8,
+            rodata: &[],
         }
     }
 
@@ -1592,5 +1932,70 @@ mod tests {
             }
             other => panic!("expected TypeError, got {:?}", other),
         }
+    }
+}
+
+// The flat `Text` admission check. Kept apart from `tests` above, which needs
+// the `floats` feature, because this check must hold in every configuration.
+#[cfg(test)]
+mod flat_text_tests {
+    use super::{checked_flat_text, range_within};
+    use crate::kstring::KString;
+    use keleusma_arena::Arena;
+
+    #[test]
+    fn a_range_is_within_only_when_both_ends_are() {
+        assert!(range_within(100, 10, 100, 10));
+        assert!(range_within(105, 5, 100, 10));
+        // An empty range at the end is within, one byte past is not.
+        assert!(range_within(110, 0, 100, 10));
+        assert!(!range_within(105, 6, 100, 10));
+        assert!(!range_within(99, 1, 100, 10));
+        assert!(!range_within(111, 0, 100, 10));
+        // A length that would overflow the address space is not within.
+        assert!(!range_within(105, usize::MAX, 100, 10));
+        assert!(!range_within(usize::MAX, 1, 100, 10));
+    }
+
+    #[test]
+    fn an_arena_string_is_admitted() {
+        let arena = Arena::with_capacity(256);
+        let (ptr, len) = KString::alloc(&arena, "héllo").expect("alloc").raw_parts();
+        let ks = checked_flat_text(ptr, len, arena.epoch(), &arena, &[]).expect("admitted");
+        assert_eq!(ks.get(&arena).expect("live"), "héllo");
+    }
+
+    #[test]
+    fn a_rodata_string_is_admitted() {
+        let arena = Arena::with_capacity(64);
+        let image: &[u8] = b"..constant..";
+        let ptr = image.as_ptr() as usize + 2;
+        let ks = checked_flat_text(ptr, 8, 0, &arena, image).expect("admitted");
+        assert_eq!(ks.get(&arena).expect("rodata never goes stale"), "constant");
+    }
+
+    #[test]
+    fn a_pointer_outside_both_regions_is_refused() {
+        let arena = Arena::with_capacity(64);
+        let elsewhere = alloc::vec![b'a'; 8];
+        // A small integer, as a scalar word read as a pointer would be.
+        assert!(checked_flat_text(3, 4, 0, &arena, &[]).is_err());
+        // A real allocation the VM does not own.
+        assert!(checked_flat_text(elsewhere.as_ptr() as usize, 8, 0, &arena, &[]).is_err());
+        // A range that starts inside the arena and runs past its end.
+        let base = arena.persistent_ptr().as_ptr() as usize;
+        assert!(checked_flat_text(base + 60, 8, 0, &arena, &[]).is_err());
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_are_refused() {
+        let arena = Arena::with_capacity(64);
+        let image: &[u8] = &[b'o', b'k', 0xFF, 0xFE];
+        let ptr = image.as_ptr() as usize;
+        assert!(checked_flat_text(ptr, 2, 0, &arena, image).is_ok());
+        assert!(checked_flat_text(ptr, 4, 0, &arena, image).is_err());
+        // A range that splits a multi-byte character is refused as well.
+        let split = "é".as_bytes();
+        assert!(checked_flat_text(split.as_ptr() as usize, 1, 0, &arena, split).is_err());
     }
 }

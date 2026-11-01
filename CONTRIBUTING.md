@@ -21,11 +21,24 @@ The full gate (every crate, every feature set, clippy, fmt, doc) is correct but 
 cargo qc     # type-check the whole workspace, no codegen (compile-error feedback)
 cargo tl     # run only the keleusma library unit tests (seconds after compile)
 cargo lint   # the exact clippy invocation CI gates on
-cargo tn     # the full workspace suite under nextest (parallel; needs cargo-nextest)
+cargo tnq    # ROUTINE tier: workspace suite minus the heavy self-host tests (nextest)
+cargo tns    # only the self-host byte-identity binaries (nextest)
+cargo tn     # the FULL workspace suite under nextest (parallel; needs cargo-nextest)
 cargo tw     # the full workspace suite under cargo's serial runner
 ```
 
-Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so the full check pairs `cargo nextest run --workspace` with `cargo test --workspace --doc`. Reserve the full gate below for before opening a pull request; the pre-push hook runs it automatically.
+**Test tiers (process audit item 1).** The ~198 self-hosted byte-identity tests (the `selfhost_*` binaries) each compile whole `.kel` stage files and dominate the suite's wall-clock. They are a differential-oracle check that the routine tier skips: `cargo tnq` omits them and is what the pre-push hook runs, while the full suite including them runs **in continuous integration on every pull request**, and in [`scripts/release-gate.sh`](scripts/release-gate.sh) for a local or offline pass. The trade-off is deliberate — a self-host regression on a feature branch surfaces at the merge gate, not at push time — so when working on a self-host stage, iterate with `scripts/fast-check.sh` (below) and let continuous integration carry the whole-corpus check. (This paragraph said "the mandatory pre-merge gate" until 2026-09-08; CI has authorized merges since 2026-08-11 and runs the self-host tier itself.)
+
+Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so a check pairs a nextest run with `cargo test --workspace --doc`.
+
+For the self-hosted-compiler inner loop, [`scripts/fast-check.sh`](scripts/fast-check.sh) bundles fmt, clippy on the touched crate, and a test filter you pass in — the one construct or the one changed self-host stage in flight — so you get a seconds-scale signal without the full gate:
+
+```sh
+scripts/fast-check.sh 'test(self_host_compiles_word_bnot)'                  # one construct
+scripts/fast-check.sh 'test(self_host_compiles_parse_kel_byte_identically)' # only the changed stage
+```
+
+Re-running only the changed stage's self-compile (rather than all five) is the fast form; the full five-stage self-compile stays in the merge gate (`scripts/release-gate.sh`), which the routine pre-push tier no longer runs. Deliberately no stage-bytecode memoization: a stale cache could mask a real byte-identity divergence, the worst failure for a differential oracle.
 
 The default nextest profile caps the run at four concurrent test processes (`test-threads` in [`.config/nextest.toml`](.config/nextest.toml)). nextest runs one process per test, so the full suite would otherwise spawn many at once; on a memory-constrained host the combined footprint plus parallel compilation can exhaust RAM and swap and wedge the run. Four processes keep peak memory modest while still finishing the library suite in a few seconds. The `ci` profile omits the cap because the CI runners have ample memory.
 
@@ -71,13 +84,28 @@ through the CLI; it orchestrates POSIX tools through `shell::run` and
 drives its exit code from their result. The earlier pure-POSIX
 implementation remains in the git history at `scripts/check-md-links.sh`. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
 
+The commands above and the pre-push hook run only the **default** feature set of
+the root workspace. They do not exercise the configurations where feature-gated
+code diverges — `--no-default-features`, the `signatures` and broad
+`signatures,shell` sets — nor the detached `compiler/` self-hosting subproject,
+which is a separate workspace gated by neither the hook nor the root CI job. That
+gap is how a `--no-default-features` compile break or a subproject regression
+reaches CI unseen. Run [`scripts/verify.sh`](scripts/verify.sh) to close it: it
+mirrors CI's runnable feature matrix plus the subproject's build, tests, clippy,
+and fmt, and reports every failure in one pass. It deliberately does not use
+`--all-features` (unsuitable for this workspace, as the CI "broad features" job
+documents — it selects mutually-degenerate narrow-word widths), and it skips the
+toolchain- or target-specific jobs (Miri, MSRV, cross-builds, WASM) with a note
+when the required toolchain is absent. Run it before pushing changes that touch
+feature-gated code or the subproject.
+
 ## Automated pre-push hook
 
 These checks also run automatically before every `git push` through a [cargo-husky](https://github.com/rhysd/cargo-husky) pre-push hook. The hook is version-controlled at [`.cargo-husky/hooks/pre-push`](.cargo-husky/hooks/pre-push) and cargo-husky installs it into `.git/hooks/` the next time the dev-dependencies compile, for example on the first `cargo test --workspace` after cloning. No manual setup step is required. The hook runs the test step under `cargo nextest` (parallel) when it is installed and falls back to `cargo test --workspace` otherwise, so installing `cargo-nextest` makes the push gate substantially faster.
 
 The hook fails the push if any check fails. To push a work-in-progress branch without running it, bypass with `git push --no-verify`. If the CI feature set or the checklist above changes, update the hook script to match.
 
-If your change is user-visible, add an entry to [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
+If your change is user-visible, add a changelog fragment under [`changelog.d/`](changelog.d/README.md) rather than editing [`CHANGELOG.md`](CHANGELOG.md). The fragments are assembled into its `[Unreleased]` section at release.
 
 If your change touches the surface language (new keyword, new operator, new construct), update the relevant section of [`docs/spec/GRAMMAR.md`](docs/spec/GRAMMAR.md) and consider whether the syntax highlighters under [`editors/`](editors/README.md) need to learn the new construct.
 
@@ -94,12 +122,12 @@ If your program lexes and parses but `Vm::new` or `compile` rejects it, the reje
 Soundness is the load-bearing property of the language. Any change to `verify::wcet_stream_iteration`, `verify::wcmu_stream_iteration`, `verify::verify`, or the surrounding analysis machinery should:
 
 - Carry tests in the affected module that exercise the soundness boundary.
-- Be paired with a CHANGELOG entry that names the soundness invariant the change preserves or relaxes.
+- Be paired with a changelog fragment that names the soundness invariant the change preserves or relaxes.
 - Be reviewed against the rationale in [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the conservative-verification stance.
 
 ## Code of conduct
 
-Interactions on issues, pull requests, and other project communication channels are expected to be civil and focused on the technical substance. There is no formal code-of-conduct document at V0.2.0; the project will adopt one if and when external contributor activity grows to a point where a written policy is useful.
+Participation in the project's spaces is governed by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). It applies to automated contributors, such as agent lines, as it does to people.
 
 ## License
 

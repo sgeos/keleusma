@@ -1,0 +1,43 @@
+Ordering is not a completion criterion. Any order that leaves the tree in
+the state below is complete.
+
+1. A capacity-carrying dynamic text type exists in the surface language,
+   with the capacity a compile-time constant that is erased before the
+   worst-case analyses run, so neither analysis sees a symbolic bound.
+
+2. Its runtime representation is a flat composite containing no pointer,
+   handle, or epoch. A value of the type may cross a yield boundary.
+
+3. Static text and dynamic text are distinct types. A literal is static
+   and carries no capacity in its type.
+
+4. Worst-case memory for a program using the type is derivable without
+   any analysis of lifetimes, because the bytes are in the body.
+
+5. An assignment that is too narrow by compile-time-known capacities is
+   refused at compile time rather than truncated.
+
+6. Runtime overflow is total: it has a defined default outcome and an
+   optional arm by which a program can observe that overflow occurred,
+   following the same shape the language already uses for checked
+   arithmetic rather than a mechanism invented for text.
+
+7. The instruction set has gained no opcode.
+
+8. The format fingerprint's pinned value differs from its value before
+   this work. A fingerprint that failed to move would mean the detector
+   is broken, and must not be resolved by weakening its test.
+
+9. The self-hosted byte-identity comparisons pass, with the Keleusma
+   emitter obtaining any changed constant from the same source as the
+   reference rather than a separately written literal.
+
+10. The full release gate passes. Partial verification across a chosen
+    subset of feature sets is not sufficient and is not reported as if
+    it were.
+
+11. The design record contains no section describing as undecided a
+    question that another section of the same record settles.
+
+12. Anything left unfinished is recorded in the process channels as
+    unfinished, naming the specific sites or checks involved.

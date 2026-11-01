@@ -17,9 +17,20 @@ license = "0BSD"
 # Detached from the parent workspace.
 [workspace]
 
+# A detached workspace does not inherit the parent's profiles, so this repeats
+# the parent's dev profile. The rationale and measurement are on the parent's
+# `[profile.dev]` in ../Cargo.toml.
+[profile.dev]
+debug = "line-tables-only"
+opt-level = 1
+
 [dependencies]
-keleusma = { path = "..", features = ["compile", "verify"] }
+keleusma = { path = "..", features = ["compile", "verify", "self-host"] }
 keleusma-arena = { path = "../keleusma-arena", features = ["alloc"] }
+
+[lib]
+name = "keleusma_selfhost"
+path = "src/lib.rs"
 
 [[bin]]
 name = "keleusma-selfhost"

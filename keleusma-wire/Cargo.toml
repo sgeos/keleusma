@@ -1,0 +1,31 @@
+[package]
+name = "keleusma-wire"
+version = "0.1.0"
+edition = "2024"
+publish = ["crates-io"]
+rust-version = "1.85"
+description = "Word-oriented binary container format with fixed-size records, in-place reads, a triplicated directory, and no schema dependency"
+license = "0BSD"
+repository = "https://github.com/sgeos/keleusma"
+homepage = "https://github.com/sgeos/keleusma/tree/main/keleusma-wire"
+readme = "README.md"
+keywords = ["serialization", "no-std", "embedded", "zero-copy", "binary"]
+categories = ["encoding", "no-std", "embedded", "data-structures"]
+
+[features]
+default = ["alloc"]
+# Enables the encoder (`WireBuilder`), which accumulates one buffer per region
+# and therefore needs a heap. The reader is allocation-free and works without
+# this feature, which is the point: a target that only ever READS artifacts
+# needs no allocator at all.
+alloc = []
+# `#[derive(WireRecord)]`. Off by default so a consumer that hand-writes its
+# offsets pays no proc-macro build cost.
+derive = ["dep:keleusma-wire-derive"]
+
+[dependencies]
+keleusma-wire-derive = { version = "0.1.0", path = "../keleusma-wire-derive", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

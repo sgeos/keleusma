@@ -1,0 +1,53 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. THE TWO UNWITNESSED OPCODES HAVE A RECORDED VERDICT.
+   For each of the two opcodes the reference compiler can emit but no
+   known source produces, the tree states one of: a source construct
+   that produces it, or that none was found together with what was
+   tried and why the guard resists. A test or a document carries this.
+   "Not investigated" does not satisfy it; "searched, not found, here
+   is the boundary" does.
+
+2. REACHABLE AND UNREACHABLE ARE NOT CONFLATED.
+   Nothing in the tree asserts an opcode is unreachable on the strength
+   of a failed search. Where the verdict is "not found", the wording
+   distinguishes that from "cannot exist".
+
+3. THE NESTED-COMPOSITE DIVERGENCE IS EITHER FIXED OR STILL PINNED.
+   If fixed: a nested array literal and a chained index both compile
+   byte-identically to the reference, and a flat-array control still
+   passes. If not fixed: the tree still carries a case that fails when
+   someone claims it works, with the measured symptom recorded.
+   Silently dropping the pin satisfies nothing.
+
+4. NO CLAIM RESTS ON AN UNCHECKED MECHANISM.
+   Any statement in the tree about WHY something behaves as it does is
+   either supported by evidence recorded beside it, or marked as
+   unverified. A plausible explanation presented as a cause does not
+   satisfy this.
+
+5. WHICH COMPILER A RESULT DESCRIBES IS UNAMBIGUOUS.
+   Two self-hosted compilers exist and have diverged. Any new result
+   about self-hosted behaviour says which one it was measured on.
+
+6. NOTHING IS SILENTLY NARROWED.
+   No capacity, error code, or public signature is changed so that it
+   rejects a program the tree accepted before, unless a test pins the
+   new boundary from both sides and a document records the reason.
+
+7. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The full test suite under the self-host feature passes with zero
+   failures, formatting is clean, and clippy is clean at deny-warnings
+   on a run performed after the last edit. Any step skipped, or goal
+   abandoned, is stated plainly with its reason.
+
+8. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+   If an item proved to need an operator decision, the tree names the
+   specific decision and the evidence establishing it. A recorded
+   blocker satisfies that item.
+
+Item 8 may substitute for item 1 or item 3, but not for both.

@@ -1,20 +1,30 @@
 //! Driver and bootstrap harness for the self-hosted Keleusma compiler (V0.3.0).
 //!
-//! This is scaffolding. The three pipeline stages live in Keleusma source under
-//! `kel/` and are not yet implemented; this driver establishes the structure that
-//! will register the `compiler::` natives, drive the yield/resume pipeline, run the
-//! bootstrap phases, and validate byte-identical output against the Rust-hosted
-//! reference compiler. See `README.md` and `MILESTONES.md`; the authoritative design
-//! is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
+//! The four pipeline stages live in Keleusma source under `kel/` (`lexer.kel`,
+//! `parse.kel`, `reconstruct.kel`, `codegen.kel`), and each self-compiles
+//! byte-identically to the Rust-hosted reference compiler. The `compile <file>`
+//! command drives all four end to end through the shared `keleusma_selfhost::selfhost`
+//! library to emit bytecode and check the fixed-point property, with the host only
+//! moving data between stages; `lex` and `parse` run the first one and two stages.
+//! The `compile` command now emits a from-scratch module scaffold: the data layout,
+//! enum-layout table, chunk signatures, schema hash, and declared WCET/WCMU header are
+//! built from the pipeline output with no reference borrow of the user program (via `self_host_compile_scratch`), so for the
+//! loop-free stage sources the serialized module is byte-identical to the reference
+//! without borrowing any field from it. See `README.md` and `MILESTONES.md`; the
+//! authoritative design is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
 
 /// The bytecode format the self-hosted compiler must emit. Sourced from the parent
 /// runtime so the two compilers cannot drift on the wire format.
 const TARGET_BYTECODE_VERSION: u16 = keleusma::bytecode::BYTECODE_VERSION;
 
-/// The three pipeline stages, in migration order (roadmap Steps 1, 2, 3).
+/// The four pipeline stages, in pipeline order. The parser stage is the merged
+/// `parse.kel`, which parses a whole top-level declaration including its function body
+/// in one pass, emitting a postorder record stream; `reconstruct.kel` folds that into
+/// the node forest the codegen stage consumes.
 const STAGES: &[(&str, &str)] = &[
     ("lexer", "kel/lexer.kel"),
-    ("parser", "kel/parser.kel"),
+    ("parser", "kel/parse.kel"),
+    ("reconstruct", "kel/reconstruct.kel"),
     ("codegen", "kel/codegen.kel"),
 ];
 
@@ -38,7 +48,39 @@ fn main() {
                 std::process::exit(2);
             }
         },
-        "parse" | "compile" => not_yet(cmd, "run a single stage over an input stream"),
+        "parse" => match args.get(1) {
+            Some(path) => run_parse_pipeline(path),
+            None => {
+                eprintln!("usage: keleusma-selfhost parse <file>");
+                std::process::exit(2);
+            }
+        },
+        "compile" => match args.get(1) {
+            Some(path) => {
+                // Optional `-o <out>` writes the assembled bytecode to a file.
+                let out = match args.get(2).map(String::as_str) {
+                    Some("-o") => match args.get(3) {
+                        Some(o) => Some(o.as_str()),
+                        None => {
+                            eprintln!("usage: keleusma-selfhost compile <file> [-o <out>]");
+                            std::process::exit(2);
+                        }
+                    },
+                    Some(other) => {
+                        eprintln!(
+                            "unexpected argument `{other}`; usage: compile <file> [-o <out>]"
+                        );
+                        std::process::exit(2);
+                    }
+                    None => None,
+                };
+                run_compile_pipeline(path, out);
+            }
+            None => {
+                eprintln!("usage: keleusma-selfhost compile <file> [-o <out>]");
+                std::process::exit(2);
+            }
+        },
         "-h" | "--help" | "help" => help(),
         other => {
             eprintln!("unknown command: {other}");
@@ -69,40 +111,65 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 26, a");
+    println!("status: porting backward, codegen first. Codegen increment 32, a");
     println!("recursion-free work-stack walk (a `loop` that delegates its yield to a");
     println!("multiheaded guarded `yield` phase machine over per-kind subroutines)");
     println!("that compiles blocks of `let`, data-field assignments, and range");
-    println!("`for` loops over the binary integer arithmetic set (+ - * / %), the six");
+    println!("`for` loops (including the bounded-runtime-range `for .. limit` form)");
+    println!("over the binary integer arithmetic set (+ - * / %), the six");
     println!("comparison operators, unary `not` and `-`, the bitwise band/bor/bxor,");
     println!("short-circuit `andalso`/`orelse`, `if`/`else` structured control flow");
-    println!("with stage-resolved jump targets, function calls, and scalar and");
+    println!("with stage-resolved jump targets, `match` over an integer scrutinee,");
+    println!("function calls, and scalar and");
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
-    println!("increment 1, a streaming tokenizer, both compile, verify, and run (see");
-    println!("tests/selfhost_codegen.rs and `lex <file>`). V0.3.0 ships when the");
-    println!("bootstrap reaches a fixed point.");
+    println!("increment 5, a streaming tokenizer whose output is now the parser's input");
+    println!("stream directly -- every token carries its unified Tok code, with maximal");
+    println!("munch over the two-byte operators, keyword classification, identifier");
+    println!("interning to stable ids, and the single-byte punctuation, `->` arrow, and");
+    println!("lone `_` mapped to their Tok codes -- both compile, verify, and run (see");
+    println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
+    // The count this line carried was 34 and the stage has 83 functions as of
+    // 2026-09-13. It is stated without a number now rather than reset to one that
+    // will drift again: nothing checks a figure printed by a banner, and this
+    // session found the same shape in the project instruction file twice.
+    println!("FULLY SELF-HOSTING: every one of its functions, including the multiheaded");
+    println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
+    println!("byte-identically. The parser stage (Step 2) is now the merged parse.kel,");
+    println!("which parses a whole top-level declaration -- a function with its full");
+    println!("body, a data block, an enum, or a use import -- in a single pass, folding");
+    println!("the retired body.kel node-forest walk into the retired parser.kel scan and");
+    println!("resolving data fields and enums by accumulating their tables as it parses");
+    println!("(see tests/selfhost_parse.rs). ALL FOUR STAGES NOW SELF-COMPILE");
+    println!("byte-identically (lexer.kel, parse.kel, reconstruct.kel, codegen.kel): the");
+    println!("record-to-forest reconstruction, once host-side Rust, is now the Keleusma");
+    println!("stage reconstruct.kel. The `compile <file>` command drives the whole four-stage");
+    println!("pipeline end to end to bytecode, checking the fixed-point property");
+    println!("(compiler/tests/fixed_point.rs), with the host only moving data between stages.");
+    println!("The `compile` command now assembles the module scaffold (data layout, enum");
+    println!("layouts, chunk signatures, schema hash, and the declared WCET/WCMU header) from");
+    println!("the pipeline output rather than borrowing it from the reference; for the loop-free");
+    println!("stage sources the serialized module is byte-identical to the reference");
+    println!("(compiler/tests/scaffold.rs). V0.3.0 ships when the bootstrap reaches the Phase");
+    println!("B/C fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.
 ///
 /// This drives `kel/lexer.kel` on the current runtime: it compiles the lexer,
 /// places the input source in the loop's `shared data` byte array, and resumes
-/// it, decoding the increment-1 `kind + value*16` token wire. It is the first
-/// end-to-end proof that the host can drive a self-hosted pipeline stage.
+/// it, decoding the unified `tok + payload*64` token wire (increment 5), where
+/// `tok` is the parser's Tok discriminant and 63/62 are the PENDING/EOF markers.
+/// It is the first end-to-end proof that the host can drive a self-hosted pipeline
+/// stage, and the point at which the lexer's output becomes the parser's input.
 fn run_lexer(path: &str) {
     use keleusma::Arena;
     use keleusma::bytecode::Value;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
-    // The lexer source lives beside this binary's package; try the package-local
-    // path first, then the repo-root path, so the command works from either.
-    let lexer_src = std::fs::read_to_string("kel/lexer.kel")
-        .or_else(|_| std::fs::read_to_string("compiler/kel/lexer.kel"))
-        .unwrap_or_else(|e| {
-            eprintln!("cannot read kel/lexer.kel: {e}");
-            std::process::exit(1);
-        });
+    // The lexer source is canonically owned by the parent crate at
+    // `src/selfhost/kel/`; `read_stage` resolves it from either directory.
+    let lexer_src = read_stage("kel/lexer.kel");
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
@@ -119,11 +186,12 @@ fn run_lexer(path: &str) {
     let mut vm = Vm::new(module, &arena).expect("verify lexer.kel");
 
     let cap = vm.shared_data_bytes();
-    // The increment-1 lexer holds up to 4096 source bytes in its shared array.
-    if input.len() > 4096 {
+    // Use the same source bound as the shipping lexer driver.
+    if input.len() > keleusma::selfhost_host::LEX_SOURCE_CAP {
         eprintln!(
-            "input is {} bytes; the increment-1 lexer caps source at 4096",
-            input.len()
+            "input is {} bytes; the lexer source capacity is {}",
+            input.len(),
+            keleusma::selfhost_host::LEX_SOURCE_CAP
         );
         std::process::exit(1);
     }
@@ -143,17 +211,35 @@ fn run_lexer(path: &str) {
     for _ in 0..(input.len() * 4 + 16) {
         match state {
             VmState::Yielded(Value::Int(t)) => {
-                let (kind, value) = (t.rem_euclid(16), t.div_euclid(16));
-                match kind {
-                    0 => {} // PENDING; the host skips it
-                    1 => {
-                        println!("  EOF");
-                        return;
+                // Unified wire (increment 5): `tok + payload*64`, with 63 PENDING
+                // (skipped) and 62 EOF above the Tok range.
+                if t == 63 {
+                    // PENDING; the host skips it.
+                } else if t == 62 {
+                    println!("  EOF");
+                    return;
+                } else {
+                    let (tok, payload) = (t.rem_euclid(256), t.div_euclid(256));
+                    if tok == 66 {
+                        eprintln!("invalid integer literal near byte {payload}");
+                        std::process::exit(1);
                     }
-                    2 => println!("  IDENT   len {value}"),
-                    3 => println!("  INT     {value}"),
-                    4 => println!("  PUNCT   {:?}", value as u8 as char),
-                    other => println!("  ?kind {other} value {value}"),
+                    let name = tok_name(tok);
+                    if tok == 65 {
+                        let value = vm
+                            .get_shared(
+                                &shared,
+                                keleusma::selfhost_host::BR_LEX_VALUES + payload as usize,
+                            )
+                            .expect("literal value");
+                        println!("  IntLit    {value:?}");
+                    } else if tok == 1 {
+                        println!("  {name:<9} id {payload}");
+                    } else if tok == 12 {
+                        println!("  {name:<9} {payload}");
+                    } else {
+                        println!("  {name}");
+                    }
                 }
             }
             VmState::Reset => {}
@@ -170,6 +256,538 @@ fn run_lexer(path: &str) {
     std::process::exit(1);
 }
 
+/// Name a parser `Tok` discriminant for the `lex` command's human-readable dump.
+/// Mirrors the `Tok` enum in `kel/parse.kel`; 4 is the catch-all that absorbs the
+/// `->` arrow and any unrecognized punctuation.
+fn tok_name(tok: i64) -> &'static str {
+    match tok {
+        0 => "fn",
+        1 => "Ident",
+        2 => "LBrace",
+        3 => "RBrace",
+        4 => "catchall",
+        5 => "yield",
+        6 => "loop",
+        7 => "LParen",
+        8 => "RParen",
+        9 => "Colon",
+        10 => "Comma",
+        12 => "IntLit",
+        13 => "data",
+        14 => "shared",
+        15 => "private",
+        16 => "const",
+        17 => "Eq",
+        19 => "use",
+        21 => "Plus",
+        22 => "Minus",
+        23 => "Star",
+        24 => "Slash",
+        25 => "Percent",
+        26 => "EqEq",
+        27 => "NotEq",
+        28 => "Lt",
+        29 => "Gt",
+        30 => "LtEq",
+        31 => "GtEq",
+        32 => "not",
+        33 => "band",
+        34 => "bor",
+        35 => "bxor",
+        36 => "andalso",
+        37 => "orelse",
+        38 => "let",
+        39 => "Semi",
+        40 => "Dot",
+        41 => "LBracket",
+        42 => "RBracket",
+        43 => "if",
+        44 => "else",
+        45 => "for",
+        46 => "in",
+        47 => "DotDot",
+        48 => "match",
+        49 => "FatArrow",
+        50 => "Underscore",
+        51 => "ColCol",
+        52 => "as",
+        53 => "enum",
+        _ => "?tok",
+    }
+}
+
+/// Run Stages 1 and 2 composed: tokenize `path` with the self-hosted lexer, build
+/// the parser's inputs from the lexer's output alone (the exposed intern table and
+/// a brace-depth scan of the token stream), drive the self-hosted parser, and print
+/// the declarations it yields. This is the first actual composition of two
+/// self-hosted stages in the driver; the host only orchestrates the yield/resume
+/// loops, with no runtime-tokenizer adapter in the path.
+///
+/// **THIS FUNCTION IS NOT COVERED BY A TEST, AND IT USED TO CLAIM IT WAS.** The claim
+/// named `tests/selfhost_pipeline.rs`, which checks an equivalent composition built from
+/// its OWN copy of the driver code in the runtime's test tree. That test passes whatever
+/// this file does.
+///
+/// The package IS tested -- `compiler/tests/` holds 86 tests across the verify stages,
+/// the scaffold, the validator, and the fixed point -- but none of them reaches this
+/// function, which `main` alone calls. That is how a stale shared-slot layout here
+/// survived the change that moved it: compiled by the continuous-integration job, never
+/// run by it.
+fn run_parse_pipeline(path: &str) {
+    use keleusma::Arena;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+
+    // Lexer `src` block slot layout: len(1) + bytes(65536) then the intern table.
+    const LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
+    const LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
+    const LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
+    // THE PARSER'S SHARED-SLOT LAYOUT COMES FROM THE RUNTIME, NOT FROM HERE.
+    //
+    // This was a copy of the arithmetic (`1 + 40960 + 2 + 256 + 3`), and it was the
+    // FIFTH such copy. Raising `toks.chunks` from 256 to 1024 moved every field after
+    // the chunk table by 768 slots and left this file seeding the keyword and type ids
+    // inside the chunk array. The three copies in the runtime's own tests failed
+    // sixty-eight tests when that happened. **This one failed nothing**, and not
+    // because the package is untested -- `compiler/tests/` holds 86 tests. None reaches
+    // `run_parse_pipeline`, which `main` alone calls, so its constants are compiled but
+    // never executed by the continuous-integration job. Arithmetic compiles clean
+    // whatever it says.
+    //
+    // A guard that walks the tree for restatements now covers this directory too. Its
+    // first version walked only the runtime's `src/` and `tests/`, which is how a live
+    // instance survived a check written specifically to prevent it.
+    const P_LEN: usize = keleusma::selfhost_host::BR_P_LEN;
+    const P_PACKED: usize = keleusma::selfhost_host::BR_P_PACKED;
+    const P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+    const P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+    const P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+    const P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+    const P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+    const P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+    const P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
+
+    let input = std::fs::read(path).unwrap_or_else(|e| {
+        eprintln!("cannot read {path}: {e}");
+        std::process::exit(1);
+    });
+    if input.len() > keleusma::selfhost_host::LEX_SOURCE_CAP {
+        eprintln!(
+            "input is {} bytes; the lexer source capacity is {}",
+            input.len(),
+            keleusma::selfhost_host::LEX_SOURCE_CAP
+        );
+        std::process::exit(1);
+    }
+
+    // Stage 1: lex the source and recover the interned-name table.
+    let lexer_src = read_stage("kel/lexer.kel");
+    let lexer = compile_stage(&lexer_src, "lexer.kel", false);
+    let need = required_persistent_capacity_for(&lexer);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut lvm = Vm::new(lexer, &arena).expect("verify lexer.kel");
+    let mut lshared = vec![0u8; lvm.shared_data_bytes()];
+    lvm.set_shared(&mut lshared, 0, Value::Int(input.len() as i64))
+        .expect("len");
+    for (i, &b) in input.iter().enumerate() {
+        lvm.set_shared(&mut lshared, 1 + i, Value::Byte(b))
+            .expect("byte");
+    }
+    let read_word = |vm: &Vm, buf: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(buf, slot).expect("get_shared") {
+            Value::Int(n) => n,
+            other => panic!("expected Int at slot {slot}, got {other:?}"),
+        }
+    };
+    let mut tokens: Vec<(i64, i64)> = Vec::new();
+    let mut st = lvm
+        .call_with_shared(&mut lshared, &[Value::Int(0)])
+        .expect("call lexer");
+    for _ in 0..(input.len() * 4 + 16) {
+        if let VmState::Yielded(Value::Int(t)) = st {
+            if t == 63 {
+                // PENDING
+            } else if t == 62 {
+                break; // EOF
+            } else {
+                if t.rem_euclid(256) == 66 {
+                    eprintln!("invalid integer literal near byte {}", t.div_euclid(256));
+                    std::process::exit(1);
+                }
+                tokens.push((t.rem_euclid(256), t.div_euclid(256)));
+            }
+        }
+        st = lvm
+            .resume_with_shared(&mut lshared, Value::Int(0))
+            .expect("resume lexer");
+    }
+    let icount = read_word(&lvm, &lshared, LEX_ICOUNT) as usize;
+    let mut names: Vec<String> = Vec::with_capacity(icount);
+    for id in 0..icount {
+        let start = read_word(&lvm, &lshared, LEX_ISTART + id) as usize;
+        let len = read_word(&lvm, &lshared, LEX_ILEN + id) as usize;
+        names.push(String::from_utf8_lossy(&input[start..start + len]).into_owned());
+    }
+    if tokens.len() > keleusma::selfhost_host::PARSE_TOKEN_CAP {
+        eprintln!(
+            "{} tokens; the parser stage caps input at {}",
+            tokens.len(),
+            keleusma::selfhost_host::PARSE_TOKEN_CAP
+        );
+        std::process::exit(1);
+    }
+
+    // Recover the parser's non-token inputs from the lexer's output.
+    let id_of = |s: &str| names.iter().position(|n| n == s).map(|i| i as i64);
+    let limit_id = id_of("limit").unwrap_or(-1);
+    let require_id = id_of("require").unwrap_or(-1);
+    let word_id = id_of("Word").unwrap_or(-1);
+    let byte_id = id_of("Byte").unwrap_or(-1);
+    let bool_id = id_of("Bool").unwrap_or(-1);
+    let chunks = chunk_ids_from_tokens(&tokens);
+
+    // Stage 2: drive the parser with the lexer-recovered inputs.
+    let parse_src = read_stage("kel/parse.kel");
+    let parser = compile_stage(&parse_src, "parse.kel", true);
+    let need = required_persistent_capacity_for(&parser);
+    let mut parena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    parena.resize_persistent(need).expect("resize");
+    let mut pvm = Vm::new(parser, &parena).expect("verify parse.kel");
+    let mut pshared = vec![0u8; pvm.shared_data_bytes()];
+    for id in 0..icount {
+        let value = read_word(&lvm, &lshared, keleusma::selfhost_host::BR_LEX_VALUES + id);
+        pvm.set_shared(
+            &mut pshared,
+            keleusma::selfhost_host::BR_P_VALUES + id,
+            Value::Int(value),
+        )
+        .expect("literal value");
+    }
+    pvm.set_shared(&mut pshared, P_LEN, Value::Int(tokens.len() as i64))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_LIMIT_ID, Value::Int(limit_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_REQUIRE_ID, Value::Int(require_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_WORD_ID, Value::Int(word_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_BYTE_ID, Value::Int(byte_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_BOOL_ID, Value::Int(bool_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_CHUNK_COUNT, Value::Int(chunks.len() as i64))
+        .unwrap();
+    for (i, &c) in chunks.iter().enumerate() {
+        pvm.set_shared(&mut pshared, P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        pvm.set_shared(&mut pshared, P_PACKED + i, Value::Int(k + v * 256))
+            .unwrap();
+    }
+
+    println!(
+        "parsing {path} ({} bytes, {} tokens, {} identifiers):",
+        input.len(),
+        tokens.len(),
+        names.len()
+    );
+    let name_of = |id: i64| -> String {
+        usize::try_from(id)
+            .ok()
+            .and_then(|i| names.get(i))
+            .cloned()
+            .unwrap_or_else(|| format!("#{id}"))
+    };
+
+    // Decode the record stream and print one line per declaration.
+    let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
+    let mut in_guard = false;
+    let (mut cat, mut nm, mut params, mut body) = (0i64, 0i64, 0i64, 0i64);
+    let (mut nfuncs, mut ndata, mut nenum, mut nuse) = (0, 0, 0, 0);
+    let state = pvm
+        .call_with_shared(&mut pshared, &[Value::Int(0)])
+        .expect("call parser");
+    let budget = tokens.len() * 4 + 64;
+    keleusma::selfhost_host::drive_parse_records(
+        &mut pvm,
+        &mut pshared,
+        state,
+        budget,
+        |code, val| {
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    _ => body += 1,
+                }
+            } else if in_guard {
+                if code == 15 {
+                    in_guard = false; // the `when` guard forest's Done
+                }
+            } else if in_data {
+                if code == 5 {
+                    in_data = false;
+                }
+            } else if in_enum {
+                if code == 5 {
+                    in_enum = false;
+                }
+            } else if in_use {
+                if code == 5 {
+                    in_use = false;
+                }
+            } else {
+                match code {
+                    0 => {}
+                    1..=3 => {
+                        cat = code;
+                        nm = val;
+                        params = 0;
+                        body = 0;
+                    }
+                    4 => params += 1,
+                    6..=8 => {}
+                    9 => {
+                        in_data = true;
+                        ndata += 1;
+                    }
+                    10 => {
+                        in_use = true;
+                        nuse += 1;
+                    }
+                    12 => {
+                        in_enum = true;
+                        nenum += 1;
+                    }
+                    16 => in_body = true,
+                    17 => in_guard = true, // GSTART: a `when` guard forest, skipped in the summary
+                    5 => {
+                        let kw = match cat {
+                            1 => "fn",
+                            2 => "yield",
+                            _ => "loop",
+                        };
+                        nfuncs += 1;
+                        println!(
+                            "  {kw:<6} {:<20} params {params}  body {body} nodes",
+                            name_of(nm)
+                        );
+                    }
+                    15 => {
+                        println!(
+                            "{nfuncs} functions, {ndata} data blocks, {nenum} enums, {nuse} use imports"
+                        );
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    other => {
+                        eprintln!("unexpected declaration record {other}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+}
+
+/// The chunk table the parser needs: function-name ids in declaration order, from a
+/// brace-depth scan of the token stream for a category keyword (fn 0, yield 5,
+/// loop 6) at depth 0 immediately followed by an Ident (Tok 1).
+fn chunk_ids_from_tokens(tokens: &[(i64, i64)]) -> Vec<i64> {
+    let mut chunks = Vec::new();
+    let mut depth = 0i64;
+    for w in tokens.windows(2) {
+        match w[0].0 {
+            2 => depth += 1,
+            3 => depth -= 1,
+            0 | 5 | 6 if depth == 0 && w[1].0 == 1 => chunks.push(w[1].1),
+            _ => {}
+        }
+    }
+    chunks
+}
+
+/// Read a pipeline-stage source by basename, resolving the two ownership families from
+/// either the subproject directory or the workspace root.
+///
+/// The four pipeline stages moved into the parent crate at `src/selfhost/kel/`; the
+/// subproject-only sources stay in `compiler/kel/`. `rel` is a `kel/<name>.kel` path;
+/// only its basename is significant.
+fn read_stage(rel: &str) -> String {
+    // The ten Rust-read stage sources now live canonically in the parent `keleusma`
+    // crate at `src/selfhost/kel/`; `prelude.kel` (not read here) stays in
+    // `compiler/kel/`. Resolve from either the workspace root or the subproject
+    // directory (`../`). `rel` is a `kel/<name>.kel` path; only the basename matters.
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let candidates = [
+        format!("src/selfhost/kel/{base}"),
+        format!("../src/selfhost/kel/{base}"),
+        format!("compiler/kel/{base}"),
+        format!("kel/{base}"),
+        rel.to_string(),
+    ];
+    for cand in &candidates {
+        if let Ok(s) = std::fs::read_to_string(cand) {
+            return s;
+        }
+    }
+    eprintln!("cannot read stage `{rel}` (tried {candidates:?})");
+    std::process::exit(1);
+}
+
+/// Compile a stage source to a module, on a wide-stack thread when `deep` (the
+/// parser stage's nesting overflows the default stack in the host's recursive parse).
+fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Module {
+    let build = |src: String, name: String| {
+        keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(&src).expect("lex stage"))
+                .expect("parse stage"),
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("cannot compile {name}: {e:?}");
+            std::process::exit(1);
+        })
+    };
+    if deep {
+        let (src, name) = (src.to_string(), name.to_string());
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || build(src, name))
+            .expect("spawn")
+            .join()
+            .expect("join")
+    } else {
+        build(src.to_string(), name.to_string())
+    }
+}
+
+/// Run the whole self-hosted pipeline over `path` and report the emitted module.
+///
+/// Drives the four Keleusma stages (`kel/lexer.kel`, `kel/parse.kel`,
+/// `kel/reconstruct.kel`, `kel/codegen.kel`) through the shared
+/// `keleusma_selfhost::selfhost` library to emit each chunk's ops, splicing them into
+/// a module whose scaffold (data layout, enum-layout table, chunk signatures, schema
+/// hash, and declared WCET/WCMU header) is itself assembled from the pipeline output --
+/// parse.kel's record stream and analyze.kel's per-chunk verdict -- rather than borrowed
+/// entirely from the pipeline output, with no reference borrow of the user program (`self_host_compile_scratch`). It then verifies the module loads and
+/// reports whether its ops, constant pool, and local-frame sizes are byte-identical to
+/// the reference compiler's -- the fixed-point property for this source. When `out` is
+/// set, the assembled bytecode is written there. See `MILESTONES.md`.
+fn run_compile_pipeline(path: &str, out: Option<&str>) {
+    use keleusma::Arena;
+    use keleusma::bytecode::BlockType;
+    use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
+    use keleusma_selfhost::selfhost::{
+        analyze_stream_chunk, compile_src, self_host_compile_scratch, validate_module_via_kel,
+    };
+
+    let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("cannot read {path}: {e}");
+        std::process::exit(1);
+    });
+    let module = self_host_compile_scratch(&src);
+    let reference = compile_src(&src);
+
+    // Report byte-identity chunk by chunk.
+    let mut mismatched = 0usize;
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        if m.ops != r.ops || m.constants != r.constants || m.local_count != r.local_count {
+            mismatched += 1;
+            eprintln!("  chunk `{}` differs from the reference", r.name);
+        }
+    }
+
+    // Serialize the bytecode before the VM consumes the module, when requested.
+    let total_ops: usize = module.chunks.iter().map(|c| c.ops.len()).sum();
+    let bytes = if out.is_some() {
+        Some(module.to_bytes().unwrap_or_else(|e| {
+            eprintln!("cannot serialize the compiled module: {e:?}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+
+    // Self-hosted resource-bound report: run analyze.kel over each Stream chunk for its
+    // per-iteration WCET and WCMU, then decide the module-level validity via the
+    // transitive self-hosted validator and confirm it agrees with the Rust reference
+    // `verify_resource_bounds`. This is a report only; it does not alter the bytecode.
+    let arena_capacity = DEFAULT_ARENA_CAPACITY as i64;
+    println!("self-hosted resource-bound report (arena capacity {arena_capacity}):");
+    for chunk in &module.chunks {
+        if chunk.block_type != BlockType::Stream {
+            continue;
+        }
+        let (wcet, stack, heap, reject, _valid) = analyze_stream_chunk(chunk);
+        if reject {
+            println!(
+                "  Stream `{}`: no static bound (analyze.kel rejects)",
+                chunk.name
+            );
+        } else {
+            println!(
+                "  Stream `{}`: WCET {wcet}, WCMU {} bytes (stack {stack} + heap {heap})",
+                chunk.name,
+                stack + heap
+            );
+        }
+    }
+    let kel_valid = validate_module_via_kel(&module, arena_capacity);
+    let ref_valid =
+        keleusma::verify::verify_resource_bounds(&module, arena_capacity as usize).is_ok();
+    println!(
+        "  module: self-hosted validator {}; reference verify_resource_bounds {}; {}",
+        if kel_valid { "admits" } else { "rejects" },
+        if ref_valid { "admits" } else { "rejects" },
+        if kel_valid == ref_valid {
+            "agree"
+        } else {
+            "DISAGREE"
+        }
+    );
+
+    // Verify the assembled module loads on the VM.
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    if let Err(e) = Vm::new(module, &arena) {
+        eprintln!("compiled {path} but the module failed to verify: {e:?}");
+        std::process::exit(1);
+    }
+
+    // Write the artifact, if requested.
+    if let (Some(out), Some(bytes)) = (out, bytes.as_ref()) {
+        std::fs::write(out, bytes).unwrap_or_else(|e| {
+            eprintln!("cannot write {out}: {e}");
+            std::process::exit(1);
+        });
+    }
+
+    let status = if mismatched == 0 {
+        "byte-identical to the reference compiler".to_string()
+    } else {
+        format!("{mismatched} chunk(s) differ from the reference")
+    };
+    match out {
+        Some(o) => println!(
+            "compiled {path}: {} chunks, {} ops, {status}; wrote {} bytes to {o}",
+            reference.chunks.len(),
+            total_ops,
+            bytes.as_ref().map_or(0, |b| b.len())
+        ),
+        None => println!(
+            "compiled {path}: {} chunks, {} ops, {status}",
+            reference.chunks.len(),
+            total_ops
+        ),
+    }
+    if mismatched != 0 {
+        std::process::exit(1);
+    }
+}
+
 fn not_yet(cmd: &str, what: &str) {
     eprintln!("`{cmd}` is not yet implemented (scaffolding).");
     eprintln!("when built, it will: {what}.");
@@ -182,7 +800,9 @@ fn help() {
     println!();
     println!("  status          show the pipeline scaffold state (default)");
     println!("  lex <file>      run Stage 1 (the self-hosted lexer) and print tokens");
-    println!("  parse|compile   run a single stage over an input stream (planned)");
+    println!("  parse <file>    run Stages 1+2 (lexer into parser) and print declarations");
+    println!("  compile <file> [-o <out>]  run the pipeline to bytecode, check the fixed point,");
+    println!("                             and optionally write the artifact");
     println!("  bootstrap       cross-compile, self-compile, reach fixed point (planned)");
     println!(
         "  verify-corpus   assert byte-identical output vs the Rust-hosted compiler (planned)"

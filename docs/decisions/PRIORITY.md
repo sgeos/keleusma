@@ -4,6 +4,16 @@
 
 Open decisions that may block near-term development.
 
+## ~~P11. Encoding-space capacity for the self-hosted pipeline~~ (Resolved — merged to v0.2.3)
+
+The self-hosted pipeline's three packed inter-stage encodings (token, record/node-kind, wire-op — all `X + payload*64`, so `X < 64`) were full, and the operator precedence scale was too coarse to match the reference's logical binding powers. The design brief at [`ENCODING_CAPACITY_BRIEF.md`](./ENCODING_CAPACITY_BRIEF.md) laid out the options; the operator's chosen path is implemented and merged to `v0.2.3` (2026-07-24, CI-green), per the plan in [`P11_OPTION_E_PLAN.md`](./P11_OPTION_E_PLAN.md):
+
+- The six-way host-driver duplication was consolidated into one shared `drive_parse_records`, then the **record** stream moved to a two-word `(tag, payload)` transport (its fat payload was at the `i64` ceiling), removing the single-word limit; the fattest record and every split-tag workaround now use native tags/payloads.
+- The **token** and **wire-op** streams were widened to an 8-bit radix (their payloads had headroom, so two-word was unnecessary), giving 0..255 tag space.
+- Precedence **P1**: `prec_of` renumbered to match the reference's binding powers, with `xor` given its own opcode (it lowers to the same `CmpNe` wire op, so output is byte-identical) so it can carry logical-band precedence. The `xor`/`and` faithfulness Gaps are closed.
+
+Every step is byte-identical against the differential-oracle corpus.
+
 ## ~~P1. Type checker implementation~~ (Resolved)
 
 A static type checker is in place at `src/typecheck.rs` and is invoked from `compile`. Type errors are surfaced as `CompileError` before bytecode emission. The parser now represents the unit literal `()` as `Literal::Unit` rather than `Literal::Int(0)`. The compiler emits `Op::PushUnit` for the new variant. The type checker recognizes `Literal::Unit` as `Type::Unit`. Five existing tests that relied on lax behavior were updated to declare the types they reference.

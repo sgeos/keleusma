@@ -20,11 +20,15 @@ use crate::kstring::KString;
 /// A compile-time constant, the variant of [`Value`] that the compiler
 /// emits into the bytecode's constant pool.
 ///
-/// Strict subset of [`Value`]. Only variants that the rkyv archive can
-/// faithfully serialize and deserialize. The runtime-only variant
-/// [`Value::KStr`] is intentionally absent because it is produced
-/// exclusively by native functions and runtime string operations,
-/// never as a compile-time constant.
+/// Strict subset of [`Value`]: only variants the bytecode's constant pool can
+/// faithfully round-trip. The runtime-only variant [`Value::KStr`] is
+/// intentionally absent because it is produced exclusively by native functions
+/// and runtime string operations, never as a compile-time constant.
+///
+/// The subset was originally drawn around what the rkyv archive could serialize.
+/// Wire format v2 replaced that archive, so the constraint now comes from the
+/// schema layer rather than from rkyv; the SET is unchanged, and the reason for
+/// it is restated here because the old one no longer holds.
 ///
 /// The runtime executes against the archived form
 /// [`ArchivedConstValue`]. Each operand-stack push from a constant
@@ -570,8 +574,10 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
 /// `Float` is excluded because the flat body compares by raw bytes,
 /// which would change the `+0.0`/`-0.0` and `NaN` semantics of tuple
 /// equality. References, `None`, and composites are not flat-eligible.
-/// The compiler's `type_flat_scalar_kind` mirrors this on the type
-/// side so construction and baked access agree.
+/// `LayoutDescriptor::flat_scalar_kind`, which the compiler calls when
+/// baking a field access, mirrors this on the TYPE side so construction
+/// and baked access agree. The name cited here was
+/// type_flat_scalar_kind, which has never existed.
 pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Float>(
     v: &GenericValue<W, F>,
 ) -> Option<crate::value_layout::ScalarKind> {
@@ -611,9 +617,22 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     v: &GenericValue<W, F>,
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Option<usize> {
+    // The internal registry-index form of an opaque contributes the width the
+    // LAYOUT gives `ScalarKind::Opaque`, which is the address width, not a
+    // word. The compiler bakes every field offset from that same layout, so
+    // taking the width from it here is what keeps construction and access in
+    // agreement on a target whose word and address widths are selected apart.
+    if matches!(v, GenericValue::OpaqueRef(_)) {
+        return Some(crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+        ));
+    }
     if let Some(kind) = flat_tuple_scalar_kind(v) {
-        return Some(kind.size_in_bytes(word_bytes, float_bytes));
+        return Some(kind.size_in_bytes(word_bytes, float_bytes, addr_bytes));
     }
     // A `StaticStr` is not directly packable (it has no arena `(ptr, len)`
     // handle); the VM construct path converts it to a `KStr` before packing,
@@ -647,6 +666,7 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
     v: &GenericValue<W, F>,
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> bool {
     match v {
         // Both the host `Arc` form and the internal index form are opaque and
@@ -663,7 +683,7 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
         GenericValue::StaticStr(_) | GenericValue::KStr(_) => {
             word_bytes >= core::mem::size_of::<usize>()
         }
-        _ => flat_field_size(v, word_bytes, float_bytes).is_some(),
+        _ => flat_field_size(v, word_bytes, float_bytes, addr_bytes).is_some(),
     }
 }
 
@@ -902,9 +922,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         elements: alloc::vec::Vec<Self>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, addr_bytes, arena)? {
             Some(body) => Ok(Self::Tuple(TupleBody::Flat(body))),
             None => Ok(Self::Tuple(TupleBody::boxed(elements))),
         }
@@ -916,9 +937,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         elements: alloc::vec::Vec<Self>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, addr_bytes, arena)? {
             Some(body) => Ok(Self::Array(ArrayBody::Flat(body))),
             None => Ok(Self::Array(ArrayBody::boxed(elements))),
         }
@@ -933,13 +955,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         fields: alloc::vec::Vec<(alloc::string::String, Self)>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
         let (names, values): (
             alloc::vec::Vec<alloc::string::String>,
             alloc::vec::Vec<Self>,
         ) = fields.into_iter().unzip();
-        match Self::pack_flat_in_arena(&values, 0, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(&values, 0, word_bytes, float_bytes, addr_bytes, arena)? {
             Some(body) => Ok(Self::Struct(StructBody::Flat(body))),
             None => Ok(Self::Struct(StructBody::boxed(
                 type_name,
@@ -972,6 +995,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         fields: alloc::vec::Vec<Self>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
         let disc_value = Self::Int(<W as crate::word::Word>::from_i64_wrap(disc));
@@ -985,7 +1009,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // form was removed). A top-level host enum has `min_payload == 0` and is
         // variant-sized.
         let min_bytes = word_bytes + min_payload;
-        match Self::pack_flat_in_arena(&values, min_bytes, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(
+            &values,
+            min_bytes,
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+            arena,
+        )? {
             Some(body) => Ok(Self::Enum(EnumBody::Flat(body))),
             None => {
                 // Not flat-eligible: rebuild the boxed body, dropping the
@@ -1023,26 +1054,146 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// exactly as [`crate::marshall::KeleusmaType::from_value_ctx`] does (B36);
     /// the cast cannot widen because the loader requires module width at most
     /// runtime width.
+    ///
+    /// # Arena cost
+    ///
+    /// The canonicalisation runs in two passes so that its arena cost is
+    /// bounded by the value's declared flat size, which the worst-case memory
+    /// bound in [`crate::vm::auto_arena_capacity_for`] relies on.
+    ///
+    /// 1. Every owned `StaticStr` composite field, at any depth, is promoted to
+    ///    an arena `KStr` first. These are the only allocations that are not
+    ///    flat bodies, and they stay live.
+    /// 2. The composite is then packed bottom-up. A nested child is packed into
+    ///    its own arena body before its parent copies it, so after a node packs
+    ///    flat every body allocated beneath it is dead. The node's body is then
+    ///    moved up over that dead space and the top head is rewound
+    ///    ([`crate::flat_value::FlatComposite::compact_after`]), so a flat value
+    ///    holds exactly its own body length, whatever its nesting depth.
+    ///
+    /// The arena top region uses one-byte alignment and no per-allocation
+    /// header, so a body of `n` bytes consumes exactly `n` bytes. While a node
+    /// is being packed its children and its own body coexist, so the transient
+    /// peak of one value is at most twice its flat size before the compaction
+    /// returns it to its flat size. Without the compaction, the dead child
+    /// bodies stayed until the next `Reset`, and their total grew with the
+    /// nesting depth, which the module does not record.
     pub fn into_arena_canonical(
+        mut self,
+        word_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        if !matches!(
+            self,
+            Self::Tuple(TupleBody::Boxed(_))
+                | Self::Array(ArrayBody::Boxed(_))
+                | Self::Struct(StructBody::Boxed(_))
+                | Self::Enum(EnumBody::Boxed(_))
+        ) {
+            return Ok(self);
+        }
+        self.promote_composite_text(word_bytes, arena)?;
+        self.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena)
+    }
+
+    /// Pack one node of an already text-promoted value, then reclaim the dead
+    /// child bodies beneath it when it packed flat. See
+    /// [`Self::into_arena_canonical`].
+    ///
+    /// The precondition, established by [`Self::promote_composite_text`], is
+    /// that no field reachable by [`Self::pack_canonical_uncompacted`] is an
+    /// owned `StaticStr` that the packer would promote, so the only arena
+    /// allocations made beneath `mark` are flat bodies. A field that breaks the
+    /// precondition is not promoted here, so its parent stays boxed rather than
+    /// having a live string reclaimed.
+    fn pack_canonical_node(
         self,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        let mark = arena.top_mark();
+        let used_at_mark = arena.top_used();
+        let packed = self.pack_canonical_uncompacted(word_bytes, float_bytes, addr_bytes, arena)?;
+        // SAFETY: every allocation made since `mark` was made by the packing
+        // above. The text pass ran first, and the packer allocates nothing but
+        // flat bodies, so those allocations are this node's body and the bodies
+        // of its descendants. A node that packed flat copied each descendant's
+        // bytes into its own body, and the descendants' handles were consumed
+        // by the packer, so the node's body is the only live reference into
+        // that range. A node that stayed boxed is returned unchanged, because
+        // its flat children are still referenced from its boxed body.
+        Ok(match packed {
+            Self::Tuple(TupleBody::Flat(b)) => Self::Tuple(TupleBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            Self::Array(ArrayBody::Flat(b)) => Self::Array(ArrayBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            Self::Struct(StructBody::Flat(b)) => Self::Struct(StructBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            Self::Enum(EnumBody::Flat(b)) => Self::Enum(EnumBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            other => other,
+        })
+    }
+
+    /// Promote, in place, every owned `StaticStr` field of a boxed composite,
+    /// at any depth, through [`Self::promote_field_text`]. A value that is not
+    /// a boxed composite is left unchanged. The recursion follows exactly the
+    /// variants [`Self::pack_canonical_uncompacted`] recurses into.
+    fn promote_composite_text(
+        &mut self,
+        word_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<(), allocator_api2::alloc::AllocError> {
+        match self {
+            Self::Tuple(TupleBody::Boxed(elems)) | Self::Array(ArrayBody::Boxed(elems)) => {
+                for v in elems.iter_mut() {
+                    v.promote_field_text(word_bytes, arena)?;
+                }
+            }
+            Self::Struct(StructBody::Boxed(b)) => {
+                for (_, v) in b.fields.iter_mut() {
+                    v.promote_field_text(word_bytes, arena)?;
+                }
+            }
+            Self::Enum(EnumBody::Boxed(b)) => {
+                for v in b.fields.iter_mut() {
+                    v.promote_field_text(word_bytes, arena)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn pack_canonical_uncompacted(
+        self,
+        word_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
         match self {
             Self::Tuple(TupleBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                    .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                Self::tuple_in_arena(elems, word_bytes, float_bytes, arena)
+                Self::tuple_in_arena(elems, word_bytes, float_bytes, addr_bytes, arena)
             }
             Self::Array(ArrayBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                    .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                Self::array_in_arena(elems, word_bytes, float_bytes, arena)
+                Self::array_in_arena(elems, word_bytes, float_bytes, addr_bytes, arena)
             }
             Self::Struct(StructBody::Boxed(b)) => {
                 let BoxedStruct { type_name, fields } = *b;
@@ -1051,11 +1202,18 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|(k, v)| {
                         Ok::<_, allocator_api2::alloc::AllocError>((
                             k,
-                            v.into_arena_canonical_field(word_bytes, float_bytes, arena)?,
+                            v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena)?,
                         ))
                     })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                Self::struct_in_arena(type_name, fields, word_bytes, float_bytes, arena)
+                Self::struct_in_arena(
+                    type_name,
+                    fields,
+                    word_bytes,
+                    float_bytes,
+                    addr_bytes,
+                    arena,
+                )
             }
             Self::Enum(EnumBody::Boxed(b)) => {
                 let BoxedEnum {
@@ -1083,7 +1241,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 if type_name == "Option" {
                     let fields = fields
                         .into_iter()
-                        .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                        .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                         .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                     return Self::enum_in_arena(
                         type_name,
@@ -1093,12 +1251,13 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                         fields,
                         word_bytes,
                         float_bytes,
+                        addr_bytes,
                         arena,
                     );
                 }
                 let fields = fields
                     .into_iter()
-                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                    .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::enum_in_arena(
                     type_name,
@@ -1108,6 +1267,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     fields,
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                     arena,
                 )
             }
@@ -1115,11 +1275,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
-    /// Canonicalise a composite *field* for flat packing (B28, B37).
+    /// Prepare a composite *field* for flat packing (B28, B37).
     ///
-    /// First canonicalises the field through [`Self::into_arena_canonical`]
-    /// (flattening a nested composite), then promotes an owned `StaticStr`
-    /// to an arena `KStr`. The promotion is what lets a text-bearing
+    /// First promotes the text fields of a nested boxed composite, then
+    /// promotes the field itself when it is an owned `StaticStr`, replacing it
+    /// with an arena `KStr`. The promotion is what lets a text-bearing
     /// composite pack flat: the compiler classifies a `Text` field as a flat
     /// `(ptr, len)` when the module word slot holds a host pointer
     /// (`classify_flat_field`), and the value-side packer
@@ -1143,19 +1303,25 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// matching that access. Without the gate the field would promote to a
     /// `KStr` and the composite would pack flat against a boxed access,
     /// reintroducing the very mismatch this repair removes, on narrow targets.
-    fn into_arena_canonical_field(
-        self,
+    ///
+    /// The promotion runs as the first pass of [`Self::into_arena_canonical`],
+    /// before any body is packed, so the string bytes are allocated below no
+    /// packed body and survive the compaction of the second pass. Its arena
+    /// cost is the string's byte length, which depends on the host's string
+    /// and cannot be bounded from the module.
+    fn promote_field_text(
+        &mut self,
         word_bytes: usize,
-        float_bytes: usize,
         arena: &keleusma_arena::Arena,
-    ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match self.into_arena_canonical(word_bytes, float_bytes, arena)? {
-            Self::StaticStr(s) if word_bytes >= core::mem::size_of::<usize>() => {
-                let ks = crate::kstring::KString::alloc(arena, &s)?;
-                Ok(Self::KStr(ks))
-            }
-            other => Ok(other),
+    ) -> Result<(), allocator_api2::alloc::AllocError> {
+        self.promote_composite_text(word_bytes, arena)?;
+        if word_bytes >= core::mem::size_of::<usize>()
+            && let Self::StaticStr(s) = self
+        {
+            let ks = crate::kstring::KString::alloc(arena, s)?;
+            *self = Self::KStr(ks);
         }
+        Ok(())
     }
 
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
@@ -1359,6 +1525,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         min_bytes: usize,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Option<crate::flat_value::FlatComposite>, allocator_api2::alloc::AllocError> {
         // Size and eligibility first, with no allocation: `flat_field_size`
@@ -1367,7 +1534,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // un-materialised arena children the VM packs here.
         let mut size = 0usize;
         for v in values {
-            match flat_field_size(v, word_bytes, float_bytes) {
+            match flat_field_size(v, word_bytes, float_bytes, addr_bytes) {
                 Some(n) => size += n,
                 None => return Ok(None),
             }
@@ -1381,8 +1548,28 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         crate::flat_value::FlatComposite::build_in_arena(arena, size, |dst| {
             let mut off = 0usize;
             for v in values {
-                if let Some(kind) = flat_tuple_scalar_kind(v) {
-                    let field = kind.size_in_bytes(word_bytes, float_bytes);
+                // An opaque field holds the ephemeral registry index, written
+                // at the width the layout gives `ScalarKind::Opaque` (the
+                // address width). An index too large for that field aborts the
+                // pack rather than truncating: the caller then boxes the
+                // composite, which is correct but slower, where a truncated
+                // index would silently name the wrong host object.
+                if let GenericValue::OpaqueRef(index) = v {
+                    let field = crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+                        word_bytes,
+                        float_bytes,
+                        addr_bytes,
+                    );
+                    let le = u64::from(*index).to_le_bytes();
+                    if field > le.len() || le[field..].iter().any(|&b| b != 0) {
+                        return Err(());
+                    }
+                    dst.get_mut(off..off + field)
+                        .ok_or(())?
+                        .copy_from_slice(&le[..field]);
+                    off += field;
+                } else if let Some(kind) = flat_tuple_scalar_kind(v) {
+                    let field = kind.size_in_bytes(word_bytes, float_bytes, addr_bytes);
                     v.write_scalar_le(dst, off, word_bytes, float_bytes)
                         .map_err(|_| ())?;
                     off += field;
@@ -1642,15 +1829,15 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// when the runtime's word or float width is narrower than
     /// the bytecode's; programs whose constants do not fit are
     /// rejected at load time by the bytecode-header width check.
-    /// Materialize a **scalar** constant into a runtime value. Used to
-    /// initialize private data slots at load, the `.data`-section model:
-    /// the compiler bakes one scalar [`ConstValue`] per zero-initializable
-    /// private slot (its `= literal` initializer or the type's zero) and the
-    /// VM writes it through this. Composite variants are never baked into a
-    /// private slot (they retain write-before-read) and map to `Unit`, so this
-    /// never allocates or touches the arena. A `StaticStr` clones its bytes
-    /// onto the global heap rather than resting on rodata; private data does
-    /// not currently zero-initialize `Text`, so this arm is defensive only.
+    /// Materialize a **scalar** constant into a runtime value. Composite
+    /// variants map to `Unit`, so this never allocates or touches the arena.
+    /// A `StaticStr` clones its bytes onto the global heap rather than resting
+    /// on rodata.
+    ///
+    /// The virtual machine no longer initializes private data slots through
+    /// this. A private slot's initializer may now be a composite zero, which
+    /// [`Self::from_const`] materializes at the module's widths and the
+    /// virtual machine then moves into the persistent composite pool.
     pub fn scalar_from_const(c: &ConstValue) -> Self {
         match c {
             ConstValue::Unit => Self::Unit,
@@ -1664,6 +1851,87 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             // Composite constants are never baked into a private slot; the slot
             // keeps the write-before-read contract and initializes to `Unit`.
             _ => Self::Unit,
+        }
+    }
+
+    /// Lift an owned [`ConstValue`] into a runtime value at the module's
+    /// declared scalar widths.
+    ///
+    /// The v2 counterpart of [`Self::from_const_archived`]. Wire format v2
+    /// carries no rkyv archive, so a constant that is not served by the pooled
+    /// template cache is decoded from the schema into a `ConstValue` and lifted
+    /// here.
+    ///
+    /// Kept structurally identical to the archived version — same flat-or-boxed
+    /// choices, same discriminant handling — because the two must materialise a
+    /// given constant identically. A divergence would show up as a constant that
+    /// compares unequal to a runtime-built value of the same shape, which the
+    /// baked flat access would then read wrongly.
+    pub fn from_const(c: &ConstValue, word_bytes: usize, float_bytes: usize) -> Self {
+        match c {
+            ConstValue::Unit => Self::Unit,
+            ConstValue::Bool(b) => Self::Bool(*b),
+            ConstValue::Int(i) => Self::Int(W::from_i64_wrap(*i)),
+            ConstValue::Byte(b) => Self::Byte(*b),
+            ConstValue::Fixed(i) => Self::Fixed(W::from_i64_wrap(*i)),
+            #[cfg(feature = "floats")]
+            ConstValue::Float(f) => Self::Float(F::from_f64(*f)),
+            ConstValue::StaticStr(s) => Self::StaticStr(s.clone()),
+            ConstValue::Tuple(items) => Self::tuple_with_widths(
+                items
+                    .iter()
+                    .map(|c| Self::from_const(c, word_bytes, float_bytes))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ConstValue::Array(items) => Self::array_with_widths(
+                items
+                    .iter()
+                    .map(|c| Self::from_const(c, word_bytes, float_bytes))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ConstValue::Struct { type_name, fields } => Self::struct_with_widths(
+                type_name.clone(),
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::from_const(v, word_bytes, float_bytes)))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ConstValue::Enum {
+                type_name,
+                variant,
+                discriminant,
+                fields,
+            } => {
+                let materialised: alloc::vec::Vec<Self> = fields
+                    .iter()
+                    .map(|c| Self::from_const(c, word_bytes, float_bytes))
+                    .collect();
+                match discriminant {
+                    Some(disc) => Self::enum_with_widths(
+                        type_name.clone(),
+                        variant.clone(),
+                        *disc,
+                        materialised,
+                        // Constants carry no per-type padding hint; see the
+                        // archived version for why zero is correct here.
+                        0,
+                        word_bytes,
+                        float_bytes,
+                    ),
+                    None => Self::Enum(EnumBody::boxed(
+                        type_name.clone(),
+                        variant.clone(),
+                        materialised,
+                    )),
+                }
+            }
+            ConstValue::None => Self::None,
         }
     }
 
@@ -1812,6 +2080,19 @@ pub enum TrapKind {
     /// only by debug builds (B29); release builds compile the assert
     /// out entirely.
     AssertionFailed,
+    /// A `for ... limit` loop reached its compile-time iteration cap
+    /// before its range was exhausted, and no `limit` outcome arm
+    /// handled the overrun. Fail-loud by default, consistent with the
+    /// other capture constructs whose unhandled defensive outcome traps.
+    LoopLimitExceeded,
+    /// Explicit indexed-bounds failure. Pops the index and four Word byte limbs
+    /// encoding an unsigned 32-bit exclusive bound, lowest limb first on stack.
+    IndexOutOfBounds,
+    /// A native call reported a soft host failure that no `host_error` arm
+    /// handled. Pops the `Word` error code the reified call pushed. The
+    /// virtual machine surfaces the host's own error, the same error an
+    /// unreified call propagated before every native call was reified.
+    HostError,
 }
 
 impl TrapKind {
@@ -1825,6 +2106,9 @@ impl TrapKind {
             TrapKind::EnumVariantUnmapped => 4,
             TrapKind::ZeroDivisor => 5,
             TrapKind::AssertionFailed => 6,
+            TrapKind::LoopLimitExceeded => 7,
+            TrapKind::IndexOutOfBounds => 8,
+            TrapKind::HostError => 9,
         }
     }
 
@@ -1840,6 +2124,9 @@ impl TrapKind {
             4 => Some(TrapKind::EnumVariantUnmapped),
             5 => Some(TrapKind::ZeroDivisor),
             6 => Some(TrapKind::AssertionFailed),
+            7 => Some(TrapKind::LoopLimitExceeded),
+            8 => Some(TrapKind::IndexOutOfBounds),
+            9 => Some(TrapKind::HostError),
             _ => None,
         }
     }
@@ -1996,6 +2283,24 @@ pub enum ArrayElem {
     Boxed,
 }
 
+impl ArrayElem {
+    /// Whether this operand uses the total read contract, which pushes the
+    /// element or a placeholder followed by the diagnostic suffix and flag.
+    /// Flat Word and Byte reads joined it first. Nested composite and boxed
+    /// reads joined it on 2026-10-24, so that a composite read without a
+    /// handler reaches the explicit bounds trap. Other flat scalar kinds keep
+    /// the faulting contract and remain outside the first-pass proof.
+    pub const fn has_bounds_outcome(self) -> bool {
+        matches!(
+            self,
+            Self::Flat {
+                kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte
+            } | Self::FlatNested { .. }
+                | Self::Boxed
+        )
+    }
+}
+
 /// Baked operand of [`Op::NewComposite`] (B28 P4).
 ///
 /// One operand for all four composite kinds. The `Flat` form carries the
@@ -2075,8 +2380,11 @@ pub enum Op {
     /// Pop and store to local variable slot.
     SetLocal(u16),
 
-    /// Push data segment slot value onto stack.
-    GetData(u16),
+    /// Push data segment slot value onto stack. The slot index is carried in
+    /// twenty-four bits on the wire (`u32` in memory, validated `< 1 << 24` at
+    /// compile and load), so the unified data-slot space is bounded to 16 M
+    /// slots rather than 64 K.
+    GetData(u32),
     /// Pop a value and store it into a data-segment slot. The runtime dispatches
     /// on the value. A scalar is stored inline in the slot. A private slot whose
     /// value is a flat composite copies its body into the persistent composite
@@ -2085,44 +2393,68 @@ pub enum Op {
     /// place (B28 P3 item 5, item 3a), so the body lives at a static,
     /// inspectable `.data`-style address rather than on the global heap. The
     /// pool offset comes from that module table rather than a baked operand, so
-    /// no dedicated composite-write opcode is required.
-    SetData(u16),
+    /// no dedicated composite-write opcode is required. The slot index is a
+    /// twenty-four-bit wire operand (`u32` in memory), as for [`Op::GetData`].
+    SetData(u32),
 
-    /// Indexed read from a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops a `Value::Int` index from the operand
-    /// stack, checks `0 <= index < total`, traps if the index is out
-    /// of range, and pushes `data[base + index]`. Used by the compiler
-    /// for `state.field[i]` reads when `state.field` is an array-typed
-    /// data field.
-    GetDataIndexed(u16, u16),
-    /// Indexed write to a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops the `Value::Int` index, then pops the
-    /// new value, checks `0 <= index < total`, traps if out of range,
-    /// and stores `data[base + index] = value`.
-    SetDataIndexed(u16, u16),
-    /// Bounds check against the value on top of the operand stack
-    /// without modifying the stack. The immediate is the exclusive
-    /// upper bound. Traps when the top is not a `Value::Int`, when
-    /// the value is negative, or when the value is greater than or
-    /// equal to the bound. Used by the compiler to validate each
-    /// level of a multi-dimensional `state.field[i][j]...` access
-    /// before the per-level stride arithmetic computes the flat
-    /// offset.
+    /// Total indexed read. Pop a Word/Byte/Unit fallback and then a Word
+    /// index. Read the selected slot only in range, otherwise use fallback.
+    /// Push value, index, four Word bound limbs, and flag zero for a read or
+    /// one for fallback. Invalid spans and type/storage contract failures
+    /// remain errors. Base and length retain their u24 wire encoding.
+    GetDataIndexed(u32, u32),
+    /// Total indexed write. Pop value and Word index, write only when the
+    /// index is in range, then push index, four Word byte limbs of the bound,
+    /// and flag zero for success or one for an invalid index. Invalid indices
+    /// and empty spans perform no write. Invalid data spans and storage/type
+    /// contract failures remain errors. Both operands use u24 wire encoding.
+    SetDataIndexed(u32, u32),
+    /// Total bounds predicate. Preserve the Word index and append four Word
+    /// byte limbs of the unsigned bound, then flag zero for in-range or one
+    /// for out-of-range. The limbs are little-endian and sign-extended from
+    /// eight bits, preserving diagnostics on every supported Word width.
+    /// Empty stacks and non-Word indices remain contract failures. Bare
+    /// source lowering dispatches an invalid outcome to an explicit Trap.
     BoundsCheck(u16),
 
-    /// Binary addition.
+    /// Binary addition on `Byte`, `Fixed`, and `Float` operands.
+    ///
+    /// **THE NAME IS WIDER THAN THE OPCODE.** Consolidation B narrowed this
+    /// away from `Int`: the compiler emits `CheckedAdd; PopN(2)` for every
+    /// `Word` expression, and the virtual machine raises a type error if an
+    /// `Int` reaches here, so an `Int` operand is not merely unemitted but
+    /// inadmissible. Stated because a backend or an alternative runtime that
+    /// implements this opcode from its name alone writes an `Int` path no
+    /// compiler output ever reaches, and the `v0.3.0` line planned an
+    /// increment around exactly that before measuring it.
+    ///
+    /// **THE NARROWING IS NOT UNIFORM ACROSS THE ARITHMETIC FAMILY**, which is
+    /// the part that misleads: [`Op::Div`] and [`Op::Mod`] still take `Int`
+    /// operands and are dispatched on them. Only `Add`, `Sub`, `Mul`, and
+    /// [`Op::Neg`] were narrowed.
     Add,
-    /// Binary subtraction.
+    /// Binary subtraction on `Byte`, `Fixed`, and `Float` operands.
+    ///
+    /// Narrowed away from `Int` by Consolidation B; see [`Op::Add`] for the
+    /// reasoning and for why `Div` and `Mod` were not narrowed with it.
     Sub,
-    /// Binary multiplication.
+    /// Binary multiplication on `Byte` and `Float` operands.
+    ///
+    /// Narrowed away from `Int` by Consolidation B; see [`Op::Add`]. `Fixed`
+    /// multiplication goes through [`Op::FixedMul`] rather than this opcode,
+    /// so this one is narrower still than `Add` and `Sub`.
     Mul,
-    /// Binary division.
+    /// Total division with the same low, high and flag results as CheckedDiv(0).
+    /// A zero integer divisor returns the numerator, typed zero and Word flag 3.
     Div,
-    /// Binary modulo.
+    /// Total remainder with low, high and Word flag results. Integer and Fixed
+    /// operands use CheckedMod outcomes. Float operands retain their remainder
+    /// with a zero high result and floating-point classification flag.
     Mod,
-    /// Unary negation.
+    /// Unary negation on `Byte`, `Fixed`, and `Float` operands.
+    ///
+    /// Narrowed away from `Int` by Consolidation B: the compiler emits
+    /// `CheckedNeg; PopN(2)` for `-Word`. See [`Op::Add`].
     Neg,
 
     /// Equality comparison.
@@ -2201,6 +2533,9 @@ pub enum Op {
     /// Pop index (Int), pop array, push element. The baked
     /// [`ArrayElem`] operand selects a flat read at `index * size` or a
     /// positional index into the boxed body (B28 P2).
+    /// Flat Word and Byte forms push the value followed by the six-Word
+    /// bounds outcome suffix. Invalid indices yield zero of the same kind.
+    /// Other operand forms retain the single-result contract.
     GetIndex(ArrayElem),
     /// Pop tuple, push element. The baked [`TupleField`] operand
     /// selects a flat read at an offset or a positional index into the
@@ -2250,9 +2585,14 @@ pub enum Op {
     FixedMul(u8),
     /// Divide two `Fixed` operands sharing the given fraction-bit
     /// count. Pops two `Value::Fixed`, computes
-    /// `(a as i128 << frac_bits) / b as i128`, pushes
-    /// `Value::Fixed`. Saturates at `i64::MAX`/`MIN`. Returns
-    /// `VmError::DivisionByZero` for `b == 0`.
+    /// `(a as i128 << frac_bits) / b as i128`, and pushes the outcome
+    /// triple `(low, high, flag)` of a Fixed `Mod`. The low slot is the
+    /// quotient, saturated at the word's maximum or minimum, the high slot
+    /// is `Fixed(0)`, and the flag is `0`, saturated or not. A zero divisor
+    /// pushes the numerator, `Fixed(0)` and flag `3`, and does not fault.
+    /// Until 2026-10-22 it pushed one `Value::Fixed` and returned
+    /// `VmError::DivisionByZero` for `b == 0`, which the operator's
+    /// 2026-10-20 ruling that only `Trap` traps retired.
     FixedDiv(u8),
 
     /// Halt execution with a runtime error.
@@ -2260,17 +2600,33 @@ pub enum Op {
 
     /// Overflow-checked Word addition. Pops two `Value::Int`
     /// operands, computes the true sum in `i128`, and pushes three
-    /// slots: the high 64 bits as `Value::Int`, the low 64 bits as
-    /// `Value::Int`, and an outcome flag `Value::Int(0)` (ok),
-    /// `Value::Int(1)` (overflow), or `Value::Int(2)` (underflow).
+    /// slots in this order: the **low** 64 bits as `Value::Int`, the
+    /// **high** 64 bits as `Value::Int`, and an outcome flag
+    /// `Value::Int(0)` (ok), `Value::Int(1)` (overflow), or
+    /// `Value::Int(2)` (underflow). The flag therefore ends up on
+    /// top and the low word at the bottom of the three.
+    ///
+    /// **The order is load-bearing, not arbitrary.** An uncaptured
+    /// `a + b` lowers to this op followed by `PopN(2)`, which
+    /// discards the top two slots (flag and high) and leaves the low
+    /// word as the expression's value. Reversing low and high would
+    /// silently make every unchecked addition evaluate to the high
+    /// word, which is zero for ordinary sums and so would look
+    /// correct until the first result that overflows one word.
+    ///
     /// The compiler stashes all three into temporary locals at the
     /// dispatch site. The construct's surface form is `expr {
     /// ok(v) => ..., overflow(h, l) => ..., underflow(h, l) =>
     /// ... }`.
+    ///
+    /// This comment previously documented the order as high, low,
+    /// flag, contradicting the implementation at
+    /// `vm.rs` (`Op::CheckedAdd`). The implementation was correct.
     CheckedAdd,
     /// Overflow-checked Word subtraction. Same stack effect as
-    /// `Op::CheckedAdd`. The true difference is computed in `i128`
-    /// and split into high and low halves before the flag.
+    /// `Op::CheckedAdd`, including its push order: the true
+    /// difference is computed in `i128` and pushed low half, then
+    /// high half, then flag.
     CheckedSub,
     /// Overflow-checked multiplication parameterized by a Q-format
     /// fraction-bit count (B35 P3d-iii). The operand is `0` for
@@ -2284,9 +2640,10 @@ pub enum Op {
     /// the high slot is unused. Same stack effect as `CheckedAdd`.
     CheckedMul(u8),
     /// Overflow-checked Word negation. Pops one `Value::Int` and
-    /// pushes three slots in the same shape: high, low, flag. The
-    /// only overflow case is `-i64::MIN`, in which the high half
-    /// is `0` and the low half is `i64::MIN` (the wrapped result).
+    /// pushes three slots in the same shape as `Op::CheckedAdd`:
+    /// low half, then high half, then flag. The only overflow case
+    /// is `-i64::MIN`, in which the high half is `0` and the low
+    /// half is `i64::MIN` (the wrapped result).
     CheckedNeg,
     /// Overflow-checked division parameterized by a Q-format
     /// fraction-bit count (B35 P3d-iii). The operand is `0` for
@@ -2554,6 +2911,10 @@ impl CostModel {
             // The boxed form reports zero flat bytes (its body is the heap
             // `Vec`, accounted separately).
             Op::NewComposite(op) => OpCost::Fixed(op.alloc_bytes()),
+            // An invalid nested-composite index allocates a zero-filled
+            // placeholder of the element's size. The bound charges it on
+            // every execution, since validity is not known statically.
+            Op::GetIndex(ArrayElem::FlatNested { size, .. }) => OpCost::Fixed(u32::from(*size)),
             Op::Add => OpCost::Dynamic(add_text_heap_alloc_bytes),
             _ => OpCost::Fixed(0),
         }
@@ -2603,6 +2964,10 @@ pub const NOMINAL_COST_MODEL: CostModel = CostModel {
 /// pipelined cycles during deployment validation.
 pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
+        Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
+        Op::BoundsCheck(_) => 7,
+        Op::SetDataIndexed(_, _) | Op::GetDataIndexed(_, _) => 8,
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => 8,
         Op::Const(_)
         | Op::GetLocal(_)
         | Op::SetLocal(_)
@@ -2651,12 +3016,11 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::Return
-        | Op::GetDataIndexed(_, _)
-        | Op::SetDataIndexed(_, _)
-        | Op::BoundsCheck(_) => 2,
+        | Op::Return => 2,
 
-        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+        Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+
+        Op::Div | Op::Mod => 5,
 
         Op::NewComposite(_) => 5,
 
@@ -2696,24 +3060,47 @@ impl Op {
         NOMINAL_COST_MODEL.cycles(self)
     }
 
-    /// Number of operand-stack slots pushed by this instruction.
+    /// Transient reach of this instruction ABOVE its starting operand depth.
     ///
-    /// This is the maximum the operand stack can grow during execution of
-    /// this single instruction relative to its starting depth. Used by the
-    /// WCMU analysis to compute peak stack consumption.
+    /// **This is not a push count, and reading it as one is a defect this
+    /// project has already paid for.** Together with [`Op::stack_shrink`] it
+    /// forms exactly one model, the operand-stack PEAK model that the
+    /// worst-case-memory-usage walk consumes:
+    ///
+    /// - `stack_growth` is how far the stack rises above its current depth
+    ///   during the instruction, which is what bounds the peak.
+    /// - `stack_growth - stack_shrink` is the NET, which propagates into the
+    ///   base every later instruction's peak is measured from.
+    ///
+    /// For an instruction that pops and then pushes, neither number is its pop
+    /// or push count. `Op::GetField` pops a composite and pushes a field value,
+    /// so it pushes one and pops one — and its correct entries here are `0` and
+    /// `0`, because it never rises above the slot it popped and its net is zero.
+    ///
+    /// **For true pop and push counts use [`crate::verify::op_depth_effect`]**,
+    /// which returns `(required, delta)`: the instruction pops `required` and
+    /// pushes `required + delta`. `text_size` reads that one; it used to read
+    /// this one and desynchronised its shadow stack on every pop-and-push
+    /// instruction.
     pub fn stack_growth(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 5,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 1,
 
             Op::Not | Op::Neg => 0,
 
             // CheckedAdd / CheckedSub / CheckedMul / CheckedDiv /
-            // CheckedMod pop two operands and push (high, low,
+            // CheckedMod pop two operands and push (low, high,
             // flag); net delta +1. CheckedNeg pops one and pushes
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
-            Op::CheckedAdd
+            // FixedDiv joined them on 2026-10-22, when a zero divisor became
+            // an outcome rather than a fault.
+            Op::Div
+            | Op::Mod
+            | Op::FixedDiv(_)
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedDiv(_)
@@ -2723,8 +3110,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -2734,12 +3119,12 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 0,
 
-            // GetDataIndexed pops one index, pushes one value.
-            Op::GetDataIndexed(_, _) => 1,
-            // SetDataIndexed pops index and value.
-            Op::SetDataIndexed(_, _) => 0,
-            // BoundsCheck does not change the stack.
-            Op::BoundsCheck(_) => 0,
+            // Indexed reads consume two values and produce seven.
+            Op::GetDataIndexed(_, _) => 5,
+            // Indexed writes consume two operands and return six diagnostic Words.
+            Op::SetDataIndexed(_, _) => 4,
+            // Preserve the index and append four diagnostic limbs and a flag.
+            Op::BoundsCheck(_) => 5,
 
             Op::If(_) | Op::BreakIf(_) => 0,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
@@ -2770,7 +3155,7 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
+            Op::FixedMul(_) => 0,
 
             Op::Trap(_) => 0,
 
@@ -2791,9 +3176,18 @@ impl Op {
         }
     }
 
-    /// Number of operand-stack slots popped by this instruction.
+    /// The subtrahend of the operand-stack PEAK model's net.
+    ///
+    /// **Not a pop count.** See [`Op::stack_growth`] for the full contract: the
+    /// pair states a transient reach and a net, and `stack_growth - stack_shrink`
+    /// is the only quantity this value is meaningful in. `Op::CheckedAdd` pops
+    /// two operands and pushes three, and its entry here is `0`, because its net
+    /// is `+1` and `stack_growth` already carries the whole of it.
+    ///
+    /// For true pop counts use [`crate::verify::op_depth_effect`].
     pub fn stack_shrink(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 0,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 0,
 
             Op::Not | Op::Neg => 0,
@@ -2803,7 +3197,10 @@ impl Op {
             // (pop 1, push 3). The growth/shrink split records
             // peak vs. final; shrink is zero because there is no
             // net pop.
-            Op::CheckedAdd
+            Op::Div
+            | Op::Mod
+            | Op::FixedDiv(_)
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedNeg
@@ -2813,8 +3210,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -2824,16 +3219,34 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 1,
 
-            // GetDataIndexed pops the index, SetDataIndexed pops the
-            // index then the value, BoundsCheck does not pop.
-            Op::GetDataIndexed(_, _) => 1,
-            Op::SetDataIndexed(_, _) => 2,
+            // Bounds operations produce at least as many values as they consume.
+            Op::GetDataIndexed(_, _) => 0,
+            Op::SetDataIndexed(_, _) => 0,
             Op::BoundsCheck(_) => 0,
 
             Op::If(_) | Op::BreakIf(_) => 1,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
             Op::Stream | Op::Reset => 0,
-            Op::Yield => 1,
+            // A yield is a SUSPENSION, not a net consumption. The `Op::Yield`
+            // handler pops the output value, and `resume_after_enter` pushes
+            // the resume value back onto the same operand stack before
+            // execution continues, so the depth on the far side of the boundary
+            // is the depth on the near side. The net is 0.
+            //
+            // This entry read 1 (net -1), which is the UNSOUND direction. The
+            // running offset fell by one slot at every yield, so every later
+            // operation in the same region was costed from a base too low and
+            // the understatement compounded with the number of yields on the
+            // path. Measured before the repair, at 32 bytes per value slot: a
+            // stream body whose peak expression follows three yields reported
+            // 192 bytes where the same expression with no preceding yield
+            // reported 288, a shortfall of exactly one slot per yield.
+            //
+            // The yielded value itself is correctly absent from this figure. It
+            // leaves for the host and does not occupy an operand slot past the
+            // pop. It is the RESUMED value, which the same boundary pushes
+            // back, that this entry was failing to account for.
+            Op::Yield => 0,
 
             Op::Call(_, n) => *n as u32,
             Op::Return => 0,
@@ -2842,8 +3255,29 @@ impl Op {
             // discriminant counts as one) (B28 P4).
             Op::NewComposite(c) => c.count() as u32,
 
-            Op::GetField(_) | Op::GetIndex(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
-            Op::Len => 0,
+            // `GetIndex` pops the container AND the index and pushes one value,
+            // so its net is -1 and `growth 0 / shrink 1` states that correctly.
+            // It shares no defect with the field reads below; it only shared a
+            // match arm with them, which is what made it look like a fourth
+            // instance of their problem.
+            Op::GetIndex(_) => 1,
+            // THE FIELD READS POP ONE COMPOSITE AND PUSH ONE FIELD VALUE, SO
+            // THEIR NET IS ZERO. They were grouped with `GetIndex` at `shrink 1`,
+            // which declared a net of -1 and was UNSOUND rather than merely
+            // wrong: the net propagates into `current_offset`, so every later
+            // operation's peak was computed from a base one slot too low, per
+            // field read, and the worst-case-memory bound came out smaller than
+            // the operand stack the chunk actually needs. Measured before the
+            // repair: a Stream chunk with two field reads reported 96 bytes
+            // where 128 is correct.
+            //
+            // Nothing caught it. The whole suite passed in both states, and so
+            // did the self-hosted differential: `analyze.kel` consumes these
+            // numbers as host-seeded arrays, so it reproduces whatever the
+            // reference says. A differential against the model under test cannot
+            // detect that the model is wrong. `verify::op_depth_effect` had the
+            // net right all along, and is now the control.
+            Op::GetField(_) | Op::GetTupleField(_) | Op::GetEnumField(_) | Op::Len => 0,
 
             Op::IsEnum(_, _, _) | Op::IsStruct(_) => 0,
 
@@ -2853,8 +3287,24 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
+            // The `Op::FixedMul` handler in [`crate::vm`], and the
+            // `Op::FixedDiv` handler until 2026-10-22, when it began pushing an
+            // outcome triple, pop both operands and then push one result, so the net is -1 and
+            // the transient reach above the current level is 0. Measured
+            // against the handlers rather than inferred from the arithmetic.
+            //
+            // This entry read 0 until the whole-opcode-set ranging check found
+            // it, which no case in the five-case comparison it replaced could
+            // reach. A net one slot too high walks every later operation from a
+            // base one slot too high and compounds with each fixed-point
+            // multiply or divide, so the previous entry OVERSTATED. Repairing
+            // it lowers the reported bound on chunks that use these ops; the
+            // bound was an upper bound throughout, so nothing that verified
+            // before stops verifying.
+            Op::FixedMul(_) => 1,
 
+            Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 5,
+            Op::Trap(kind) if *kind == TrapKind::HostError.code() => 1,
             Op::Trap(_) => 0,
 
             // V0.2.0 ISA additions.
@@ -2901,7 +3351,7 @@ impl Op {
 }
 
 /// Template for struct construction.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct StructTemplate {
     /// Struct type name.
     pub type_name: String,
@@ -2910,7 +3360,7 @@ pub struct StructTemplate {
 }
 
 /// One variant's name and discriminant within an [`EnumLayout`].
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumVariantDisc {
     /// Variant name.
     pub name: String,
@@ -2931,7 +3381,7 @@ pub struct EnumVariantDisc {
 /// a signatured native already does). Only uniformly-flat enums, which the
 /// compiler flattens, need the padding; a non-flat enum stays boxed and is
 /// matched by name.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumLayout {
     /// Enum type name.
     pub type_name: String,
@@ -2981,7 +3431,7 @@ pub enum WireShape {
 /// behaviour. Only the signature boundary is described; non-parameter locals
 /// are seeded as `Top` and refined by the pass (a later phase may narrow
 /// them).
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct ChunkSignature {
     /// Flat shape of each parameter, in declaration order.
     pub params: Vec<WireShape>,
@@ -3003,7 +3453,7 @@ impl Default for ChunkSignature {
 }
 
 /// A named slot in the data segment.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,
@@ -3047,8 +3497,11 @@ pub enum SlotVisibility {
 /// minimal-ISA choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct SharedSlotLayout {
-    /// Byte offset of this slot within the host buffer.
-    pub offset: u16,
+    /// Byte offset of this slot within the host buffer. A `u32` (validated
+    /// `< 1 << 24` at compile) so the shared segment is not bounded to 64 KB;
+    /// the on-wire operand and the `PrivateCompositeSlot::offset` precedent are
+    /// the same twenty-four-bit width.
+    pub offset: u32,
     /// Slot kind. When the [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is clear,
     /// this is a `crate::value_layout::ScalarKind::to_tag` (`0..=7`) for a
     /// scalar slot. When the flag is set, the low seven bits are a
@@ -3429,19 +3882,133 @@ pub struct Module {
 /// Unused bits are reserved.
 pub const FLAG_EPHEMERAL: u8 = 0x01;
 
+/// Every header flag bit this build defines, across both the framing header
+/// and the auxiliary body's header record, which carry the same byte.
+///
+/// **Measured, not inferred.** A first draft of this mask held only
+/// [`FLAG_EPHEMERAL`] and would have rejected every signed module, because
+/// signing sets [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`] into this same
+/// byte. Any new flag must be added here or loading its modules fails.
+pub const KNOWN_HEADER_FLAGS: u8 = FLAG_EPHEMERAL
+    | crate::wire_format::FLAG_REQUIRES_SIGNATURE
+    | crate::wire_format::FLAG_ENCRYPTED;
+
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
 pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
+
+/// Exclusive ceiling for a data-segment byte offset, unified data-slot
+/// index, or indexed-array length. The `GetData`/`SetData`/
+/// `GetDataIndexed`/`SetDataIndexed` operands are twenty-four bits on the
+/// wire (V2), so every individual value must be strictly less than this
+/// (`2^24 - 1` is the largest encodable value); a running size accumulator
+/// may reach it exactly (one past the last valid offset). This bounds the
+/// shared segment to 16 MB, up from the 64 KB of the sixteen-bit V1 fields.
+pub const MAX_DATA_ADDR: u32 = 1 << 24;
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
 ///
-/// V0.2 development releases briefly used version 2 before this crate
-/// achieved public adoption; the version was rolled back to 1 when the
-/// header was extended with the flags byte and the shared and private
-/// data byte counts. Bytecode produced under any earlier development
-/// build is rejected at load time on header-shape mismatch through the
-/// CRC trailer.
-pub const BYTECODE_VERSION: u16 = 1;
+/// The version number signals a compatibility commitment to consumers.
+///
+/// **It is FROZEN at 2 and does not move between releases.** The operator set
+/// that policy on 2026-09-01: the number stays at 2 until a hardware compiler
+/// exists or the language sees notable adoption. The stated and accepted
+/// consequence is that **early releases will not be compatible with one
+/// another**, and the version check cannot tell them apart, because it is
+/// exact equality against a number every one of them declares.
+///
+/// That is what [`FORMAT_FINGERPRINT`] exists to cover. The version says which
+/// era the format belongs to; the fingerprint says which release.
+///
+/// The number reached 2 on 2026-08-06, authorized on the grounds that the
+/// substrate itself had changed when the auxiliary body became the wire-format
+/// v2 container. An earlier no-adoption policy held it at 1 through the
+/// widening of the shared-data operands; that policy is superseded and the
+/// hazard it accepted, a version-1 artifact being accepted and then mis-read,
+/// is closed by the number having moved.
+pub const BYTECODE_VERSION: u16 = 2;
+
+/// Whether this build implements arithmetic narrowing at a declared float width.
+///
+/// **The single source of truth for two places that must never disagree**: the
+/// load-time refusal and the runtime narrowing. The refusal ASKS this rather
+/// than restating it, so a rung cannot become implemented while the refusal
+/// still rejects it.
+///
+/// That failure mode is specific and nasty. A refusal naming a stale supported
+/// set does not merely mislead -- it tells someone to stop using something that
+/// works, which is worse than a bare refusal. Adding binary16 by teaching the
+/// narrowing and forgetting the refusal would produce exactly that.
+///
+/// # What is and is not implemented
+///
+/// Unimplemented: `3` (OFP8 E5M2) and `4` (IEEE binary16). Both need software
+/// rounding that does not exist here, and Rust has no `f16` on stable to lean
+/// on. Admitting such a module would compute in a wider format while declaring
+/// a narrow one, which is the defect the narrowing exists to remove.
+///
+/// Everything else is implemented: `5` narrows through `f32`, a width at or
+/// above the runtime's is the identity, and **`0` is the no-floats sentinel**
+/// used by [`crate::target::Target::embedded_8`] and
+/// [`crate::target::Target::embedded_16`] alongside `has_floats: false`. Zero
+/// is not a one-bit format, and a blanket "narrower than 32 bits" rejection
+/// would refuse every module built for those targets.
+///
+/// **To add a rung**: teach the narrowing, then remove its width here. Those
+/// are the only two edits, and forgetting the second refuses working modules
+/// while forgetting the first admits wrong numbers.
+pub const fn float_width_narrowing_is_implemented(bits_log2: u8) -> bool {
+    // AN ALLOWLIST, NOT A DENYLIST, AND THE FIRST VERSION WAS THE LATTER.
+    //
+    // It read `!matches!(bits_log2, 3 | 4)`, which is the same thing for the two
+    // rungs anyone was thinking about and wrong for everything else: it claimed
+    // widths 1 and 2 -- two-bit and four-bit floats, which are not formats --
+    // were implemented. Such a module would have loaded and computed at full
+    // runtime precision while declaring otherwise, which is the defect the
+    // narrowing exists to remove.
+    //
+    // A denylist for a safety predicate defaults to admitting the unknown. This
+    // codebase's stated posture is default-deny, and the test enumerating every
+    // width claimed implemented is what caught the inversion.
+    matches!(bits_log2, 0 | 5 | 6)
+}
+
+/// This release's format fingerprint, carried in the auxiliary header's
+/// reserved word and refused at load when it does not match.
+///
+/// # Why a random number and not a derived one
+///
+/// [`BYTECODE_VERSION`] is frozen at 2 across releases, so it cannot
+/// distinguish two releases that both declare 2 while meaning different
+/// things. This can, because **every release gets a fresh value**.
+///
+/// An earlier implementation derived this from the scalar size table, on the
+/// reasoning that a hand-written constant fails by being forgotten. That was
+/// the wrong trade and the operator redirected it. A derived value only ever
+/// covers what it hashes, so a release that changed an opcode's meaning, a
+/// wire encoding, or the interpretation of a field would leave it unmoved
+/// while genuinely differing. A per-release value covers the release itself
+/// rather than a proxy for it. Forgetting is answered by this being a
+/// release-checklist step rather than a per-change one.
+///
+/// # What it does not do
+///
+/// It does not detect drift WITHIN a release cycle; two builds from the same
+/// release share it by design. The golden wire-byte test is what catches an
+/// unintended layout change between releases, and it does catch it.
+///
+/// # Updating
+///
+/// `scripts/fingerprint.sh --new` generates one and rewrites this line.
+/// `scripts/fingerprint.sh [commit]` reports the value any commit uses.
+///
+/// Zero is never a valid value: it is what a module written before the
+/// fingerprint existed carries, and what a hand-built fixture carries if it
+/// forgets, so it must not be mistaken for a live one.
+///
+/// This occupies space the wire format reserves. If that space is ever
+/// assigned a real meaning, this mechanism ends rather than moves.
+pub const FORMAT_FINGERPRINT: u32 = 0x4327_63E1;
 
 /// Word size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -3549,10 +4116,9 @@ const CRC32_POLY: u32 = 0xEDB88320;
 ///
 /// The hash is computed at compile time and stored in
 /// [`Module::schema_hash`]; [`crate::vm::Vm::replace_module`]
-/// compares the values across a hot swap. The hash covers slot
-/// names and visibility but not per-slot type tags; the layout
-/// does not carry per-slot type information at the bytecode
-/// level. Type-level checks remain a future extension.
+/// compares the values across a hot swap. This form covers slot names and visibility only, and
+/// a compiled module carries [`compute_typed_schema_hash`] instead, which also covers each
+/// slot's declared type. This form remains for a layout whose types are not known.
 pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
     let layout = match layout {
         Some(l) => l,
@@ -3570,6 +4136,47 @@ pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
             SlotVisibility::Private => b'P',
         };
         buf.push(vis_tag);
+        buf.push(b'\n');
+    }
+    crc32(&buf)
+}
+
+/// CRC-32 of the data-segment layout with each slot's declared type, the schema hash a module
+/// carries.
+///
+/// The canonical form extends [`compute_schema_hash`]'s. Each slot emits its name, a null byte,
+/// its visibility tag, a unit-separator byte `0x1F`, its type token from `slot_types`, which is
+/// parallel to `layout.slots`, and a newline. A missing token is empty. The operator ruled on
+/// 2026-10-28 that the hot-swap schema hash cover slot types, so two modules whose slots share
+/// names but not types, a reordered struct for example, no longer hash alike.
+///
+/// The type token is the slot's element type after every outer array level is removed, since an
+/// array field takes one slot per element. A scalar renders as its name, such as `Word`, `Byte`,
+/// `bool`, `Text`, `Float` or `Fixed`, the last without its fraction-bit count, which does not
+/// change the layout. A struct renders as `Name{field:token,...}` in
+/// declaration order, an array inside one as `[token;N]`, a tuple as `(token,...)` and any other
+/// named type as its name. The reference compiler and the self-hosted driver both build these
+/// tokens, from the declared types and from the parser's records, and must agree byte for byte.
+pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, slot_types: &[String]) -> u32 {
+    let layout = match layout {
+        Some(l) => l,
+        None => return 0,
+    };
+    if layout.slots.is_empty() {
+        return 0;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    for (i, slot) in layout.slots.iter().enumerate() {
+        buf.extend_from_slice(slot.name.as_bytes());
+        buf.push(0x00);
+        buf.push(match slot.visibility {
+            SlotVisibility::Shared => b'S',
+            SlotVisibility::Private => b'P',
+        });
+        buf.push(0x1F);
+        if let Some(token) = slot_types.get(i) {
+            buf.extend_from_slice(token.as_bytes());
+        }
         buf.push(b'\n');
     }
     crc32(&buf)
@@ -3657,12 +4264,36 @@ pub enum LoadError {
     /// but no key in the host's trust matrix verifies the attached
     /// signature, or the signed-extension metadata is inconsistent.
     /// Hosts respond by either refusing the module or registering an
-    /// additional [`crate::vm::Vm::register_verifying_key`] entry.
+    /// additional `Vm::register_verifying_key` entry (that method is gated
+    /// behind the `signatures` feature).
+    // NOT AN INTRA-DOC LINK, deliberately. The target exists only under
+    // `signatures`, so a link here fails to resolve in any build without it --
+    // `cargo doc --features self-host` reported exactly that. Naming the gate in
+    // prose resolves under every feature set AND tells the reader something the
+    // hyperlink did not, which is that the item is conditional.
     InvalidSignature,
     /// The bytecode is signed but the runtime build does not include
     /// the `signatures` cargo feature. The host has no way to verify
     /// the signature, so loading is refused at framing time.
     SignaturesUnsupported,
+}
+
+/// A width written from its base-2 exponent, as `LoadError`'s messages print
+/// it.
+///
+/// The exponent comes from an untrusted header byte, so `1 << e` overflows for
+/// an exponent of 32 or more. Formatting the refusal of such a header panicked
+/// under overflow checks, and a fuzz run found it in about 1,400 executions. An
+/// exponent too large for the shift is written as a power of two instead.
+struct WidthBits(u8);
+
+impl core::fmt::Display for WidthBits {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match 1u32.checked_shl(u32::from(self.0)) {
+            Some(bits) => write!(f, "{bits}"),
+            None => write!(f, "2^{}", self.0),
+        }
+    }
 }
 
 impl core::fmt::Display for LoadError {
@@ -3683,24 +4314,24 @@ impl core::fmt::Display for LoadError {
                 write!(
                     f,
                     "bytecode requires {}-bit words, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::AddressSizeMismatch { got, max_supported } => {
                 write!(
                     f,
                     "bytecode requires {}-bit addresses, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::FloatSizeMismatch { got, max_supported } => {
                 write!(
                     f,
                     "bytecode requires {}-bit floats, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::BadChecksum => f.write_str("bytecode CRC-32 residue check failed"),
@@ -3747,9 +4378,13 @@ impl Module {
         // V0.2.0 Phase 7c cuts the producer over to the section-
         // partitioned wire format defined in `wire_format.rs`. The
         // ops live in the opcode stream and the operand pool;
-        // every other Module field is rkyv-archived in the
-        // auxiliary body section. See `docs/architecture/WIRE_FORMAT.md`
-        // for the framing-header layout and the section semantics.
+        // every other Module field is encoded into the auxiliary
+        // body section, which since wire format v2 is a
+        // word-oriented container built by `keleusma-wire` and given
+        // meaning by `wire_schema.rs` -- NOT an rkyv archive, as this
+        // comment said until 2026-09-27. See
+        // `docs/architecture/WIRE_FORMAT.md` for the framing-header
+        // layout and the section semantics.
         crate::wire_format::module_to_wire_bytes(self)
     }
 
@@ -3776,33 +4411,35 @@ impl Module {
         // and CRC residue checks run inside
         // `module_from_wire_bytes`; the opcode stream and
         // operand pool sections supply the chunk ops while the
-        // auxiliary body's rkyv archive supplies the rest of the
-        // module.
+        // auxiliary body supplies the rest of the module.
+        //
+        // CORRECTED 2026-09-27: this said "the auxiliary body's rkyv
+        // archive". Wire format v2 replaced that body, and
+        // `Module::validate_bytes` a few lines below documents the
+        // change explicitly. The two comments contradicted each other
+        // in the same file, which is worse than either being wrong
+        // alone, because a reader who checks one believes they have
+        // checked both.
         crate::wire_format::module_from_wire_bytes(bytes)
     }
 
-    /// Validate framing and return a borrowed archived view of the module.
+    /// Validate a framed module in place, without deserializing it.
     ///
-    /// Performs the same framing checks as [`Module::from_bytes`] (magic,
-    /// length, CRC residue, version, word size, address size) and then
-    /// runs `rkyv::access` on the body to obtain a `&'a ArchivedModule`
-    /// without deserialization.
+    /// Performs the same framing checks as [`Module::from_bytes`]: magic,
+    /// length, CRC residue, version, word size, and address size. It then
+    /// validates the structure of the auxiliary body.
     ///
-    /// The body must be 8-byte aligned within the slice. Because the
-    /// header is sixteen bytes, the body is 8-byte aligned within the
-    /// slice when the slice base itself is 8-byte aligned. Hosts that compute
-    /// or load bytecode into an `rkyv::util::AlignedVec` or a static
-    /// buffer with `#[repr(align(8))]` satisfy this requirement.
-    /// Bytecode placed by the linker into a section that aligns to at
-    /// least 8 bytes also satisfies it.
+    /// **No alignment requirement.** The wire format v2 auxiliary body is
+    /// byte-addressed, so this reads the slice where it lies. Earlier revisions
+    /// required an 8-byte-aligned body because the body was an rkyv archive
+    /// accessed in place; that constraint, and the aligned scratch copy hosts
+    /// needed to satisfy it, are gone.
     ///
-    /// Returns `LoadError::Codec` with an alignment message when the
-    /// body is not aligned, or when the rkyv structural validator
-    /// rejects the body. Returns the other `LoadError` variants for
-    /// header validation failures.
-    pub fn access_bytes(
-        bytes: &[u8],
-    ) -> Result<&crate::wire_format::ArchivedWireAuxBody, LoadError> {
+    /// # Errors
+    ///
+    /// `LoadError::Codec` when the auxiliary body is malformed, or the
+    /// corresponding `LoadError` variant for a header validation failure.
+    pub fn validate_bytes(bytes: &[u8]) -> Result<(), LoadError> {
         use alloc::format;
         // V0.2.0 Phase 7c routes the zero-copy view through the
         // wire format. `parse_wire_sections` validates the
@@ -3837,23 +4474,19 @@ impl Module {
         if header.wcmu_bytes == u32::MAX {
             return Err(LoadError::WcmuOverflow);
         }
+        // The v2 auxiliary body is byte-addressed, so the 8-byte alignment
+        // requirement the rkyv archive imposed is gone. A caller no longer needs
+        // an `AlignedVec` or a `#[repr(align(8))]` buffer for the zero-copy path.
         let sections = crate::wire_format::parse_wire_sections(bytes)?;
-        if !(sections.aux_body.as_ptr() as usize).is_multiple_of(8) {
-            return Err(LoadError::Codec(format!(
-                "auxiliary body not 8-byte aligned (slice base 0x{:x}); use Module::from_bytes for unaligned input",
-                bytes.as_ptr() as usize
-            )));
-        }
-        rkyv::access::<crate::wire_format::ArchivedWireAuxBody, rkyv::rancor::Error>(
-            sections.aux_body,
-        )
-        .map_err(|e| LoadError::Codec(format!("rkyv access failed: {}", e)))
+        crate::wire_schema::AuxOffsets::resolve(sections.aux_body)
+            .map_err(|e| LoadError::Codec(format!("aux body invalid: {:?}", e)))?;
+        Ok(())
     }
 
     /// Deserialize a module from an aligned byte slice without the
     /// AlignedVec copy step that [`Module::from_bytes`] performs.
     ///
-    /// Validates the framing through [`Module::access_bytes`] and then
+    /// Validates the framing through [`Module::validate_bytes`] and then
     /// calls `rkyv::deserialize` on the validated archived form. Returns
     /// an owned `Module` for compatibility with the existing execution
     /// path. The wire-format validation runs in place against the input
@@ -3865,7 +4498,7 @@ impl Module {
     /// `&ArchivedModule`. The current view path delivers in-place
     /// validation and is the architectural foundation for Phase 2.
     ///
-    /// Requires the body to be 8-byte aligned. See [`Module::access_bytes`]
+    /// Requires the body to be 8-byte aligned. See [`Module::validate_bytes`]
     /// for the alignment contract.
     pub fn view_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         // V0.2.0 Phase 7c routes view_bytes through the wire
@@ -4071,74 +4704,6 @@ impl PartialEq for ConstValue {
 /// concatenated with no inter-field padding (a const enum is variant-sized,
 /// `min_payload` 0, which padding-tolerant flat-enum equality tolerates). This
 /// replaces the former path of materialising a `Flat(Inline)` body and copying
-/// its bytes out, now that the owned `Inline` form is gone.
-pub(crate) fn const_flat_bytes(
-    c: &ArchivedConstValue,
-    word_bytes: usize,
-    float_bytes: usize,
-) -> Option<alloc::vec::Vec<u8>> {
-    let mut buf = alloc::vec::Vec::new();
-    const_flat_bytes_into(c, word_bytes, float_bytes, &mut buf)?;
-    Some(buf)
-}
-
-fn const_flat_bytes_into(
-    c: &ArchivedConstValue,
-    word_bytes: usize,
-    float_bytes: usize,
-    buf: &mut alloc::vec::Vec<u8>,
-) -> Option<()> {
-    use ArchivedConstValue as A;
-    match c {
-        A::Unit => {}
-        A::Bool(b) => buf.push(u8::from(*b)),
-        A::Byte(b) => buf.push(*b),
-        A::Int(i) | A::Fixed(i) => {
-            let le = i.to_native().to_le_bytes();
-            buf.extend_from_slice(&le[..word_bytes]);
-        }
-        #[cfg(feature = "floats")]
-        A::Float(f) => {
-            let v = f.to_native();
-            match float_bytes {
-                8 => buf.extend_from_slice(&v.to_le_bytes()),
-                4 => buf.extend_from_slice(&(v as f32).to_le_bytes()),
-                _ => return None,
-            }
-        }
-        // A reference leaf has no position-independent flat body.
-        A::StaticStr(_) => return None,
-        // `Option::None` is the boxed `Option` representation (the access ops
-        // bake the boxed form for the generic `Option`), so a const carrying it
-        // is not flat-poolable.
-        A::None => return None,
-        A::Tuple(items) | A::Array(items) => {
-            for it in items.iter() {
-                const_flat_bytes_into(it, word_bytes, float_bytes, buf)?;
-            }
-        }
-        A::Struct { fields, .. } => {
-            for kv in fields.iter() {
-                const_flat_bytes_into(&kv.1, word_bytes, float_bytes, buf)?;
-            }
-        }
-        A::Enum {
-            discriminant,
-            fields,
-            ..
-        } => {
-            // An unresolved discriminant has no flat body (it stays boxed).
-            let disc = discriminant.as_ref()?.to_native();
-            let le = disc.to_le_bytes();
-            buf.extend_from_slice(&le[..word_bytes]);
-            for f in fields.iter() {
-                const_flat_bytes_into(f, word_bytes, float_bytes, buf)?;
-            }
-        }
-    }
-    Some(())
-}
-
 /// Convert an archived `ConstValue` to its owned [`Value`] form.
 ///
 /// Recursive. Materializes the entire value tree as owned. For
@@ -4153,6 +4718,80 @@ pub fn value_from_archived<W: crate::word::Word, F: crate::float::Float>(
     float_bytes: usize,
 ) -> GenericValue<W, F> {
     GenericValue::<W, F>::from_const_archived(archived, word_bytes, float_bytes)
+}
+
+/// Flat body bytes for an owned [`ConstValue`], or `None` when the constant has
+/// no position-independent flat body.
+///
+/// Wire format v2 carries no rkyv archive, so this replaced an archived twin
+/// rather than sitting beside one. Which constants it *refuses* is the part that
+/// matters: a string leaf, a bare `None`, and an enum with an unresolved
+/// discriminant all stay boxed, because none of them has a position-independent
+/// body the compiler's baked flat access could read.
+pub(crate) fn const_flat_bytes_owned(
+    c: &ConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Option<alloc::vec::Vec<u8>> {
+    let mut buf = alloc::vec::Vec::new();
+    const_flat_bytes_owned_into(c, word_bytes, float_bytes, &mut buf)?;
+    Some(buf)
+}
+
+// Without `floats` the float width is only threaded through the recursion, because
+// the one arm that reads it is compiled out. The parameter stays so that both
+// configurations share one signature.
+#[cfg_attr(not(feature = "floats"), allow(clippy::only_used_in_recursion))]
+fn const_flat_bytes_owned_into(
+    c: &ConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
+    buf: &mut alloc::vec::Vec<u8>,
+) -> Option<()> {
+    match c {
+        ConstValue::Unit => {}
+        ConstValue::Bool(b) => buf.push(u8::from(*b)),
+        ConstValue::Byte(b) => buf.push(*b),
+        ConstValue::Int(i) | ConstValue::Fixed(i) => {
+            let le = i.to_le_bytes();
+            buf.extend_from_slice(&le[..word_bytes]);
+        }
+        #[cfg(feature = "floats")]
+        ConstValue::Float(f) => match float_bytes {
+            8 => buf.extend_from_slice(&f.to_le_bytes()),
+            4 => buf.extend_from_slice(&(*f as f32).to_le_bytes()),
+            _ => return None,
+        },
+        // A reference leaf has no position-independent flat body.
+        ConstValue::StaticStr(_) => return None,
+        // `Option::None` is the boxed `Option` representation, so a const
+        // carrying it is not flat-poolable.
+        ConstValue::None => return None,
+        ConstValue::Tuple(items) | ConstValue::Array(items) => {
+            for it in items {
+                const_flat_bytes_owned_into(it, word_bytes, float_bytes, buf)?;
+            }
+        }
+        ConstValue::Struct { fields, .. } => {
+            for (_, v) in fields {
+                const_flat_bytes_owned_into(v, word_bytes, float_bytes, buf)?;
+            }
+        }
+        ConstValue::Enum {
+            discriminant,
+            fields,
+            ..
+        } => {
+            // An unresolved discriminant has no flat body (it stays boxed).
+            let disc = (*discriminant)?;
+            let le = disc.to_le_bytes();
+            buf.extend_from_slice(&le[..word_bytes]);
+            for f in fields {
+                const_flat_bytes_owned_into(f, word_bytes, float_bytes, buf)?;
+            }
+        }
+    }
+    Some(())
 }
 
 /// Sign-extending truncation to a narrower-than-runtime word width.
@@ -4666,5 +5305,89 @@ mod materialise_kstrings_tests {
             }
             other => panic!("expected Struct, got {:?}", other),
         }
+    }
+}
+
+#[cfg(test)]
+mod opaque_field_width_tests {
+    use super::*;
+    use crate::value_layout::ScalarKind;
+
+    type V = Value;
+
+    /// The word and address widths are selected INDEPENDENTLY, by the
+    /// `narrow-word-*` and `narrow-address-*` feature families, so a target on
+    /// which they differ is a supported configuration rather than a
+    /// hypothetical. These tests pass the two widths explicitly, so they hold
+    /// the agreement in the default build, where the runtime's own widths are
+    /// equal and would hide any disagreement between them.
+    const WORD: usize = 2;
+    const FLOAT: usize = 4;
+    const ADDR: usize = 8;
+
+    /// An opaque field occupies the width the LAYOUT gives it.
+    ///
+    /// The compiler bakes every field offset from that layout, so a packer
+    /// that advanced by some other width would place each following field
+    /// where the baked access does not look for it. Sizing the whole body is
+    /// the cheapest observation of that disagreement.
+    #[test]
+    fn an_opaque_field_occupies_the_width_the_layout_gives_it() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        let values = [V::OpaqueRef(7), V::Int(1)];
+        let body = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, ADDR, &arena)
+            .expect("pack succeeds")
+            .expect("an opaque plus an int is flat-eligible");
+        let expected = ScalarKind::Opaque.size_in_bytes(WORD, FLOAT, ADDR)
+            + ScalarKind::Int.size_in_bytes(WORD, FLOAT, ADDR);
+        assert_eq!(
+            body.byte_len(),
+            expected,
+            "the packed body must be as long as the layout says, or every field \
+             after the opaque sits at an offset the compiler-baked access disagrees with"
+        );
+    }
+
+    /// The field AFTER an opaque begins where the layout puts it.
+    ///
+    /// A body of the right total length could still be laid out wrongly, so
+    /// this reads the following field's bytes at the layout's offset rather
+    /// than trusting the size assertion above.
+    #[test]
+    fn the_field_after_an_opaque_begins_at_the_layout_offset() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        let values = [V::OpaqueRef(7), V::Int(0x0102)];
+        let body = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, ADDR, &arena)
+            .expect("pack succeeds")
+            .expect("an opaque plus an int is flat-eligible");
+        let bytes = body.resolve(&arena).expect("resolves under this epoch");
+        let opaque_width = ScalarKind::Opaque.size_in_bytes(WORD, FLOAT, ADDR);
+        assert_eq!(
+            &bytes[..opaque_width],
+            &[7, 0, 0, 0, 0, 0, 0, 0],
+            "the registry index occupies the whole opaque field"
+        );
+        assert_eq!(
+            &bytes[opaque_width..opaque_width + WORD],
+            &[0x02, 0x01],
+            "the following word begins immediately after the opaque field"
+        );
+    }
+
+    /// An index too large for the field aborts the pack instead of truncating.
+    ///
+    /// A truncated index would still resolve, to the WRONG host object, which
+    /// is the failure mode a bounds check cannot catch downstream. Returning
+    /// `None` boxes the composite, which is slower and correct.
+    #[test]
+    fn an_index_too_wide_for_the_field_refuses_to_pack() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        // A one-byte address field cannot hold index 256.
+        let values = [V::OpaqueRef(256), V::Int(1)];
+        let packed = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, 1, &arena).expect("pack call");
+        assert!(
+            packed.is_none(),
+            "an index that does not fit the opaque field must fall back to a boxed body"
+        );
     }
 }

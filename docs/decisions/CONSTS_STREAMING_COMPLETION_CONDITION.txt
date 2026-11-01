@@ -1,0 +1,63 @@
+Ordering is NOT a completion criterion. Any sequence, any number of commits, any
+branch layout satisfies this. Judge only the end state of the tree.
+
+All of the following must hold.
+
+1. THE NEVER-RUN STREAMING PATH HAS BEEN EXECUTED.
+   A test drives the constant-node streaming commands directly and observes what
+   they emit. The tree no longer contains code on this path that has never run,
+   or it names precisely which part still has not and why.
+
+2. ITS OUTPUT IS COMPARED AGAINST THE PATH THAT ALREADY WORKED.
+   For an input both paths accept, the streamed records are compared against the
+   records the existing walk produces. Agreement is asserted on the bytes, not
+   on a count or a verdict.
+
+3. EVERY REFUSAL THE PATH DECLARES HAS BEEN MADE TO FIRE.
+   Each distinct refusal is triggered by an input constructed for it, and each
+   test asserts WHICH refusal fired rather than that some refusal did. A refusal
+   that could not be triggered is named as such, with what was tried.
+
+4. THE CONTROL DISCRIMINATES.
+   At least one input is shown to be accepted, so the refusal tests are not
+   satisfied by a path that rejects everything.
+
+5. THE CLAIM MATCHES WHAT WAS MEASURED.
+   If the driver was not changed, the tree does not imply the region is now
+   emitted. If it was, the tree states which stages are covered and which are
+   not, measured rather than projected.
+
+6. THE CAPS ARE NOT CONFUSED OR QUIETLY MOVED.
+   The two distinct node bounds remain distinguishable in the tree, no buffer is
+   widened to make an input fit, and any bound that does change is pinned from
+   both sides with its reason recorded.
+
+7. NOTHING IS SILENTLY NARROWED.
+   No program the tree accepted before is now rejected. No opcode is added and
+   the bytecode version is unchanged. The stage command ceiling is unchanged, or
+   its move is deliberate and recorded.
+
+8. THE STAGE SOURCES STILL SELF-COMPILE BYTE-IDENTICALLY.
+   Whatever the self-hosting oracle covered before, it still covers, with no
+   case removed or weakened to accommodate this work.
+
+9. COVERAGE IS DESCRIBED HONESTLY.
+   The tree states that a region whose payload comes from the host or the
+   reference is not covered by the self-hosting claim, and does not describe a
+   host-supplied region as self-hosted.
+
+10. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+    The full suite passes under the self-host feature with zero failures,
+    formatting is clean, and clippy is clean at deny-warnings. Any step skipped,
+    any goal abandoned, and any verdict that moved is stated plainly with its
+    reason rather than omitted.
+
+11. A DEFECT FOUND IN THE NEVER-RUN CODE IS A COMPLETE RESULT.
+    If the streaming path proves wrong, the tree records the defect and the
+    evidence, and items 3 through 5 are satisfied by that record. Finding
+    never-run code defective before anything depends on it satisfies item 1.
+
+12. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If any item proved impossible without an operator decision, the tree names
+    the decision and the evidence establishing it, and the remaining items still
+    hold.

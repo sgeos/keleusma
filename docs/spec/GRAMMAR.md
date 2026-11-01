@@ -353,6 +353,8 @@ match classify(value) {
 
 A function call and a `match` block are the valid pipeline targets. The pipeline operator is left-associative with lower precedence than all other operators.
 
+A pipeline target name resolves exactly as the name of the call it stands for. A local binding of the same name, whether a `let`, a parameter, a `match` binding or a loop variable, shadows the function or native, and since no local is callable, both the pipe and the call are rejected while it is in scope. The category-call discipline and the yield contract apply to a pipe as to a call.
+
 ### Yield Expressions
 
 The `yield` expression suspends the coroutine, sends a value to the host, and evaluates to the next input received from the host when the coroutine is resumed.
@@ -444,6 +446,16 @@ Any expression can appear as a statement. The result is discarded.
 play_note(0, 60, 0.8);     // Call for side effect; result discarded.
 ````
 
+### Empty Statements
+
+A semicolon at statement position with nothing to terminate is an empty statement and is discarded. This is what allows a trailing semicolon after a `for` loop, which is a statement and consumes no terminator of its own, and it admits a run of semicolons or one before any other statement.
+
+````
+for i in 0..8 { audio::set_volume(i, 0.0); };   // Accepted; the `;` terminates nothing.
+````
+
+An empty statement does not stand in for a missing expression. A block whose only statement is a semicolon produces the unit value and is rejected where a value is required, and a semicolon in the middle of an incomplete expression, as in `let x = ;`, remains an error.
+
 ### For Loop
 
 The `for` loop iterates over arrays and ranges. Iteration is guaranteed to terminate because arrays have fixed size and ranges have fixed bounds.
@@ -458,9 +470,43 @@ for i in 0..8 {
 }
 ````
 
-The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints.
+The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints. A range over **runtime** endpoints is admitted by supplying the bound explicitly with a `limit` clause; see [Bounded Repetition with a Limit](#bounded-repetition-with-a-limit) immediately below, which also covers the optional `on` block capturing how the loop ended.
+
+A `for` loop is a statement and needs no trailing semicolon, but one is accepted, as it is after the block-form `if`, `match`, and `loop` statements. A semicolon at statement position with nothing to terminate is an empty statement and is discarded. Earlier revisions rejected the form after `for` alone, with `unexpected token Semicolon in expression`, because `for` is a statement and consumes no terminator while the other three are expressions whose expression-statement path already consumed one. That diagnostic named the semicolon rather than the `for` and misdirected two defect reports toward `break`, neither of which was about `break`. The current behaviour is pinned by `tests/block_form_statements.rs`, and the agreement of the reference and self-hosted parsers on the form by `tests/selfhost_codegen.rs`.
 
 All host-provided iterable types are assumed finite by contract. The compiler checks that only iterable types are used with `for..in`. The host is responsible for not providing infinite iterators.
+
+### Bounded Repetition with a Limit
+
+A range `for` loop over runtime endpoints is normally rejected by strict verification, because the worst-case iteration count cannot be extracted from the bytecode. A `limit` clause supplies that bound explicitly: it caps the iteration count at a compile-time constant, so the loop is admitted and its worst-case-execution-time and worst-case-memory-usage bounds are the cap rather than the range width.
+
+````
+for i in min..max limit cp.hard_limit {
+  // body
+}
+````
+
+The `limit` expression must reduce to a positive `Word` constant by compile time: an integer literal, a const-data field, or a const parameter (the last two erased to a literal by const-data inlining and monomorphization). The runtime range still governs the actual iteration count; the cap only bounds it from above. The loop lowers to a compile-time counter `0..limit`, which is the canonical bounded header the verifier recognizes, alongside the runtime range test.
+
+An unhandled overrun, where the loop reaches its cap before the range is exhausted, traps as `LoopLimitExceeded`. This fail-loud default matches the other capture constructs, whose unhandled defensive outcome traps rather than passing silently.
+
+An optional `on` block captures how the loop ended, mirroring the checked-arithmetic arm block. `limit` and `on` are contextual keywords recognised only in these positions, so both remain usable as identifiers elsewhere.
+
+````
+for i in min..max limit cp.hard_limit {
+  // body, may `break`
+} on {
+  ok(count)      => { /* the range was exhausted */ },
+  break(i)       => { /* the body executed `break`; i is the index */ },
+  limit(stopped) => { /* the cap was hit before the range end */ },
+}
+````
+
+The block follows the same discipline as every other capture construct. When an `on` block is present it must carry an unguarded `ok` catch-all arm, and each outcome appears at most once. The outcomes split into two tiers. `ok` and `break` are intended, non-trapping exits; an absent `break` arm falls through to the `ok` catch-all, and a break never traps. `limit` is a defensive exit; an absent `limit` arm traps as above. Each arm optionally binds a single `Word`: the completed iteration count for `ok`, the loop variable at the exit for `break` and `limit`. When the range length equals the cap exactly, the loop completes as `ok` rather than reporting `limit`, so a range that fits the cap exactly never traps.
+
+The `break` and `limit` arms may carry a `when` guard, checked as `Bool` in the scope of the arm's binding, mirroring the checked-arithmetic arms; the `ok` catch-all must be unguarded. When a guarded outcome matches but the guard is false the outcome is unhandled: an intended `break` becomes a noop, and the defensive `limit` falls through to the trap exactly as an absent arm would.
+
+The `overflow` outcome, for an induction increment that overflows the index type, is reserved in the grammar but is inadmissible on a `limit` loop, and the compiler rejects an `overflow` arm. The outcome cannot arise: the range test runs before the body, so the body executes only while the index is below the range end, which is at most the type maximum, and the cap bounds the counter likewise, so the increment never overflows. This mirrors the checked-arithmetic rule that rejects an arm whose outcome cannot occur.
 
 ### Break Statement
 
@@ -556,6 +602,8 @@ Only one `loop` function may exist per script, and it serves as the coroutine en
 ### 6.4 Yield Contract
 
 The yield contract of a `loop` or `yield` function is defined by its parameter type (input from host) and return type (output to host). When a `yield` function is called from a `loop` or another `yield` function, the contracts must match. This allows yield expressions in the callee to transparently propagate to the host.
+
+The type checker enforces the contract against the entry `main` at every call or pipe into a `yield` or `loop` function. The callee's return type, instantiated at the call, must be the entry's return type, since the host receives each value the callee yields as the entry's output. A `loop` callee that declares a first parameter declares a resume type, and that type must be the entry's first parameter type. Every `yield` expression in a delegated callee already has the entry's resume type, so a `yield` callee's parameters are ordinary arguments. A delegation that breaks the contract is refused at compile time.
 
 ````
 // Both share the yield contract: AudioCommand -> AudioAction
@@ -712,7 +760,7 @@ overflow_kind  = 'ok' '(' arm_pattern ')'
 arm_pattern    = '_' | lower_ident | signed_int_lit
 ````
 
-Guards a single arithmetic operation against overflow, underflow, and, for division and modulo, a zero divisor. The operation is `+`, `-`, `*`, `/`, `%`, or unary `-` on `Word` operands, `+`, `-`, `*`, `/`, `%` on `Byte` operands, `+`, `-`, `*`, `/` on `Float` operands, or `+`, `-`, `*`, `/`, `%`, or unary `-` on `Fixed<N>` operands. On `Word` the runtime computes the true result in `i128` and pushes `(high, low, flag)`; the `overflow` and `underflow` arms destructure the high and low halves `(h, l)` so big-number arithmetic can chain through successive checked operations. On `Float` the Institute of Electrical and Electronics Engineers 754 operations are total, so there is no trap and no zero divisor; instead a `nan` arm matches a not-a-number result, `overflow` matches positive infinity, `underflow` matches negative infinity, and a division by zero produces one of these rather than trapping. The `ok` class must have an unguarded catch-all arm (bare identifier or wildcard). The `overflow` and `underflow` classes are optional; an omitted or unmatched class defaults to two's-complement wrapping. For `/` and `%`, a `zero_divisor(numerator)` arm handles a zero divisor and binds the numerator, and an unhandled zero divisor traps as a division by zero. An arm whose outcome cannot arise for the operator and operand type is a compile error. On the signed `Word` type, `+`, `-`, and `*` admit `overflow` and `underflow`, unary `-` admits `overflow` only, `/` admits `overflow` and `zero_divisor`, and `%` admits `zero_divisor` only. On the unsigned `Byte` type, `+` and `*` admit `overflow`, `-` admits `underflow`, `/` and `%` admit `zero_divisor`, and unary `-` is not available; the `Byte` `overflow` and `underflow` arms bind a single pattern matching the wrapped `Byte` result, written `overflow(w)`, rather than two halves. On the `Float` type, `+`, `-`, `*`, and `/` admit `overflow`, `underflow`, and `nan`, while `%` and unary `-` are not available; the `Float` `overflow`, `underflow`, and `nan` arms each bind a single pattern matching the result. The signed `Fixed<N>` type admits the same outcomes as `Word` (`+`, `-`, and `*` admit `overflow` and `underflow`, unary `-` admits `overflow`, `/` admits `overflow` and `zero_divisor`, and `%` admits `zero_divisor`), and `nan` is not available; the `Fixed` `overflow` and `underflow` arms bind a single pattern matching the wrapped `Fixed` result, written `overflow(v)`, rather than two halves. The checked `Fixed` multiply and divide wrap an out-of-range result to the bound value, unlike the plain `Fixed` multiply and divide which saturate. Patterns are admitted from a restricted subset (wildcard, variable, signed integer literal); an optional `when expr` guard between the pattern and the `=>` is checked as `Bool` and falls through to the next arm when false.
+Guards a single arithmetic operation against overflow, underflow, and, for division and modulo, a zero divisor. The operation is `+`, `-`, `*`, `/`, `%`, or unary `-` on `Word` operands, `+`, `-`, `*`, `/`, `%` on `Byte` operands, `+`, `-`, `*`, `/` on `Float` operands, or `+`, `-`, `*`, `/`, `%`, or unary `-` on `Fixed<N>` operands. On `Word` the runtime computes the true result in `i128` and pushes `(low, high, flag)`, bottom of stack to top. The `overflow` and `underflow` arms destructure the two halves in the **reverse** order, as `(h, l)`, so big-number arithmetic can chain through successive checked operations. The push order and the binding order are deliberately opposite, because an uncaptured operation lowers to the opcode followed by `PopN(2)`, which discards the flag and the high half and leaves the wrapped low half as the expression's value. On `Float` the Institute of Electrical and Electronics Engineers 754 operations are total, so there is no trap and no zero divisor; instead a `nan` arm matches a not-a-number result, `overflow` matches positive infinity, `underflow` matches negative infinity, and a division by zero produces one of these rather than trapping. The `ok` class must have an unguarded catch-all arm (bare identifier or wildcard). The `overflow` and `underflow` classes are optional; an omitted or unmatched class defaults to two's-complement wrapping. For `/` and `%`, a `zero_divisor(numerator)` arm handles a zero divisor and binds the numerator, and an unhandled zero divisor traps as a division by zero. An arm whose outcome cannot arise for the operator and operand type is a compile error. On the signed `Word` type, `+`, `-`, and `*` admit `overflow` and `underflow`, unary `-` admits `overflow` only, `/` admits `overflow` and `zero_divisor`, and `%` admits `zero_divisor` only. On the unsigned `Byte` type, `+` and `*` admit `overflow`, `-` admits `underflow`, `/` and `%` admit `zero_divisor`, and unary `-` is not available; the `Byte` `overflow` and `underflow` arms bind a single pattern matching the wrapped `Byte` result, written `overflow(w)`, rather than two halves. On the `Float` type, `+`, `-`, `*`, and `/` admit `overflow`, `underflow`, and `nan`, while `%` and unary `-` are not available; the `Float` `overflow`, `underflow`, and `nan` arms each bind a single pattern matching the result. The signed `Fixed<N>` type admits the same outcomes as `Word` (`+`, `-`, and `*` admit `overflow` and `underflow`, unary `-` admits `overflow`, `/` admits `overflow` and `zero_divisor`, and `%` admits `zero_divisor`), and `nan` is not available; the `Fixed` `overflow` and `underflow` arms bind a single pattern matching the wrapped `Fixed` result, written `overflow(v)`, rather than two halves. The checked `Fixed` multiply and divide wrap an out-of-range result to the bound value, unlike the plain `Fixed` multiply and divide which saturate. Patterns are admitted from a restricted subset (wildcard, variable, signed integer literal); an optional `when expr` guard between the pattern and the `=>` is checked as `Bool` and falls through to the next arm when false.
 
 The `saturate_max` and `saturate_min` keywords inside arm bodies denote context-determined saturation values, resolved at the construct's operand type. On `Word` they resolve to `Word::MAX` and `Word::MIN`, on `Byte` to `255` and `0`, on `Float` to the largest and most-negative finite `Float`, and on `Fixed<N>` to the extremal `Q`-format bit patterns. When the surrounding expected type is a refined newtype declared with a `with saturate_max = N` or `with saturate_min = M` clause, the keyword resolves to a constructor call against that literal.
 
@@ -771,6 +819,39 @@ let safe = table[i] {
     invalid_index(idx) => table[idx % length(table)],
 };
 ````
+
+### Indexed Write Construct
+
+````
+store_construct = data_index_target '=' expr '{' store_arm { ',' store_arm } [ ',' ] '}'
+store_arm      = store_kind [ 'when' expr ] '=>' expr
+store_kind     = 'ok' '(' store_pattern ',' store_pattern ')'
+               | 'invalid_index' '(' arm_pattern ')'
+store_pattern  = '_' | lower_ident
+````
+
+Guards a write into a data-block array field against an out-of-bounds index. The target is a data-block field indexed down to a scalar element, `d.f[i]` or `d.f[i][j]`. Each index is checked against its own level's length in source order. The first level out of range stops the write, so neither a later index nor the value is evaluated, and `invalid_index` binds that level's index. The flat offset alone is not the test, so `d.m[0][5]` on a `[[Word; 3]; 2]` field reaches `invalid_index(5)` although the flat offset five lies within the field. The self-hosted compiler refuses a handled write with more than one index, as it refuses every multi-index data access. The `ok` arm binds the element's value before the write and the value written, and either may be `_`. The element is read only when some `ok` arm binds the old value. The `invalid_index` arm binds the offending index `Word`, with the patterns and guards of the indexing construct. The `ok` class must end with an unguarded arm, and a literal pattern is inadmissible in either `ok` position. The `invalid_index` class is optional, and an unhandled out-of-bounds index traps as `IndexOutOfBounds`. The construct is an expression whose type is the common type of its arms. It may stand as a statement ending in `;`, whose value is discarded, or as the tail expression of a block. Other expression positions, such as a `let` initializer, are not yet supported.
+
+**The arm block belongs to the write.** An arm block after the right-hand side of an indexed assignment handles the write, so `d.f[i] = a[j] { ok(v) => v }` is a malformed write handler rather than a handled read of `a[j]`. A right-hand side that needs its own handler is parenthesized, `d.f[i] = (a[j] { ok(v) => v, invalid_index(_) => 0 });`, or bound with `let` first. This meaning took effect on 2026-10-21. The assignment of a whole scalar field, `d.f = e`, cannot fail, and an arm block after its right-hand side still belongs to the right-hand side.
+
+**Evaluation order.** Every indexed write, handled or not, evaluates its index first and checks it against the bound before evaluating the value. An out-of-bounds index therefore never evaluates the value, and a valid write evaluates the index before the value. A program that must evaluate the value regardless binds it with `let` before the write. Before 2026-10-21 a bare write evaluated the value first.
+
+Example:
+
+````
+// Store a sample and return the value it replaced, or the negated index.
+fn store(i: Word, s: Word) -> Word {
+    d.samples[i] = s {
+        ok(old, _) => old,
+        invalid_index(j) => 0 - j,
+    }
+}
+
+// Discard the outcome; an invalid index is ignored rather than trapping.
+d.samples[i] = s { ok(_, _) => (), invalid_index(_) => () };
+````
+
+The self-hosted compiler implements the construct and the index-first order byte for byte, for Word and Byte elements. It refuses a handled write on any other element type, as it refuses the handled read on one, so `--compiler self-hosted` fails loudly on such a program rather than emitting a module. The shapes it is checked against are listed in `tests/indexed_write_handlers.rs`.
 
 ### Newtype Construction Construct
 
@@ -831,11 +912,12 @@ let s = code as Status {
 native_construct = native_call '{' native_arm { ',' native_arm } [ ',' ] '}'
 native_arm     = native_kind [ 'when' expr ] '=>' expr
 native_kind    = 'ok' '(' arm_pattern ')'
+               | 'host_error' [ '(' arm_pattern ')' ]
                | 'error' '(' arm_pattern ')'
 arm_pattern    = '_' | lower_ident | signed_int_lit
 ````
 
-Guards a native function call against a host failure. The construct shares the arm-block syntax of the other construct-family members, attached to a native call. The `ok` arm binds the success value, and the `error` arm binds the `Word` error code the native reported on failure. The `ok` class must have an unguarded catch-all arm. The `error` class is optional, and an unhandled native error propagates the host failure exactly as it would without the construct. The `error` arm is admissible on any native call, because fallibility is not tracked at compile time; on a native that never fails, the `error` arm is simply never taken. The arithmetic, indexing, newtype, and discriminant arms are inadmissible.
+Guards a native function call against a host failure. The construct shares the arm-block syntax of the other construct-family members, attached to a native call. The `ok` arm binds the success value, and the `host_error` arm binds the `Word` error code the native reported on failure. `error` is accepted as an alias of `host_error`, and `host_error` written without a pattern handles every failure without binding the code. The `ok` class must have an unguarded catch-all arm. The `host_error` class is optional. A failure that no `host_error` arm handles reaches the compiler-default host-error trap, which surfaces the host's own error to the embedding host. A bare native call outside the construct behaves the same way, because every native call reports a host failure as an outcome. An unguarded `host_error` arm whose pattern is a binder or a wildcard handles every failure, and the compiler then emits no default trap. The `host_error` arm is admissible on any native call, because fallibility is not tracked at compile time; on a native that never fails, the arm is simply never taken. The arithmetic, indexing, newtype, and discriminant arms are inadmissible. A native call takes at most 127 arguments.
 
 The host reports the `Word` code by returning an error that converts to it. The `keleusma-macros` `KeleusmaError` derive generates `From<E> for VmError` for a fieldless enum, mapping each variant to its discriminant as the code, so the native may `return Err(MyError::Variant.into())`. Pairing the host enum's discriminants with a script-side `enum` lets the error code be recovered structurally with the discriminant-to-enum construct.
 
@@ -920,6 +1002,8 @@ A device loading this bytecode rejects the module unless the attached signature 
 ## 8. Pattern Matching
 
 Patterns appear in function heads, `match` arms, and `let` bindings.
+
+A `let` pattern must be irrefutable for the type of its value, since a `let` has no other arm to take. A variable, a wildcard, a tuple or struct pattern whose parts are all irrefutable, and a variant pattern of an enum that declares a single variant are irrefutable. A literal pattern, a variant pattern of an enum with more than one variant, including `Option::Some` and `Option::None`, and any pattern holding one of these are refutable, and the compiler refuses them in a `let` with a message that points to `match`.
 
 ### Pattern Forms
 
@@ -1184,10 +1268,15 @@ comparison_op   = '==' | '!=' | '<' | '>' | '<=' | '>='
 block           = { statement } [ expression ]
 statement       = let_stmt | for_stmt | break_stmt | assert_stmt
                 | data_field_assign | data_field_index_assign
-                | expr_stmt
+                | expr_stmt | empty_stmt
+empty_stmt      = ';'
 let_stmt        = 'let' pattern [ ':' type_expr ] '=' expression ';'
 assert_stmt     = 'assert' expression [ ',' string_lit ] ';'
-for_stmt        = 'for' lower_ident 'in' iterable '{' block '}'
+for_stmt        = 'for' lower_ident 'in' iterable [ 'limit' expression ]
+                  '{' block '}' [ 'on' '{' loop_arm { ',' loop_arm } [ ',' ] '}' ]
+loop_arm        = loop_outcome [ '(' arm_pattern ')' ] [ 'when' expression ]
+                  '=>' '{' block '}'
+loop_outcome    = 'ok' | 'break' | 'limit' | 'overflow'
 iterable        = expression
                 | expression '..' expression
 break_stmt      = 'break' ';'

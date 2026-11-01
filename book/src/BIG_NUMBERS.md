@@ -16,7 +16,9 @@ op_expr {
 }
 ```
 
-The runtime computes the true result of `op_expr` in `i128`, splits it into a high and a low half, and pushes `(high, low, flag)` on the operand stack. The compiler dispatches on `flag` to one of three outcome classes (`ok`, `overflow`, `underflow`) and binds the pattern variables in that arm's body to the corresponding slot values. The `ok` arm binds a single `Word` against the in-range result; the `overflow` and `underflow` arms bind two `Word` values against the high and low halves.
+The runtime computes the true result of `op_expr` in `i128`, splits it into a high and a low half, and pushes `(low, high, flag)` on the operand stack, bottom to top. The compiler dispatches on `flag` to one of three outcome classes (`ok`, `overflow`, `underflow`) and binds the pattern variables in that arm's body to the corresponding slot values. The `ok` arm binds a single `Word` against the in-range result; the `overflow` and `underflow` arms bind two `Word` values against the high and low halves.
+
+Note that the arm binds `(h, l)` while the runtime pushes low first, so the binding order is the reverse of the stack order. You never need the stack order to write a program, and it is stated here only because it is easy to misread the two as the same. The reason for it is that an uncaptured operation such as a bare `a + b` lowers to the checked opcode followed by `PopN(2)`, which discards the flag and the high half and leaves the wrapped low half as the value of the expression.
 
 The high half is the carry-out for additive operations and the upper 64 bits of the true product for multiplication. Together with the low half (the wrapped i64 result) this is sufficient to express chained multi-digit arithmetic.
 
@@ -71,7 +73,7 @@ The `Word` type is signed `i64`. Treating it as an unsigned `u64` digit in multi
 
 2. For two operands whose sum needs more than 65 bits (impossible for `i64` addition but reachable through multiplication), the high half carries genuine bits 64-127. The multiplication example demonstrates this case directly.
 
-3. Division and modulo route through dedicated `Op::CheckedDiv` and `Op::CheckedMod` opcodes that compute the true result in `i128` and dispatch to the same `(h, l, flag)` shape as the other checked operations. The `i64::MIN / -1` corner (true result `2^63`, decomposed as `high=0, low=i64::MIN, flag=1`) routes to the overflow arm; the `i64::MIN % -1` corner (true result `0`, division step overflows) likewise flags through the overflow arm with `high=0, low=0`. Division by zero continues to trap with `VmError::DivisionByZero` because the opcode fails before arm dispatch runs.
+3. Division and modulo route through dedicated `Op::CheckedDiv` and `Op::CheckedMod` opcodes that compute the true result in `i128` and dispatch to the same `(h, l, flag)` shape as the other checked operations. The `i64::MIN / -1` corner (true result `2^63`, decomposed as `high=0, low=i64::MIN, flag=1`) routes to the overflow arm; the `i64::MIN % -1` corner (true result `0`, division step overflows) likewise flags through the overflow arm with `high=0, low=0`. A zero divisor does not fail inside the opcode: `CheckedDiv` and `CheckedMod` reify it as flag `3` carrying the numerator, precisely so a `zero_divisor(numerator)` arm can bind it. An UNHANDLED zero divisor still surfaces as `VmError::DivisionByZero`, but through the compiled dispatch rather than from the opcode. This sentence previously gave the opposite mechanism, saying the opcode fails before arm dispatch runs.
 
 ## Where the pattern is and is not appropriate
 

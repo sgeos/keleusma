@@ -40,6 +40,8 @@ pub struct LexError {
 /// are treated as whitespace. Semicolons serve as statement terminators.
 /// The token stream ends with an Eof token.
 pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
+    #[cfg(all(test, feature = "self-host"))]
+    reference_poison::observe(source);
     let mut lexer = Lexer::new(source);
     let mut tokens = Vec::new();
 
@@ -804,13 +806,35 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    /// Lex a double-quoted string literal.
+    ///
+    /// # The literal's bytes are the source's bytes
+    ///
+    /// The accumulator is a byte buffer, not a `String`, because the scan is
+    /// byte-wise. Pushing a scanned byte as `c as char` would reinterpret it
+    /// as a Unicode scalar and re-encode it, so every byte at or above `0x80`
+    /// -- that is, every byte of every multi-byte character -- would expand
+    /// into two. A literal was silently corrupted that way: six source bytes
+    /// became eleven, and the damage was invisible because the result was
+    /// still well-formed text, merely the wrong text.
+    ///
+    /// Scanning bytes is safe here because every delimiter this loop tests for
+    /// (`"`, `\n`, `\\`) is ASCII, and no byte of a multi-byte UTF-8 sequence
+    /// is ever equal to an ASCII byte. A multi-byte character therefore passes
+    /// through untouched rather than being split.
+    ///
+    /// The final conversion cannot fail: `tokenize` takes a `&str`, so the
+    /// source is valid UTF-8 by construction, and this loop copies whole
+    /// characters and inserts only ASCII. It is still handled rather than
+    /// unwrapped, so a future caller that supplies raw bytes gets a clean lex
+    /// error instead of a panic.
     fn lex_string(
         &mut self,
         start: usize,
         start_line: u32,
         start_col: u32,
     ) -> Result<Token, LexError> {
-        let mut value = String::new();
+        let mut value: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         loop {
             match self.advance() {
                 None => {
@@ -831,12 +855,12 @@ impl<'a> Lexer<'a> {
                     ));
                 }
                 Some(b'\\') => match self.advance() {
-                    Some(b'n') => value.push('\n'),
-                    Some(b't') => value.push('\t'),
-                    Some(b'r') => value.push('\r'),
-                    Some(b'\\') => value.push('\\'),
-                    Some(b'"') => value.push('"'),
-                    Some(b'0') => value.push('\0'),
+                    Some(b'n') => value.push(b'\n'),
+                    Some(b't') => value.push(b'\t'),
+                    Some(b'r') => value.push(b'\r'),
+                    Some(b'\\') => value.push(b'\\'),
+                    Some(b'"') => value.push(b'"'),
+                    Some(b'0') => value.push(0),
                     Some(c) => {
                         return Err(self.error(
                             {
@@ -859,13 +883,101 @@ impl<'a> Lexer<'a> {
                         ));
                     }
                 },
-                Some(c) => value.push(c as char),
+                Some(c) => value.push(c),
             }
         }
+        let value = String::from_utf8(value).map_err(|_| {
+            self.error(
+                String::from("string literal is not valid UTF-8"),
+                start,
+                start_line,
+                start_col,
+            )
+        })?;
         Ok(Token {
             kind: TokenKind::StringLit(value),
             span: self.span_from(start, start_line, start_col),
         })
+    }
+}
+
+/// Test-only intervention that makes the reference lexer refuse marked sources.
+///
+/// Every reference parse, type check and compilation of a source text starts here,
+/// since `tokenize` is the only constructor of reference tokens. A control arms a
+/// marker unique to itself, embeds it as comments in the user program and runs a
+/// self-hosted path. Any reference lexing of text carrying the marker is counted
+/// and panics, so a path that silently consults the reference changes its result
+/// or its hit count. Unmarked text, including the stage programs the pipeline
+/// legitimately bootstraps through the reference, passes untouched, which keeps
+/// concurrently running tests unaffected.
+///
+/// The marker is matched as a substring. A reference consultation of a fragment
+/// that excludes every marker copy evades it, so callers place copies throughout.
+#[cfg(all(test, feature = "self-host"))]
+pub(crate) mod reference_poison {
+    extern crate std;
+    use alloc::collections::BTreeMap;
+    use alloc::string::String;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    static ARMED: AtomicUsize = AtomicUsize::new(0);
+    static MARKERS: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
+
+    /// Disarms its marker when dropped, including during an unwinding failure.
+    pub(crate) struct Armed {
+        marker: String,
+    }
+
+    impl Armed {
+        /// Reference lexings of marked text observed so far.
+        pub(crate) fn hits(&self) -> usize {
+            let markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+            markers.get(&self.marker).copied().unwrap_or(0)
+        }
+    }
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            let mut markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+            if markers.remove(&self.marker).is_some() {
+                ARMED.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Arm `marker`, which must be nonempty and not already armed.
+    pub(crate) fn arm(marker: &str) -> Armed {
+        assert!(
+            !marker.is_empty(),
+            "an empty marker would poison every source"
+        );
+        let mut markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            markers.insert(marker.into(), 0).is_none(),
+            "marker `{marker}` is already armed"
+        );
+        ARMED.fetch_add(1, Ordering::SeqCst);
+        Armed {
+            marker: marker.into(),
+        }
+    }
+
+    pub(super) fn observe(source: &str) {
+        if ARMED.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        let mut markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+        let hit = markers
+            .iter_mut()
+            .find(|(marker, _)| source.contains(marker.as_str()));
+        if let Some((marker, count)) = hit {
+            *count = count.saturating_add(1);
+            let marker = marker.clone();
+            drop(markers);
+            panic!("reference lexer reached poisoned source `{marker}`");
+        }
     }
 }
 
@@ -1487,6 +1599,50 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("unterminated"));
+    }
+
+    #[test]
+    fn a_string_literal_keeps_the_source_bytes_of_a_multibyte_character() {
+        // The literal's bytes ARE the source's bytes. Scanning byte-wise and
+        // pushing each byte as `c as char` re-encoded every byte at or above
+        // 0x80, so a six-byte literal became eleven bytes of well-formed but
+        // WRONG text. Nothing caught it: the corrupted result was still valid
+        // UTF-8, no `.kel` source in the tree carries a non-ASCII literal, and
+        // the byte-identity oracle compares only sources that do not.
+        //
+        // Byte length alone would not pin this. A double-encoding that
+        // happened to preserve the length would pass, so the bytes themselves
+        // are compared.
+        let literal = "aé漢";
+        assert_eq!(literal.len(), 6, "the fixture is six source bytes");
+        assert_eq!(literal.chars().count(), 3, "and three characters");
+
+        let tokens = tokenize("fn main() -> Text { \"aé漢\" }").expect("lex");
+        let baked = tokens
+            .iter()
+            .find_map(|t| match &t.kind {
+                TokenKind::StringLit(v) => Some(v.clone()),
+                _ => None,
+            })
+            .expect("a string literal token");
+        assert_eq!(baked.as_bytes(), literal.as_bytes());
+    }
+
+    #[test]
+    fn a_string_literal_escape_bakes_one_byte_each() {
+        // The six escapes the lexer accepts, each baking exactly one byte.
+        // `\0` is in the set, so a literal is a BYTE string that may carry an
+        // interior NUL, which is what makes the length-delimited host contract
+        // load-bearing rather than a preference.
+        let tokens = tokenize("fn main() -> Text { \"\\n\\t\\r\\\"\\\\\\0\" }").expect("lex");
+        let baked = tokens
+            .iter()
+            .find_map(|t| match &t.kind {
+                TokenKind::StringLit(v) => Some(v.clone()),
+                _ => None,
+            })
+            .expect("a string literal token");
+        assert_eq!(baked.as_bytes(), b"\n\t\r\"\\\0");
     }
 
     #[test]

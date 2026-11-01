@@ -1,0 +1,238 @@
+# Design Brief: Encoding-Space Capacity for the Self-Hosted Pipeline
+
+> **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
+
+**Status**: RESOLVED — merged to `v0.2.3` (2026-07-24) and CI-green. Prepared 2026-07-22
+(process-audit item 6); revised 2026-07-23
+with the total-word-budget finding. The operator chose the recommended path, implemented as:
+the **record** stream got Option E two-word transport (its payload was at the `i64` ceiling),
+while the **token** and **wire-op** streams got an 8-bit radix widening (their payloads had
+headroom, so two-word was unnecessary — see [P11_OPTION_E_PLAN.md](./P11_OPTION_E_PLAN.md)
+and the branch handoff). The nested-machinery frontier is addressed by native `>= 64` record
+tags (every split-tag workaround retired), and the precedence sub-decision was taken as **P1**
+(renumber to match the reference), closing the `xor`/`and` faithfulness Gaps. The options and
+tradeoffs below are retained as the decision record; the "decision requested" section is now
+answered inline.
+
+## The problem
+
+The self-hosted compiler pipeline (`lexer → parse → reconstruct → codegen`, in
+`compiler/kel/`) communicates between stages with packed integer words. Three of those
+encodings, plus the operator precedence scale, are now **at capacity**, and the most
+recent increments have been progressively more intricate workarounds. The remaining
+full-language work — the nested-composite-equality frontier (enum-in-struct,
+tuple-of-struct, 2+-level) and future operators — needs clean capacity to land as
+oracle-checked increments rather than reuse tricks.
+
+### The four constrained spaces (verified 2026-07-22)
+
+| Space | Encoding | Range | State |
+|-------|----------|-------|-------|
+| Token (lexer → parse) | `tok + payload*64` | `tok` 0..61 (62/63 = EOF/PENDING sentinels) | **Full** — all 0..61 assigned |
+| Record kind (parse → reconstruct) | `kind + arg*64` | `kind` 1..63 | **Full** — all assigned in the `Node` enum |
+| Wire op (codegen → driver) | `op + operand*64` | `op` 1..63 | **Full** — all 1..63 assigned |
+| Operator precedence | small integers (Orelse 1 … unary 10) | — | **Too coarse** to match the reference's logical binding powers |
+
+The three packed spaces share the same root: a **6-bit (`*64`) low field**. Note this
+is the encoding of the **intermediate inter-stage streams**, NOT the final `Module`
+bytecode (which is a separate encoding in `src/wire_format.rs` and is not at capacity).
+
+### The deeper wall: total word budget, not just the tag field (verified 2026-07-23)
+
+Widening the low field is more constrained than a "the 6-bit tag has room to grow"
+framing suggests, because the tag shares one signed 64-bit `Word` with its payload, and
+the payload is itself already over-packed. The fattest inter-stage record, the
+array-of-composite equality builder (`parse.kel:2457`, `ArrayOfEnumEqBuild`), packs seven
+sub-fields whose top field (`arrsize`, an 8-bit count at bits 48 through 55, per
+`reconstruct.kel:329`) puts the payload alone at 56 bits. Each word is `tag + payload *
+radix`, so the used width is `payload_bits + radix_bits`, and the signed ceiling is 63
+bits. The measured worst case:
+
+| Low-field radix | Worst-case word | Fits `i64`? | Spare bits below 2^63 |
+|-----------------|-----------------|-------------|-----------------------|
+| `*64` (6-bit, current) | ~2^62 | yes | 1 |
+| `*128` (7-bit) | 2^63 − 1 = `i64::MAX` | yes, exactly | 0 (zero margin) |
+| `*256` (8-bit) | ~2^64 | **no — overflows** | — |
+
+The current scheme therefore already sits one bit below the `i64` ceiling. Widening to
+7 bits lands the worst case exactly on `i64::MAX`, leaving no margin for any new field or
+larger value; widening to 8 bits overflows a signed `Word` outright. The governing
+constraint is `payload_bits + radix_bits <= 63`, and the payloads are already near the
+limit. This corrects the "ample headroom" characterization of Option A below: the tag
+field is not the binding constraint — the total word budget is.
+
+### Investigation (2026-07-23): the single packed word is only a parse-emit artifact
+
+A read-only trace of the record stream found that the payload ceiling is far
+cheaper to remove than the packed encoding suggests, because the tag and payload
+are **already de-coupled everywhere except at the parse-emit boundary**:
+
+- Parse yields each record as one packed `kind + payload*64` word.
+- The host transport immediately splits it (`compiler/src/selfhost.rs:563`,
+  `let (code, val) = (w.rem_euclid(64), w.div_euclid(64))`) into **two parallel
+  arrays**, `rec_kind[]` and `rec_arg[]` (`reconstruct.kel:28-56`).
+- Reconstruct reads those two arrays separately (`reconstruct.kel:828`,
+  `step(io.rec_kind[start+i], io.rec_arg[start+i])`) and dispatches on them as two
+  independent parameters. It never sees the packed word.
+
+So the 63-bit total-word ceiling exists **only** because parse folds `kind` and
+`payload` into one `i64` before the host unfolds it. If parse instead emits the
+kind and the payload as two separate words (or the host reads a pair), the payload
+gets a full independent word and the record tag namespace becomes unbounded — and
+**reconstruct needs no change at all**, because it already consumes two arrays.
+
+Two further facts from the trace:
+
+- The workspace already uses the reference compiler's side-table idiom in the
+  self-host: `structdefs`, `tupledefs`, and `enums` (`parse.kel:859-984`) carry
+  per-entity fields out of band, indexed from the record. A fat record could join
+  that idiom instead of inline-packing.
+- The inter-stage record format is **internal** to the self-host pipeline. The
+  byte-identity corpus compares the final `Module` bytes, not the record stream,
+  so changing the record encoding does not, in itself, perturb byte-identity — the
+  corpus remains the safety net while the plumbing changes.
+
+**Option E (new, recommended): separate tag and payload into independent words.**
+Emit each record as a `(kind, payload)` pair rather than `kind + payload*64`. The
+payload becomes a full 63-bit word (extensible to further words if ever needed) and
+the tag namespace becomes unbounded, permanently retiring the total-word ceiling.
+Touch map from the trace: parse emit sites and the host transport
+(`selfhost.rs:561-630`) change; reconstruct is untouched. The identical structure
+applies to the token stream (lexer emit / parse consume) and the wire-op stream
+(codegen emit / `decode_op`), which can follow for uniformity once the record
+stream proves the pattern.
+- *Pro:* removes the ceiling instead of deferring it; unbounded tag space and a
+  full-word payload; **nearly free downstream** (reconstruct already two-array);
+  matches the existing two-array transport; the byte-identity corpus is unperturbed
+  in principle, so it stays as the verification net. This is the future-proof answer.
+- *Con:* still a coordinated differential-oracle change (parse emit + host
+  transport, then re-verify the whole corpus); the intermediate streams grow by one
+  word per record, which is immaterial for transient buffers, especially after the
+  24-bit shared-data ceiling lands.
+
+### The workarounds already in use (and their cost)
+
+- **Token space:** eager `and`/`or` sidestep it via the *ident-by-id* pattern (lexed as
+  identifiers, recognized by interned id in operator position). Works for keyword
+  operators; does **not** help a new punctuation operator.
+- **Record/node-kind space:** node kinds live in an un-packed forest array and may exceed
+  63 (64–68 are in use). New parse *records* reuse a value that is only a *node* kind
+  (the "split record/node-kind" pattern; e.g. `bnot` yields record 48 = StructEq's node
+  value). Works, but reusing a node-kind value as a record kind is a latent footgun — a
+  reader cannot tell from the value which namespace applies.
+- **Wire-op space:** the planned `GetTupleField(FlatNested)` for tuple-of-struct will
+  reuse op 53 with a nested *operand form*, distinguished in the driver by operand
+  magnitude. Works, but overloads one op tag with two operand shapes.
+- **Precedence:** `xor` is mapped to `NotEq` (comparison level) and `and`/`or` to coarse
+  values, producing two documented faithfulness defects (`a xor b == c`, `a and b xor c`
+  diverge from the reference; pinned as Gaps in the boundary test).
+
+Each workaround is individually sound and tested, but collectively they are accumulating
+fragility, and the record-kind namespace overload in particular is the kind of thing that
+caused the recent subproject-decoder drift.
+
+## Options
+
+### For the three packed spaces
+
+**A. Widen the low field 6→7 bits (`*64` → `*128`).** Doubles token/record/op capacity to
+0..127. This is an intermediate-representation change only (not a bytecode change): every
+producer that packs (`... * 64`, the `wire.radix` constant in `codegen.kel`, the lexer
+token emit, the parse record yields) and every consumer that unpacks (`w % 64`, `w / 64`
+in the drivers' `decode_op` and reconstruct) must change to 128 in lockstep. The payloads
+are already large multiplications and fit (words are full-width in the self-host's 32-bit+
+floor). Retires the split-kind and operand-overload tricks.
+- *Pro:* clean, uniform, byte-friendly at 8 bits (decode is `word & 0xFF` / `word >> 8`);
+  removes the namespace-overload footguns.
+- *Con:* **little to no word-budget headroom** (see the total-word-budget table above). At
+  the current worst-case payload, a 7-bit radix lands exactly on `i64::MAX` (zero margin)
+  and an 8-bit radix overflows a signed `Word`. Widening the tag therefore is **not** a
+  standalone change: it requires FIRST shrinking the fattest payloads (the
+  array-of-composite equality builders) below 56 bits — see Option D. It is also a
+  coordinated differential-oracle change touching all stages and both drivers, requiring a
+  full re-baseline of the byte-identity corpus and the boundary test as one reviewable
+  step, and it does nothing for precedence.
+
+**D. De-pack the fat payloads (multi-word records or a side table), then widen.** The array-
+of-composite equality builders cram seven sub-fields into a single word; carrying those
+fields across two words (or in an auxiliary descriptor table keyed by record index) drops
+the worst-case payload well below 56 bits and removes the single-word `i64` ceiling that is
+the *actual* wall. Once the payloads are de-packed, an 8-bit (byte-aligned) radix becomes
+safe with comfortable margin.
+- *Pro:* attacks the real constraint (total word budget), not just the tag namespace;
+  makes a subsequent clean 8-bit widening trivial; the multi-word/side-table shape is what
+  the reference oracle already uses for its auxiliary descriptor tables.
+- *Con:* the largest single change of the four; touches the record encode/decode on both
+  the `parse -> reconstruct` and driver sides; must land as one re-baselined oracle step.
+  Best sequenced *before* any radix widening, not after.
+
+**B. Escape/extended-kind codes.** Reserve one value in each space as an escape meaning
+"the real kind/op is in the next word (or the high bits)." Localizes the change to the
+overflow cases only.
+- *Pro:* minimal disruption to existing encodings; pay-as-you-go.
+- *Con:* two-word decode paths add complexity exactly where clarity matters; the drivers
+  and reconstruct grow special cases; still leaves the base space full.
+
+**C. Continue the current reuse patterns (status quo).** ident-by-id for keyword
+operators, split record/node kinds, operand-form reuse for ops.
+- *Pro:* zero infrastructure change; each next increment is "just" more of the same.
+- *Con:* increasingly intricate and error-prone; the record-kind overload is a latent
+  drift hazard; punctuation operators remain impossible; does not scale to the full
+  language.
+
+### For the precedence scale
+
+**P1. Renumber the self-host precedence scale to match the reference's ordering.** Give the
+logical operators (`orelse < andalso < or < xor < and`, all below comparison) distinct
+values with room, fixing the two faithfulness defects.
+- *Pro:* closes the only in-set correctness gap; makes `xor`/`and`/`or` fully faithful.
+- *Con:* renumbering changes operator folding for *existing* operators, so it breaks
+  byte-identity broadly and requires a full re-baseline — a coordinated change guarded by
+  the whole self-compile corpus and the boundary test, not a local edit.
+
+**P2. Accept the defects (status quo), documented.** The two divergent cases are pinned as
+Gaps in `self_hosted_construct_support_boundary`.
+- *Pro:* no work, no risk.
+- *Con:* the self-host is knowingly unfaithful to the reference for those groupings.
+
+## Recommendation
+
+The operator asked for enough capacity to solve the problem durably, with future-proofing.
+The investigation makes **Option E** the clear answer, and it supersedes the earlier
+"D then A" sequencing. Because the tag and payload are already de-coupled downstream (two
+parallel arrays), emitting each record as an independent `(kind, payload)` pair removes the
+total-word ceiling entirely rather than deferring it: the payload gets a full word, the tag
+namespace becomes unbounded, and reconstruct is untouched. A bare radix widening (Option A)
+is a dead end here — 7 bits is zero-margin, 8 bits overflows — and the side-table stopgap
+(Option D / the investigation's "Scheme B") only relocates the fattest known record without
+lifting the ceiling, so it is not worth doing as a stepping stone when E is itself
+low-touch. Recommendation: **Option E for the record stream first** (the high-value,
+low-risk step that resolves the actual P11 wall), then extend the same two-word shape to the
+token and wire-op streams for uniform future-proofing. I continue to recommend treating
+**P1** (precedence) as a separate, self-contained change independent of the packed-space
+work. All of these are differential-oracle changes and must be landed as single,
+fully-re-verified steps against the byte-identity corpus and the boundary test — which is
+exactly the machinery that makes them safe to attempt.
+
+If the roadmap is near-term-bounded and only a few more constructs are expected, **Option
+B** (escape codes) or continued **C** may be proportionate, and **P2** (documented defects)
+is defensible.
+
+## Decision taken (2026-07-24)
+
+1. Packed token/record/op spaces: **E for the record stream** (its fat payload was at the
+   ceiling, so two-word was required), and **an 8-bit radix widening for the token and
+   wire-op streams** (their payloads had headroom, so two-word would have been
+   over-engineering — a refinement of the "then token and wire-op" clause of E, chosen per
+   stream by its actual constraint). Options B/C/D were not used.
+2. Precedence: **P1** (renumber the self-host scale to match the reference). `xor` required
+   its own opcode first (it was folded onto `NotEq`); it now lowers to the same `CmpNe` wire
+   op, so the output stays byte-identical while its precedence is corrected. The two
+   faithfulness Gaps are closed.
+3. Sequencing: the capacity change landed as its own arc on `feat/selfhost-two-word-records`
+   (the six-way host-driver duplication was consolidated first, then the transport, then the
+   capacity increments); the nested-equality frontier is addressed by native `>= 64` tags.
+
+All of the above is implemented, verified byte-identical, and merged to `v0.2.3` (CI-green).
+The change was past the autonomy boundary and was taken with the operator's explicit
+direction at each step.

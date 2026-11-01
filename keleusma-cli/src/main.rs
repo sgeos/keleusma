@@ -21,8 +21,10 @@
 //! by non-enrolled keys. See `strict_mode` for the policy mechanics.
 
 mod duration;
+mod native;
 mod runtasks;
 mod strict_mode;
+mod validate;
 
 use std::env;
 use std::fs;
@@ -37,7 +39,7 @@ use keleusma::compiler::{CompileOptions, compile_with_options};
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::stddsl;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, ExecutionChecks, TrapPolicy, Vm, VmOptions, VmState};
 use keleusma::{Arena, Value};
 
 use strict_mode::{PolicyContext, X25519_PRIVATE_KEY_LEN, build_policy_context};
@@ -58,9 +60,11 @@ fn main() -> ExitCode {
         "run" => run_subcommand(&args[2..]),
         "run-tasks" => run_tasks_subcommand(&args[2..]),
         "compile" => compile_subcommand(&args[2..]),
+        "validate" => validate::run(&args[2..]),
         "strip" => strip_subcommand(&args[2..]),
         "keygen" => keygen_subcommand(&args[2..]),
         "repl" => repl_subcommand(&args[2..]),
+        "native" => native::run(&args[2..]),
         "--help" | "-h" | "help" => {
             print_help();
             ExitCode::SUCCESS
@@ -126,6 +130,14 @@ fn print_help() {
     println!("  run <file> [--verifying-key <keyfile> ...]");
     println!("             [--decryption-key <keyfile> ...]");
     println!("             [--tick-interval <duration>] [--quiet] [--print-memory]");
+    println!("             [--require-trap-free] [--proven-execution]");
+    println!(
+        "                                    --require-trap-free refuses trapping or unproved input."
+    );
+    println!(
+        "                                    --proven-execution also proves operand-stack checks"
+    );
+    println!("                                    cannot fail and implies --require-trap-free.");
     println!("                                    Compile and execute a script.");
     println!("                                    Pass --verifying-key (repeatable) to verify");
     println!("                                    signed compiled bytecode against the");
@@ -139,8 +151,21 @@ fn print_help() {
     println!("                                    configured interval. --print-memory reports the");
     println!("                                    program's worst-case arena footprint and exits");
     println!("                                    without running, for provisioning a host.");
+    println!("  native <kel-native arguments>   Native output, delegated to the `kel-native`");
+    println!("                                    command with every argument unchanged, for");
+    println!("                                    example `keleusma native build <file> --prefix");
+    println!("                                    <name> --out <dir>`. It is found through");
+    println!("                                    KELEUSMA_NATIVE, beside `keleusma`, or on PATH.");
+    println!("  validate <bytecode> [--validator <rust|self-hosted>]");
+    println!("                      [--arena-capacity <bytes>] [--require-trap-free]");
+    println!("                                    Check structure, types and resource bounds.");
+    println!(
+        "                                    Does not execute code or authenticate signatures."
+    );
+    println!("                                    Uses empty native resource attestations.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
     println!("                 [--encryption-key <keyfile>] [--target <name>] [--debug]");
+    println!("                 [--compiler <rust|self-hosted>]");
     println!("                                    Compile to bytecode. With --debug, emit");
     println!("                                    strippable debug metadata (source spans for");
     println!("                                    stack traces); remove it later with `strip`.");
@@ -156,6 +181,26 @@ fn print_help() {
     println!("                                    embedded_16, embedded_8. Programs are");
     println!("                                    validated against the selected target's");
     println!("                                    word, address, and float widths.");
+    println!("                                    --compiler selects the backend: rust");
+    println!("                                    (default, the reference compiler) or");
+    println!("                                    self-hosted (the Keleusma-written pipeline,");
+    println!("                                    host target only, self-hosted subset only:");
+    println!("                                    no float literals, no float + - or *, no");
+    println!("                                    generics, and no CLI preamble). Float");
+    println!("                                    division and comparison, and passing float");
+    println!("                                    values around, DO compile. Text is");
+    println!("                                    unrelated to the subset: neither backend");
+    println!("                                    implements it.");
+    println!("                                    An out-of-subset program errors with a hint");
+    println!("                                    to retry with --compiler rust, naming the");
+    println!("                                    offending construct or the diverging");
+    println!("                                    function; a genuine source error is");
+    println!("                                    reported plainly, without the hint, since");
+    println!("                                    the reference reports the same error.");
+    println!("                                    With self-hosted, signing and encryption");
+    println!("                                    are framed in Keleusma with the Ed25519,");
+    println!("                                    X25519 and AES-GCM primitives in Rust, and");
+    println!("                                    the artifact must equal the reference's.");
     println!("  keygen --seed <out> --public <out>");
     println!("                                    Generate a fresh Ed25519 keypair from the");
     println!("                                    OS RNG. Writes the 32-byte signing seed to");
@@ -309,6 +354,15 @@ fn run_subcommand(args: &[String]) -> ExitCode {
             }
             "--quiet" => {
                 loop_config.quiet = true;
+                i += 1;
+            }
+            "--require-trap-free" => {
+                loop_config.vm_options.trap_policy = TrapPolicy::RequireTrapFree;
+                i += 1;
+            }
+            "--proven-execution" => {
+                loop_config.vm_options.trap_policy = TrapPolicy::RequireTrapFree;
+                loop_config.vm_options.execution_checks = ExecutionChecks::Proven;
                 i += 1;
             }
             "--print-memory" => {
@@ -501,6 +555,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     let mut encryption_key_path: Option<String> = None;
     let mut target: Option<keleusma::target::Target> = None;
     let mut emit_debug = false;
+    let mut backend = Backend::Rust;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -549,6 +604,23 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             "--debug" => {
                 emit_debug = true;
                 i += 1;
+            }
+            "--compiler" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --compiler requires a backend name (rust, self-hosted)");
+                    return ExitCode::FAILURE;
+                }
+                match args[i + 1].as_str() {
+                    "rust" => backend = Backend::Rust,
+                    "self-hosted" | "selfhosted" => backend = Backend::SelfHosted,
+                    other => {
+                        eprintln!(
+                            "error: unknown compiler backend `{other}` (expected rust or self-hosted)"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
             }
             other => {
                 eprintln!("error: unknown option `{}`", other);
@@ -604,13 +676,27 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let module = match compile_source_with_target(&source, target.as_ref(), emit_debug) {
+    let module = match compile_source_with_target(&source, target.as_ref(), emit_debug, backend) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error: {}", e);
             return ExitCode::FAILURE;
         }
     };
+    // A module whose worst-case memory usage cannot be computed is refused
+    // here, because no host can load it at any arena capacity. A module whose
+    // bound is computable but larger than this host's default arena is still
+    // emitted, since a host with a larger arena loads it, which is the
+    // cross-compilation case `--target` exists for. Natives the host has not
+    // attested count zero, as on the load path, so a native call never makes a
+    // bound uncomputable. On the operator's ruling of 2026-10-30.
+    if let Err(reason) = module_arena_sizing(&module) {
+        eprintln!(
+            "error: {input}: the worst-case memory bound cannot be computed, so no host can \
+             load this module: {reason}"
+        );
+        return ExitCode::FAILURE;
+    }
     let bytes = match (signing_key_path, encryption_key_path) {
         (Some(sign_path), Some(enc_path)) => {
             // Signed-and-encrypted path.
@@ -635,15 +721,16 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             let mut ephemeral_seed = [0u8; X25519_PRIVATE_KEY_LEN];
             use rand_core::RngCore;
             rand_core::OsRng.fill_bytes(&mut ephemeral_seed);
-            match keleusma::wire_format::module_to_encrypted_signed_wire_bytes(
+            match encrypt_module(
                 &module,
                 &signing_key,
                 &recipient_pk,
                 &ephemeral_seed,
+                backend,
             ) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("error: encrypting and signing bytecode: {:?}", e);
+                    eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -657,24 +744,21 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match keleusma::wire_format::module_to_signed_wire_bytes(&module, &signing_key) {
+            match sign_module(&module, &signing_key, backend) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("error: signing bytecode: {:?}", e);
+                    eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
             }
         }
-        (None, _) => {
-            // Unsigned, unencrypted (existing default).
-            match module.to_bytes() {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("error: serializing bytecode: {:?}", e);
-                    return ExitCode::FAILURE;
-                }
+        (None, _) => match serialize_unsigned_module(&module, backend) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
             }
-        }
+        },
     };
     if let Err(e) = fs::write(&output_path, &bytes) {
         eprintln!("error: writing {}: {}", output_path, e);
@@ -766,7 +850,13 @@ fn keygen_subcommand(args: &[String]) -> ExitCode {
     }
     let (seed_bytes, public_bytes, kind_label) = match kind {
         KeyKind::Signing => {
-            let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+            // An Ed25519 secret key is any 32 bytes, so it is drawn from the OS RNG and
+            // expanded by `from_bytes`. This is what `SigningKey::generate` does, without
+            // tying the CLI's random source to the `rand_core` release `ed25519-dalek` uses.
+            use rand_core::RngCore;
+            let mut secret = [0u8; ed25519_dalek::SECRET_KEY_LENGTH];
+            rand_core::OsRng.fill_bytes(&mut secret);
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
             let verifying_key = signing_key.verifying_key();
             (signing_key.to_bytes(), verifying_key.to_bytes(), "Ed25519")
         }
@@ -1552,19 +1642,142 @@ fn strip_subcommand(args: &[String]) -> ExitCode {
     }
 }
 
+/// Which compiler backend `compile` uses. `Rust` (default) is the in-tree
+/// reference compiler; `SelfHosted` is the Keleusma-written pipeline
+/// (`keleusma::selfhost`), selected by `--compiler self-hosted`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Rust,
+    SelfHosted,
+}
+
+/// Keep unsigned output on the selected compiler's serialization path.
+fn serialize_unsigned_module(
+    module: &keleusma::bytecode::Module,
+    backend: Backend,
+) -> Result<Vec<u8>, String> {
+    match backend {
+        Backend::Rust => module
+            .to_bytes()
+            .map_err(|e| format!("serializing bytecode: {e:?}")),
+        Backend::SelfHosted => keleusma::selfhost::wire_module_artifact_via_kel(module)
+            .map_err(|e| format!("self-hosted serialization: {e}; retry with --compiler rust")),
+    }
+}
+
+/// Sign on the selected compiler's serialization path. The self-hosted backend produces the
+/// sections through the Keleusma wire stages and frames them through the Keleusma cryptographic
+/// framing (Order 5), with the Ed25519 primitive as a host native. Its artifact is accepted only
+/// when it is byte-identical to the reference signer's, which is deterministic, so a divergence
+/// fails the compile rather than shipping either artifact.
+fn sign_module(
+    module: &keleusma::bytecode::Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    backend: Backend,
+) -> Result<Vec<u8>, String> {
+    let reference = keleusma::wire_format::module_to_signed_wire_bytes(module, signing_key)
+        .map_err(|e| format!("signing bytecode: {e:?}"))?;
+    if backend == Backend::Rust {
+        return Ok(reference);
+    }
+    let framed = keleusma::crypto_frame::signing_sections_via_kel(module)
+        .and_then(|sections| keleusma::crypto_frame::sign_sections(module, &sections, signing_key))
+        .map_err(|e| format!("self-hosted signing: {e:?}; retry with --compiler rust"))?;
+    if framed != reference {
+        return Err(String::from(
+            "self-hosted signing diverged from the reference signer; retry with --compiler rust",
+        ));
+    }
+    Ok(framed)
+}
+
+/// Sign and encrypt on the selected compiler's serialization path, as [`sign_module`] does. Both
+/// sides use the same ephemeral seed, so the reference artifact is the comparison oracle.
+fn encrypt_module(
+    module: &keleusma::bytecode::Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    recipient: &[u8; X25519_PRIVATE_KEY_LEN],
+    ephemeral_seed: &[u8; X25519_PRIVATE_KEY_LEN],
+    backend: Backend,
+) -> Result<Vec<u8>, String> {
+    let reference = keleusma::wire_format::module_to_encrypted_signed_wire_bytes(
+        module,
+        signing_key,
+        recipient,
+        ephemeral_seed,
+    )
+    .map_err(|e| format!("encrypting and signing bytecode: {e:?}"))?;
+    if backend == Backend::Rust {
+        return Ok(reference);
+    }
+    let framed = keleusma::crypto_frame::signing_sections_via_kel(module)
+        .and_then(|sections| {
+            keleusma::crypto_frame::encrypt_sections(
+                module,
+                &sections,
+                signing_key,
+                recipient,
+                ephemeral_seed,
+            )
+        })
+        .map_err(|e| format!("self-hosted encryption: {e:?}; retry with --compiler rust"))?;
+    if framed != reference {
+        return Err(String::from(
+            "self-hosted encryption diverged from the reference; retry with --compiler rust",
+        ));
+    }
+    Ok(framed)
+}
+
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
-    compile_source_with_target(source, None, false)
+    compile_source_with_target(source, None, false, Backend::Rust)
 }
 
 /// Compile the source through the standard pipeline, routing
 /// through [`compile_with_target`] when an explicit target is
 /// provided so the compiler validates the program against the
 /// target's word, address, and float widths before emitting.
+///
+/// With `backend == Backend::SelfHosted` the Keleusma-written pipeline compiles the
+/// user source directly (the CLI preamble is NOT injected, and only the self-hosted
+/// subset at the host target is supported); any out-of-subset program is reported as
+/// an error suggesting `--compiler rust`.
 fn compile_source_with_target(
     source: &str,
     target: Option<&keleusma::target::Target>,
     emit_debug: bool,
+    backend: Backend,
 ) -> Result<keleusma::bytecode::Module, String> {
+    if backend == Backend::SelfHosted {
+        // Resolve the target (host when absent), then run the self-hosted pipeline on the
+        // user source with any shebang line stripped. No preamble is prepended: the
+        // self-hosted compiler declares no natives, so the CLI preamble is out of subset.
+        let host_target;
+        let resolved_target = match target {
+            Some(t) => t,
+            None => {
+                host_target = keleusma::target::Target::host();
+                &host_target
+            }
+        };
+        let user_src: String = match source.strip_prefix("#!") {
+            Some(rest) => match rest.find('\n') {
+                Some(nl) => rest[nl + 1..].to_string(),
+                None => String::new(),
+            },
+            None => source.to_string(),
+        };
+        return keleusma::selfhost::self_hosted_compile(&user_src, resolved_target).map_err(|e| {
+            // Only suggest the Rust backend when it would actually help. A genuine source
+            // error (the reference compiler rejects it too) reports identically under
+            // `--compiler rust`, so the hint would only mislead; report it plainly.
+            if e.rust_backend_would_help() {
+                format!("self-hosted compile: {e}; retry with --compiler rust")
+            } else {
+                format!("compile error: {e}")
+            }
+        });
+    }
     let mut combined = build_preamble();
     // A script may begin with a `#!/usr/bin/env keleusma` shebang so it
     // is directly executable. The lexer skips a shebang only when it is
@@ -1624,12 +1837,44 @@ fn parse_target_name(name: &str) -> Result<keleusma::target::Target, String> {
 /// Worst-case arena byte sizing for `module`: the persistent (`.data`)
 /// region, the transient stream-iteration region, and the total floored at
 /// the working minimum. The total is the arena the runner allocates.
-fn module_arena_sizing(module: &keleusma::bytecode::Module) -> (usize, usize, usize) {
+///
+/// **THE TRANSIENT REGION IS `Err` FOR A PROGRAM WHOSE WORST-CASE MEMORY USAGE
+/// CANNOT BE BOUNDED**, carrying the verifier's own reason. Callers must decide
+/// what to do with that; see [`module_arena_sizing_or_default`] for the
+/// allocation path and [`print_module_memory`] for the reporting path, which
+/// need opposite treatments.
+fn module_arena_sizing(
+    module: &keleusma::bytecode::Module,
+) -> Result<(usize, usize, usize), String> {
     let persistent = keleusma::vm::required_persistent_capacity_for(module);
-    let transient =
-        keleusma::vm::auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
+    let transient = keleusma::vm::auto_arena_capacity_for(module, &[]).map_err(|e| match e {
+        keleusma::vm::VmError::VerifyError(m) => m,
+        other => alloc_fmt_error(other),
+    })?;
     let total = (persistent + transient).max(DEFAULT_ARENA_CAPACITY);
-    (persistent, transient, total)
+    Ok((persistent, transient, total))
+}
+
+/// One-line rendering for a non-`VerifyError` fault from the sizing call.
+fn alloc_fmt_error(e: keleusma::vm::VmError) -> String {
+    format!("{:?}", e)
+}
+
+/// The sizing an allocation needs, substituting the working default when no
+/// bound can be computed.
+///
+/// **THIS SUBSTITUTION IS A FALLBACK AND IS DELIBERATE HERE.** Verification
+/// compares the arena's capacity against the program's bound, so an arena must
+/// exist before the check can run; refusing to allocate would replace a precise
+/// verification error with an allocation error. The unbounded case is caught
+/// immediately afterwards by `Vm::new`, which is why swallowing the reason is
+/// safe on this path and was NOT safe on the reporting path.
+fn module_arena_sizing_or_default(module: &keleusma::bytecode::Module) -> (usize, usize, usize) {
+    module_arena_sizing(module).unwrap_or_else(|_| {
+        let persistent = keleusma::vm::required_persistent_capacity_for(module);
+        let total = (persistent + DEFAULT_ARENA_CAPACITY).max(DEFAULT_ARENA_CAPACITY);
+        (persistent, DEFAULT_ARENA_CAPACITY, total)
+    })
 }
 
 /// Allocate the worst-case arena for `module` and size its persistent
@@ -1639,7 +1884,7 @@ fn module_arena_sizing(module: &keleusma::bytecode::Module) -> (usize, usize, us
 /// robustness point: a host that cannot provide the program's bounded arena
 /// fails actionably rather than with `SIGABRT`.
 fn allocate_module_arena(module: &keleusma::bytecode::Module) -> Result<Arena, String> {
-    let (persistent, _transient, total) = module_arena_sizing(module);
+    let (persistent, _transient, total) = module_arena_sizing_or_default(module);
     let mut arena = Arena::try_with_capacity(total).map_err(|_| {
         format!("out of memory: this program needs a {total}-byte arena, which this host cannot allocate")
     })?;
@@ -1653,9 +1898,45 @@ fn allocate_module_arena(module: &keleusma::bytecode::Module) -> Result<Arena, S
 /// `run --print-memory`, so an operator can size or qualify a host before
 /// deploying, turning the static worst-case-memory bound into an
 /// operational figure.
-fn print_module_memory(module: &keleusma::bytecode::Module) {
-    let (persistent, transient, total) = module_arena_sizing(module);
+///
+/// **IT USED TO FABRICATE THE FIGURE IT EXISTS TO REPORT.** The sizing call
+/// swallowed the verifier's error with `unwrap_or(DEFAULT_ARENA_CAPACITY)`, so a
+/// program whose worst-case memory usage cannot be bounded printed the default
+/// arena as though it were that program's bound, and exited zero. Measured
+/// 2026-09-27 on the recursive example of `book/src/19_why_rejected.md`:
+/// `arena: 65536 bytes total (persistent 0, transient 65536)`, for a program the
+/// runtime refuses on load. An operator sizing a host from that figure would be
+/// provisioning for a program that cannot run.
+///
+/// The crate's value proposition is a DEFINITIVE worst-case bound, so the one
+/// tool whose output is that bound must report a computed figure or no figure.
+fn print_module_memory(module: &keleusma::bytecode::Module) -> Result<(), String> {
+    let (persistent, transient, total) = module_arena_sizing(module).map_err(|why| {
+        format!(
+            "no worst-case memory bound exists for this program, so no arena size can be \
+             reported: {why}"
+        )
+    })?;
     println!("arena: {total} bytes total (persistent {persistent}, transient {transient})");
+    Ok(())
+}
+
+fn print_module_memory_with_options(
+    module: &keleusma::bytecode::Module,
+    options: VmOptions,
+) -> Result<(), String> {
+    if options.execution_checks == ExecutionChecks::Proven {
+        return Err(String::from(
+            "--proven-execution cannot be combined with --print-memory",
+        ));
+    }
+    if options.trap_policy == TrapPolicy::RequireTrapFree {
+        match keleusma::trap_analysis::classify_traps(module) {
+            Ok(keleusma::trap_analysis::TrapVerdict::TrapFree) => {}
+            result => return Err(format!("trap policy requires TrapFree: {result:?}")),
+        }
+    }
+    print_module_memory(module)
 }
 
 /// Run a source program through compile and execute. The runner
@@ -1669,12 +1950,12 @@ fn execute_source(
 ) -> Result<(), String> {
     let module = compile_source(source)?;
     if print_memory {
-        print_module_memory(&module);
-        return Ok(());
+        return print_module_memory_with_options(&module, loop_config.vm_options);
     }
     let entry_kind = detect_entry_kind(&module)?;
     let arena = allocate_module_arena(&module)?;
-    let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+    let (mut vm, _) = Vm::new_with_options(module, &arena, loop_config.vm_options)
+        .map_err(|e| format!("verify: {:?}", e))?;
     drive_to_completion(&mut vm, &arena, entry_kind, loop_config)
 }
 
@@ -1807,8 +2088,7 @@ fn execute_bytecode(
     let module = load_module(bytes, verifying_keys, decryption_keys, policy)?;
 
     if print_memory {
-        print_module_memory(&module);
-        return Ok(());
+        return print_module_memory_with_options(&module, loop_config.vm_options);
     }
 
     // Auto-size the arena from the module's declared bounds and allocate it
@@ -1826,7 +2106,8 @@ fn execute_bytecode(
     // happened during load_module. The flag is cleared in
     // load_module so Vm::new accepts the module without further
     // checks.
-    let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+    let (mut vm, _) = Vm::new_with_options(module, &arena, loop_config.vm_options)
+        .map_err(|e| format!("verify: {:?}", e))?;
     for key in verifying_keys {
         vm.register_verifying_key(*key);
     }
@@ -1850,6 +2131,8 @@ struct LoopRunnerConfig {
     /// exceeds the configured interval. Default false (warnings
     /// emitted).
     quiet: bool,
+    /// Host-selected trap policy and execution proofs, applied before running.
+    vm_options: VmOptions,
 }
 
 /// Outcome of inspecting the loaded module's entry chunk. Drives
@@ -2399,6 +2682,30 @@ fn print_value(v: &Value, arena: &Arena) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unsigned_serializer_dispatch_reaches_the_selected_backend() {
+        let mut module = super::compile_source_with_target(
+            "fn main() -> Word { 7 }",
+            None,
+            false,
+            super::Backend::SelfHosted,
+        )
+        .unwrap();
+        assert_eq!(
+            super::serialize_unsigned_module(&module, super::Backend::SelfHosted).unwrap(),
+            super::serialize_unsigned_module(&module, super::Backend::Rust).unwrap(),
+        );
+        // A discriminator makes reference serialization on both branches fail this test.
+        // This is an artificial module, never emitted by the unsigned command path.
+        module.flags |= keleusma::wire_format::FLAG_REQUIRES_SIGNATURE;
+        assert!(super::serialize_unsigned_module(&module, super::Backend::Rust).is_ok());
+        assert!(
+            super::serialize_unsigned_module(&module, super::Backend::SelfHosted)
+                .unwrap_err()
+                .contains("dedicated encoders")
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -2425,13 +2732,14 @@ mod tests {
         let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
 
         // Release build (no debug).
-        let release_bytes = compile_source_with_target(src, None, false)
+        let release_bytes = compile_source_with_target(src, None, false, Backend::Rust)
             .expect("compile release")
             .to_bytes()
             .expect("encode release");
 
         // Debug build carries a debug pool on the calling chunk.
-        let debug_module = compile_source_with_target(src, None, true).expect("compile debug");
+        let debug_module =
+            compile_source_with_target(src, None, true, Backend::Rust).expect("compile debug");
         assert!(
             debug_module.chunks.iter().any(|c| c.debug_pool.is_some()),
             "a --debug compile should attach debug metadata"
