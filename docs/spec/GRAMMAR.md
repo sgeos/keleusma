@@ -999,6 +999,8 @@ A device loading this bytecode rejects the module unless the attached signature 
 
 Patterns appear in function heads, `match` arms, and `let` bindings.
 
+A `let` pattern must be irrefutable for the type of its value, since a `let` has no other arm to take. A variable, a wildcard, a tuple or struct pattern whose parts are all irrefutable, and a variant pattern of an enum that declares a single variant are irrefutable. A literal pattern, a variant pattern of an enum with more than one variant, including `Option::Some` and `Option::None`, and any pattern holding one of these are refutable, and the compiler refuses them in a `let` with a message that points to `match`.
+
 ### Pattern Forms
 
 | Pattern | Example | Matches |

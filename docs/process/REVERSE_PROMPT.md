@@ -99,6 +99,55 @@ The array design, `ARRAY_WIRE_SLOT_DESIGN.md`, and the ring design, `RING_BUFFER
 
 After the explanation of the two encodings, "Proceed with encoding F."
 
+## Rulings received first-hand, third list, 2026-10-31, verbatim
+
+A third consolidated list of decisions and concerns was answered first-hand in this session.
+
+> 1. A. Yes, when an overflow is possible or guranteed.
+> 2. A. Runtime batch length should eventually be supported subject to WCET and WCMU analysis
+>    feasibility. A ring buffer has fixed memory, so my understanding is that this is gated on
+>    WCET.
+> 3. Later. I will address this once your line is otherwise idle. I plan to pull the V0.2.X work
+>    and V0.3.X work together and address loose ends before a release.
+> 4. B.
+> 5. B.
+> 6. B.
+> 7. A.
+> 8. Recommendation accepted.
+> 9. Recommendation accepted.
+> 10. Recommendation accepted.
+> 11. Acknowledged.
+> 12. Acknowledged.
+> 13. Acknowledged.
+
+> Re: Concerns.
+>
+> - We already know that contract violations can cause problems.
+> - The goal of `auto_arena_capacity_for` is to right-size an arena automatically. If the current
+>   implementation does not do this, then fix it so it does. This might mean you need another
+>   function or two to handle other use cases.
+> - Yes, we want to stick to defined results. If it will work for [a deployment context withheld
+>   under Appendix B], the solution is likely acceptable.
+> - We want full language coverage, including the pipe operator.
+> - Aknowledged.
+> - Probably an update in progress.
+
+One phrase in the third concern is replaced by a bracketed reference, because the words name
+context that Appendix B keeps out of tracked files. The rest is verbatim.
+
+| Item | Question | Ruling |
+|---|---|---|
+| 1 | Ring batch push B1, a required `overflow` arm | (a), required when an overflow is possible or guaranteed |
+| 2 | Ring batch push B2, a run-time batch length | (a) for the first pass, a run-time length later where the time bound allows |
+| 3 | When to cut V0.2.3 | Later, when this line is otherwise idle, together with the V0.3.X work |
+| 4 | A resume value whose type only a later use fixes | (b), feed the type checker's types to monomorphization |
+| 5 | Nested struct and single-variant enum `let` in the self-hosted compiler | (b), extend the stages now |
+| 6 | The local `archive/*` tags | (b), recreate with the noreply address and push |
+| 7 | Stale worktrees of other lines | (a), tell the owners, the operator unlocks the locked one |
+| 8 | A unit variant pattern matching a `Word` scrutinee | Refuse it |
+| 9 | A delegated callee yielding another type than the entry | Refuse it at compile time |
+| 10 | Clippy under `--no-default-features` on tests | Gate the dead code |
+
 ## Done, 2026-10-31
 
 | Pull request | Merge | What it carries |
@@ -116,36 +165,42 @@ nineteen stale worktrees were removed, and three unmerged branches and one dirty
 kept as local `archive/*` tags. GitHub refused the tags because those commits carry the
 private author email, so they exist only in the shared local repository.
 
+Later on 2026-10-31, pull requests 687, 690 and 691 merged, the rulings record, the private read
+alias with a VM overlap fix that Miri under Tree Borrows passed, and the fuzz corpus editorconfig
+exemption. Item 6 is done, with the four `archive/*` tags on GitHub, three of them recreated
+with the noreply address and identical trees.
+
 ## In progress
 
-- The private read alias, option (c), on `fix/v02-private-read-alias`.
-- Refutable `let` refusal, struct destructuring in `let`, pipes in the self-hosted compiler, and
-  V0.3.X sequence 181's unmonomorphized call on an unannotated resume value, on
-  `feat/v02-let-patterns-pipes`.
+- Pull request 694, refutable `let` refusal, struct destructuring, pipes in the self-hosted
+  compiler and the monomorphized resume type.
+- Items 4, 8, 9 and 10, and pipe resolution under shadowing, on `fix/v02-typecheck-followups`.
+- The `Text<N>` method surface with fully defined results for malformed values, on
+  `feat/v02-text-methods`.
+- Item 5, nested and single-variant enum `let` patterns in the self-hosted stages, on
+  `feat/v02-selfhost-let-patterns`.
 
 ## Next, in order
 
-1. Integrate the two branches above.
-2. Switch the `Text<N>` operations to method calls, `a.concat(b)` and the like, replacing the
-   free functions of pull request 682, as D1 directs.
-3. Encoding F, the per-field schema hash, option B addressing, the field-based `DataLayout`,
-   and then packed private storage S1, under `ARRAY_WIRE_SLOT_DESIGN.md`. No fingerprint or
-   version moves before the release is cut, per C3.3. Artifacts inside the repository built
-   under the old layout are regenerated in the same change, since nothing is published.
-4. The ring buffer, after the batch-push overflow arm of D4 is written into
-   `RING_BUFFER_DESIGN.md` for review.
-5. The C5 review of the self-hosted validator, once the self-hosted changes above land.
+1. Right-size `auto_arena_capacity_for` for the virtual machine route again and add a function
+   for the native route, on the operator's concern ruling, once V0.3.X states what a native-only
+   host allocates. Its request is sequence 186.
+2. Encoding F, the per-field schema hash, option B addressing, the field-based `DataLayout`, then
+   packed private storage S1, under `ARRAY_WIRE_SLOT_DESIGN.md`.
+3. The ring buffer, with the batch push and a required `overflow` arm where overflow is possible
+   or guaranteed.
+4. The C5 review of the self-hosted validator.
+5. The release, which the operator takes up once this line is otherwise idle.
 
 ## Decisions waiting on the operator
 
-1. **The batch-push overflow arm**, once it is written into the ring design.
-2. **V0.3.X's native header figure.** V0.3.X keeps `<prefix>_region_bytes` for a C host that
-   cannot call `auto_arena_capacity_for`, and put that choice to the operator in its own
-   session. That line documents that the two figures must not be added together.
+None is open on this line. V0.3.X's native header figure was answered first-hand in that line's
+session as its question 28, option (a), reported in sequence 184, so the item is dropped.
 
 ## Concerns
 
-- Item 1 leaves the field-order contract to the host. A reordered `Text` field read crosswise is
+- Item 1 leaves the field-order contract to the host, which the operator accepted as a known
+  property of contract violations. A reordered `Text` field read crosswise is
   undefined behaviour, which only the documented contract excludes.
 - The fold of question 22 means `auto_arena_capacity_for` is no longer the virtual machine's
   byte-exact minimum. A host that runs only the virtual machine is over-provisioned by the

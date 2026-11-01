@@ -73,6 +73,12 @@ run.
   `tests/ci_shard_coverage.rs`. Its one full run put the shards at 32.5 to 35.5
   minutes, against 26 to 37 before. Measure four more full runs, and if the longest
   shard is not clearly shorter, put keeping the lists or plain hashing to the operator.
+- **Scratch volume.** On the operator's request of 2026-10-31 this worktree's `target`
+  is a link to `/Volumes/Scratch/keleusma/kaizen/target`. Run
+  `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
+  target` after any `cargo clean`. The proposal to adopt it in `worktree.sh`, and the
+  orphaned copy of `kaizen-test-duration`, wait on the operator. See
+  [the proposal](../kaizen/2026-10-31-scratch-volume-proposal.md).
 - **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
   so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
   Applying it is the operator's decision.
@@ -107,18 +113,24 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and measure
    the shards on four full runs after PR 689.
-2. If the operator applies `idleCompaction: false`, run `context_quality.py` again
+2. Claude Code makes its agent trees under `.claude/worktrees/` without
+   `worktree.sh`, so PR 697 does not link them, as the administrator session noted on
+   2026-10-31. Four held 11.7 GB of `target` on the data volume that day. Check for a
+   worktree hook, or report unlinked trees in `worktree.sh list`. Their output is the
+   operator's to move or delete.
+3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
    about two weeks later and compare with the trial report.
-3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
-6. Measure branch-run cost again once changelog fragments are in use.
+5. Finish the three selection tasks, record their outcomes, and read the comparison.
+6. A state-file budget guard, once the owning lines have converted their files.
+7. Measure branch-run cost again once changelog fragments are in use.
 
 ## Open with the operator
 
 [The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
-list. Whether to apply `idleCompaction: false` is open. The operator's own checks K6,
+list. Whether to apply `idleCompaction: false` is open, and so are the scratch-volume
+proposal, the orphaned scratch copy and this line's temporary target directories. The operator's own checks K6,
 K9, K10 and K11 remain, and K14 is held. K13 waits on a proofs session, because
 `origin/proofs` is unchanged since the release and its inbox holds the release unread.
 
@@ -139,7 +151,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `4577769ebcf25dac580ad11a2717de1169188e98c3234205fac9bafc0827e3ef`, 189 messages, 8 unacknowledged at export, none addressed to `kaizen` |
+| [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
@@ -153,8 +165,10 @@ Pilot judgments never change gates.
   cannot read the known hosts file.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
-- `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER` and an
-  isolated `CARGO_TARGET_DIR`.
+- `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER`, in the
+  linked `target`. The isolated `CARGO_TARGET_DIR` directories under the sandbox's
+  temporary directory hold 8.5 GB on the data volume, and their deletion is the
+  operator's decision.
 
 ## Governing rules
 
