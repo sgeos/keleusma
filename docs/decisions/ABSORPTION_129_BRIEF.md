@@ -92,7 +92,9 @@ follow the private read copy of 690. Six new emitter sites were classified in
 
 ## Verification
 
-Made with `RUSTC_WRAPPER=` at `915e739c` and again after the records.
+Made with `RUSTC_WRAPPER=` and `KEL_REQUIRE_LLVM_TOOLS=1`, at `915e739c` and
+again at `841b75b4` after the records. The figures below were written after
+the second run, and only this file changed afterwards.
 
 The first full run at `915e739c` passed every step except the two native
 suites, at 874 passed, 2 failed and 1 ignored each. Both failures were records
@@ -101,10 +103,10 @@ and the state table's test count. After them:
 
 | Check | Result |
 |---|---|
-| Native fmt, clippy in both float configurations, doc and shellcheck | FILL |
-| Native suites, default features and `narrow-float-32` | FILL |
-| Root `documentation_links`, `comment_citations`, `ci_shard_coverage` and `gate_ci_correspondence` | FILL |
-| Root `confinement_analysis`, `rogue_scripts`, and with `self-host` `selfhost_full_language` and `selfhost_parse_refusals` | FILL |
+| Native fmt, clippy in both float configurations, doc and shellcheck | passed |
+| Native suites, default features and `narrow-float-32` | 876 passed, 0 failed, 1 ignored each, over 178 test binaries |
+| Root `documentation_links`, `comment_citations`, `ci_shard_coverage` and `gate_ci_correspondence` | 21 passed |
+| Root `confinement_analysis`, `rogue_scripts`, and with `self-host` `selfhost_full_language` and `selfhost_parse_refusals` | 62 and 122 passed |
 
 The root workspace suite was not run locally. The hosted run on the pull
 request covers it. The native differential for the `text` methods of 701, and
