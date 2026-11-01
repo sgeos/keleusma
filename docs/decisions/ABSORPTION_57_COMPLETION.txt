@@ -1,0 +1,43 @@
+COMPLETION CONDITION — absorption 57 and the width-discipline census
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE ABSORPTION PREDICTION IS RECORDED BEFORE ITS OUTCOME.
+   A document in the tree states, in advance of the merge, how many files were
+   expected to conflict, which ones, and what was expected of the suite. The
+   outcome is recorded beside it, stating for each clause whether it hit, and
+   naming any clause that missed rather than quietly restating the prediction.
+
+2. THE OWNERSHIP BOUNDARY IS VERIFIED, NOT ASSUMED.
+   After absorbing, the repository-root src/ and tests/ are byte-identical to the
+   other line's branch, checked rather than asserted.
+
+3. THE NAMED RISK IS CLEARED BY EVIDENCE, NOT BY A GREEN AGGREGATE.
+   The incoming set changes files that are also corpus subjects of this backend.
+   Somewhere in the tree, the corpus-derived figures affected by that are
+   re-derived and stated -- module count, refusal set, and any site or chunk
+   figure pinned to an exact number -- rather than left to a passing suite.
+
+4. EVERY PLACE THE EMITTER MOVES AN OPERAND AS A WORD IS ENUMERATED.
+   A single place in the tree lists those sites and classifies each by whether a
+   composite body operand can reach it, and if so what stops the address being
+   stored where it would outlive the memory it points into. A site with no answer
+   is stated as open rather than omitted.
+
+5. THAT ENUMERATION IS NON-VACUOUS AND FAILS ON GROWTH.
+   It finds the sites already known -- including the data-slot site that was a
+   defect -- and a new site of the same kind causes a failure that asks for
+   classification rather than passing silently.
+
+6. THE CENSUS STATES WHAT IT CANNOT DO.
+   It does not claim to prove any individual site is guarded, and says so next to
+   itself.
+
+7. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT OTHER THAN WHAT THE ABSORPTION BRINGS IN.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

@@ -1,0 +1,55 @@
+COMPLETION CONDITION — source-string whole-module differential
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. A MULTI-FUNCTION PROGRAM WRITTEN INLINE IS RUN BOTH WAYS AND COMPARED
+   The tree contains an executable check that takes a program as text, runs it
+   through the native lowering and through the reference implementation, and
+   compares the results. It works for a program in which one function calls
+   another, which the pre-existing inline harness could not express.
+
+2. THE TWO SIDES DEMONSTRABLY RUN THE SAME FUNCTION
+   The check establishes, rather than assumes, that the function invoked
+   natively is the one the reference implementation runs. A comparison between
+   two different functions must not be able to report agreement.
+
+3. FAILURE MODES A VALUE COMPARISON CANNOT SEE ARE GUARDED
+   Writes past the end of every caller-provided buffer are detected, and the
+   shape of the compiled entry point is checked before it is called through.
+   Both guards are present because a uniform offset error returns correct values
+   and a shape mismatch crashes without attribution.
+
+4. THE HARNESS IS SHOWN TO BE ABLE TO FAIL
+   Evidence in the tree distinguishes the harness detecting agreement from the
+   harness being unable to detect anything: at least one case it reports as
+   agreeing and one closely related case it would report as disagreeing.
+
+5. ANY WIDENING OF WHAT THE BACKEND ACCEPTS IS BACKED BY EXECUTION
+   If the backend now accepts something it previously refused, the tree contains
+   a check that runs that thing and compares it against the reference, AND
+   evidence that the check fails without the change. If no widening was made,
+   the tree records that decision and its reason. Either outcome is acceptable;
+   an unverified widening is not.
+
+6. FIGURES THAT COULD HAVE MOVED ARE RE-DERIVED
+   Corpus coverage figures are re-measured and stated, whether or not they
+   changed, rather than copied forward.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the project's verification gate, or of the
+   subproject step it contains, showing formatting, lint with warnings denied,
+   tests, and the documentation build all clean. Test results give both the
+   runner's exit status and the summed pass, fail and binary counts, and the two
+   agree.
+
+8. CLAIMS MATCH THE TREE
+   No document asserts a figure, blocker, or cause the tree contradicts.
+   Anything corrected is visible as corrected rather than silently replaced, and
+   nothing is described as verified that was not executed.
+
+9. WORK IS INTEGRATED AND CLEAN
+   No uncommitted changes remain and the local branch agrees with its remote.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

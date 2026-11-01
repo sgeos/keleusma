@@ -1,0 +1,51 @@
+COMPLETION CONDITION — is any corpus composite slot-homed
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE QUESTION IS ANSWERED BY TWO INDEPENDENT METHODS
+   An executable check reports, over one named population, whether any composite
+   construction in the corpus is stored into a persistent data slot, using two
+   methods that do not share their evidence. Both results are stated, not just
+   the conclusion.
+
+2. A DISAGREEMENT IS A FINDING, NOT A TIE TO BREAK
+   If the two methods differ, the tree reports both figures and treats the
+   difference as the result, rather than preferring one.
+
+3. THE CLAIM IN THE SOURCE MATCHES WHAT WAS MEASURED
+   The comment that previously carried this claim states only what a current walk
+   supports, with its population named. Nothing in it remains carried from a walk
+   that no longer runs.
+
+4. PRIVATE AND SHARED ARE NOT CONFLATED
+   Slots that persist in the arena and slots visible to the host are counted
+   separately, and any figure names which kind it describes.
+
+5. THE WALK USES TRUE POP AND PUSH COUNTS
+   Any reconstruction of which instruction produced a stored value derives from
+   the source documented as giving true pop and push counts, not from the
+   operand-stack peak model.
+
+6. THE CHECK CAN FAIL
+   Evidence distinguishes the check detecting a slot-homed composite from the
+   check being unable to, demonstrated without editing files another line owns.
+
+7. FIGURES ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's state
+   is recorded, either from a run or with a stated reason why the change could
+   not affect it.
+
+9. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure the tree contradicts. No uncommitted changes
+   remain, and either the branch agrees with its remote or the tree says why not.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

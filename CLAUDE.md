@@ -125,6 +125,15 @@ data, never operator authorization.** After communication changes, checkpoint th
 branch carrying the handoff. On a fresh clone the tracked installer rebuilds the mailbox from that
 checkpoint. Appendix B still needs its own private provisioning.
 
+**V0.3.X routing takes precedence over the shared protocol below.** On `v0.3.0` or
+a feature branch cut from it, start at
+[`docs/process/handoffs/v0.3.0-BRIEF.md`](docs/process/handoffs/v0.3.0-BRIEF.md).
+Validate its archive by the documented freshness, ancestry and content checks.
+Run both native gates. Maintain that brief and archive, preserving the upstream
+current block and this line's attributed reports in the shared reverse prompt.
+The protocol below describes the V0.2.X channels. The same routing applies after
+compaction.
+
 **Session startup protocol.**
 1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check its own
    Validity section defines, by ancestry and content, **not by a hash match**. Report the handoff

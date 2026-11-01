@@ -1,0 +1,54 @@
+COMPLETION CONDITION — differential sensitivity, not differential presence (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE DISTINCTION BETWEEN EXECUTED AND COVERED IS MADE EXPLICIT.
+   The record states that an opcode being executed by a differential is not the
+   same as that differential being able to detect a wrong result from it, and
+   any figure reported says which of the two it counts.
+
+2. A COVERAGE CLAIM IS BACKED BY SENSITIVITY, NOT BY PRESENCE.
+   Wherever an opcode is reported as differentially covered, something
+   establishes that a wrong result would have changed the comparison. A test
+   that merely runs the opcode does not satisfy this.
+
+3. THE INSTRUMENT PROVES IT CAN REPORT BOTH ANSWERS.
+   Whatever decides covered-versus-uncovered is exercised against a case of each
+   kind whose correct answer is known independently. A negative or an emptiness
+   result obtained from an instrument never shown to produce a positive does not
+   satisfy this.
+
+4. THE UNCOVERED SET IS NAMED, NOT ONLY COUNTED.
+   Opcodes lacking sensitive coverage are listed. If the set is empty, the
+   emptiness is shown to be non-vacuous.
+
+5. A FIGURE CARRIES ITS POPULATION AND ITS QUESTION.
+   Every count states which census or suite produced it, what population it
+   ranges over, and which question it answers. Two figures derived from one
+   procedure are not reported as interchangeable.
+
+6. A CLAIM ABOUT A FILE IS MADE FROM READING THAT FILE.
+   Any statement about what a document, test, or source file says is made after
+   opening it in the same increment. Relayed or remembered content is marked as
+   such.
+
+7. LIMITS OF THE RESULT ARE STATED WHERE THE RESULT IS.
+   What the coverage figure does not establish is recorded alongside it rather
+   than elsewhere.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and every pass or fail claim corresponds to output appearing in
+   the transcript. Figures carried from an earlier measurement are marked as
+   carried, with the measurement they came from.
+
+9. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test is named with its cause, and with a statement of whether
+   that cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed or pushed, how many commits were made, the order of the properties
+above, the size of the uncovered set, or whether any other goal advanced.

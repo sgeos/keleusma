@@ -1,0 +1,36 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE GATE RUNS AN OPTIMISED PHASE
+- The backend gate script runs at least one phase with the optimiser enabled, and
+  that phase contributes to the script's single pass-or-fail verdict rather than
+  being able to fail unnoticed.
+- The optimiser setting applies only to that phase, so no other phase's meaning
+  changes.
+
+2. THE SCOPE AND COST ARE WRITTEN WHERE THEY ARE DECIDED
+- The script records which part of the suite the optimised phase covers and which
+  part remains a manual sweep.
+- The measured cost of both is recorded, so the next person weighing the manual
+  half has a number rather than an impression.
+
+3. IT WAS ACTUALLY EXECUTED
+- The tree records a gate run in which the new phase appeared and passed, rather
+  than the phase merely existing in the script.
+
+4. NO OVERCLAIMING
+- Nothing states or implies that the gate now covers optimised execution of the
+  whole suite if it does not.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

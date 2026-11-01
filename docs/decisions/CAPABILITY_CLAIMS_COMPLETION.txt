@@ -1,0 +1,47 @@
+COMPLETION CONDITION — capability claims and what their bodies show
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE SET IS DEFINED BY RULE BEFORE IT IS AUDITED
+   The tree states which tests were examined and the syntactic rule that selected
+   them, so the set is not the ones that came to mind.
+
+2. EVERY MEMBER IS CLASSIFIED AGAINST THE RIGHT QUESTION
+   Each test is recorded as either demonstrating the capability its name asserts,
+   or not. Whether the underlying property is true is treated as a separate
+   matter from whether the body demonstrates the capability, and a passing test
+   is not taken as evidence that its name is accurate.
+
+3. THE RESULT IS A RATE WITH ITS BLIND SPOT
+   The tree states how many overclaimed out of how many, and names the classes of
+   name this rule cannot see, so the figure is not read as covering all tests.
+
+4. CORRECTIONS CHOOSE THEIR DIRECTION
+   Where name and body disagree, the tree says whether the name was narrowed or
+   the body strengthened, and why that direction was right. A claim worth having
+   is not quietly downgraded to make a name true, and no correction introduces
+   the same defect.
+
+5. SOUND IS A LEGITIMATE VERDICT
+   Tests whose bodies do demonstrate their claim are recorded as such and left
+   alone.
+
+6. FIGURES CARRY THEIR POPULATION AND ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed, and every figure names the set it was measured over.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's state
+   is recorded, either from a run or with a stated reason why the change could
+   not affect it.
+
+8. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree says
+   why not. Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs,
+   and the CI workflow directory.

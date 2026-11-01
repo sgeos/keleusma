@@ -1,0 +1,51 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE CENSUS
+- A test under native_codegen/tests/ decomposes the backend's published host
+  arena figure into its constituent planner terms for every corpus module that
+  has an entry point, not for a hand-picked subset.
+- The census asserts that the named terms account for the published figure: they
+  do not exceed it, and any unexplained remainder is bounded by a stated
+  threshold with the reason for that threshold given.
+- Modules with a stream chunk and modules without are reported separately, since
+  the spill reservation applies only to the former.
+- The population size is asserted to be non-trivial, so a census that enumerated
+  nothing cannot pass.
+- A figure the census pins fails when it moves, and the failure message asks for
+  a classification rather than a new constant.
+
+2. THE RESULT IS RECORDED HONESTLY
+- The tree states what fraction of the published figure is the flat spill
+  reservation, across the corpus rather than across the three shapes that
+  motivated the question.
+- The record says plainly that over-provisioning is safe and that the
+  reservation's stated rationale stands; the finding is the size of the
+  looseness, not its existence.
+- If the decomposition does not account for the published figure, that is
+  recorded as the result rather than worked around.
+
+3. NO PLANNER CHANGE
+- The region planner's behaviour is unchanged by this work. If any change to it
+  is made, the reason is recorded and the open soundness obligation against it is
+  addressed explicitly.
+
+4. THE SHARED RECORD
+- The project-level catalogue of ways a green verification run has under-reported
+  includes the case where a gate run phase by phase has its verdict assembled by
+  hand, so a phase can be omitted without anything saying so.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any test that does not pass is recorded as a finding rather than deleted,
+  skipped, or weakened.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

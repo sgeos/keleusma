@@ -1,0 +1,38 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE SWEEP IS RE-RUN ON THE CURRENT EMITTER
+- The corpus execution differential has been run with the optimiser enabled on a
+  tree that includes the width changes, and the outcome is recorded with the
+  commit it covers.
+- The generated-program differentials have also been run with the optimiser
+  enabled, or the tree records why they were not.
+- The record states that a previous green sweep predates those changes and
+  therefore did not cover them.
+
+2. THE OPTIMISER IS SHOWN TO HAVE RUN
+- The tree records evidence that the optimiser actually executed, independent of
+  wall-clock time, since a flat runtime is not evidence either way here.
+
+3. FINDINGS
+- Any divergence under optimisation is recorded as a finding, reduced toward a
+  minimal case, and described as the two implementations disagreeing rather than
+  as a verdict about which is wrong.
+- Nothing is weakened, skipped or deleted to make a run green.
+
+4. NO LINGERING STATE
+- No later measurement silently runs under different settings because of this
+  work.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations at the default optimisation setting.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

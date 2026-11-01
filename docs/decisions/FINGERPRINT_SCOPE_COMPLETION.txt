@@ -1,0 +1,48 @@
+COMPLETION CONDITION — the guard covers what the figures depend on
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE GUARD'S POPULATION MATCHES ITS CONSUMERS'
+   The check that detects a change to the shared corpus covers every source root
+   that the tree's corpus-derived figures are computed from, and the tree shows
+   how that set was determined from what those consumers read rather than from a
+   list that looked correct.
+
+2. WHAT IS READ, NOT ONLY WHAT COMPILES
+   Files that the loaders read but skip are still covered, because a change that
+   made one usable would move the figures.
+
+3. AGREEMENT BETWEEN INSTRUMENTS IS EXPLAINED, NOT ASSERTED
+   Where two measurements over different populations report the same value, the
+   tree states why, established by running something rather than by reasoning.
+   If a previously published claim of corroboration does not survive that, the
+   correction is visible and the superseded wording remains quoted.
+
+4. THE GUARD IS SHOWN TO BE ABLE TO FAIL
+   Evidence distinguishes the check detecting a change from the check being
+   unable to, demonstrated without editing files another line owns.
+
+5. SCOPE IS STATED HONESTLY
+   The tree names which inputs are covered and which are not, and no document
+   describes the guard as protecting figures whose inputs it does not read.
+
+6. FIGURES ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   moved, and any figure whose population changed is restated with its new
+   population named.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's
+   state is recorded, either from a run or with a stated reason why the change
+   could not affect it.
+
+8. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree says
+   why not. Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs,
+   and the CI workflow directory.

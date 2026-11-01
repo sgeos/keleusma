@@ -1,0 +1,45 @@
+COMPLETION CONDITION — seeding the type-verification stage
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The type-verification self-hosted stage is driven from more than one
+   subject, or the tree records why it cannot be and names the
+   obstacle.
+
+2. Each driven subject is shown to reach its verdict within the drive
+   budget, and to move that verdict. A subject that runs without
+   reaching or moving its verdict is reported rather than counted as
+   agreement.
+
+3. The tree states why the subjects are sized as they are, referring to
+   the stage's own published step bound rather than leaving the size
+   unexplained.
+
+4. Shared slots are resolved by name through the module layout, never
+   by a computed or assumed index.
+
+5. The report states how many stages are seeded and names those still
+   unseeded, and does not imply the unseeded set is closed.
+
+6. Files owned by the other line are unmodified. Defects found in them
+   are recorded as reports, including any documented host-facing
+   channel that nothing reads, and any discrepancy between a stage's
+   published step bound and the budget it is driven with.
+
+7. Any stage that disagrees on a newly added subject is reported as a
+   finding and investigated, not exempted or masked.
+
+8. The tree does not claim the Order-1 gate is met.
+
+9. Any claim that a figure changed is supported by a recorded
+   measurement of both the before and after values.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.

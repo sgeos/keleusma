@@ -1,0 +1,9715 @@
+//! Lowering of verified Keleusma bytecode to LLVM IR (V0.3.x Workstream A).
+//!
+//! # Scope
+//!
+//! This is a subset of the instruction set: **60 of 66 opcodes lower**, 2 are
+//! named refusals and 3 are unproven (re-derived 2026-08-27; the subset was
+//! **46** when this note was written). Everything outside it is refused rather
+//! than lowered to something plausible and wrong.
+//!
+//! **Re-derive rather than trusting the figure**, since it moves as the subset
+//! widens: `cd native_codegen && cargo test --test isa_lowering_census -- --nocapture`.
+//! Widening the subset is the work of subsequent increments, tracked in
+//! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
+//!
+//! The integer arithmetic surface is complete as of this increment, which is
+//! not the same set of opcodes it looks like. `Op::Add`, `Op::Sub`, `Op::Mul`
+//! and `Op::Neg` do **not** implement `Word` arithmetic; consolidation B
+//! narrowed them away from `Int` operands and the compiler emits
+//! `Checked{Add,Sub,Mul,Neg}; PopN(2)` instead. Those four unchecked opcodes are
+//! reachable only for `Byte`, `Fixed` and `Float`.
+//!
+//! **The clause that used to follow -- that none of those three representations
+//! is settled -- EXPIRED when the float slices landed.** `Float` is settled by
+//! the operator's Option A ruling and lowered, and these arms dispatch on the
+//! operand's kind tag rather than refusing wholesale. `Byte` and `Fixed` are not
+//! restated here, because the increment that corrected this sentence measured
+//! neither.
+//!
+//! All 66 opcodes are emitted by the reference compiler, so there is no dead
+//! region of the instruction set to skip. Verified by enumeration, 2026-08-08.
+//!
+//! # The correctness signal
+//!
+//! The oracle is differential execution against the VM over the same bytecode,
+//! per `docs/roadmap/V0_3_X_ROADMAP.md`. It is not a formality: the first
+//! version of this lowering carried a real defect that a single test case
+//! passed straight through (see `stack depth` below). Do not add an opcode
+//! without adding inputs that distinguish it.
+//!
+//! # Two design decisions worth stating
+//!
+//! **The operand stack is modelled as allocas, not as hand-built phi nodes.**
+//! Keleusma's control flow is structured (`If`/`Else`/`EndIf` carry targets),
+//! so basic blocks fall out directly with no control-flow-graph reconstruction.
+//! What does not fall out is SSA form for the operand stack across a merge.
+//! Rather than construct phis by hand, each stack slot is an alloca and LLVM's
+//! `mem2reg` performs the SSA construction. This trades verbose IR for a whole
+//! class of absent bugs.
+//!
+//! **The allocas are removed by the MIDDLE END, not by an optimisation level**,
+//! and the difference is worth 30x of stack frame. An earlier version of this
+//! comment said mem2reg runs "at any optimisation level above none", which is
+//! wrong in the way that matters: `llc -O2` is an optimisation level above none
+//! and does not run it, because `mem2reg` is an `opt` pass. Measured on
+//! 2026-08-09 for `thumbv7em-none-eabihf`:
+//!
+//! | Program | `llc -O2` alone | `opt -O1` first |
+//! |---|---|---|
+//! | `a + b` | 536 bytes | 0 bytes |
+//! | branchy | 552 bytes | 16 bytes |
+//! | handled multiply | 616 bytes | 20 bytes |
+//!
+//! `opt -passes=mem2reg` alone accounts for the whole difference. 512 of those
+//! bytes are [`MAX_STACK`] slots that the program never uses. A pipeline that
+//! runs only `llc` therefore ships a half-kilobyte frame per function, which on
+//! a microcontroller is the difference between fitting and not, and any native
+//! worst-case-memory bound computed on the wrong pipeline is wrong by that
+//! factor.
+//!
+//! **Stack depth is per-block, not carried linearly.** The compile-time depth
+//! must be restored from the recorded incoming edges when entering a merge
+//! block, never carried across a branch. Carrying it was the original defect:
+//! the then-path wrote slot 0 while the merge read slot 1, and the function
+//! returned the wrong operand. Every incoming edge must agree on depth, which
+//! the typed operand-stack verifier already guarantees, so a disagreement here
+//! is a lowering bug and is asserted rather than tolerated.
+
+pub mod coroutine;
+pub mod cost;
+pub mod linkage;
+pub mod opaque;
+pub mod region;
+pub mod stack;
+pub mod stage;
+pub mod stage_factory;
+mod text;
+
+/// The PACKED width of an operand-stack value, for placing it inside a flat
+/// composite body.
+///
+/// # Why this is carried rather than recovered
+///
+/// Recovering an operand's width by looking backwards from a `NewComposite`
+/// needed either a change to the shared crate, a second copy of the verifier's
+/// abstract interpretation, or an adjacency heuristic. None was necessary: the
+/// emitter already maintains the operand stack and already pops exactly each
+/// opcode's operands. It only lacked this.
+///
+/// # `Unknown` is the DEFAULT, and that is deliberate
+///
+/// A `Byte` occupies a full `i64` operand slot holding a value in `0..=255`, so
+/// **a `Byte` and a `Word` are indistinguishable on this stack** — and they pack
+/// into a body at ONE byte and EIGHT. Defaulting to word width would therefore
+/// silently mispack any byte field, and the byte-identity oracle would only
+/// catch it where the corpus happens to build one. Everything is unknown until
+/// an opcode arm states otherwise, and a composite operation that consumes an
+/// unknown is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+
+pub enum Width {
+    /// The operand IS the data: `bytes` of it, stored directly.
+    Scalar(u32),
+    /// The operand POINTS AT the data: `bytes` of body at the address it holds,
+    /// copied rather than stored.
+    ///
+    /// **Splitting this from `Scalar` is not tidiness.** An eight-byte nested
+    /// composite body and a `Word` are both eight bytes, and a single-field
+    /// struct wrapping a word is exactly that shape — 80 of the corpus's
+    /// constructions are `(8, 1)`. Storing one as a scalar would write the
+    /// POINTER into the parent body while every downstream field offset still
+    /// looked correct, which is a silent wrong answer rather than a fault.
+    Body(u32),
+    /// Not statically determined here. Fails a composite operation closed.
+    Unknown,
+}
+
+/// Whether an operand is an integer or a floating-point value.
+///
+/// **Separate from [`Width`], and deliberately not folded into it.** A `Float`
+/// and a `Word` are the same width **in the default build**, so a width alone
+/// cannot tell them apart there — and under `narrow-float-32` a `Float` is four
+/// bytes while a `Word` is eight, so the width discriminates in one supported
+/// configuration and not in the other. **Either way a width is not a kind**, and
+/// an earlier version of this sentence claimed the two are always eight bytes,
+/// which was false in a shipped configuration and hid a real defect for a week.
+/// `width_of_declared_shape` collapses `WireShape::Scalar { kind }` to a size and
+/// discards exactly this. Every float operation therefore needs a channel width
+/// cannot provide, and overloading `Width::Scalar` would reinstate the collapse
+/// being repaired.
+///
+/// **`Unknown` is a real answer, never a default.** A bitcast is only correct
+/// when the tag is right; an operation on an operand of unknown kind refuses
+/// rather than guessing, which is the discipline the width model already
+/// applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperandKind {
+    /// An integer, which is every operand this backend produced before floats.
+    Int,
+    /// A floating-point value, held on the operand stack **bitcast to `i64`** so
+    /// the stack stays homogeneous. The alternative — a stack of value enums —
+    /// touches 46 pop sites for no gain the optimiser does not already give.
+    Float,
+    /// A Q-format fixed-point value. **Indistinguishable from `Int` in LLVM** --
+    /// both are `i64` -- which is precisely why the backend once lowered
+    /// `Fixed % Fixed` to an integer remainder and returned a value where the
+    /// reference virtual machine raises `TypeError("cannot modulo Fixed by
+    /// Fixed")`. The scale is not tracked here; only the fact that the value is
+    /// scaled, which is what the reference dispatches on.
+    Fixed,
+    /// The address of a string literal's record, `{ i64 len, bytes }`, which
+    /// this backend lays out itself. Two of these compare by content.
+    ///
+    /// **Only a string constant has this kind.** A `Text` from a call, a
+    /// parameter, a native or a field has a representation this backend does not
+    /// own, and `text::comparisons_reached_by_text` refuses comparing it.
+    Text,
+    /// Not determined here. Fails a float-sensitive operation closed.
+    Unknown,
+}
+
+impl Width {
+    /// Byte count the value occupies in a packed body, or `None` when unknown.
+    pub fn bytes(self) -> Option<u32> {
+        match self {
+            Width::Scalar(n) | Width::Body(n) => Some(n),
+            Width::Unknown => None,
+        }
+    }
+
+    /// Whether placing this operand copies from an address rather than storing
+    /// the value.
+    pub fn is_body(self) -> bool {
+        matches!(self, Width::Body(_))
+    }
+}
+
+/// The floating-point type for a module's declared float width.
+///
+/// **The operator ruled that the floating-point type matches the runtime's
+/// float width.** "Double" is incoherent in a build with no `f64`, so a
+/// hard-coded `f64_type()` was wrong in a `narrow-float-32` build rather than
+/// merely narrow.
+fn float_type<'ctx>(ctx: &'ctx Context, float_bytes: u32) -> inkwell::types::FloatType<'ctx> {
+    match float_bytes {
+        4 => ctx.f32_type(),
+        8 => ctx.f64_type(),
+        // **UNREACHABLE, AND THAT IS MEASURED RATHER THAN ARGUED.** Replacing
+        // this arm with a panic and running the whole package gave 454 passed,
+        // 0 failed over 87 binaries with zero panics, so nothing in the corpus
+        // reaches it. Two changes made that true: the entry-ABI refusal is
+        // hoisted above the declarations, and the module-level type is built
+        // only inside the branches holding a float shape.
+        //
+        // It stays an `f64` rather than a panic because a lowering that cannot
+        // proceed is a fault in this codebase, not an abort of the host — the
+        // same reason `FlatComposite::nested_view` was hardened from a
+        // `debug_assert` into a real error. Eight is spelled out above so the
+        // supported set is visible in the code rather than hidden in a
+        // catch-all, which is how five refusal messages came to name the wrong
+        // set after `f32` landed.
+        _ => ctx.f64_type(),
+    }
+}
+
+/// Whether this backend lowers a float of `float_bytes`.
+///
+/// Four and eight. Any other width is refused rather than approximated,
+/// because a float of the wrong width is a silently wrong number and not a
+/// fault.
+fn float_width_lowered(float_bytes: u32) -> bool {
+    matches!(float_bytes, 4 | 8)
+}
+
+/// A float value as the operand stack carries it: its bit pattern in an `i64`.
+///
+/// # ⚠ THE CONVENTION, AND IT IS THE ONE THING HERE THAT CAN PRODUCE A
+/// PLAUSIBLE WRONG NUMBER
+///
+/// At eight bytes this is a direct `bitcast`. **At four bytes that bitcast is
+/// illegal**, so a 32-bit float occupies the **LOW 32 BITS, ZERO-EXTENDED**.
+///
+/// **Zero-extension rather than sign-extension, and the difference is
+/// observable.** A negative float has its sign bit set, so sign-extending would
+/// fill the upper word with ones, and any later store or comparison of the raw
+/// operand would see a different number. The reference writes four bytes
+/// little-endian, so a buffer comparison pins it.
+fn float_to_bits<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    f: inkwell::values::FloatValue<'ctx>,
+    i64t: IntType<'ctx>,
+    float_bytes: u32,
+) -> IntValue<'ctx> {
+    if float_bytes == 8 {
+        b.build_bit_cast(f, i64t, "fbits").unwrap().into_int_value()
+    } else {
+        let i32t = i64t.get_context().i32_type();
+        let narrow = b
+            .build_bit_cast(f, i32t, "fbits32")
+            .unwrap()
+            .into_int_value();
+        b.build_int_z_extend(narrow, i64t, "fbitsz").unwrap()
+    }
+}
+
+/// The inverse of [`float_to_bits`]: an operand's bit pattern read back as a
+/// float of the module's width.
+fn bits_to_float<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    v: IntValue<'ctx>,
+    ft: inkwell::types::FloatType<'ctx>,
+    float_bytes: u32,
+) -> inkwell::values::FloatValue<'ctx> {
+    if float_bytes == 8 {
+        b.build_bit_cast(v, ft, "asf").unwrap().into_float_value()
+    } else {
+        let i32t = v.get_type().get_context().i32_type();
+        let narrow = b.build_int_truncate(v, i32t, "astrunc").unwrap();
+        b.build_bit_cast(narrow, ft, "asf32")
+            .unwrap()
+            .into_float_value()
+    }
+}
+
+/// A vector of `n` unknown widths.
+fn alloc_vec_unknown(n: usize) -> Vec<Width> {
+    vec![Width::Unknown; n]
+}
+
+/// Packed width of a declared parameter type.
+///
+/// `Word` is eight bytes because this backend is 64-bit throughout; a narrow-word
+/// target is refused elsewhere. `Composite` is UNKNOWN rather than a guess: a
+/// composite parameter's body length is not carried on the type tag, and
+/// guessing it is exactly the silent mispack this type exists to prevent.
+fn width_of_tag(t: TypeTag) -> Width {
+    match t {
+        TypeTag::Byte | TypeTag::Bool => Width::Scalar(1),
+        // **`Fixed` IS EIGHT BYTES, AND THAT IS MEASURED RATHER THAN ASSUMED.**
+        // The reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at
+        // `byte_size: 16`, identical to a pair of `Word`s. A Q-format value is
+        // an `i64` of fixed-point bits, so it occupies a full slot.
+        //
+        // It was `Unknown` until 2026-08-21, and NOT for a stated reason: it sat
+        // inside an assertion whose doc comment justified only `Composite`. This
+        // line declined to widen it on the ground that doing so "would newly
+        // admit composites carrying `Fixed` fields, a packing change with its
+        // own risk" -- a risk that was asserted and never measured. The risk of
+        // widening is the risk of GUESSING a width, and there is nothing here to
+        // guess.
+        TypeTag::Fixed => Width::Scalar(8),
+        TypeTag::Word => Width::Scalar(8),
+        // `Composite` stays unknown because a body length is genuinely not
+        // carried on the tag. `Float` stays unknown too, but **the REASON has
+        // changed and the old one is now false on both halves**: it read "this
+        // backend has no float representation at all -- redundant with the
+        // module-level guard that refuses a float by every route", and the
+        // backend does have one while three of the four routes are open. What
+        // is still absent is a float INSIDE A COMPOSITE, so a body width for a
+        // float field would be a guess, which is the one thing this function
+        // exists not to do.
+        _ => Width::Unknown,
+    }
+}
+
+use inkwell::AddressSpace;
+use inkwell::IntPredicate;
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::basic_block::BasicBlock;
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::module::Module as LlvmModule;
+use inkwell::types::IntType;
+use inkwell::values::{FunctionValue, IntValue, PointerValue, ValueKind};
+use keleusma::bytecode::{
+    BlockType, Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility, TypeTag,
+};
+use std::collections::BTreeMap;
+
+/// Maximum operand-stack depth the lowering provisions slots for.
+///
+/// A fixed bound is appropriate because Keleusma's operand-stack depth is
+/// statically known per program point; this is a provisioning ceiling, not a
+/// runtime limit. Exceeding it is a lowering bug, not a program error.
+pub const MAX_STACK: usize = 64;
+
+/// Word width this backend lowers, in bits.
+///
+/// Enforced by [`check_word_width`]. The shift lowering masks counts by
+/// `WORD_BITS - 1`, mirroring the VM, so widening word support means changing
+/// both together rather than only the acceptance check.
+pub const WORD_BITS: u64 = 64;
+
+/// How an unhandled partial operation lowers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverflowPolicy {
+    /// Discard the outcome flag, keeping the low word. **This is the default
+    /// and it matches the VM.**
+    ///
+    /// Bare `a + b` compiles to `CheckedAdd; PopN(2)`, which discards the flag
+    /// and the high word so the low word survives. That is wrapping addition,
+    /// and it is *total*: it always produces a value. Keleusma's premise is
+    /// totality, and a programmer who needs the overflow outcome has the
+    /// handled `expr { ok(v) => .., overflow(h, l) => .., underflow(h, l) => .. }`
+    /// form to reach for.
+    #[default]
+    Wrap,
+    /// Branch to a native trap when the outcome flag is non-zero.
+    ///
+    /// This was the shape `V0_3_X_ROADMAP.md` Workstream F described for an
+    /// unhandled partial operation. **It is superseded.** Since the V0.2.X
+    /// line made the partial operations total, the compiler emits an explicit
+    /// `Trap` for each unhandled outcome, and the backend lowers that `Trap`.
+    /// Workstream F needs nothing from this policy, which `ORDER_4_PLAN.md`
+    /// records. **It still diverges from the VM**: with it `add(i64::MAX, 1)`
+    /// aborts through `llvm.trap` where the VM returns the wrapped value. It is
+    /// kept only because existing tests name it. Do not enable it.
+    Trap,
+}
+
+/// Lowering configuration.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LowerOptions {
+    /// How an unhandled checked arithmetic operation lowers.
+    pub overflow: OverflowPolicy,
+    /// Admit a stream whose suspension is DELEGATED to a tail-position callee.
+    ///
+    /// **Off by default, and that default is the decision, not an oversight.**
+    /// The transform is verified by execution on a synthetic module of the
+    /// qualifying shape (`delegated_suspension.rs`). The one module in the
+    /// shipped corpus that qualifies is `codegen.kel`, and it **cannot be
+    /// execution-differentiated by this subproject**: its input is an
+    /// abstract-syntax-tree block whose 78 slot constants and two seeding
+    /// helpers are private to `src/selfhost/mod.rs`, a file this line may read
+    /// but must not edit. Admitting it by default would rest on `lower_module`
+    /// returning `Ok`, which is a fact about the compiler and not about the
+    /// program.
+    ///
+    /// Turning this on is therefore an explicit statement that unexecuted
+    /// lowering is acceptable for the module in hand. See
+    /// `docs/decisions/NATIVE_DELEGATED_SUSPENSION.md`.
+    pub delegated_suspension: bool,
+    /// Count every bytecode instruction the native code executes.
+    ///
+    /// **Instrumentation for Workstream E, off by default.** The module declares
+    /// an external global [`OP_METER_SYMBOL`], an array of `i64` with one word
+    /// per instruction of every chunk in order, which the host defines and
+    /// zeroes. Each lowered instruction
+    /// adds one to its word before its own code runs. The VM executes the same
+    /// instructions, which its breakpoints can count, so equal counts show
+    /// that native execution follows the bytecode's path. That is what lets
+    /// the verifier's cost bound, a sum over that path, describe native code.
+    /// The counter is one global, so a metered module serves one instance on
+    /// one thread at a time.
+    pub op_meter: bool,
+    /// Refuse a coroutine whose native code would dispatch on a run-time kind.
+    ///
+    /// **Workstream G, the flat machine in native code, off by default.** With
+    /// it set, a coroutine lowers only when its type analysis gives every
+    /// operand and local of every reachable instruction a single kind and no
+    /// instruction needs a kind guard. The kinds the emitter then stores are
+    /// constants, so after promotion the code carries no kind beside any value
+    /// and selects on none. See `coroutine::KindCensus`. Outside a coroutine
+    /// kinds are already static, and the option changes nothing.
+    pub static_kinds: bool,
+}
+
+/// The global a metered module counts executed instructions into. See
+/// [`LowerOptions::op_meter`].
+pub const OP_METER_SYMBOL: &str = "kel_op_meter";
+
+/// The index of `(chunk, instruction)` in the [`OP_METER_SYMBOL`] array.
+pub fn op_meter_index(program: &Module, chunk: usize, instruction: usize) -> usize {
+    program.chunks[..chunk]
+        .iter()
+        .map(|c| c.ops.len())
+        .sum::<usize>()
+        + instruction
+}
+
+/// Packed width a producing instruction fixes by ITSELF, independent of its
+/// operands, or `None`.
+///
+/// **Only operand-independent sources qualify, and that is the whole safety
+/// argument.** A `Const` carries its kind, and the four arithmetic instructions
+/// that push a `(low, high, flag)` triple push `low` at a literal word width
+/// whatever they were given. An instruction whose result width depends on what
+/// it consumed cannot be classified here, because doing so would need the very
+/// analysis this pre-pass runs ahead of.
+///
+/// `which` selects among a multi-push instruction's results. **A triple's `low`
+/// is the arithmetic result; its `flag` is a boolean.** Classifying on the
+/// instruction alone would label a flag as a word.
+fn instruction_fixed_width(chunk: &Chunk, op_index: usize, which: u32) -> Option<Width> {
+    match chunk.ops.get(op_index)? {
+        Op::Const(c) if which == 0 => match chunk.constants.get(*c as usize)? {
+            keleusma::bytecode::ConstValue::Int(_) => Some(Width::Scalar(8)),
+            keleusma::bytecode::ConstValue::Byte(_) => Some(Width::Scalar(1)),
+            keleusma::bytecode::ConstValue::Bool(_) => Some(Width::Scalar(1)),
+            _ => None,
+        },
+        // `push_triple` pushes `low` at `Width::Scalar(8)` as a literal.
+        Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedNeg if which == 0 => {
+            Some(Width::Scalar(8))
+        }
+        _ => None,
+    }
+}
+
+/// Packed widths that can be trusted for locals the chunk writes MORE THAN ONCE.
+///
+/// # Why a multi-write local is normally untrusted, and why that is right
+///
+/// The width pass is a linear walk and **cannot see a back edge**, so a local
+/// rewritten inside a loop would be read at the width of whichever write appears
+/// earlier in the text and packed wrongly on every iteration after the first.
+/// Declining to trust it costs coverage and cannot mispack, which is the correct
+/// direction for a decision that is otherwise silent.
+///
+/// # What narrows it
+///
+/// **"Cannot see a back edge" only matters when the writes DISAGREE.** If every
+/// write to a local stores a value of the same width, that is the width whichever
+/// write reached the read, back edge or not. This certifies exactly that case,
+/// and only from sources whose width is fixed by the instruction rather than by
+/// its operands — so no circularity arises and no fixpoint is needed.
+///
+/// **A `for` loop's induction variable is the motivating case**: it is written
+/// twice, once from a constant and once from an arithmetic result, and both are
+/// words. Measured on `12_sensor_window.kel` and `14_frame_log.kel`.
+///
+/// # One unclassifiable write sinks the local
+///
+/// A write this cannot classify yields no certification at all, rather than
+/// being ignored as though the remaining writes agreed.
+fn certified_local_widths(chunk: &Chunk) -> BTreeMap<usize, Width> {
+    // `(op index, which push)` for every live operand-stack slot.
+    //
+    // **Driven by `op_depth_effect`, whose contract is true pop and push counts.**
+    // `Op::stack_growth`/`stack_shrink` are the PEAK model — a transient reach
+    // and a net — and their own documentation says they are not pop counts.
+    // A shadow stack driven by them desynchronises at every pop-and-push
+    // instruction, which is a mistake this repository has recorded once already.
+    let mut stack: Vec<(usize, u32)> = Vec::new();
+    let mut agreed: BTreeMap<usize, Option<Width>> = BTreeMap::new();
+    for (i, op) in chunk.ops.iter().enumerate() {
+        if let Op::SetLocal(n) = op {
+            let found = stack
+                .last()
+                .and_then(|&(pi, k)| instruction_fixed_width(chunk, pi, k));
+            let slot = agreed.entry(usize::from(*n)).or_insert(found);
+            if *slot != found {
+                *slot = None;
+            }
+        }
+        // **A `Trap` has no successor, so its pops reach no later write.** This
+        // walk is straight-line. Absorption 82 gave `Trap(IndexOutOfBounds)` five
+        // true pops, and charging them to the fallthrough edge attributed every
+        // later `SetLocal` to the wrong producer, which could certify a width the
+        // local never holds. Upstream's own memory walk treats a trap as a path
+        // exit for the same reason.
+        if matches!(op, Op::Trap(_)) {
+            continue;
+        }
+        let (required, delta) = keleusma::verify::op_depth_effect(op, chunk);
+        for _ in 0..required.max(0) {
+            stack.pop();
+        }
+        for k in 0..(required + delta).max(0) {
+            stack.push((i, k as u32));
+        }
+    }
+    agreed
+        .into_iter()
+        .filter_map(|(idx, w)| w.map(|w| (idx, w)))
+        .collect()
+}
+
+/// Packed width implied by a DECLARED boundary shape, or [`Width::Unknown`].
+///
+/// One definition serving both call paths. A native's declared return shape and
+/// a chunk's declared return shape answer the same question — how many bytes
+/// this value occupies inside a composite body — and a second copy of the
+/// mapping would be a second opinion about packing, which is exactly the class
+/// of defect the operand-width machinery exists to prevent.
+///
+/// # Fails closed, and that is the whole contract
+///
+/// **`Top`, an absent entry, and a scalar kind this backend cannot size all
+/// yield `Unknown`, never a default.** A default here would convert a missing
+/// table entry into a silent mispack: a `Byte` and a `Word` are
+/// indistinguishable on the operand stack, so a guessed width writes the wrong
+/// number of bytes and the body reads back as a plausible wrong value rather
+/// than as an error. `Unknown` instead fails at the USE, which is the existing
+/// refusal.
+fn width_of_declared_shape(
+    shape: Option<&keleusma::bytecode::WireShape>,
+    float_bytes: u32,
+) -> Width {
+    match shape {
+        Some(keleusma::bytecode::WireShape::Scalar { kind }) => {
+            match keleusma::value_layout::ScalarKind::from_tag(*kind) {
+                // **THE FLOAT WIDTH IS THE MODULE'S, NOT EIGHT, AND THAT WAS A
+                // REAL DEFECT.** It used to be hard-coded, and the comment on
+                // `OperandKind` above still said *"a `Float` and a `Word` are both
+                // eight bytes"* — false under `narrow-float-32`, where a `Float`
+                // is four.
+                //
+                // **Measured before repairing, and the symptom is a REFUSAL rather
+                // than a wrong number**: a struct with a `Float` field built from a
+                // declared-`Float` call result was rejected under `narrow-float-32`
+                // with *"NewComposite packs 16 bytes but the instruction bakes 12;
+                // the layout model has drifted"*. Sixteen is 8 + 8; twelve is 4 + 8.
+                // **The backend refused a program it should lower, and blamed the
+                // layout model for a constant of its own.**
+                //
+                // It is latent rather than dangerous only because the packed size is
+                // cross-checked against the size the instruction bakes. That guard
+                // is what converts a silent mispack into a loud refusal, which is
+                // the same property that makes the `Opaque` refusal protective: the
+                // danger was never being wrong, it was being wrong SILENTLY.
+                //
+                // The word width stays eight because this backend is 64-bit by
+                // construction (`WORD_BITS`), and the address width because `Opaque`
+                // is refused at every reachable route.
+                Some(k) => Width::Scalar(
+                    u32::try_from(k.size_in_bytes(8, float_bytes as usize, 8)).unwrap_or(0),
+                ),
+                None => Width::Unknown,
+            }
+        }
+        Some(keleusma::bytecode::WireShape::Flat { size, .. }) => Width::Body(*size),
+        _ => Width::Unknown,
+    }
+}
+
+/// Error cases the lowering refuses rather than guesses at.
+#[derive(Debug)]
+pub enum LowerError {
+    /// Diagnostic mode collected refusals rather than stopping at the first.
+    ///
+    /// Always an error, never a success carrying a warning list: the module is
+    /// incomplete wherever a chunk was abandoned, so handing it back as `Ok`
+    /// would invite someone to run it. Produced only by [`module_refusals`],
+    /// which discards the module and keeps the list.
+    ///
+    /// Carries the COUNT only. The list stays with the caller, because an
+    /// earlier version moved it into this error and left the caller's vector
+    /// empty — reporting that every module lowers cleanly.
+    Diagnostic(usize),
+    /// An opcode for which this backend has no lowering, or none for the shape
+    /// encountered.
+    ///
+    /// `op` carries the opcode's identity as **data**. It was previously
+    /// recoverable only as the leading word of the message, and
+    /// `isa_lowering_census` read it that way — so `Const(60000) out of range`,
+    /// a malformed constant INDEX, was credited to the `Const` OPCODE, which
+    /// this backend lowers in nearly every module of the corpus. Whether a
+    /// refusal concerns an opcode is now a property of the type rather than of
+    /// English word order.
+    UnsupportedOp {
+        /// The opcode this refusal is about. An ISA opcode name.
+        op: String,
+        /// What specifically was not lowerable. May be empty when the backend
+        /// has no arm for the opcode at all.
+        detail: String,
+    },
+    /// A type or feature this backend lacks, not attributable to one opcode.
+    ///
+    /// Floats are the standing case: a float in a chunk signature is a property
+    /// of the signature, and calling it an unsupported opcode produced the
+    /// sentence "does not yet support opcode chunk 0 has a Float in its
+    /// signature".
+    UnsupportedShape(String),
+    /// A float width this backend does not lower, with the width as DATA.
+    ///
+    /// The word axis already had `UnsupportedWordWidth`; the float axis did not,
+    /// so seven float-width refusals sat inside `UnsupportedShape`'s prose and a
+    /// census could not read the width without parsing English. This is the same
+    /// treatment `unsupported_op` gave the opcode name, for the same reason.
+    UnsupportedFloatWidth {
+        /// The declared float width in bytes. Only 4 and 8 are lowered.
+        float_bytes: u32,
+        /// The sentence for a human. The census reads `float_bytes`.
+        detail: String,
+    },
+    /// The input's own integrity failed — an out-of-range index, an arity
+    /// mismatch, a reserved encoding.
+    ///
+    /// **Not a statement that any opcode is unlowerable.** The opcode named in
+    /// the message is the one whose operand was malformed, and the backend
+    /// lowers it fine for well-formed input.
+    MalformedInput(String),
+    /// A defect in this crate rather than in the input, like
+    /// [`LowerError::InvalidIr`], but detected before IR was produced.
+    ///
+    /// Kept distinct so a consumer can tell "your program uses a feature I
+    /// lack" from "I am broken". Reporting the second as the first invites a
+    /// user to rewrite a program that was never the problem.
+    Internal(String),
+    /// The module declares a word width this backend does not lower.
+    UnsupportedWordWidth(u8),
+    /// A data-segment slot this backend cannot lower.
+    ///
+    /// Carries the slot index and the reason. Private slots and shared
+    /// composite or non-integer scalar slots are refused rather than guessed
+    /// at, since a wrong decode reads the host's buffer at the wrong width and
+    /// yields a plausible number.
+    UnsupportedDataSlot { slot: u32, why: String },
+    /// The chunk's operand stack is deeper than [`MAX_STACK`] provisions for.
+    ///
+    /// A refusal rather than a panic. The verifier already computes the exact
+    /// figure as `RuntimeFootprint::max_operand_slots`, so a caller that wants
+    /// to lower such a chunk can raise the provisioning deliberately instead of
+    /// discovering the ceiling through a crash.
+    OperandStackTooDeep { needed: usize, provisioned: usize },
+    /// A loop-body composite the host can still be holding when the next
+    /// iteration overwrites it.
+    ///
+    /// [`region::plan_chunk_region`] gives each site ONE offset for the life of
+    /// the chunk, so a site inside a loop rewrites the same bytes every
+    /// iteration. A composite is an arena handle rather than a copy, and an
+    /// overwrite in place advances no epoch, so a host holding iteration `n`'s
+    /// value calls `resolve`, SUCCEEDS, and reads iteration `n+1`'s bytes.
+    ///
+    /// **The failure is a silently wrong value, not a `Stale` error**, which is
+    /// why it is refused here instead of left to a runtime guard: there is no
+    /// runtime guard it trips. `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1.1.
+    ///
+    /// Not reusing the slot instead would mean one region per iteration, which
+    /// is unbounded in the iteration count and gives up the bounded-memory
+    /// property this backend exists to provide. Refusal is the disposition that
+    /// keeps the bound and loses the defect.
+    /// A composite construction site the shipped confinement analysis reports
+    /// as not confined to its iteration.
+    ///
+    /// **Distinct from [`LowerError::YieldEscapingLoopComposite`] on purpose.**
+    /// That one is a per-chunk SYNTACTIC finding: a site in a loop body whose
+    /// value reaches a `Yield` in the same chunk. This one is the ANALYSIS's
+    /// answer, which carries callee summaries and therefore covers the
+    /// interprocedural shape -- built in a loop, returned, yielded by the
+    /// caller -- that the syntactic check cannot see and that the region
+    /// planner's soundness obligation names as its open residual.
+    EscapesItsIteration {
+        /// Address of the `Op::NewComposite`.
+        site_op: usize,
+        /// The analysis's verdict, rendered.
+        verdict: String,
+        /// The route the analysis found, rendered.
+        reason: String,
+    },
+    YieldEscapingLoopComposite {
+        /// Index into the chunk's `ops` of the construction site.
+        site_op: usize,
+        /// Index into the chunk's `ops` of the `Yield` that can carry it out.
+        yield_op: usize,
+    },
+    /// The lowering produced a module LLVM's own verifier rejects.
+    ///
+    /// A postcondition on [`lower_module`], not a diagnostic for the caller's
+    /// input. Reaching it always means a defect in this crate. It exists because
+    /// `verify` was previously called only in the test harness, so malformed IR
+    /// would reach a consumer while every test stayed green.
+    InvalidIr(String),
+}
+
+impl LowerError {
+    /// A refusal that genuinely concerns `op`.
+    ///
+    /// Takes the opcode name separately from the prose so the two cannot drift:
+    /// the census reads `op`, and the sentence is for a human.
+    fn unsupported_float_width(float_bytes: u32, detail: String) -> Self {
+        LowerError::UnsupportedFloatWidth {
+            float_bytes,
+            detail,
+        }
+    }
+
+    fn unsupported_op(op: &str, detail: String) -> Self {
+        LowerError::UnsupportedOp {
+            op: op.to_string(),
+            detail,
+        }
+    }
+}
+
+/// The opcode's variant name, derived from the opcode itself.
+///
+/// This is deriving a name from an `Op` value, not parsing English out of a
+/// message — `Debug` for these variants opens with the variant name.
+fn op_variant_name(op: &Op) -> String {
+    format!("{op:?}")
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+impl core::fmt::Display for LowerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LowerError::Diagnostic(n) => {
+                write!(f, "diagnostic lowering collected {n} chunk refusal(s)")
+            }
+            LowerError::UnsupportedOp { op, detail } if detail.is_empty() => {
+                write!(f, "native lowering does not yet support opcode {op}")
+            }
+            LowerError::UnsupportedOp { op, detail } => {
+                write!(
+                    f,
+                    "native lowering does not yet support opcode {op}: {detail}"
+                )
+            }
+            LowerError::UnsupportedFloatWidth { detail, .. } => {
+                write!(f, "{detail}")
+            }
+            LowerError::UnsupportedShape(what) => {
+                // A neutral lead-in, because these messages are CLAUSES rather
+                // than noun phrases. "does not support {what}" rendered
+                // "does not support chunk 0 carries a Float CONSTANT ...".
+                write!(f, "native lowering refused this module: {what}")
+            }
+            LowerError::MalformedInput(what) => {
+                write!(f, "the module is malformed and was not lowered: {what}")
+            }
+            LowerError::Internal(what) => {
+                write!(f, "a defect in this crate rather than in the input: {what}")
+            }
+            LowerError::UnsupportedWordWidth(w) => {
+                write!(f, "native lowering does not support word_bits_log2 = {w}")
+            }
+            LowerError::UnsupportedDataSlot { slot, why } => {
+                write!(f, "data slot {slot} is not lowerable: {why}")
+            }
+            LowerError::EscapesItsIteration {
+                site_op,
+                verdict,
+                reason,
+            } => write!(
+                f,
+                "composite built at op {site_op} is {verdict} its iteration ({reason}); the \
+                 region places one offset per site, so the next iteration overwrites those \
+                 bytes and a value that outlives the iteration would be read wrong rather \
+                 than faulted"
+            ),
+            LowerError::YieldEscapingLoopComposite { site_op, yield_op } => write!(
+                f,
+                "the composite built at op {site_op} is yielded at op {yield_op} from inside \
+                 a loop, so reusing its fixed offset would hand the host the next \
+                 iteration's bytes with no Stale error; refused rather than \
+                 miscompiled"
+            ),
+            LowerError::OperandStackTooDeep {
+                needed,
+                provisioned,
+            } => write!(
+                f,
+                "chunk needs {needed} operand-stack slots, more than the {provisioned} \
+                 this backend provisions"
+            ),
+            LowerError::InvalidIr(why) => write!(
+                f,
+                "the lowering produced a module LLVM's own verifier rejects, \
+                 which is always a defect in this crate rather than in the input: {why}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LowerError {}
+
+struct Lower<'ctx> {
+    b: Builder<'ctx>,
+    i64t: IntType<'ctx>,
+    /// The entry block, so operand slots can be allocated lazily at its top.
+    ///
+    /// Allocas must sit in the entry block for the memory-to-register pass to
+    /// promote them, and at its TOP so that inserting one is valid however far
+    /// the current block has progressed.
+    entry: BasicBlock<'ctx>,
+    locals: Vec<PointerValue<'ctx>>,
+    slots: Vec<PointerValue<'ctx>>,
+    depth: usize,
+    /// The depth at which the provisioned slot array was first exceeded.
+    ///
+    /// Recorded rather than panicked. `MAX_STACK` is a provisioning ceiling
+    /// chosen by this backend, not a limit the language imposes, so a chunk
+    /// that needs more is a REFUSAL like any other unsupported construct — not
+    /// a crash inside a library. Indexing a `Vec` would have panicked, and the
+    /// claim that exceeding it "is a lowering bug, not a program error" was an
+    /// assumption with nothing enforcing it.
+    stack_overflow: Option<usize>,
+    /// Set when an arm popped an operand the stack did not hold.
+    ///
+    /// **Recorded rather than panicked, exactly as `stack_overflow` is.** `pop`
+    /// decremented a `usize` unconditionally, so a chunk whose op stream pops
+    /// more than it pushes underflowed and panicked with *"attempt to subtract
+    /// with overflow"* — inside a library, unrecoverably, for a caller of a
+    /// PUBLIC entry point that does not require a verified module.
+    ///
+    /// A verified module cannot reach this: `verify_stack_depth` computes the
+    /// terminal depth of every region. **But `lower_module` does not require
+    /// verification, and the tree's own tests mutate bytecode and lower it.**
+    /// Measured by `lowering_robustness.rs`: 58 of 195 structural mutations
+    /// panicked, in two classes, of which this was one.
+    ///
+    /// The poisoned pop returns a zero constant so the arm can finish building
+    /// whatever it was building; the module is discarded by the refusal below,
+    /// so no caller ever sees that IR.
+    stack_underflow: bool,
+    /// Packed width of each live operand, parallel to the slot at the same
+    /// depth. Grown alongside `slots` and defaulted to [`Width::Unknown`], so an
+    /// arm that does not state a width cannot be mistaken for one that did.
+    widths: Vec<Width>,
+    /// Kind of each operand-stack entry, parallel to `widths`. Seeded by the
+    /// PRODUCING opcode — `IntToFloat` and a float `Const` push `Float` — so
+    /// this is local dataflow rather than signature threading.
+    kinds: Vec<OperandKind>,
+    /// Packed width most recently stored into each local, so `GetLocal` can
+    /// restore what `SetLocal` put there. A local never written in this chunk
+    /// stays unknown.
+    local_widths: Vec<Width>,
+    /// Kind most recently stored into each local, so `GetLocal` restores what
+    /// `SetLocal` put there — the same round-trip the widths already make.
+    local_kinds: Vec<OperandKind>,
+    // Host-derived bodies are immutable values. Region bodies retain aliases.
+    ownership: Option<coroutine::ownership::Flags<'ctx>>,
+    ownership_width_unknown: bool,
+    runtime_kinds: Option<coroutine::kinds::Flags<'ctx>>,
+    borrowed_slots: Vec<bool>,
+    borrowed_locals: Vec<bool>,
+    input_copy_bounds: Vec<Option<u32>>,
+    input_body_sizes: Vec<IntValue<'ctx>>,
+    input_tags: Vec<IntValue<'ctx>>,
+    output_copy_bounds: Vec<Option<u32>>,
+}
+
+impl<'ctx> Lower<'ctx> {
+    /// Index of the slot for `depth`, clamped so that an overflowing chunk
+    /// keeps building valid-but-discarded IR instead of panicking. The clamp is
+    /// only ever reached once `stack_overflow` is set, and the caller turns that
+    /// into an error before the function is handed back.
+    /// Allocate operand slots on demand, up to the refusal ceiling.
+    ///
+    /// **`MAX_STACK` is a ceiling, not a provisioning quantity.** Emitting all
+    /// 64 slots unconditionally was measured to cost real frame bytes: the
+    /// promotion pass turns them into virtual registers, a machine with roughly
+    /// fourteen usable general-purpose registers cannot hold them, and the
+    /// allocator spills the excess straight back. So the fixed provisioning
+    /// survived optimisation as spill slots and dominated the frame, which is
+    /// why the smallest frames measured sat near `64 * 8` bytes.
+    ///
+    /// Growing on demand asks the emitter what it actually used rather than
+    /// duplicating the verifier's depth analysis in a second place, which is the
+    /// drift hazard this package has already been bitten by twice.
+    fn ensure_slot(&mut self, idx: usize) {
+        while self.slots.len() <= idx && self.slots.len() < MAX_STACK {
+            let name = format!("s{}", self.slots.len());
+            let resume = self.b.get_insert_block();
+            match self.entry.get_first_instruction() {
+                Some(i) => self.b.position_before(&i),
+                None => self.b.position_at_end(self.entry),
+            }
+            let p = self.b.build_alloca(self.i64t, &name).unwrap();
+            if let Some(flags) = &mut self.ownership {
+                flags
+                    .slots
+                    .push(self.b.build_alloca(self.i64t, "owned_operand").unwrap());
+            }
+            if let Some(flags) = &mut self.runtime_kinds {
+                let kind = self.b.build_alloca(self.i64t, "kind_operand").unwrap();
+                let size = self.b.build_alloca(self.i64t, "body_size_operand").unwrap();
+                self.b.build_store(kind, self.i64t.const_zero()).unwrap();
+                self.b.build_store(size, self.i64t.const_zero()).unwrap();
+                flags.slots.push(kind);
+                flags.slot_sizes.push(size);
+            }
+            if let Some(bb) = resume {
+                self.b.position_at_end(bb);
+            }
+            self.slots.push(p);
+        }
+    }
+
+    fn slot(&mut self, depth: usize) -> PointerValue<'ctx> {
+        self.ensure_slot(depth);
+        self.slots[depth.min(self.slots.len() - 1)]
+    }
+
+    /// Load the operand living at stack index `idx`, counted from the BOTTOM.
+    ///
+    /// `width_at` counts from the top and `slot` is indexed from the bottom;
+    /// mixing the two is how a spill saves the wrong entries in the wrong order,
+    /// so both conventions are named wherever they meet.
+    fn slot_value(&mut self, idx: usize) -> IntValue<'ctx> {
+        let p = self.slot(idx);
+        self.b
+            .build_load(self.i64t, p, "spillv")
+            .unwrap()
+            .into_int_value()
+    }
+
+    fn push(&mut self, v: IntValue<'ctx>) {
+        self.push_w(v, Width::Unknown);
+    }
+
+    /// Push, stating the value's packed width.
+    ///
+    /// The unstated form defaults to [`Width::Unknown`] rather than to a word,
+    /// so an unlabelled arm fails a composite operation closed instead of
+    /// mispacking it. See [`Width`].
+    /// Push with an explicit kind. `push_w` is this with `Int`, which is what
+    /// every pre-float producer means.
+    fn push_k(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind) {
+        self.push_w(v, w);
+        if self.kinds.len() < self.widths.len() {
+            self.kinds.resize(self.widths.len(), OperandKind::Unknown);
+        }
+        if let Some(d) = self.depth.checked_sub(1) {
+            if self.kinds.len() <= d {
+                self.kinds.resize(d + 1, OperandKind::Unknown);
+            }
+            self.kinds[d] = k;
+        }
+    }
+
+    /// The kind of the operand `back` entries down, `Unknown` if untracked.
+    fn kind_at(&self, back: usize) -> OperandKind {
+        match self.depth.checked_sub(back + 1) {
+            Some(d) => self.kinds.get(d).copied().unwrap_or(OperandKind::Unknown),
+            None => OperandKind::Unknown,
+        }
+    }
+
+    fn push_w(&mut self, v: IntValue<'ctx>, w: Width) {
+        if self.depth >= MAX_STACK {
+            self.stack_overflow.get_or_insert(self.depth);
+        }
+        let slot = self.slot(self.depth);
+        self.b.build_store(slot, v).unwrap();
+        if let Some(flags) = &self.ownership {
+            self.b
+                .build_store(flags.slots[self.depth], self.i64t.const_zero())
+                .unwrap();
+        }
+        if self.widths.len() <= self.depth {
+            self.widths.resize(self.depth + 1, Width::Unknown);
+        }
+        // **Mark the slot Int here, not only in `push_k`.** The stack reuses
+        // slots, so a `Float` tag left by an earlier operand would otherwise
+        // survive into an integer pushed at the same depth and make a later
+        // bitcast reinterpret it.
+        if self.kinds.len() <= self.depth {
+            self.kinds.resize(self.depth + 1, OperandKind::Unknown);
+        }
+        self.kinds[self.depth] = OperandKind::Int;
+        self.widths[self.depth] = w;
+        self.depth += 1;
+    }
+
+    fn owned_at(&self, back: usize) -> IntValue<'ctx> {
+        let Some(index) = self.depth.checked_sub(back + 1) else {
+            // Legacy entry points also accept malformed bytecode. Their stack
+            // and local checks issue the refusal without metadata underflow.
+            return self.i64t.const_zero();
+        };
+        if self.borrowed_slots.get(index) == Some(&true) {
+            return self.i64t.const_zero();
+        }
+        self.ownership
+            .as_ref()
+            .map_or(self.i64t.const_zero(), |flags| {
+                coroutine::ownership::load(&self.b, flags.slots[index])
+            })
+    }
+
+    fn owned_local(&self, index: usize) -> IntValue<'ctx> {
+        if self.borrowed_locals.get(index) == Some(&true) {
+            return self.i64t.const_zero();
+        }
+        self.ownership
+            .as_ref()
+            .map_or(self.i64t.const_zero(), |flags| {
+                coroutine::ownership::load(&self.b, flags.locals[index])
+            })
+    }
+
+    fn copy_value(
+        &mut self,
+        v: IntValue<'ctx>,
+        w: Width,
+        owned: IntValue<'ctx>,
+        slot: usize,
+        bound: Option<u32>,
+    ) -> IntValue<'ctx> {
+        if self.ownership.is_some()
+            && w == Width::Unknown
+            && owned.get_zero_extended_constant() != Some(0)
+        {
+            if let (Some(maximum), Some(flags)) = (bound, &self.runtime_kinds) {
+                let bytes = coroutine::ownership::load(&self.b, flags.slot_sizes[slot]);
+                return coroutine::ownership::copy_bounded(&self.b, v, maximum, bytes, owned);
+            }
+            self.ownership_width_unknown = true;
+        }
+        coroutine::ownership::copy(&self.b, v, w, owned)
+    }
+    fn push_owned(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind, owned: IntValue<'ctx>) {
+        let bound = self.output_copy_bounds.get(self.depth).copied().flatten();
+        let v = self.copy_value(v, w, owned, self.depth, bound);
+        self.push_k(v, w, k);
+        if let Some(flags) = &self.ownership {
+            self.b
+                .build_store(flags.slots[self.depth - 1], owned)
+                .unwrap();
+        }
+    }
+
+    /// Read the top operand WITHOUT consuming it.
+    ///
+    /// Distinct from [`Lower::pop`] because `Op::BoundsCheck` peeks: the VM
+    /// reads `stack.last()` and leaves the operand for the indexing opcode that
+    /// follows.
+    fn peek(&mut self) -> IntValue<'ctx> {
+        let slot = self.slot(self.depth - 1);
+        self.b
+            .build_load(self.i64t, slot, "peek")
+            .unwrap()
+            .into_int_value()
+    }
+
+    /// Packed width of the operand `back` entries below the top, `back == 0`
+    /// being the top. Unknown when out of range, so an overflowing chunk fails a
+    /// composite closed rather than indexing wildly.
+    fn width_at(&self, back: usize) -> Width {
+        match self.depth.checked_sub(back + 1) {
+            Some(d) => self.widths.get(d).copied().unwrap_or(Width::Unknown),
+            None => Width::Unknown,
+        }
+    }
+
+    /// Relabel the top operand's packed width without touching its value.
+    ///
+    /// For a conversion that is a no-op on the bits and not on the layout:
+    /// `ByteToWord` leaves the value alone and changes how many bytes it
+    /// occupies inside a composite body. Silent if the stack is empty, which
+    /// only happens in a chunk already refused for overflow.
+    fn set_top_width(&mut self, w: Width) {
+        if let Some(d) = self.depth.checked_sub(1)
+            && d < self.widths.len()
+        {
+            self.widths[d] = w;
+        }
+    }
+
+    fn pop(&mut self) -> IntValue<'ctx> {
+        // **DO NOT PANIC ON A MALFORMED OP STREAM.** See `stack_underflow`.
+        if self.depth == 0 {
+            self.stack_underflow = true;
+            return self.i64t.const_zero();
+        }
+        self.depth -= 1;
+        let slot = self.slot(self.depth);
+        self.b
+            .build_load(self.i64t, slot, "pop")
+            .unwrap()
+            .into_int_value()
+    }
+
+    /// Sign-extend an operand into the 128-bit domain the checked arithmetic
+    /// opcodes compute in.
+    fn widen(&self, v: IntValue<'ctx>, i128t: IntType<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.b.build_int_s_extend(v, i128t, name).unwrap()
+    }
+
+    /// Push the `(low, high, flag)` triple every integer checked arithmetic
+    /// opcode produces, given the exact result already computed in 128 bits.
+    ///
+    /// One helper serves add, subtract, negate and multiply because the VM
+    /// routes all four through the same `checked_arith_outputs` classifier
+    /// (`src/vm.rs`): only the wide expression differs. `low` is the
+    /// two's-complement-wrapped 64-bit result, `high` is the bits above it, and
+    /// `flag` is `0` in range, `1` above `i64::MAX`, `2` below `i64::MIN`.
+    ///
+    /// The shift below is arithmetic to mirror the VM's `>>` on `i128`, but
+    /// **the choice is unobservable here** and no test can distinguish it. Bit
+    /// `i` of the result is bit `i + 64` of the input for `i < 64` under both an
+    /// arithmetic and a logical shift; they differ only in bits 64 and above,
+    /// which the truncate to `i64` discards. Established by a must-fire case
+    /// that did not fire (2026-08-09) and then by the argument above, in that
+    /// order. Do not read a passing suite as evidence that the shift kind was
+    /// checked.
+    ///
+    /// This mirrors the classifier at `word_bits_log2 == 6` specifically, where
+    /// its `narrow` path is dead and `truncate_int_to_declared_width` is the
+    /// identity. [`check_word_width`] refuses every other width, so that
+    /// precondition is enforced rather than assumed.
+    /// **THE `Byte` ARM OF A CHECKED ADD OR MULTIPLY**, which is not the integer
+    /// arm at a narrower type.
+    ///
+    /// Read from `src/vm.rs`: the result is computed wide, the **low eight bits**
+    /// become the low slot, the middle slot is **unused and zero** where the
+    /// integer arm puts a high half, and the flag is `1` above `0xFF` and
+    /// **never 2** — unsigned byte addition and multiplication cannot underflow.
+    ///
+    /// **The flag is the half that is easy to miss.** Truncating the value while
+    /// classifying against the 64-bit range would leave every byte overflow
+    /// reporting flag 0, turning a wrong value into a wrong value with a wrong
+    /// arm.
+    fn push_byte_checked(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        wide: IntValue<'ctx>,
+    ) {
+        let i64t = self.i64t;
+        let i128t = ctx.i128_type();
+        let ff = i128t.const_int(0xFF, false);
+        let over = self
+            .b
+            .build_int_compare(IntPredicate::SGT, wide, ff, "byover")
+            .unwrap();
+        let flag = self
+            .b
+            .build_select(over, i64t.const_int(1, false), i64t.const_zero(), "byflag")
+            .unwrap()
+            .into_int_value();
+        let trunc = self.b.build_int_truncate(wide, i64t, "bylow64").unwrap();
+        let low = self
+            .b
+            .build_and(trunc, i64t.const_int(0xFF, false), "bylow")
+            .unwrap();
+        self.push_triple(ctx, func, trap_bb, opts, (low, i64t.const_zero(), flag));
+    }
+
+    fn push_checked_triple(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        wide: IntValue<'ctx>,
+    ) {
+        let triple = self.checked_triple(ctx, wide);
+        self.push_triple(ctx, func, trap_bb, opts, triple);
+    }
+
+    /// Classify a 128-bit result into `(low, high, flag)` without pushing it.
+    ///
+    /// Separate from the push so the division family can OVERRIDE the triple
+    /// before it lands: a zero divisor reifies as flag `3` with the numerator in
+    /// the low slot, an outcome this classifier cannot produce because it
+    /// classifies a result and a zero divisor has none.
+    fn checked_triple(
+        &mut self,
+        ctx: &'ctx Context,
+        wide: IntValue<'ctx>,
+    ) -> (IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
+        let i64t = self.i64t;
+        let i128t = ctx.i128_type();
+
+        let low = self.b.build_int_truncate(wide, i64t, "low").unwrap();
+        let sh = self
+            .b
+            .build_right_shift(wide, i128t.const_int(64, false), true, "sh")
+            .unwrap();
+        let high = self.b.build_int_truncate(sh, i64t, "high").unwrap();
+
+        let maxv = i128t.const_int(i64::MAX as u64, false);
+        let minv = self
+            .b
+            .build_int_s_extend(i64t.const_int(i64::MIN as u64, true), i128t, "min")
+            .unwrap();
+        let ov = self
+            .b
+            .build_int_compare(IntPredicate::SGT, wide, maxv, "ov")
+            .unwrap();
+        let un = self
+            .b
+            .build_int_compare(IntPredicate::SLT, wide, minv, "un")
+            .unwrap();
+        let f2 = self
+            .b
+            .build_select(un, i64t.const_int(2, false), i64t.const_zero(), "f2")
+            .unwrap()
+            .into_int_value();
+        let flag = self
+            .b
+            .build_select(ov, i64t.const_int(1, false), f2, "flag")
+            .unwrap()
+            .into_int_value();
+
+        (low, high, flag)
+    }
+
+    /// Push the four bound limbs and the flag that end every bounds outcome.
+    ///
+    /// Read from `src/vm.rs`: each limb is one little-endian byte of the
+    /// unsigned 32-bit bound, SIGN-extended from eight bits into a Word, and the
+    /// flag is `1` for an out-of-range index, otherwise `0`. The
+    /// `Trap(IndexOutOfBounds)` arm reassembles the bound from these limbs, and
+    /// `PopN` discards them on the in-range path, so this backend reproduces
+    /// them exactly rather than approximately.
+    fn push_bound_outcome(&mut self, bound: IntValue<'ctx>, invalid: IntValue<'ctx>) {
+        let i64t = self.i64t;
+        let i8t = i64t.get_context().i8_type();
+        for limb in 0..4u64 {
+            let shifted = self
+                .b
+                .build_right_shift(bound, i64t.const_int(8 * limb, false), false, "bound_shift")
+                .unwrap();
+            let byte = self
+                .b
+                .build_int_truncate(shifted, i8t, "bound_byte")
+                .unwrap();
+            let word = self.b.build_int_s_extend(byte, i64t, "bound_limb").unwrap();
+            self.push_w(word, Width::Scalar(8));
+        }
+        let flag = self
+            .b
+            .build_int_z_extend(invalid, i64t, "bound_flag")
+            .unwrap();
+        self.push_w(flag, Width::Scalar(8));
+    }
+
+    /// The integer and Byte division triple shared by `CheckedDiv(0)`,
+    /// `CheckedMod` and, since absorption 82, bare `Div` and `Mod`.
+    ///
+    /// The checked forms do NOT fault on a zero divisor. They reify it as flag
+    /// 3 with the numerator in the low slot, so a handled `zero_divisor(n)` arm
+    /// can bind it. Only an UNHANDLED zero divisor traps, and that trap is
+    /// emitted by the compiler as an ordinary `Op::Trap` in the flag dispatch.
+    ///
+    /// **SIXTY-FOUR BITS, NOT 128.** The reference divides in 128 bits, and
+    /// this lowering once did too, which made every Word `/` call the compiler
+    /// runtime's `__divti3` once upstream routed `/` here in absorption 82. Only
+    /// two inputs need the wide domain, and both are fixed points: a zero
+    /// divisor, whose triple is `(numerator, 0, 3)`, and `i64::MIN / -1`, whose
+    /// wide quotient 2^63 gives `(i64::MIN, 0, 1)` and whose remainder gives
+    /// `(0, 0, 0)`. Substituting a divisor of one for both yields `i64::MIN`
+    /// and `0` respectively, which are already those low slots. Every other
+    /// quotient and remainder fits, so the high slot is its sign extension and
+    /// the flag is zero, as the wide classification would compute.
+    ///
+    /// Branch-free, so the per-block operand-depth bookkeeping is untouched.
+    ///
+    /// **A matched Byte pair keeps its width.** The reference returns
+    /// `Byte(x / y)`, `Byte(0)` and a Word flag. Upstream moved Byte `/` and `%`
+    /// onto these opcodes in absorption 82, and labelling the quotient as a
+    /// word would refuse every Byte operation that consumes it. The values
+    /// agree with the integer arm because both operands lie in `0..=255`.
+    fn lower_checked_division(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        divide: bool,
+    ) {
+        let i64t = self.i64t;
+        let byte_operands =
+            self.width_at(0) == Width::Scalar(1) && self.width_at(1) == Width::Scalar(1);
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let select = |b: &Builder<'ctx>, c, yes: IntValue<'ctx>, no: IntValue<'ctx>, name| {
+            b.build_select(c, yes, no, name).unwrap().into_int_value()
+        };
+        let iszero = self
+            .b
+            .build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
+            .unwrap();
+        let is_min = self
+            .b
+            .build_int_compare(
+                IntPredicate::EQ,
+                lhs,
+                i64t.const_int(i64::MIN as u64, true),
+                "ismin",
+            )
+            .unwrap();
+        let is_neg1 = self
+            .b
+            .build_int_compare(IntPredicate::EQ, rhs, i64t.const_all_ones(), "isneg1")
+            .unwrap();
+        let wraps = self.b.build_and(is_min, is_neg1, "minneg1").unwrap();
+        let unsafe_divisor = self.b.build_or(iszero, wraps, "unsafediv").unwrap();
+        let divisor = select(
+            &self.b,
+            unsafe_divisor,
+            i64t.const_int(1, false),
+            rhs,
+            "safediv",
+        );
+        let value = if divide {
+            self.b.build_int_signed_div(lhs, divisor, "q64").unwrap()
+        } else {
+            self.b.build_int_signed_rem(lhs, divisor, "r64").unwrap()
+        };
+        let sign = self
+            .b
+            .build_right_shift(value, i64t.const_int(63, false), true, "qsign")
+            .unwrap();
+        let (high, flag) = if divide {
+            (
+                select(&self.b, wraps, i64t.const_zero(), sign, "qhigh"),
+                select(
+                    &self.b,
+                    wraps,
+                    i64t.const_int(1, false),
+                    i64t.const_zero(),
+                    "qflag",
+                ),
+            )
+        } else {
+            (sign, i64t.const_zero())
+        };
+        let low = select(&self.b, iszero, lhs, value, "zdlow");
+        let high = select(&self.b, iszero, i64t.const_zero(), high, "zdhigh");
+        let flag = select(&self.b, iszero, i64t.const_int(3, false), flag, "zdflag");
+        self.push_triple(ctx, func, trap_bb, opts, (low, high, flag));
+        if byte_operands {
+            let top = self.depth;
+            self.widths[top - 3] = Width::Scalar(1);
+            self.widths[top - 2] = Width::Scalar(1);
+        }
+    }
+
+    /// Apply the overflow policy and push a `(low, high, flag)` triple.
+    fn push_triple(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        (low, high, flag): (IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>),
+    ) {
+        let i64t = self.i64t;
+
+        if opts.overflow == OverflowPolicy::Trap {
+            let cont = ctx.append_basic_block(func, "nooverflow");
+            let bad = self
+                .b
+                .build_int_compare(IntPredicate::NE, flag, i64t.const_zero(), "bad")
+                .unwrap();
+            self.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+            self.b.position_at_end(cont);
+        }
+
+        // Push order is low, high, flag, matching the VM at `src/vm.rs`. It is
+        // load-bearing: `Checked*; PopN(2)` discards flag and high specifically
+        // so that low survives as an uncaptured expression's value. Verified by
+        // execution, not taken from the opcode's doc comment, which was wrong
+        // about this until 2026-08-08.
+        // `low` is the arithmetic RESULT and is a word; `Checked*; PopN(2)`
+        // discards the other two, so this is the width a construction sees for
+        // `a + 1`. The flag is a boolean and `high` is the overflow word, both
+        // labelled so a construction consuming one is packed correctly rather
+        // than refused for want of a label.
+        self.push_w(low, Width::Scalar(8));
+        self.push_w(high, Width::Scalar(8));
+        self.push_w(flag, Width::Scalar(1));
+    }
+}
+
+/// `ScalarKind::to_tag` values this backend understands. The tag space is the
+/// wire format's, not this crate's, so the constants mirror
+/// `src/value_layout.rs` rather than redefining it.
+const SCALAR_BOOL: u8 = 1;
+const SCALAR_BYTE: u8 = 2;
+const SCALAR_INT: u8 = 3;
+/// Q-format fixed point. Signed two's-complement of the runtime's word width.
+const SCALAR_FIXED: u8 = 4;
+/// Bytes this backend gives a private data slot.
+///
+/// The layout of private storage is **this backend's own choice**, because
+/// private slots are unreachable from outside a running program: the host API
+/// exposes `get_shared`/`set_shared` and no private equivalent. Native code
+/// therefore need not agree with the runtime's `GenericValue` representation,
+/// which is just as well, since that type carries no `#[repr]` and its layout
+/// is unspecified.
+///
+/// A flat word per slot is chosen. The only quantity crossing the boundary is
+/// the SIZE of the region, which the runtime reserves as
+/// `private_count * size_of::<GenericValue>()`, so a native layout fits exactly
+/// when it is no wider per slot. That is asserted rather than argued, because
+/// "8 is less than 32" is a fact about two current choices and not an
+/// invariant.
+pub const PRIVATE_SLOT_BYTES: u32 = 8;
+
+const _: () = assert!(
+    PRIVATE_SLOT_BYTES as usize <= 32,
+    "a private slot wider than the runtime's reserved Value slot would overrun \
+     a region sized by the runtime's arithmetic"
+);
+
+/// High bit of a shared slot's kind byte marks a composite body.
+const SHARED_COMPOSITE_FLAG: u8 = 0x80;
+
+/// Resolve a shared scalar slot to `(byte offset, load width, kind tag)`.
+///
+/// Refuses rather than guesses in four cases, each of which would otherwise
+/// decode the host's buffer at the wrong width and return a plausible number:
+/// a private slot, a slot outside the declared layout, a composite body, and a
+/// scalar kind whose representation this backend has not settled.
+fn resolve_shared_scalar<'ctx>(
+    data: &DataCtx<'_>,
+    slot: u32,
+    i8t: IntType<'ctx>,
+    i64t: IntType<'ctx>,
+    float_bytes: u32,
+) -> Result<(u32, IntType<'ctx>, u8), LowerError> {
+    if slot >= data.shared_count {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from(
+                "private slot; private storage is a later increment and its native layout is                  this backend's own choice rather than the runtime's",
+            ),
+        });
+    }
+    let e =
+        data.shared_layout
+            .get(slot as usize)
+            .ok_or_else(|| LowerError::UnsupportedDataSlot {
+                slot,
+                why: String::from("shared slot index outside the declared layout table"),
+            })?;
+    if e.kind & SHARED_COMPOSITE_FLAG != 0 {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("shared composite body; Workstream C"),
+        });
+    }
+    match e.kind {
+        // **`Fixed` IS A WORD OF Q-FORMAT BITS, AND THE OPERATOR RULED THE
+        // SCALE OUT OF BAND.** This arm was refused with "the host-visible
+        // fraction-bit scale is unspecified, so two programs whose values differ
+        // by a factor of 2^N share one layout". That was the right refusal until
+        // 2026-08-31, when the operator ruled that the host is expected to know
+        // the interpretation of the bits, on the analogy of a C header laying out
+        // the contract for a separately compiled procedure.
+        //
+        // So the layout IS the contract and the scale travels with the header.
+        // The bits are the value: no rescale, no mask, exactly as `Fixed` is
+        // already read from a composite body. See `docs/decisions/ABI_RULINGS.md`
+        // and `FIXED_SHARED_SLOT_ABI.md`.
+        SCALAR_INT | SCALAR_FIXED => Ok((e.offset, i64t, e.kind)),
+        SCALAR_BYTE | SCALAR_BOOL => Ok((e.offset, i8t, e.kind)),
+        // **A FLOAT SLOT IS AN EIGHT-BYTE LOAD AND A TAG.** The operator's
+        // Option A ruling settles this slot as IEEE-754 bytes at the stated
+        // offset, and the reference agrees: `read_scalar_le`'s `Float` arm at
+        // eight bytes is `f64::from_le_bytes` over exactly this offset. The
+        // operand stack already carries a float as its bit pattern in an `i64`,
+        // so no conversion happens here at all -- what the caller must do is
+        // TAG the pushed operand `Float`, which the returned kind says.
+        // **THE LOAD WIDTH FOLLOWS THE MODULE'S FLOAT WIDTH.** The reference
+        // stores `float_bytes` little-endian bytes at this offset, so an
+        // eight-byte load in a four-byte build would read the neighbour.
+        SCALAR_FLOAT_TAG if float_width_lowered(float_bytes) => Ok((
+            e.offset,
+            if float_bytes == 8 {
+                i64t
+            } else {
+                i64t.get_context().i32_type()
+            },
+            e.kind,
+        )),
+        other => Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: alloc_format_kind(other, float_bytes),
+        }),
+    }
+}
+
+/// Why a data slot of this kind is refused.
+///
+/// **A DATA SLOT IS NOT A COMPOSITE BODY FIELD, and the distinction is why
+/// `Fixed` is lowered in one and refused here.** A body field is INTERNAL: the
+/// compiler packs it, the same program reads it, and no one outside sees the
+/// layout, so the backend agreeing with the reference is a fact rather than a
+/// choice. A shared data slot is **HOST-VISIBLE**, and its layout is an
+/// application binary interface -- the same class of question as the string ABI
+/// (ruled provisional) and the float ABI (undecided, blocking two opcodes).
+///
+/// So the `Fixed` case here stays refused deliberately, not by omission, even
+/// though the identical-looking exclusion on `GetField` and `GetIndex` was
+/// lifted. Settling a host-visible layout by writing whichever version compiles
+/// is the trade this line refuses.
+fn alloc_format_kind(tag: u8, float_bytes: u32) -> String {
+    match tag {
+        0 => String::from("Unit slot; the flat representation of Unit is unsettled"),
+        // **The REPRESENTATION is settled; the host-visible SCALE is not.**
+        // `ScalarKind::Fixed` is a signed two's-complement Q-format integer of
+        // the runtime's word width, and a backend lowering it at the stated
+        // offset would agree with the reference byte for byte. What is absent is
+        // `N`: it is carried by the opcodes and the compile-time type, and
+        // `SharedSlotLayout` has no field holding it, so `Fixed<16>` and
+        // `Fixed<8>` — a factor of 256 apart — are indistinguishable to a host.
+        //
+        // The previous wording, "fixed-point representation is unsettled", sent
+        // a reader looking for a decision made long ago. Corrected per the ACTION
+        // recorded in `docs/decisions/FIXED_SHARED_SLOT_ABI.md` for whichever
+        // line owns this message; this one does.
+        4 => String::from(
+            "Fixed slot; the host-visible fraction-bit scale is unspecified, so two \
+             programs whose values differ by a factor of 2^N share one layout",
+        ),
+        // **REACHED ONLY AT A WIDTH THIS BACKEND DOES NOT LOWER.** Four and
+        // eight are both lowered above, per the operator's Option A ruling as
+        // recorded in
+        // `docs/decisions/ABI_RULINGS.md`. A narrower `Float` is refused rather
+        // than widened, on the same ground as every other float route on this
+        // branch: a float of the wrong width is a silently wrong number and not
+        // a fault.
+        SCALAR_FLOAT_TAG => format!(
+            "Float slot in a module whose Float is {float_bytes} bytes wide; only \
+             4- and 8-byte Floats have a settled slot ABI here"
+        ),
+        6 => String::from("Text slot; string representation is Workstream C"),
+        7 => String::from("Opaque slot; host handles are Workstream D"),
+        n => format!("unknown scalar kind tag {n}"),
+    }
+}
+
+/// Width in bytes of a shared scalar kind this backend lowers.
+fn shared_scalar_width(kind: u8, float_bytes: u32) -> Option<u32> {
+    match kind {
+        SCALAR_INT | SCALAR_FIXED => Some(8),
+        SCALAR_BYTE | SCALAR_BOOL => Some(1),
+        SCALAR_FLOAT_TAG if float_width_lowered(float_bytes) => Some(float_bytes),
+        _ => None,
+    }
+}
+
+/// Prove that shared slots `base .. base + count` form a contiguous, uniform
+/// array in the host buffer, returning `(first offset, element width, kind)`.
+///
+/// **Checked rather than assumed.** Measured over the corpus, all 556,496
+/// adjacent shared scalar pairs are contiguous, with no exceptions. That is a
+/// property of today's compiler and NOT a guarantee the wire format states, so
+/// relying on it would make the lowering silently wrong if the layout ever
+/// changed. Verifying it per module costs one pass over `count` table entries
+/// and converts an assumption into a precondition, which is the same move the
+/// `i64::MIN / -1` guard makes for a different unsound-by-default case.
+fn resolve_shared_array(
+    data: &DataCtx<'_>,
+    base: u32,
+    count: u32,
+    float_bytes: u32,
+) -> Result<(u32, u32, u8), LowerError> {
+    let refuse = |why: String| LowerError::UnsupportedDataSlot { slot: base, why };
+    if count == 0 {
+        return Err(refuse(String::from("zero-length shared array")));
+    }
+    let first = data
+        .shared_layout
+        .get(base as usize)
+        .ok_or_else(|| refuse(String::from("shared array base outside the layout table")))?;
+    // **A COMPOSITE RANGE STRIDES BY ITS STATED LENGTH.**
+    //
+    // The layout gives every element its own entry with the composite flag set
+    // and a `len` field, so the stride is READ rather than derived — the opposite
+    // direction from the persistent pool, where the size is inferred and the
+    // offsets are the evidence for it. Here the length is the statement and the
+    // offsets are checked against it.
+    //
+    // This arm replaced a refusal reading "shared array of composite bodies;
+    // Workstream C". A placeholder label outliving the work it named is a stale
+    // pointer, so it is gone rather than updated.
+    let width = if first.kind & SHARED_COMPOSITE_FLAG != 0 {
+        if first.len == 0 {
+            return Err(refuse(String::from(
+                "a shared array element marked composite with a stated length of zero; the kind                  and the layout disagree",
+            )));
+        }
+        u32::from(first.len)
+    } else {
+        shared_scalar_width(first.kind, float_bytes)
+            .ok_or_else(|| refuse(alloc_format_kind(first.kind, float_bytes)))?
+    };
+    for i in 1..count {
+        let e = data
+            .shared_layout
+            .get((base + i) as usize)
+            .ok_or_else(|| refuse(String::from("shared array runs past the layout table")))?;
+        if e.kind != first.kind {
+            return Err(refuse(format!(
+                "shared array is not uniform: element {i} has kind {} against {}",
+                e.kind, first.kind
+            )));
+        }
+        // **A matching kind is not a matching size.** Two composite elements can
+        // carry the same composite kind and different body lengths, and the copy
+        // is sized from the length.
+        if e.len != first.len {
+            return Err(refuse(format!(
+                "shared array is not uniform: element {i} states a body length of {} against {}",
+                e.len, first.len
+            )));
+        }
+        if e.offset != first.offset + i * width {
+            return Err(refuse(format!(
+                "shared array is NOT contiguous: element {i} sits at offset {} where a stride of \
+                 {width} predicts {}",
+                e.offset,
+                first.offset + i * width
+            )));
+        }
+    }
+    Ok((first.offset, width, first.kind))
+}
+
+/// Declare the host yield hook, reusing an existing declaration.
+///
+/// **This is a provisional application binary interface decision**, the fourth
+/// on this branch after the symbol scheme, the shared-buffer pointer and the
+/// private-region layout, and like those it belongs to Workstream D.
+///
+/// `i64 kel_yield(i64)` takes the yielded value and returns the resume value.
+/// It inverts control relative to the runtime, where `call` returns
+/// `Yielded(v)` and the host calls `resume(r)`, but the OBSERVABLE SEQUENCE of
+/// yielded and resumed values is identical, which is what the differential
+/// oracle compares. The inversion is why this suits a reentrant `yield fn`,
+/// which suspends a bounded number of times and returns, and does NOT suit a
+/// divergent `loop fn`, which would spin inside native code with no way for the
+/// host to stop it. `Op::Stream` and `Op::Reset` stay refused for that reason
+/// rather than by omission.
+fn yield_hook<'ctx>(ctx: &'ctx Context, module: &LlvmModule<'ctx>) -> FunctionValue<'ctx> {
+    module.get_function("kel_yield").unwrap_or_else(|| {
+        let i64t = ctx.i64_type();
+        module.add_function("kel_yield", i64t.fn_type(&[i64t.into()], false), None)
+    })
+}
+
+/// Emit a static string literal as a constant global and return its address.
+///
+/// # Layout: `{ i64 len, [n+1 x i8] bytes }`, the bytes NUL-terminated
+///
+/// The length is explicit and comes first because **a Keleusma string is a byte
+/// string, not a C string**: nothing in the language forbids an interior NUL, so
+/// a bare `char*` would silently truncate one. The trailing NUL is added anyway,
+/// costing one byte, so that a host written in C can pass the pointer straight
+/// to a string function for the overwhelmingly common literal that contains no
+/// NUL. A host that cares reads the length; a host that does not still works.
+///
+/// # This is a host-visible ABI decision
+///
+/// On the virtual machine a string-taking native receives an owned `String`
+/// through marshalling. Natively it receives this pointer. **The two embeddings
+/// are therefore not source-compatible for a string-taking native**, which is
+/// inherent to ahead-of-time lowering rather than a defect here, but it is new
+/// surface and the operator may want a different shape.
+///
+/// # Why no deduplication
+///
+/// Identical literals get separate globals. Sharing them means naming a global
+/// by a hash of its contents, and a hash collision would silently bind two
+/// DIFFERENT strings to one global — a wrong-answer failure to save a handful
+/// of bytes. The whole shipped corpus contains **ten** static strings.
+fn static_string_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    s: &str,
+) -> PointerValue<'ctx> {
+    let i64t = ctx.i64_type();
+    let i8t = ctx.i8_type();
+
+    // First unused name. Linear probing, which is quadratic in the number of
+    // string literals and irrelevant at ten.
+    let mut n = 0usize;
+    let name = loop {
+        let cand = format!("kel_str_{n}");
+        if module.get_global(&cand).is_none() {
+            break cand;
+        }
+        n += 1;
+    };
+
+    let mut bytes: Vec<_> = s
+        .as_bytes()
+        .iter()
+        .map(|b| i8t.const_int(u64::from(*b), false))
+        .collect();
+    bytes.push(i8t.const_zero());
+    let data = i8t.const_array(&bytes);
+
+    let ty = ctx.struct_type(&[i64t.into(), data.get_type().into()], false);
+    let init = ty.const_named_struct(&[i64t.const_int(s.len() as u64, false).into(), data.into()]);
+
+    let g = module.add_global(ty, None, &name);
+    g.set_initializer(&init);
+    g.set_constant(true);
+    g.set_linkage(inkwell::module::Linkage::Internal);
+    g.as_pointer_value()
+}
+
+/// The address of the copy at the yield's cursor word, at a constant offset
+/// inside the entry's region reservation. See [`region::YieldCopy`].
+fn yield_cursor_pointer<'ctx>(
+    b: &Builder<'ctx>,
+    region: PointerValue<'ctx>,
+    copy: region::YieldCopy,
+    i64t: IntType<'ctx>,
+) -> PointerValue<'ctx> {
+    unsafe {
+        b.build_in_bounds_gep(
+            i64t.get_context().i8_type(),
+            region,
+            &[i64t.const_int(u64::from(copy.offset), false)],
+            "yield_cursor",
+        )
+        .unwrap()
+    }
+}
+
+/// Return the copy at the yield's cursor to its first slot.
+fn yield_cursor_reset<'ctx>(
+    b: &Builder<'ctx>,
+    region: PointerValue<'ctx>,
+    copy: region::YieldCopy,
+    i64t: IntType<'ctx>,
+) {
+    let cursor = yield_cursor_pointer(b, region, copy, i64t);
+    b.build_store(cursor, i64t.const_zero())
+        .unwrap()
+        .set_alignment(1)
+        .expect("1 is a power of two");
+}
+
+/// Copy a yielded body into the cursor's slot, advance the cursor, and return
+/// the slot's address as the value to yield.
+///
+/// The slot count is the verifier's bound on yields between resets, so the
+/// cursor cannot pass the last slot. It is checked anyway, and a cursor past
+/// it traps rather than writing beyond the reservation.
+#[allow(clippy::too_many_arguments)]
+fn yield_copy_body<'ctx>(
+    b: &Builder<'ctx>,
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    region: PointerValue<'ctx>,
+    copy: region::YieldCopy,
+    body: IntValue<'ctx>,
+    trap: inkwell::basic_block::BasicBlock<'ctx>,
+    i64t: IntType<'ctx>,
+) -> Result<IntValue<'ctx>, LowerError> {
+    let i8t = ctx.i8_type();
+    let cursor_ptr = yield_cursor_pointer(b, region, copy, i64t);
+    let cursor = b
+        .build_load(i64t, cursor_ptr, "yield_slot")
+        .unwrap()
+        .into_int_value();
+    cursor
+        .as_instruction()
+        .expect("a load is an instruction")
+        .set_alignment(1)
+        .expect("1 is a power of two");
+    let in_range = b
+        .build_int_compare(
+            IntPredicate::ULT,
+            cursor,
+            i64t.const_int(u64::from(copy.slots), false),
+            "yield_slot_in_range",
+        )
+        .unwrap();
+    let copying = ctx.append_basic_block(func, "yield_copy");
+    b.build_conditional_branch(in_range, copying, trap).unwrap();
+    b.position_at_end(copying);
+    let offset = b
+        .build_int_add(
+            i64t.const_int(u64::from(copy.offset) + 8, false),
+            b.build_int_mul(
+                cursor,
+                i64t.const_int(u64::from(copy.slot_bytes), false),
+                "yield_slot_stride",
+            )
+            .unwrap(),
+            "yield_slot_offset",
+        )
+        .unwrap();
+    let slot = unsafe {
+        b.build_in_bounds_gep(i8t, region, &[offset], "yield_slot_ptr")
+            .unwrap()
+    };
+    let source = b
+        .build_int_to_ptr(body, ctx.ptr_type(AddressSpace::default()), "yield_source")
+        .unwrap();
+    b.build_memcpy(
+        slot,
+        1,
+        source,
+        1,
+        i64t.const_int(u64::from(copy.slot_bytes), false),
+    )
+    .map_err(|e| LowerError::Internal(format!("the copy at the yield: {e}")))?;
+    let next = b
+        .build_int_add(cursor, i64t.const_int(1, false), "yield_slot_next")
+        .unwrap();
+    b.build_store(cursor_ptr, next)
+        .unwrap()
+        .set_alignment(1)
+        .expect("1 is a power of two");
+    Ok(b.build_ptr_to_int(slot, i64t, "yield_slot_bits").unwrap())
+}
+
+/// An internal constant global holding a composite constant's packed body, the
+/// source a `Const` copies into its region site.
+fn composite_constant_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    body: &[u8],
+) -> PointerValue<'ctx> {
+    let i8t = ctx.i8_type();
+    let mut n = 0usize;
+    let name = loop {
+        let cand = format!("kel_const_body_{n}");
+        if module.get_global(&cand).is_none() {
+            break cand;
+        }
+        n += 1;
+    };
+    let bytes: Vec<_> = body
+        .iter()
+        .map(|b| i8t.const_int(u64::from(*b), false))
+        .collect();
+    let data = i8t.const_array(&bytes);
+    let g = module.add_global(data.get_type(), None, &name);
+    g.set_initializer(&data);
+    g.set_constant(true);
+    g.set_linkage(inkwell::module::Linkage::Internal);
+    g.as_pointer_value()
+}
+
+/// Whether two string literal records hold the same bytes.
+///
+/// Each operand is the address of a `{ i64 len, [len x i8] ... }` record from
+/// [`static_string_global`]. The lengths are compared first, then the bytes in
+/// a loop bounded by the length, which is the record's own and therefore
+/// inside it. The result is an `i1`.
+fn text_equality<'ctx>(
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    b: &Builder<'ctx>,
+    lhs: IntValue<'ctx>,
+    rhs: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let i64t = ctx.i64_type();
+    let i8t = ctx.i8_type();
+    let ptr = ctx.ptr_type(AddressSpace::default());
+    let (a, z) = (
+        b.build_int_to_ptr(lhs, ptr, "text_a").unwrap(),
+        b.build_int_to_ptr(rhs, ptr, "text_b").unwrap(),
+    );
+    let la = b
+        .build_load(i64t, a, "text_a_len")
+        .unwrap()
+        .into_int_value();
+    let lz = b
+        .build_load(i64t, z, "text_b_len")
+        .unwrap()
+        .into_int_value();
+    let same_len = b
+        .build_int_compare(IntPredicate::EQ, la, lz, "text_same_len")
+        .unwrap();
+    let start = b.get_insert_block().unwrap();
+    let head = ctx.append_basic_block(func, "text_cmp_head");
+    let body = ctx.append_basic_block(func, "text_cmp_body");
+    let step = ctx.append_basic_block(func, "text_cmp_step");
+    let done = ctx.append_basic_block(func, "text_cmp_done");
+    b.build_conditional_branch(same_len, head, done).unwrap();
+
+    b.position_at_end(head);
+    let index = b.build_phi(i64t, "text_index").unwrap();
+    let at = index.as_basic_value().into_int_value();
+    let more = b
+        .build_int_compare(IntPredicate::ULT, at, la, "text_more")
+        .unwrap();
+    b.build_conditional_branch(more, body, done).unwrap();
+
+    b.position_at_end(body);
+    // The bytes start eight bytes into the record, after its length.
+    let offset = b
+        .build_int_add(at, i64t.const_int(8, false), "text_byte_offset")
+        .unwrap();
+    let pa = unsafe {
+        b.build_in_bounds_gep(i8t, a, &[offset], "text_a_byte")
+            .unwrap()
+    };
+    let pz = unsafe {
+        b.build_in_bounds_gep(i8t, z, &[offset], "text_b_byte")
+            .unwrap()
+    };
+    let ba = b.build_load(i8t, pa, "text_a_at").unwrap().into_int_value();
+    let bz = b.build_load(i8t, pz, "text_b_at").unwrap().into_int_value();
+    let same = b
+        .build_int_compare(IntPredicate::EQ, ba, bz, "text_same_byte")
+        .unwrap();
+    b.build_conditional_branch(same, step, done).unwrap();
+
+    b.position_at_end(step);
+    let next = b
+        .build_int_add(at, i64t.const_int(1, false), "text_next")
+        .unwrap();
+    b.build_unconditional_branch(head).unwrap();
+    index.add_incoming(&[(&i64t.const_zero(), start), (&next, step)]);
+
+    b.position_at_end(done);
+    let result = b.build_phi(ctx.bool_type(), "text_equal").unwrap();
+    let t = ctx.bool_type().const_int(1, false);
+    let f = ctx.bool_type().const_zero();
+    // Unequal lengths, a differing byte, or every byte equal at the end.
+    result.add_incoming(&[(&f, start), (&f, body), (&t, head)]);
+    result.as_basic_value().into_int_value()
+}
+
+/// Declare `llvm.trap`, reusing the existing declaration if the module already
+/// carries one. Lowering a second chunk into the same module must not redeclare
+/// it.
+fn trap_declaration<'ctx>(ctx: &'ctx Context, module: &LlvmModule<'ctx>) -> FunctionValue<'ctx> {
+    module.get_function("llvm.trap").unwrap_or_else(|| {
+        module.add_function("llvm.trap", ctx.void_type().fn_type(&[], false), None)
+    })
+}
+
+/// Lower one bytecode chunk into `module` as a function named `sym`.
+///
+/// The emitted signature is `param_count` × `i64` returning `i64`, which is the
+/// 64-bit word width (`word_bits_log2 == 6`). Narrower word widths are a later
+/// increment and are refused rather than silently lowered at the wrong width.
+/// Marks a function this backend DEFINES as unable to unwind.
+///
+/// # Why this is a contract statement and not an optimisation flag
+///
+/// Keleusma has no exceptions. A fault traps. So nothing this backend generates
+/// can unwind, and saying so is a statement of fact about the emitted code.
+///
+/// **It also reaches the host, and that is the part worth stating.** A chunk
+/// calls host natives, so asserting the chunk never unwinds asserts that no
+/// unwind arrives from a native either. **That constraint already existed**:
+/// natives are `extern "C"`, and unwinding out of an `extern "C"` boundary is
+/// undefined in C and aborts in Rust. The attribute makes the existing contract
+/// explicit rather than adding a new one. **An embedder whose native unwinds was
+/// already outside the contract; after this they get miscompilation instead of a
+/// crash**, which is why it is documented for embedders and not only here.
+///
+/// # Why only defined functions
+///
+/// The declarations of host natives are deliberately left unmarked. Measured,
+/// marking the declarations alone removes the unwind machinery just as well —
+/// **but that would be this backend asserting something about code it does not
+/// generate.** Marking what it defines makes the narrower claim and achieves the
+/// same result.
+///
+/// # What it costs to omit
+///
+/// Measured on `thumbv8m.main-none-eabihf`: without it, any module that calls a
+/// native requires `__aeabi_unwind_cpp_pr0`, an unwinding personality routine,
+/// from an object that can never unwind. A module with no call does not, which is
+/// what identified the cause. See `docs/decisions/NOUNWIND.md`.
+fn mark_nounwind<'ctx>(ctx: &'ctx Context, func: FunctionValue<'ctx>) {
+    let kind = Attribute::get_named_enum_kind_id("nounwind");
+    func.add_attribute(AttributeLoc::Function, ctx.create_enum_attribute(kind, 0));
+}
+
+/// The natives a lowered module requires of its host: symbol, arity, and whether
+/// the return is a float.
+///
+/// **Read off the LOWERED MODULE rather than recomputed.** A module records
+/// native NAMES and return shapes; the argument count comes from the call sites
+/// and is resolved during lowering, so it exists nowhere else. Deriving the list
+/// from the module about to be written to the object means a generated header
+/// cannot disagree with the object it describes — there is nothing to disagree
+/// with.
+///
+/// Only declarations are returned. A function this backend defines is not part
+/// of the host's contract.
+pub fn host_native_declarations<'ctx>(lm: &LlvmModule<'ctx>) -> Vec<(String, u32, bool)> {
+    let mut out = Vec::new();
+    let mut f = lm.get_first_function();
+    while let Some(func) = f {
+        let name = func.get_name().to_string_lossy().into_owned();
+        if func.count_basic_blocks() == 0 && name.starts_with(NATIVE_SYMBOL_PREFIX) {
+            let returns_float = func
+                .get_type()
+                .get_return_type()
+                .is_some_and(|t| t.is_float_type());
+            out.push((name, func.count_params(), returns_float));
+        }
+        f = func.get_next_function();
+    }
+    out.sort();
+    out
+}
+
+pub fn lower_chunk<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    chunk: &Chunk,
+    sym: &str,
+    opts: LowerOptions,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    let i64t = ctx.i64_type();
+    let params: Vec<_> = (0..chunk.param_count).map(|_| i64t.into()).collect();
+    let func = module.add_function(sym, i64t.fn_type(&params, false), None);
+    mark_nounwind(ctx, func);
+    // No callees are visible, so any `Op::Call` is refused. A single chunk
+    // cannot resolve one: the target is an index into the module's chunk table,
+    // which this entry point does not receive.
+    lower_chunk_body(
+        ctx,
+        module,
+        chunk,
+        func,
+        &[],
+        DataCtx::default(),
+        BodyCfg {
+            opts,
+            retcon: false,
+            retcon_frame_bytes: None,
+            retcon_owned_bodies: false,
+            retcon_sites: None,
+            retcon_native_bodies: None,
+            retcon_fallible_natives: None,
+            retcon_facts: None,
+            retcon_reply_body_maximum: 0,
+            retcon_site_offset: None,
+            retcon_trap_offset: None,
+            op_meter: None,
+            retcon_resume_type: None,
+            retcon_resume_shape: None,
+            retcon_branches: None,
+            degenerate_yield: None,
+            delegated_call: None,
+            // No module, so no signature table.
+            own_signature: None,
+            // Unreachable rather than merely absent: this path refuses
+            // `Op::Call`, so a stream chunk here has no callee to suspend.
+            suspending_callee: None,
+            confinement: None,
+            yield_copy: None,
+            natives: &[],
+            native_shapes: &[],
+            chunk_signatures: &[],
+            float_bytes: 8,
+            // `lower_chunk` sees no module, so it resolves no call and needs no
+            // per-site offsets; it refuses `Op::Call` for the same reason.
+            call_regions: &[],
+            // Nobody is asking this single-chunk path what it lowered.
+            visited: None,
+        },
+    )
+}
+
+/// Lower every chunk in a module, so that `Op::Call` resolves.
+///
+/// Functions are declared for all chunks BEFORE any body is lowered, which is
+/// what lets a call reference a chunk that has not been lowered yet. Declaration
+/// order would otherwise matter, and it should not: the type checker rejects
+/// direct and mutual recursion, so the call graph is acyclic, but "acyclic" does
+/// not mean "callees come first" in the chunk table.
+///
+/// Symbols are `kel_chunk_<index>`. **This is deliberately not the R4.2 mangling
+/// scheme.** That scheme encodes purity, category, module path and type
+/// arguments for EXTERNAL linkage across separately compiled artefacts, and it
+/// needs metadata a `Chunk` does not carry. Nothing here is externally linked
+/// yet, so an internal, obviously-provisional name is more honest than a
+/// half-implemented mangling that looks authoritative.
+/// For host-driven suspension, use [`coroutine::lower`] or its explicit-contract
+/// variants. This low-level route retains its ordinary function, degenerate-step
+/// and synchronous yield-callback contracts. It does not select the returned-
+/// continuation interface automatically. See `host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks`
+/// in `tests/retcon_bytecode.rs`.
+///
+/// # Precondition: the module must be ADMISSIBLE, and this function does not check it
+///
+/// **Verified is not enough.** A module can pass [`keleusma::verify::verify`] and
+/// still be refused by `Vm::new`, which additionally requires a statically
+/// extractable resource bound. This function accepts such a module and lowers it,
+/// and the code it produces is **not memory-safe**.
+///
+/// Measured rather than supposed: mutating one `CheckedAdd` to `CheckedSub` in a
+/// corpus module yields bytecode that is `verify()`-clean, refused by
+/// `auto_arena_capacity_for`, `module_wcmu` and `Vm::new` alike, accepted here
+/// without complaint, and whose lowered form died with SIGBUS.
+///
+/// **The caller is responsible for admissibility.** The guarantee this project
+/// sells is a resource bound; an execution path that runs what the bound analysis
+/// refuses is a hole in it. Enforcing the check here was considered and not done —
+/// it would couple a pure lowering function to the resource analysis and pay that
+/// cost on every call. `no_lowerable_corpus_module_is_unbounded` in
+/// `tests/corpus_differential.rs` pins that no shipped corpus module violates it.
+pub fn lower_module<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    program: &Module,
+    opts: LowerOptions,
+) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
+    lower_module_with(ctx, module, program, opts, None, None, None)
+}
+
+/// Every chunk-level refusal in `program`, rather than only the first.
+///
+/// **This exists to make the slack measurement DERIVABLE.** Every blocker ranking
+/// on this line has been computed from a hand-maintained model of what the
+/// lowering supports, because `lower_module` returns one verdict per module and
+/// stops. Three copies of that model exist and all three went stale, in the
+/// pessimistic direction, which the drift control could not detect and which
+/// silently understates every other blocker class.
+///
+/// A module's refusal SET is the union over its chunks. That is coarser than
+/// per-op and derived from the real lowering rather than restated beside it,
+/// which is the property that matters.
+/// The name reported for a refusal that rejects the WHOLE module rather than
+/// one chunk. Not a chunk name, and deliberately bracketed so it cannot collide
+/// with one.
+pub const MODULE_LEVEL_REFUSAL: &str = "<module>";
+
+pub fn module_refusals(program: &Module, opts: LowerOptions) -> Vec<(String, LowerError)> {
+    let ctx = Context::create();
+    let m = ctx.create_module("refusals");
+    let mut sink = Vec::new();
+    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink), None, None);
+    // **A MODULE-LEVEL REFUSAL USED TO BE INVISIBLE HERE, and callers read the
+    // emptiness of this vector as "the backend accepts it".**
+    //
+    // `lower_module_with` reports per-CHUNK refusals through the sink and
+    // rejects the whole module by RETURNING. The return value was discarded, so
+    // a module the backend cannot lower at all produced ZERO refusals — the
+    // same answer as a module it lowers perfectly. Measured: a float-signature
+    // module gave `0 entries` from here while `lower_module` gave `Err`.
+    //
+    // Two guards already had this shape before the float one: the native-symbol
+    // collision check and the word-width check. Both were equally unreportable.
+    //
+    // **`Diagnostic` IS A MODE SENTINEL, NOT A REFUSAL.** In diagnostic mode
+    // `lower_module_with` ALWAYS returns `Err(Diagnostic(sink.len()))`, even
+    // when the sink is empty and the module lowers cleanly, because the IR it
+    // built is incomplete wherever a chunk was abandoned. Pushing every `Err`
+    // therefore marked EVERY module refused -- measured: the support census went
+    // to 0 lowering, 15 refused, and its own control fired.
+    if let Err(e) = outcome
+        && !matches!(e, LowerError::Diagnostic(_))
+    {
+        sink.push((MODULE_LEVEL_REFUSAL.to_string(), e));
+    }
+    sink
+}
+
+/// One chunk's refusal: the chunk's name and why it was refused.
+///
+/// `MODULE_LEVEL_REFUSAL` in the name position means the whole module was
+/// rejected rather than any one chunk.
+pub type ChunkRefusal = (String, LowerError);
+
+/// Which op indices the lowering visited, per chunk, parallel to
+/// `Module::chunks`.
+///
+/// `Some(indices)` for a chunk that lowered to completion; `None` for one that
+/// refused, whose partial record is deliberately withheld because its last entry
+/// is the op that failed. See [`module_lowered_op_indices`].
+pub type LoweredOpIndices = Vec<Option<Vec<usize>>>;
+
+/// Per-chunk record of which op indices the lowering ACTUALLY VISITED, beside
+/// the same refusals [`module_refusals`] reports.
+///
+/// Returns a vector parallel to `program.chunks`: `Some(indices)` for a chunk
+/// that lowered to completion, `None` for one that refused. A module-level
+/// refusal yields `None` for every chunk, since nothing in it was lowered.
+///
+/// # Why chunk-level success is not enough, and what this exists to prevent
+///
+/// **The op loop skips code no edge reaches.** `break;` lowers to an
+/// unconditional branch and whatever follows it in the opcode stream is
+/// unreachable, so `lower_chunk_body` marks itself `dead` and steps over those
+/// ops without ever entering their match arms. An opcode occurring ONLY in such
+/// a region of an otherwise clean chunk was therefore never lowered, and
+/// concluding "this chunk lowered, so the backend supports every opcode in it"
+/// would credit a lowering that does not exist — which is the same shape as
+/// every coverage error this line has recorded: a signal answering a narrower
+/// question than the one asked.
+///
+/// **Indices, not names.** The refusal list carries chunk NAMES, and a module
+/// holding two chunks of one name makes a name lookup ambiguous exactly when it
+/// matters. This is positional, so it cannot be confused.
+///
+/// # What a visited index does NOT mean
+///
+/// **Not that the emitted code is correct.** It means the backend produced
+/// something for that op. Correctness belongs to the differential oracle.
+pub fn module_lowered_op_indices(
+    program: &Module,
+    opts: LowerOptions,
+) -> (Vec<ChunkRefusal>, LoweredOpIndices) {
+    let ctx = Context::create();
+    let m = ctx.create_module("lowered_ops");
+    let mut sink = Vec::new();
+    let mut visits = Vec::new();
+    let outcome = lower_module_with(
+        &ctx,
+        &m,
+        program,
+        opts,
+        Some(&mut sink),
+        Some(&mut visits),
+        None,
+    );
+    // A module-level refusal returns BEFORE the chunk loop, so `visits` is short
+    // or empty rather than all-`None`. Normalising here keeps the postcondition
+    // ("parallel to `program.chunks`") true for every caller, instead of leaving
+    // each one to rediscover the case. `Diagnostic` is the diagnostic-mode
+    // sentinel and is not a refusal — see `module_refusals`.
+    if let Err(e) = outcome
+        && !matches!(e, LowerError::Diagnostic(_))
+    {
+        sink.push((MODULE_LEVEL_REFUSAL.to_string(), e));
+        return (sink, vec![None; program.chunks.len()]);
+    }
+    debug_assert_eq!(visits.len(), program.chunks.len());
+    visits.resize(program.chunks.len(), None);
+    (sink, visits)
+}
+
+fn lower_module_with<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    program: &Module,
+    opts: LowerOptions,
+    mut refusals: Option<&mut Vec<(String, LowerError)>>,
+    mut visits: Option<&mut Vec<Option<Vec<usize>>>>,
+    retcon_config: Option<(u32, &coroutine::types::Analysis)>,
+) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
+    let retcon_bytes = retcon_config.map(|(bytes, _)| bytes);
+    let reachable =
+        |index: usize| retcon_config.is_none_or(|(_, facts)| facts.plan.reachable[index]);
+    check_word_width(program.word_bits_log2)?;
+    let i64t = ctx.i64_type();
+    let op_meter = opts.op_meter.then(|| {
+        let words = program
+            .chunks
+            .iter()
+            .map(|c| c.ops.len())
+            .sum::<usize>()
+            .max(1);
+        let ty = i64t.array_type(words as u32);
+        // A declaration, so the host supplies the words and reads them back.
+        module
+            .add_global(ty, None, OP_METER_SYMBOL)
+            .as_pointer_value()
+    });
+    // **The module's float width, hoisted above its first use.** It was computed
+    // further down, which was fine while the entry ABI's type was hard-coded
+    // `f64` and stopped being fine the moment that type became width-derived.
+    let float_bytes = 1u32 << program.float_bits_log2 >> 3;
+
+    // **THE SIGNATURE ROUTE IS NOW OPEN — for the one float width that is built.**
+    // A float parameter or return takes a real floating-point position in the
+    // declared function type, converted at the four boundary points (declaration,
+    // prologue, return, call). What stays refused is a float of a width this
+    // lowering does not emit: `Float` is `f32` under `narrow-float-32`, and
+    // declaring a `double` there would be a silently wrong number rather than a
+    // fault. Approximating a width is exactly the failure this guard exists for.
+    if !float_width_lowered(float_bytes)
+        && let Some((idx, _)) = program.signatures.iter().enumerate().find(|(index, sg)| {
+            reachable(*index) && (shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+        })
+    {
+        return Err(LowerError::unsupported_float_width(
+            float_bytes,
+            format!(
+                "chunk {idx} has a Float in its signature and this module's Float is \
+                 {float_bytes} bytes wide; only 4- and 8-byte Floats have an entry ABI \
+                 here. \
+                 Refused rather than declared as a `double`, because a float of the \
+                 wrong width is a wrong number and not a fault"
+            ),
+        ));
+    }
+
+    // **THE FLOAT TYPE IS NOT BUILT HERE, AND THAT IS THE POINT.** It used to be,
+    // eagerly, which meant `float_type` was called with the NO-FLOATS SENTINEL
+    // width of zero for every float-free module and quietly returned `f64`. The
+    // value was never consumed on that path, so nothing was wrong — but a
+    // recorded prediction that the width never reaches the type function was
+    // refuted by measurement, and the default arm contradicted a comment two
+    // functions above it.
+    //
+    // The fix is not to thread an error through the call sites. It is to arrange
+    // that the function is never reached with a width it cannot serve: the
+    // signature refusal above now runs BEFORE any declaration, and the type is
+    // built only in the branches that have a float shape in hand. Both remaining
+    // callers are therefore past a `shape_is_float` guard AND past the refusal.
+    //
+    // This mirrors the `v0.2.3` line's arithmetic-width design, which moved its
+    // refusal to load rather than returning a `Result` from ten hot-path sites.
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+
+    // Shared slots occupy the low indices of the unified slot space, so their
+    // count is also the private boundary.
+    let (shared_count, shared_layout): (u32, &[SharedSlotLayout]) = match &program.data_layout {
+        Some(dl) => (
+            dl.slots
+                .iter()
+                .filter(|s| s.visibility == SlotVisibility::Shared)
+                .count() as u32,
+            dl.shared_layout.as_slice(),
+        ),
+        None => (0, &[]),
+    };
+    // **A STREAM CHUNK NEEDS THE REGION EVEN WITH NO COMPOSITES.** Its locals
+    // live in the arena rather than in machine-stack `alloca`s, because a
+    // resumable stream returns at each `yield` and re-enters at the same point,
+    // and a machine frame does not survive that. See
+    // `region::stream_locals_bytes`.
+    // **ONLY A NON-DEGENERATE STREAM NEEDS IT**, and the distinction is
+    // load-bearing rather than tidy. Adding the pointers to EVERY stream changed
+    // the signature of the degenerate chunks too — and `yield_sequence.rs` calls
+    // those through a hand-written `extern "C" fn(i64) -> i64`, so the extra
+    // parameters became garbage read from registers the callee never touches.
+    // **Ten tests passed by the calling convention's good manners rather than by
+    // being right.** A signature change is invisible to a harness that names the
+    // signature itself, so it must be confined to chunks that actually need it.
+    let needs_region = retcon_bytes.is_some()
+        || program.chunks.iter().any(|c| {
+            chunk_builds_composite(c)
+                || (c.block_type == BlockType::Stream
+                    && degenerate_stream_yield(c, program).is_none())
+        });
+    let data = DataCtx {
+        stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
+            .unwrap_or(u32::MAX),
+        needs_region,
+        private_composite_slots: program
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.private_composite_layout.as_slice())
+            .unwrap_or(&[]),
+        private_init: program
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.private_init.as_slice())
+            .unwrap_or(&[]),
+        persistent_composite_bytes: program.persistent_composite_bytes,
+        composite_init_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
+            .unwrap_or(u32::MAX)
+            .saturating_add(crate::region::stream_state_supplement_bytes(program)),
+        shared_count,
+        shared_layout,
+        has_data: program
+            .data_layout
+            .as_ref()
+            .is_some_and(|dl| !dl.slots.is_empty()),
+        slot_count: program
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.slots.len() as u32)
+            .unwrap_or(0),
+    };
+
+    // **The shared buffer arrives as a trailing pointer parameter**, and only
+    // when the module declares shared slots, so a module without them keeps the
+    // signature it had. This mirrors the runtime, where the buffer is supplied
+    // per call through `call_with_shared` rather than installed globally, and it
+    // keeps the lowering reentrant: a module-level global would be shared by
+    // every concurrent invocation. Like the symbol scheme, it is provisional and
+    // belongs to Workstream D's application binary interface.
+    // **Uniform data ABI.** A module that declares any data slot takes TWO
+    // trailing pointers, the shared buffer and the private region, in that
+    // order. Making the signature depend on which KINDS of slot a module
+    // declares would vary the calling convention along two independent
+    // dimensions, and a caller would have to reproduce that reasoning to get
+    // the arity right. One rule is cheaper than two, and an unused pointer
+    // costs a register.
+    let has_data = program
+        .data_layout
+        .as_ref()
+        .is_some_and(|dl| !dl.slots.is_empty());
+    if shared_count > 0 {
+        check_target_endianness()?;
+    }
+    let owned_bodies = retcon_config.is_some_and(|(_, facts)| facts.plan.owns_bodies);
+    let declared: Vec<FunctionValue<'ctx>> = program
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if !reachable(i) {
+                // Preserve bytecode chunk indices without declaring an unsupported
+                // ABI for an unused helper. No emitted call can reach this symbol.
+                return Ok(module.add_function(
+                    &format!("kel_chunk_{i}"),
+                    i64t.fn_type(&[], false),
+                    None,
+                ));
+            }
+            let sig = program.signatures.get(i);
+            let retcon_internal = retcon_config.is_some() && Some(i) != program.entry_point;
+            // **A FLOAT PARAMETER TAKES A FLOATING-POINT POSITION, so the lowered
+            // function uses the platform's floating-point calling convention where
+            // the signature says it should.**
+            //
+            // Before this every position was `i64`, which on aarch64 means a
+            // general-purpose register where the C convention passes a double in
+            // `v0`-`v7`. A host calling the symbol through its declared Keleusma
+            // type would have read an unrelated register. That is not a fault; it
+            // is a plausible wrong number, which is why the signature route stayed
+            // REFUSED until this existed.
+            let mut params: Vec<_> = (0..c.param_count as usize)
+                .map(|p| match sig.and_then(|s| s.params.get(p)) {
+                    Some(sh) if shape_is_float(sh) && !retcon_internal => {
+                        float_type(ctx, float_bytes).into()
+                    }
+                    _ => i64t.into(),
+                })
+                .collect();
+            if has_data || needs_region {
+                params.push(ptrt.into()); // shared buffer
+                params.push(ptrt.into()); // private region
+                // The composite body region. Host-supplied, and documented as
+                // coming from the arena's BOTTOM section: the caller takes at
+                // least `region::plan_chunk_region(chunk).bytes` from
+                // `alloc_bottom_bytes` and releases it with `bottom_mark`.
+                //
+                // Naming the provenance is not decoration. A region of
+                // unspecified origin would put the backend's memory outside the
+                // arena's accounting, and transferring that bound is the whole
+                // property this lowering exists to preserve. The backend never
+                // allocates and never frees; it writes at compile-time offsets
+                // into memory the host scoped.
+                params.push(ptrt.into()); // composite body region
+            }
+            if retcon_internal {
+                params.push(ptrt.into()); // ownership, kind and body-size metadata
+            }
+            let retcon_delegate = retcon_bytes.is_some()
+                && Some(i) != program.entry_point
+                && c.block_type != BlockType::Func;
+            if retcon_delegate {
+                params.push(ptrt.into());
+            }
+            // The RETURN type comes from the same table. `lower_chunk` cannot do
+            // this at all — a chunk carries its parameter types but NOT its
+            // return type, which lives only in the module-level signature — which
+            // is why the entry ABI is a module-level feature.
+            let fnty = if !retcon_internal && sig.is_some_and(|s| shape_is_float(&s.ret)) {
+                float_type(ctx, float_bytes).fn_type(&params, false)
+            } else {
+                i64t.fn_type(&params, false)
+            };
+            let f = if let Some(bytes) = retcon_bytes.filter(|_| Some(i) == program.entry_point) {
+                coroutine::declare(ctx, module, i, &params, bytes)?
+            } else {
+                module.add_function(&format!("kel_chunk_{i}"), fnty, None)
+            };
+            if retcon_delegate {
+                coroutine::mark_delegate(ctx, f);
+            } else if retcon_internal {
+                f.set_linkage(inkwell::module::Linkage::Internal);
+            }
+            mark_nounwind(ctx, f);
+            Ok(f)
+        })
+        .collect::<Result<_, LowerError>>()?;
+
+    // A module-level precondition, checked before any body is lowered. Two
+    // natives whose names differ but whose SYMBOLS coincide would each bind to
+    // the same host definition, and every call site would look correct in
+    // isolation. Refusing the module is the only place this is visible.
+    if let Some((sym, names)) = native_symbol_collisions(&program.native_names) {
+        return Err(LowerError::MalformedInput(format!(
+            "natives {names:?} all mangle to the external symbol `{sym}`; the \
+             lowering refuses rather than binding several declarations to one \
+             host definition"
+        )));
+    }
+
+    // **A FLOAT IN ANY SIGNATURE REFUSES THE MODULE, so the absence of float
+    // miscompiles stops being incidental.**
+    //
+    // Measured before this existed: `fn p(a: Float) -> Float { a }` LOWERED with
+    // no refusal. Only float CONSTANTS were guarded, by `Op::Const`. Nothing
+    // stopped a float VALUE reaching the operand stack — what stopped a wrong
+    // answer was that no float OPERATION was supported, so the value was never
+    // operated on. That is a property of what is unimplemented, not a guard.
+    //
+    // **It is also a live ABI defect rather than only a hazard.** The lowered
+    // entry takes `i64`; a float-typed Keleusma function should receive a
+    // double. A host calling it under the real C ABI would read an FP register
+    // this code never wrote. The pass-through case happens to round-trip a bit
+    // pattern, which is correct by accident and only inside this harness.
+    //
+    // **The tag is compared numerically on purpose.** `ScalarKind::Float` is
+    // behind the `floats` feature, so naming the variant would make this guard
+    // vanish in a build without it — exactly when it is still needed, because
+    // the wire tag is stable regardless of which features the READER was built
+    // with.
+    //
+    // **A SIGNATURE IS NOT THE ONLY ROUTE A FLOAT TAKES, and the other routes
+    // used to be closed only by accident.**
+    //
+    // Measured: `fn p(w: Word) -> Word { let f = 1.5; ... }` has NO float in any
+    // signature and DOES carry `ConstValue::Float`. Before this, that module was
+    // refused only because `Op::Add` was unsupported -- a property of what is
+    // unimplemented, not a guard. The moment `Op::Add` lowers as an integer add
+    // (which is correct for `Byte` and `Fixed`), that program would SILENTLY
+    // MISCOMPILE.
+    //
+    // So the routes are enumerated and each is closed:
+    //   1. chunk signatures        -- above
+    //   2. chunk constants         -- here
+    //   3. native return shapes    -- here
+    //   4. data-segment slots      -- here
+    //
+    // **The list is a claim, and `float_guard_routes.rs` tests each route with a
+    // named test per route.** A guard that closes three of four while reading as
+    // total is the shape this line keeps finding.
+    //
+    // **AND THIS COMMENT WAS ITSELF AN INSTANCE OF IT UNTIL 2026-08-24.** It
+    // cited a test called `the_float_guard_closes_every_route_it_names` **that
+    // was never written**, and route 3 -- the native return shape -- had no test
+    // at all. Proved by disabling this guard: every other test in that file
+    // still passed. A citation to a test that does not exist cannot fail, so it
+    // read as coverage every time anyone checked, while being coverage for three
+    // routes. `comment_citations.rs` now scans this package for exactly
+    // that shape.
+    // **THE CONSTANT ROUTE IS OPEN, and it is the ONLY one of the four that is.**
+    //
+    // It was closed because "the integer arithmetic lowering would silently
+    // miscompile it". That is no longer the lowering: a float constant is pushed
+    // as its bit pattern tagged `OperandKind::Float`, the conversions and float
+    // `Add`/`Sub`/`Mul` are implemented, and **an opcode that consumes a float
+    // and was not written for one refuses at the operand**. The coarse route
+    // guard is therefore replaced by a finer check, not removed.
+    //
+    // **ROUTES 1 AND 4 ARE NOW OPEN TOO, each on a ruling rather than on a
+    // judgement.** The chunk signature opened with the entry ABI, and the DATA
+    // SLOT opened with the float shared slot -- the operator's Option A ruling
+    // settles that slot as IEEE-754 bytes at the stated offset, which is what
+    // the reference's `read_scalar_le` already does. See
+    // `docs/decisions/ABI_RULINGS.md` and
+    // `docs/decisions/FLOAT_SHARED_SLOT_BRIEF.md`.
+    //
+    // **Route 3 stays closed because nothing is built behind it**: a float
+    // native return needs a native float ABI, which no ruling settles. Opening a
+    // route with no lowering behind it would admit a module that is compiled
+    // wrong rather than refused.
+    //
+    // Verified end to end rather than by lowering alone: `float_witness.kel` runs
+    // in the corpus differential against the virtual machine. See
+    // `docs/decisions/FLOAT_SLICE_TWO.md`.
+    if let Some(i) = program
+        .native_return_shapes
+        .iter()
+        .enumerate()
+        .find(|(index, sh)| retcon_config.is_none_or(|(_, facts)| u16::try_from(*index).is_ok_and(|index| facts.plan.native_calls.contains(&index)))
+            && matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+        .map(|(index, _)| index)
+    {
+        return Err(LowerError::UnsupportedShape(format!(
+            "native {i} declares a Float RETURN SHAPE; its result would reach the \
+             operand stack as a float this backend cannot represent"
+        )));
+    }
+    // Route 4, the data segment, is decided AT THE ACCESS rather than at the
+    // declaration, and deliberately not re-checked here. `resolve_shared_scalar`
+    // admits `SCALAR_INT`, `SCALAR_BYTE`, `SCALAR_BOOL` and -- since the float
+    // shared slot landed -- `SCALAR_FLOAT_TAG` at an eight-byte `Float`,
+    // refusing everything else as `UnsupportedDataSlot`. `Fixed` is among the
+    // refusals and stays there: its gap is the host-visible SCALE, not the
+    // representation.
+    //
+    // **The measured fact that shaped this placement still holds**: a module
+    // that DECLARES a slot this backend cannot lower and never reads it LOWERS,
+    // because an unread slot puts nothing on the operand stack. The access is
+    // where a value would actually arrive, so the access is where the decision
+    // belongs -- which is also why opening the float case needed no change here.
+    //
+    // A second check here would be a parallel model of a guard that already
+    // exists and the two could drift. `float_guard_routes.rs` tests this route
+    // through the EXISTING behaviour.
+
+    // **THE CONFINEMENT VERDICTS, COMPUTED ONCE FOR THE WHOLE MODULE.**
+    // `module_confinement` is the form that carries callee summaries, which is
+    // the only form worth consuming: the per-chunk form assumes every call leaks
+    // and would refuse sites this one confines. The interprocedural shape --
+    // built in a loop, returned, yielded by the caller -- is exactly the residual
+    // the region planner's soundness obligation names as open, and it is
+    // reachable only through the summaries.
+    //
+    // Indexed by chunk, parallel to `program.chunks`.
+    let confinement = keleusma::confine::module_confinement(program);
+
+    // A delegated suspension affects exactly TWO chunks: the entry, whose tail
+    // call becomes the return, and the callee, whose yields become returns.
+    let delegated = if opts.delegated_suspension {
+        delegated_suspension_plan(program)
+    } else {
+        None
+    };
+
+    for (i, (chunk, func)) in program.chunks.iter().zip(declared.iter()).enumerate() {
+        if !reachable(i) {
+            continue;
+        }
+        let mut tail = degenerate_stream_yield(chunk, program);
+        let mut delegated_call = None;
+        if let Some((entry, callee, call_ix)) = delegated {
+            if i == entry {
+                // An EMPTY yield list, deliberately: it makes `Stream` and
+                // `Reset` lower to nothing, exactly as in a degenerate stream,
+                // while marking no `Yield` for return -- the entry has none.
+                tail = Some(Vec::new());
+                delegated_call = Some(call_ix);
+            } else if i == callee {
+                tail = Some(
+                    chunk
+                        .ops
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, o)| matches!(o, Op::Yield))
+                        .map(|(ix, _)| ix)
+                        .collect(),
+                );
+            }
+        }
+        let call_regions = region::plan_call_site_regions(program, i);
+        let seen = core::cell::RefCell::new(Vec::new());
+        let retcon = retcon_bytes.is_some() && Some(i) == program.entry_point;
+        if retcon || coroutine::is_delegate(*func) {
+            tail = None;
+        }
+        let cfg = BodyCfg {
+            opts,
+            retcon,
+            retcon_frame_bytes: retcon_bytes.filter(|_| retcon),
+            retcon_owned_bodies: owned_bodies,
+            retcon_reply_body_maximum: retcon_config
+                .map_or(0, |(_, facts)| facts.reply_body_maximum),
+            retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
+            retcon_native_bodies: retcon_config.map(|(_, facts)| &facts.plan.native_body_returns),
+            retcon_fallible_natives: retcon_config.map(|(_, facts)| &facts.plan.fallible_natives),
+            retcon_facts: retcon_config.map(|(_, facts)| &facts.facts[i]),
+            retcon_site_offset: retcon_config.and_then(|(_, facts)| facts.plan.metadata_offset),
+            retcon_trap_offset: retcon_config
+                .map(|(_, facts)| facts.plan.trap_offset)
+                .filter(|_| retcon),
+            op_meter: op_meter.map(|g| (g, op_meter_index(program, i, 0) as u64)),
+            retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
+            retcon_resume_shape: retcon_bytes
+                .and(program.entry_point)
+                .and_then(|entry| program.signatures.get(entry))
+                .map(|sig| {
+                    sig.params
+                        .first()
+                        .copied()
+                        .unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 })
+                }),
+            retcon_resume_type: retcon_bytes.and(program.entry_point).map(|entry| {
+                program.chunks[entry]
+                    .param_types
+                    .first()
+                    .copied()
+                    .unwrap_or(TypeTag::Unit)
+            }),
+            degenerate_yield: tail.as_deref(),
+            delegated_call,
+            own_signature: program.signatures.get(i),
+            suspending_callee: if chunk.block_type == BlockType::Stream {
+                stream_suspending_callee(chunk, program)
+            } else {
+                None
+            },
+            confinement: confinement.get(i).map(|v| v.as_slice()),
+            yield_copy: if retcon {
+                region::yield_copy(program)
+            } else {
+                None
+            },
+            natives: &program.native_names,
+            native_shapes: &program.native_return_shapes,
+            chunk_signatures: &program.signatures,
+            float_bytes: 1u32 << program.float_bits_log2 >> 3,
+            call_regions: &call_regions,
+            visited: visits.as_ref().map(|_| &seen),
+        };
+        match lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg) {
+            Ok(_) => {
+                // A CLEAN chunk, so every recorded index lowered. See
+                // `BodyCfg::visited` for why a refused chunk's list is dropped
+                // instead: its last entry is the op that failed.
+                if let Some(v) = visits.as_mut() {
+                    v.push(Some(seen.into_inner()));
+                }
+            }
+            Err(e) => {
+                if let Some(v) = visits.as_mut() {
+                    v.push(None);
+                }
+                // In diagnostic mode, record and carry on to the NEXT CHUNK.
+                //
+                // A chunk's own lowering still stops at its first refusal, since
+                // continuing inside one would desynchronise the operand-stack
+                // depth and produce nonsense. Per-chunk is nonetheless strictly
+                // better than the per-module verdict every ranking has been
+                // computed from: a module's refusal SET is the union over its
+                // chunks, which is what makes a slack measurement derivable from
+                // the real lowering instead of from a hand-maintained model. The
+                // module is left unusable either way, which is why this returns
+                // the refusals rather than the functions.
+                if let Some(sink) = refusals.as_mut() {
+                    sink.push((chunk.name.clone(), e));
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    if let Some(sink) = refusals.as_ref() {
+        // Diagnostic mode never claims a usable module: the IR is incomplete
+        // wherever a chunk was abandoned, so returning it would invite someone
+        // to run it.
+        //
+        // The error carries only a COUNT; the list stays with the caller. An
+        // earlier version used `core::mem::take`, which emptied the caller's
+        // vector into an error the caller discards — so `module_refusals`
+        // reported that every module lowers cleanly. A wrong answer in the
+        // reassuring direction, which is the one nobody questions.
+        return Err(LowerError::Diagnostic(sink.len()));
+    }
+
+    // Ask LLVM to verify what we just produced. This was previously done only in
+    // the test harness (`lm.verify()` in three test files, nowhere in `src/`),
+    // which meant the one check that would catch malformed IR was the one never
+    // run in production. A postcondition belongs at the boundary that promises
+    // it, not in the tests that happen to exercise it.
+    module
+        .verify()
+        .map_err(|e| LowerError::InvalidIr(e.to_string()))?;
+
+    Ok(declared)
+}
+
+/// What the lowering knows about the module's data segment.
+///
+/// Empty for [`lower_chunk`], which receives one chunk and therefore cannot see
+/// the module's layout table. Data-segment access is refused there for the same
+/// reason a call is: the information required to resolve it was never supplied.
+#[derive(Default, Clone, Copy)]
+struct DataCtx<'a> {
+    /// Load-time values for private slots. Coroutine reads use their kinds until
+    /// the first write, then load the actual kind from persistent metadata.
+    private_init: &'a [ConstValue],
+    /// Number of shared slots. Shared slots occupy the low indices, so this is
+    /// also the boundary above which a slot is private.
+    shared_count: u32,
+    /// Layout entries for the shared slots, indexed by slot.
+    shared_layout: &'a [SharedSlotLayout],
+    /// Whether the module declares any data slot at all, which decides whether
+    /// the two trailing pointers are present.
+    has_data: bool,
+    /// Byte offset, from the PRIVATE pointer, of this module's stream
+    /// resume-state words.
+    ///
+    /// **`.bss` for the coroutine**: fixed size, fixed offset, and it must
+    /// survive `Op::Reset`, which clears the ephemeral regions. It therefore sits
+    /// in the PERSISTENT region, immediately after
+    /// `keleusma::vm::required_persistent_capacity_for`, and
+    /// `region::persistent_supplement_bytes` is what a host must add to make room
+    /// for it.
+    ///
+    /// Computed where the module is in scope, because the body lowering sees one
+    /// chunk at a time.
+    stream_state_off: u32,
+    /// Total declared slots, shared plus private.
+    slot_count: u32,
+    /// The private slots that hold a flat composite body, from the module's own
+    /// `private_composite_layout`.
+    ///
+    /// **Carried so a composite data slot can be REFUSED rather than silently
+    /// mis-lowered.** The slot access below is a single word-sized load or
+    /// store; applied to a composite that writes the BODY'S ADDRESS where the
+    /// runtime copies its bytes into the persistent pool. Measured, not
+    /// supposed: a subject storing a composite on one loop iteration and reading
+    /// it back after two more rebuilt the same site yielded `0` on the runtime
+    /// and `2` here.
+    ///
+    /// Empty for [`lower_chunk`], like every other module-level fact.
+    private_composite_slots: &'a [keleusma::bytecode::PrivateCompositeSlot],
+    /// Byte offset, from the PRIVATE pointer, of the per-composite-slot
+    /// initialisation words.
+    ///
+    /// One word per entry of `private_composite_layout`, in table order, set to
+    /// one by a write and tested by a read. See
+    /// `region::composite_init_supplement_bytes` for why a separate word rather
+    /// than a sentinel body, and why persistent rather than ephemeral.
+    composite_init_off: u32,
+    /// The module's declared persistent composite pool size, in bytes.
+    ///
+    /// Carried because it CLOSES the derivation of body sizes: the pool is
+    /// packed with one running total, so the last entry's size is the gap from
+    /// its offset to this figure. Without it the final entry has no upper bound
+    /// and every size would be an assumption.
+    persistent_composite_bytes: u32,
+    /// Whether ANY chunk in the module constructs a flat composite, and so
+    /// whether the trailing region pointer is present.
+    ///
+    /// Module-wide rather than per-chunk on purpose. Deciding arity per chunk
+    /// would make a caller reproduce this analysis to get the signature right,
+    /// which is the same two-dimensional arity the shared/private pair already
+    /// refuses. All three pointers or none.
+    needs_region: bool,
+}
+
+/// Where a private composite slot's body lives in THIS backend's persistent
+/// region, and how many bytes it is.
+///
+/// # The pool's base is this backend's choice, not the runtime's
+///
+/// `required_persistent_capacity_for` sizes the persistent region as
+/// `private_count * size_of::<Value>()` plus the pool, and the runtime's `Value`
+/// is 32 bytes where a private slot here is [`PRIVATE_SLOT_BYTES`]. **The two
+/// private regions are different memory images**, so the pool is placed after
+/// this backend's own slot array rather than after the runtime's. The check
+/// below is what keeps that from colliding with the resume-state word, which
+/// sits at the runtime's figure.
+///
+/// # The size is DERIVED, so the derivation is validated
+///
+/// `src/compiler.rs` packs the pool with one running total and no padding, in
+/// ascending slot order, so a body's size is the gap to the next entry's offset
+/// and the last entry's is the gap to the declared pool size. That arithmetic is
+/// exact over a packed table — **and a derived length feeding a copy is the one
+/// place here where being slightly wrong is an overrun rather than a wrong
+/// answer**, so the table is required to partition the pool: offsets strictly
+/// ascending, and the final entry ending exactly at the declared size. A table
+/// that fails refuses.
+fn private_composite_extent(data: &DataCtx<'_>, slot: u32) -> Result<(u32, u32), LowerError> {
+    let table = data.private_composite_slots;
+    let mut offsets: Vec<u32> = table.iter().map(|e| e.offset).collect();
+    offsets.sort_unstable();
+    for w in offsets.windows(2) {
+        if w[0] >= w[1] {
+            return Err(LowerError::UnsupportedDataSlot {
+                slot,
+                why: String::from(
+                    "the module's private composite table does not partition the pool: two                      entries share or invert an offset, so no body size can be derived from it",
+                ),
+            });
+        }
+    }
+    let last = *offsets
+        .last()
+        .ok_or_else(|| LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("the slot is composite but the module declares no composite pool"),
+        })?;
+    if last >= data.persistent_composite_bytes {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from(
+                "the last private composite offset is not inside the declared pool, so the                  table and the pool size disagree and neither can be trusted",
+            ),
+        });
+    }
+
+    let offset = table
+        .iter()
+        .find(|e| u32::from(e.slot) == slot)
+        .map(|e| e.offset)
+        .ok_or_else(|| LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("no pool entry for this slot"),
+        })?;
+    let next = offsets
+        .iter()
+        .copied()
+        .find(|o| *o > offset)
+        .unwrap_or(data.persistent_composite_bytes);
+    let size = next - offset;
+    if size == 0 {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("the derived body size is zero"),
+        });
+    }
+
+    // The pool sits after this backend's private slot array. The resume-state
+    // word sits at the runtime's persistent figure, which is strictly larger
+    // because the runtime's per-slot storage is wider — asserted rather than
+    // assumed, so the relation is rechecked if either width moves.
+    let private_slots = data.slot_count.saturating_sub(data.shared_count);
+    let base = private_slots.saturating_mul(PRIVATE_SLOT_BYTES);
+    if base.saturating_add(data.persistent_composite_bytes) > data.stream_state_off {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: format!(
+                "the composite pool at {base} + {} bytes would reach the stream resume state at                  {}; the persistent layout no longer has room for both",
+                data.persistent_composite_bytes, data.stream_state_off
+            ),
+        });
+    }
+    Ok((base + offset, size))
+}
+
+/// The extent of an array-of-composite field: its first element's pool offset,
+/// the element size, and the number of elements the table covers uniformly.
+///
+/// # Why the stride is validated rather than assumed
+///
+/// `src/compiler.rs` places an array-of-composite field with ONE POOL ENTRY PER
+/// ELEMENT, in a single loop, each advancing the running total by the same body
+/// size — so the entries are consecutive and uniformly spaced **by
+/// construction**. That is a fact about the producer, and this checks it in the
+/// table rather than inheriting it from the shape of the loop that built it.
+///
+/// **Two consecutive entries prove nothing about the third**, so the whole
+/// declared range is walked.
+fn indexed_composite_extent(
+    data: &DataCtx<'_>,
+    base_slot: u32,
+    count: u32,
+) -> Result<(u32, u32), LowerError> {
+    // The element size comes from the SAME derivation the direct path uses, so
+    // the two cannot drift.
+    let (first_off, size) = private_composite_extent(data, base_slot)?;
+    for k in 1..count {
+        let slot = base_slot + k;
+        let (off, sz) =
+            private_composite_extent(data, slot).map_err(|_| LowerError::UnsupportedDataSlot {
+                slot,
+                why: format!(
+                    "an indexed composite field of {count} elements: the module's pool table \
+                     has no entry for element {k}, so its address would be invented from its \
+                     neighbours"
+                ),
+            })?;
+        if sz != size {
+            return Err(LowerError::UnsupportedDataSlot {
+                slot,
+                why: format!(
+                    "element {k} of an indexed composite field is {sz} bytes where element 0 is \
+                     {size}; the stride is not uniform and `base + index * size` would not \
+                     address it"
+                ),
+            });
+        }
+        if off != first_off + k * size {
+            return Err(LowerError::UnsupportedDataSlot {
+                slot,
+                why: format!(
+                    "element {k} sits at pool offset {off} where a uniform stride puts it at {}; \
+                     the table does not partition this field's range",
+                    first_off + k * size
+                ),
+            });
+        }
+    }
+    Ok((first_off, size))
+}
+
+/// How many trailing pointer parameters a function in this module carries.
+///
+/// **One source, used by the signature, the call-arity check and the argument
+/// forwarding alike.** A hand-written `- 2` in the arity check drifted the
+/// moment a third pointer was added and made every correct call read as a short
+/// call; deriving it is what stops that recurring.
+fn trailing_ptrs(data: &DataCtx<'_>) -> u32 {
+    if data.has_data || data.needs_region {
+        3
+    } else {
+        0
+    }
+}
+
+/// Whether a chunk constructs a flat composite, and so needs somewhere to put a
+/// body.
+///
+/// `Boxed` does not count: it carries no baked body size, the corpus contains
+/// none, and the construction arm refuses it rather than placing it. A `Const`
+/// holding a packed composite counts, because it copies its body into a site.
+fn chunk_builds_composite(chunk: &Chunk) -> bool {
+    chunk
+        .ops
+        .iter()
+        .any(|o| crate::region::flat_site_size(chunk, o).is_some())
+}
+
+/// Per-chunk lowering configuration.
+///
+/// Exists because `lower_chunk_body` reached eight positional arguments, which
+/// clippy flags and which is a real readability cost rather than a lint to
+/// suppress. These two travel together: both are decided by the caller and both
+/// stay constant for the whole body.
+#[derive(Clone, Copy)]
+struct BodyCfg<'a> {
+    /// LLVM owns suspension state instead of the handwritten stream dispatch.
+    retcon: bool,
+    /// LLVM continuation bytes, excluding the caller-owned completion tail.
+    retcon_frame_bytes: Option<u32>,
+    /// Track ownership for all flat entry arguments, not only the reply shape.
+    retcon_owned_bodies: bool,
+    retcon_reply_body_maximum: u32,
+    retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
+    retcon_facts: Option<&'a BTreeMap<usize, coroutine::types::Facts>>,
+    retcon_native_bodies: Option<&'a BTreeMap<u16, coroutine::NativeBodyReturn>>,
+    /// Natives whose symbol returns a value and a failure word.
+    retcon_fallible_natives: Option<&'a std::collections::BTreeSet<u16>>,
+    retcon_site_offset: Option<u32>,
+    /// Frame offset of the entry's trap record. `Some` only for the entry.
+    retcon_trap_offset: Option<u32>,
+    /// The instruction meter and this chunk's first index in it.
+    op_meter: Option<(PointerValue<'a>, u64)>,
+    /// The VM writes host replies to the outer entry parameter even when a
+    /// reentrant callee is suspended. Its own parameters retain their values.
+    retcon_resume_type: Option<TypeTag>,
+    retcon_resume_shape: Option<keleusma::bytecode::WireShape>,
+    /// Proven outcomes after the coroutine type analysis reaches a fixed point.
+    retcon_branches: Option<&'a BTreeMap<usize, bool>>,
+    opts: LowerOptions,
+    /// Byte width of the runtime's `Float`, from the module header's
+    /// `float_bits_log2`.
+    ///
+    /// **Carried rather than assumed.** `Float` is `f32` under `narrow-float-32`
+    /// and `f64` otherwise, so a hard-coded `double` would be the wrong type in
+    /// a build that has no `f64`. Four and eight are lowered; any other width is
+    /// REFUSED rather than approximated, because a float of the wrong width is a
+    /// silently wrong number and not a fault.
+    float_bytes: u32,
+    /// `Some(ip)` when this is a degenerate stream chunk and `ip` is the
+    /// `Op::Yield` that becomes the return. Computed by the caller, which holds
+    /// the bytecode module; `lower_chunk` passes `None` for the same reason it
+    /// refuses `Op::Call`.
+    degenerate_yield: Option<&'a [usize]>,
+    /// This chunk's confinement verdicts, when the caller has a module to
+    /// compute them from.
+    ///
+    /// **`None` for [`lower_chunk`], and that is deliberate rather than a
+    /// limitation.** The verdicts worth consuming are the ones carrying callee
+    /// summaries, which need the whole module; the per-chunk form assumes every
+    /// call leaks and would refuse sites the module-level answer confines. A
+    /// single-chunk lowering therefore adds no refusal here and keeps exactly
+    /// the behaviour it had, which is the same reason it refuses `Op::Call`
+    /// outright rather than guessing at one.
+    confinement: Option<&'a [keleusma::confine::SiteVerdict]>,
+    /// The entry stream's copy at the yield, operator question 24. `Some` only
+    /// for the retcon entry chunk, and only when [`region::yield_copy`] finds
+    /// that the yields are the only route out of the iteration. It then
+    /// replaces the two escape refusals of a construction site in this chunk.
+    yield_copy: Option<region::YieldCopy>,
+    /// Op index of a tail-position `Call` whose result is RETURNED rather than
+    /// pushed, because the callee suspends on the caller's behalf. See
+    /// [`delegated_suspension_plan`].
+    delegated_call: Option<usize>,
+    /// This chunk's OWN signature descriptor, when the module ships one.
+    ///
+    /// **Distinct from `chunk_signatures`, which is the whole table**: that is
+    /// indexed by CALLEE at a call site, and a chunk cannot find its own entry
+    /// there without knowing its index. Carried separately so a parameter's
+    /// declared flat shape can seed its width — `TypeTag::Composite` says only
+    /// "not a scalar", while `WireShape::Flat` carries the body's byte size.
+    own_signature: Option<&'a keleusma::bytecode::ChunkSignature>,
+    /// `Some((op, callee))` when this is a stream chunk that calls a chunk which
+    /// can suspend. See [`stream_suspending_callee`] for why such a chunk is
+    /// refused rather than lowered by the general resumable path.
+    ///
+    /// `None` for [`lower_chunk`], which refuses `Op::Call` outright and so
+    /// cannot reach the shape at all.
+    suspending_callee: Option<(usize, usize)>,
+    /// The module's declared native names, indexed by the operand of
+    /// `CallVerifiedNative`/`CallExternalNative`.
+    ///
+    /// Empty for `lower_chunk`, which therefore refuses a native call for the
+    /// same reason it refuses `Op::Call`: the operand is an index into a
+    /// module-level table a single chunk does not receive.
+    ///
+    /// **Names rather than indices, because that is what the runtime binds on.**
+    /// `Vm::run` resolves the operand to a name through `native_name(idx)` and
+    /// then searches its registry by NAME. Emitting `kel_native_<index>` would
+    /// have bound the object file to declaration order, which is a property of
+    /// the source text rather than of the interface.
+    natives: &'a [String],
+    /// Return-value shape of each declared native, parallel to `natives`.
+    ///
+    /// **Consulted rather than ignored.** Before 2026-08-14 every native result
+    /// was pushed at `Width::Unknown`, which is correct when the shape is `Top`
+    /// and needlessly lossy when it is not: a composite built from a signatured
+    /// native's result was refused for a width the module actually declares.
+    /// `rogue_dungen` is the corpus case.
+    native_shapes: &'a [keleusma::bytecode::WireShape],
+    /// Declared signature of each chunk, parallel to `Module::chunks`.
+    ///
+    /// **The chunk-call analogue of `native_shapes`.** Without it an `Op::Call`
+    /// result carries no width and any composite packing one is refused. Empty
+    /// for the single-chunk entry point, which resolves no call at all.
+    chunk_signatures: &'a [keleusma::bytecode::ChunkSignature],
+    /// Region offset for each `Op::Call` in this chunk, by op index.
+    ///
+    /// **The caller-allocated return slot, expressed through the pointer the
+    /// caller already passes.** A callee writes its flat sites at offsets it
+    /// plans from zero, so handing every call site the same region base makes
+    /// two calls to one callee overwrite each other — the `10_multbyte.kel`
+    /// defect, where `p[0]` read `r[0]`'s value. Giving each site a disjoint
+    /// block fixes it without changing any signature: the callee still receives
+    /// one region pointer and never names an arena.
+    call_regions: &'a [(usize, u32)],
+    /// Where to record the op indices this body actually LOWERED, if anywhere.
+    ///
+    /// **Exists because "the chunk lowered" does not imply "every op in it was
+    /// lowered".** The op loop skips anything in code no edge reaches (`if dead
+    /// { continue; }`), and the compiler emits such code routinely — a `break`
+    /// is an unconditional branch and whatever follows it in the opcode stream
+    /// is unreachable. So an opcode witnessed ONLY in a dead region of an
+    /// otherwise clean chunk was never visited, and a census that inferred
+    /// support from chunk-level success would credit the backend with a lowering
+    /// it does not have.
+    ///
+    /// Recorded at the TOP of the iteration, before the arm runs. That is sound
+    /// for the only consumer, [`module_lowered_op_indices`], because a chunk's
+    /// lowering stops at its first refusal and the consumer keeps this list only
+    /// for chunks that lowered CLEANLY — in which case every recorded index
+    /// succeeded. It is NOT sound to read for a refused chunk, whose last
+    /// recorded index is the one that failed.
+    ///
+    /// A `RefCell` rather than `&mut` so `BodyCfg` stays `Copy`.
+    visited: Option<&'a core::cell::RefCell<Vec<usize>>>,
+}
+
+/// The external symbol a declared native binds to.
+///
+/// `host::play` becomes `kel_native_host__play` — **TWO** underscores, because
+/// each character outside `[A-Za-z0-9_]` becomes `_` ONE FOR ONE, and `::` is two
+/// characters. The substitution exists because a Keleusma path separator is not a
+/// legal C identifier and the whole point of this backend is an object file an
+/// ordinary linker resolves.
+///
+/// ⚠ **THIS EXAMPLE SAID `kel_native_host_play`, WITH ONE UNDERSCORE, UNTIL
+/// 2026-09-24.** The rule stated beside it was right and the example was wrong, so
+/// the comment contradicted itself — and the example is the half a reader copies.
+/// **The cost of copying it is a SEGFAULT, not a compile error**: a host defining
+/// `kel_native_host_play` leaves the module's declaration unresolved, and
+/// `native_calls.rs` records what happens then — the engine *"resolves the
+/// declaration to nothing and jumps to it."* The working stubs in that file are
+/// `kel_native_host__one`, `__two`, `__three`, all double, which is what the code
+/// has always produced. [`the_native_symbol_examples_match_the_code`] pins it.
+///
+/// **The mapping is not injective**, which is why [`native_symbol_collisions`]
+/// exists: `host::play` and a name spelled with a literal double underscore in
+/// place of the separator both land on `kel_native_host__play`. (That pair was
+/// given as `host::play` against a single-underscore spelling until 2026-09-24,
+/// which does NOT collide under the real rule — the same off-by-one error.) Two
+/// natives sharing a symbol would silently bind both call sites to whichever the
+/// host defined, and the differential oracle would only catch it if the corpus
+/// happened to call both.
+/// Result width for the generic arithmetic surface, or `None` to refuse.
+///
+/// **Refusing is the default and the point.** A matched `Byte` pair yields a
+/// `Byte`; a matched eight-byte pair yields the same width, which after the
+/// module-level float guard can only be `Fixed`. Everything else -- an unknown
+/// width, a mismatched pair, a body operand -- is refused, because a guess here
+/// is a silent wrong answer rather than a fault.
+///
+/// `byte_only` refuses the eight-byte case, for `Op::Mul`, whose `Fixed` form
+/// the compiler emits as `Op::FixedMul` instead.
+fn arith_result_width(l: Width, r: Width, byte_only: bool) -> Option<Width> {
+    match (l, r) {
+        (Width::Scalar(1), Width::Scalar(1)) => Some(Width::Scalar(1)),
+        (Width::Scalar(8), Width::Scalar(8)) if !byte_only => Some(Width::Scalar(8)),
+        _ => None,
+    }
+}
+
+/// The width a width-preserving binary operation should push.
+///
+/// # Why this exists, and what it deliberately excludes
+///
+/// `Op::Div`, `Op::Mod` and the three bitwise operators return a value of the
+/// SAME shape as their operands — a word divided by a word is a word, a byte
+/// xored with a byte is a byte. **They pushed `Width::Unknown` regardless**, and
+/// the cost was not a wrong answer but a refusal: `NewComposite` declines an
+/// operand of unknown packed width, so **no composite field could hold the result
+/// of a division, a modulo, or any bitwise operation.**
+///
+/// Measured 2026-09-17 over a generated composite, which refused on its second
+/// program. Of eleven `Word` producers, `param`, `add`, `sub`, `mul`, `neg` and a
+/// literal could fill a field; `div`, `mod`, `band`, `bor` and `bxor` could not.
+///
+/// **`Body` is excluded on purpose.** A `Body(n)` operand POINTS AT its data, and
+/// propagating that through an arithmetic result would label a computed scalar as
+/// a pointer — the exact confusion the `Scalar`/`Body` split exists to prevent.
+/// Such an operand cannot reach these arms today; excluding it means a future
+/// change cannot make it silently wrong.
+fn preserved_scalar_width(l: Width, r: Width) -> Option<Width> {
+    match (l, r) {
+        (Width::Scalar(a), Width::Scalar(b)) if a == b => Some(Width::Scalar(a)),
+        _ => None,
+    }
+}
+
+/// Truncate to eight bits when the result is a `Byte`, and leave it alone
+/// otherwise.
+///
+/// **The asymmetry is the whole content.** A `Byte` must be masked to hold the
+/// representation invariant that makes `ByteToWord` a no-op. A `Fixed` must NOT
+/// be, and masking one would truncate it to eight bits while every later field
+/// offset still looked correct -- a silent wrong answer of exactly the kind the
+/// `Width::Body` split exists to prevent.
+fn mask_if_byte<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    v: inkwell::values::IntValue<'ctx>,
+    out: Width,
+) -> inkwell::values::IntValue<'ctx> {
+    if out == Width::Scalar(1) {
+        b.build_and(v, i64t.const_int(0xFF, false), "bmask")
+            .unwrap()
+    } else {
+        v
+    }
+}
+
+/// The one spelling of the host-contract prefix. Two copies of this string
+/// is the drift this package spent a day removing elsewhere.
+pub const NATIVE_SYMBOL_PREFIX: &str = "kel_native_";
+
+/// The object-file symbol a host must bind for a native of this name.
+///
+/// **Public because it IS the host contract.** A host linking an object this
+/// backend emitted, or a harness mapping a stub into a JIT engine, needs the
+/// exact spelling; re-deriving the sanitisation rule at the call site would be a
+/// second computation of the same quantity, free to drift from this one. That is
+/// the specific failure `NATIVE_SYMBOL_PREFIX` above already exists to prevent,
+/// and publishing the function rather than only the prefix closes the rest of it.
+pub fn native_symbol(name: &str) -> String {
+    let mut s = String::from(NATIVE_SYMBOL_PREFIX);
+    for c in name.chars() {
+        s.push(if c.is_ascii_alphanumeric() || c == '_' {
+            c
+        } else {
+            '_'
+        });
+    }
+    s
+}
+
+/// Distinct native names that collide onto one external symbol.
+///
+/// Returns the offending symbol and the names that share it. A module-level
+/// precondition rather than a per-site check, because the hazard is a PAIR of
+/// declarations and no single call site can see it.
+fn native_symbol_collisions(names: &[String]) -> Option<(String, Vec<String>)> {
+    let mut by_symbol: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for n in names {
+        by_symbol
+            .entry(native_symbol(n))
+            .or_default()
+            .push(n.clone());
+    }
+    by_symbol.into_iter().find(|(_, ns)| ns.len() > 1)
+}
+
+/// Is this chunk a **degenerate stream**, lowerable as a plain function?
+///
+/// A degenerate stream is `Stream ; <body> ; Yield ; PopN(1) ; Reset` with the
+/// `Yield` at nesting depth zero and nothing able to observe a suspension. It
+/// lowers to a single entry point whose signature needs no special case, because
+/// the data pointers already trail the declared parameters:
+///
+/// ```text
+/// kel_chunk_N(resume, shared, private) -> i64
+/// ```
+///
+/// # Why ONE entry point, not an init/step pair
+///
+/// `Vm::resume_after_enter` writes the resume value into local slot 0 and then
+/// pushes it as the suspended `Yield`'s result. The parameter reproduces the
+/// first; the `PopN(1)` discards the second, because the `yield` is the body's
+/// tail expression. Iteration zero takes its value from the `call` argument and
+/// iteration k from the k-th `resume`, so `f(a)`, `f(r1)`, `f(r2)` reproduces the
+/// virtual machine's whole sequence with **no distinguished first call**.
+///
+/// # Why the module and not just the chunk
+///
+/// **A delegated suspension is invisible in the chunk's own ops.**
+/// `resume_after_enter` writes slot 0 of `frames.first()`, the ENTRY chunk,
+/// whenever that entry is a `Stream` — regardless of which frame suspended. So a
+/// nested `yield fn` callee's suspension updates this chunk's resume parameter in
+/// the virtual machine, while natively the `kel_yield` return reaches only the
+/// callee's operand stack. The next iteration would read a stale value.
+///
+/// The test is exact rather than conservative: `category_can_call` enforces
+/// `Fn => matches!(callee, Fn)`, so the transitive closure of a `Func` chunk
+/// contains only `Func` chunks, and requiring every callee to be `Func` settles
+/// it from the direct call sites alone. No call-graph walk and no
+/// `compute_always_yielding`, which is behind a feature this package does not
+/// enable.
+///
+/// Returns the indices of every `Op::Yield` that becomes a return.
+/// Can this module's suspension be delegated across ONE call edge?
+///
+/// Returns `(entry, callee, call_op_index)` when it can.
+///
+/// # Why this is not a widening of [`degenerate_stream_yield`]
+///
+/// That predicate asks whether a chunk suspends and returns in tail position.
+/// This one asks whether an entry hands its ENTIRE body to a callee that does.
+/// The two share a soundness argument but not a shape, and folding them together
+/// is what would turn a refusal into a silent miscompile.
+///
+/// # The soundness argument, in one line
+///
+/// On resume the virtual machine writes the input into slot 0 of the ENTRY frame
+/// and pushes it as the suspended frame's yield value. When every `Yield` in the
+/// callee is immediately followed by `Return`, that pushed value is returned
+/// straight out and discarded by the caller's `PopN(1)`, so it is DEAD. The only
+/// live path is the entry's slot 0, which the next native call supplies as its
+/// argument. Executed, not reasoned: see
+/// `probe_delegated_suspension.rs::the_resume_value_reaches_the_entrys_slot_zero_and_is_dead_in_the_callee`.
+///
+/// # Every clause refuses a case the transform cannot model
+fn delegated_suspension_plan(module: &Module) -> Option<(usize, usize, usize)> {
+    let entry = module.entry_point?;
+    let chunk = module.chunks.get(entry)?;
+    if chunk.block_type != BlockType::Stream {
+        return None;
+    }
+    // Clause 1: the entry is a prologue-free `Stream ... Call ; PopN(1) ; Reset`.
+    // An op before `Stream` runs once in the VM and on every native call.
+    let ops = &chunk.ops;
+    if !matches!(ops.first(), Some(Op::Stream)) || !matches!(ops.last(), Some(Op::Reset)) {
+        return None;
+    }
+    if ops.len() < 4 {
+        return None;
+    }
+    // The call must be in TAIL position: `Call ; PopN(1) ; Reset` and nothing else.
+    let call_ix = ops.len() - 3;
+    if !matches!(ops.get(ops.len() - 2), Some(Op::PopN(1))) {
+        return None;
+    }
+    let Some(Op::Call(target, _)) = ops.get(call_ix) else {
+        return None;
+    };
+    let callee_ix = *target as usize;
+    // The entry must contain no `Yield` of its own; one would be the ordinary
+    // degenerate case and the two transforms must not both fire.
+    if ops.iter().any(|o| matches!(o, Op::Yield)) {
+        return None;
+    }
+    // Nor any other call: a second callee would run after the delegated return.
+    if ops
+        .iter()
+        .enumerate()
+        .any(|(i, o)| i != call_ix && matches!(o, Op::Call(_, _)))
+    {
+        return None;
+    }
+
+    let callee = module.chunks.get(callee_ix)?;
+    // Clause 2: EVERY `Yield` in the callee is immediately followed by `Return`.
+    // One that is not makes the resumed value live in the callee, and the
+    // transform would lose it silently. This is where the general case is
+    // refused, and refusing it is the point.
+    let mut yields = 0usize;
+    for (i, op) in callee.ops.iter().enumerate() {
+        if matches!(op, Op::Yield) {
+            yields += 1;
+            if !matches!(callee.ops.get(i + 1), Some(Op::Return)) {
+                return None;
+            }
+        }
+    }
+    if yields == 0 {
+        return None;
+    }
+    // Clause 3: the callee calls only `Func` chunks, so suspension is exactly
+    // one frame deep. An unresolvable index refuses rather than skips.
+    for op in &callee.ops {
+        if let Op::Call(t, _) = op
+            && module.chunks.get(*t as usize).map(|c| c.block_type) != Some(BlockType::Func)
+        {
+            return None;
+        }
+    }
+    // Clause 5: no OTHER call site of the callee anywhere in the module. A
+    // second caller would reach a `Yield` lowered as a return and take it for an
+    // ordinary result.
+    for (ci, c) in module.chunks.iter().enumerate() {
+        for (oi, op) in c.ops.iter().enumerate() {
+            if let Op::Call(t, _) = op
+                && *t as usize == callee_ix
+                && !(ci == entry && oi == call_ix)
+            {
+                return None;
+            }
+        }
+    }
+    Some((entry, callee_ix, call_ix))
+}
+
+/// Does this module delegate its suspension across one call edge, and to what?
+///
+/// A thin public view of `delegated_suspension_plan`, which is private, so the
+/// name is given as text rather than as a link. It exists so that a
+/// CENSUS can ask the question over a corpus without restating the predicate,
+/// and it delegates rather than reimplements for exactly that reason: a second
+/// copy of this test would be a second opinion about which modules the lowering
+/// will transform, and the only opinion that matters is the lowering's.
+///
+/// **This is a query, not a switch.** Calling it neither enables the delegated
+/// transform nor changes what `lower_module` does; the mechanism stays behind
+/// `LowerOptions::delegated_suspension`, which remains off by default.
+///
+/// Returns `(entry chunk, callee chunk, call op index)` for a qualifying module
+/// and `None` otherwise. `None` covers both "not a stream entry at all" and
+/// "a stream entry whose shape this transform refuses", which are different
+/// facts; a caller that needs to tell them apart must read the ops itself.
+pub fn delegated_suspension_subject(module: &Module) -> Option<(usize, usize, usize)> {
+    delegated_suspension_plan(module)
+}
+
+/// The first `Op::Call` in this chunk whose callee can SUSPEND, as
+/// `(op index, callee index)`.
+///
+/// # Why this is its own function, and the defect that made it one
+///
+/// This check lived inside [`degenerate_stream_yield`] as one `return None`
+/// among several. That was safe only while `None` meant REFUSE. It stopped
+/// being safe the moment general `Op::Stream` lowering landed, because the
+/// general path is selected by exactly `Stream && degenerate_yield.is_none()`
+/// — so **every shape this predicate rejected for soundness was silently
+/// promoted into the new lowering**, including this one.
+///
+/// Measured, not argued: with the delegated flag OFF,
+///
+/// ```text
+/// yield helper(x: Word) -> Word { let r = yield x; r }
+/// loop main(a: Word) -> Word { yield helper(a) }
+/// ```
+///
+/// went from refused to `Refusals: []`. Four ratchets caught it —
+/// `delegated_suspension.rs` (three) and `yield_sequence.rs` (one) — which is
+/// what they were written for.
+///
+/// # Why the shape has to be refused
+///
+/// **The two suspension mechanisms do not compose.** A general stream's own
+/// `Op::Yield` lowers to a RETURN, so the host regains control. A callee's
+/// `Op::Yield` lowers to the `kel_yield` host CALLBACK, which inverts control.
+/// A program mixing them suspends through two different doors, and the runtime
+/// additionally overwrites the entry's resume parameter on the callee's
+/// suspension where a return-based lowering has no reason to.
+///
+/// Admitting it with the `delegated_suspension` option is a separate, narrower
+/// transform with its own plan and its own witnesses; it reaches the chunk
+/// through `degenerate_yield` rather than through this path.
+///
+/// # An unresolvable callee index counts as suspending
+///
+/// Admitting on missing evidence is the wrong default in a soundness check.
+fn stream_suspending_callee(chunk: &Chunk, module: &Module) -> Option<(usize, usize)> {
+    chunk.ops.iter().enumerate().find_map(|(ip, op)| match op {
+        Op::Call(idx, _)
+            if module.chunks.get(*idx as usize).map(|c| c.block_type) != Some(BlockType::Func) =>
+        {
+            Some((ip, *idx as usize))
+        }
+        _ => None,
+    })
+}
+
+fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>> {
+    if chunk.block_type != BlockType::Stream {
+        return None;
+    }
+    let ops = &chunk.ops;
+
+    // The prologue must be EMPTY. `Reset` rewinds to just after `Stream`, so an
+    // op before `Stream` runs once in the virtual machine and on every call
+    // natively. This reads as tidiness and is the one that changes behaviour.
+    if !matches!(ops.first(), Some(Op::Stream)) {
+        return None;
+    }
+    // `Reset` last. A tail after it is unreachable in the virtual machine, which
+    // rewinds rather than falling through, and reachable natively.
+    if !matches!(ops.last(), Some(Op::Reset)) {
+        return None;
+    }
+    // Slot 0 is the resume parameter; a second has no native source.
+    if chunk.param_count > 1 {
+        return None;
+    }
+    // Every callee must be `Func`, so none can suspend.
+    //
+    // **THIS RETURN IS A SOUNDNESS REFUSAL AND NOT A "TRY THE OTHER PATH".**
+    // See [`stream_suspending_callee`], which now carries the check, and the
+    // note there about what returning `None` from this function came to mean.
+    if stream_suspending_callee(chunk, module).is_some() {
+        return None;
+    }
+
+    // EVERY `Yield` must be in TAIL POSITION: nothing but block delimiters and
+    // the final `PopN(1)` executes between it and `Reset` on any path.
+    //
+    // This replaces an earlier rule requiring exactly one `Yield` at nesting
+    // depth zero. That rule was not wrong, it was **too narrow**: it described
+    // the shape eight stages happen to have rather than the property that makes
+    // the transformation sound. `lexer.kel` has nineteen yields nested up to
+    // depth eleven, every one of them inside an `If` and none under a `Loop`, so
+    // each path still yields exactly once and ends. It is a control-flow JOIN,
+    // not a suspension across a back edge, and the depth rule rejected it for a
+    // reason that has nothing to do with correctness.
+    //
+    // The walk FOLLOWS JUMPS rather than scanning linearly. A linear scan is
+    // unusable here: the ops textually between a nested `Yield` and `Reset`
+    // include other branches' bodies, which are on different paths. Following
+    // `Else`/`EndLoop` targets asks the question that actually matters.
+    let mut tail_yields: Vec<usize> = Vec::new();
+    for (ip, op) in ops.iter().enumerate() {
+        if !matches!(op, Op::Yield) {
+            continue;
+        }
+        let mut j = ip + 1;
+        // Net operand-stack effect of the tail, which must end at -1: the
+        // segment consumes exactly the resume value the `Yield` pushed.
+        let mut delta: i32 = 0;
+        loop {
+            match ops.get(j) {
+                // A branch delimiter carries no value and ends no path.
+                Some(Op::EndIf) => j += 1,
+                // A forward jump past the sibling arm, or a loop back edge that
+                // cannot be taken from here; follow it rather than walking into
+                // code this path never runs.
+                Some(Op::Else(t)) | Some(Op::EndLoop(t)) => {
+                    let t = *t as usize;
+                    // Refuse rather than loop forever on malformed bytecode.
+                    if t <= j {
+                        return None;
+                    }
+                    j = t;
+                }
+                // Any op that touches ONLY the operand stack and this frame's
+                // locals, tracked by net depth rather than by name.
+                //
+                // This replaced a two-element allowlist on 2026-08-11. The old
+                // rule admitted exactly `PopN(1)` and refused ten corpus chunks
+                // whose tail is `PopN(1), Const(0), PopN(1)` — a body that
+                // suspends and then evaluates a discarded trailing constant.
+                // That sequence is effect-free and reaches the same depth, so
+                // it is exactly as safe as the one the rule admitted. The
+                // allowlist was drawn from the instructions its author had seen
+                // and coincided with the property only on that sample.
+                //
+                // Traps are EXCLUDED deliberately, so no checked arithmetic
+                // appears here: a trap is observable, and the virtual machine
+                // would take it after the suspension where native code, having
+                // already returned, would not.
+                Some(Op::Const(c))
+                    if matches!(
+                        chunk.constants.get(*c as usize),
+                        Some(
+                            ConstValue::Int(_)
+                                | ConstValue::Byte(_)
+                                | ConstValue::Bool(_)
+                                | ConstValue::Unit
+                        )
+                    ) =>
+                {
+                    delta += 1;
+                    j += 1;
+                }
+                Some(Op::PushImmediate(_)) | Some(Op::GetLocal(_)) | Some(Op::Dup) => {
+                    delta += 1;
+                    j += 1;
+                }
+                Some(Op::PopN(n)) => {
+                    delta -= i32::from(*n);
+                    j += 1;
+                }
+                Some(Op::SetLocal(_)) => {
+                    // Writes a local that `Reset` clears, so unobservable.
+                    delta -= 1;
+                    j += 1;
+                }
+                // Building a composite that is then discarded.
+                //
+                // **The same mistake the allowlist above already made once**,
+                // one construct further along. `rogue_ai_boss`, `_hunter` and
+                // `_tracker` all end `Yield ; PopN(1) ; Const(0) x3 ;
+                // NewComposite(Tuple, 3) ; PopN(1) ; Reset` -- a trailing tuple
+                // built and thrown away. Their net delta is ALREADY exactly
+                // `-1`, the value this rule demands; only the allowed-op set
+                // rejected them.
+                //
+                // Sound for the same reason as the constants: it writes only
+                // the scratch region, nothing reads it because the value is
+                // discarded by the following `PopN` and `Reset` rewinds, and it
+                // can neither trap nor call out nor touch the data segment.
+                //
+                // `Flat` only. A `Boxed` body allocates outside the region and
+                // the emitter refuses it anyway, so admitting it here would
+                // widen the predicate ahead of the lowering.
+                Some(Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                    count,
+                    ..
+                })) => {
+                    delta += 1 - i32::from(*count);
+                    j += 1;
+                }
+                Some(Op::Reset) => break,
+                // Anything else may consume the resumed value, write the data
+                // segment, call out, or trap. None of those survives.
+                _ => return None,
+            }
+        }
+        if delta != -1 {
+            return None;
+        }
+        tail_yields.push(ip);
+    }
+    if tail_yields.is_empty() {
+        return None;
+    }
+    Some(tail_yields)
+}
+
+/// The wire tag `WireShape::Scalar { kind }` carries when the scalar is a `Float`.
+///
+/// **Named by VALUE rather than by the enum variant on purpose.** The float
+/// variant sits behind the `floats` feature, so matching on the name would make
+/// every use of this vanish in a build without it — exactly when it is still
+/// needed, because the wire tag is stable regardless of which features the
+/// READER was built with.
+const SCALAR_FLOAT_TAG: u8 = 5;
+
+/// `ScalarKind::Fixed` as `to_tag` encodes it.
+///
+/// **Pinned by `the_fixed_scalar_tag_still_matches_upstream`**, because a tag is
+/// a number agreed with a file this line does not own, and a silent renumbering
+/// upstream would turn every `Fixed` operand into an unrecognised one -- failing
+/// open, back to the `Op::Mod` divergence this constant exists to close.
+const SCALAR_FIXED_TAG: u8 = 4;
+
+/// Whether a declared flat shape is a scalar float, and so takes a
+/// floating-point position in the entry application binary interface rather than
+/// an integer one.
+fn shape_is_float(shape: &keleusma::bytecode::WireShape) -> bool {
+    matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
+}
+
+/// The operand kind a declared scalar kind carries onto the stack.
+///
+/// **Every flat read already knew this and threw all of it away but `Float`.**
+/// `StructField::Flat` and `ArrayElem::Flat` carry a `ScalarKind` in the baked
+/// operand; the arms mapped it to a WIDTH and tagged only floats, so a `Fixed`
+/// field read back as an untyped integer and `p.v % p.v` lowered the `Op::Mod`
+/// that `a % b` refuses. The lattice was built for floats and never widened when
+/// `Fixed` started mattering.
+fn operand_kind_of(kind: keleusma::value_layout::ScalarKind) -> OperandKind {
+    use keleusma::value_layout::ScalarKind as SK;
+    // **The `floats` feature belongs to the `keleusma` crate, not to this one.**
+    // Written as `#[cfg(feature = "floats")]` here it is always FALSE, the
+    // `Float` arm vanishes, and float field reads push `Unknown` — undoing the
+    // tagging the two call sites were carrying before this helper replaced them.
+    // Caught by clippy's `unexpected_cfg_condition_value`, which is the only
+    // reason the regression did not ship inside a refactor that looked like a
+    // simplification.
+    match kind {
+        SK::Fixed => OperandKind::Fixed,
+        SK::Float => OperandKind::Float,
+        _ => OperandKind::Unknown,
+    }
+}
+
+/// The kind an arithmetic result carries, given its two operand kinds.
+///
+/// **`Fixed` is contagious through arithmetic, and it has to be.** Seeding it
+/// only at parameters left `(a + b) % (a + b)` lowering the `Op::Mod` that
+/// `a % b` refuses: neither operand was a direct parameter read, so neither
+/// carried the kind. **A guard whose reach stops at the operand it was tested on
+/// is a guard that has not been tested.** Found by driving the fix rather than
+/// trusting it.
+fn arith_result_kind(l: OperandKind, r: OperandKind) -> OperandKind {
+    if l == OperandKind::Fixed || r == OperandKind::Fixed {
+        OperandKind::Fixed
+    } else {
+        OperandKind::Unknown
+    }
+}
+
+/// Is this declared shape a Q-format fixed-point scalar?
+fn shape_is_fixed(shape: &keleusma::bytecode::WireShape) -> bool {
+    matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FIXED_TAG)
+}
+
+/// Return `v` from `func`, converting to the function's DECLARED return type.
+///
+/// The operand stack is homogeneous `i64` and a float rides it as its BIT
+/// PATTERN, so a chunk whose signature returns a float still has an `i64` in
+/// hand at every return site.
+///
+/// # Why this reads the declared type rather than the signature
+///
+/// The declaration is the single fact a caller and a callee must agree on.
+/// Deriving "is this a float return?" separately at the declaration and again at
+/// each return site is precisely how the two come to disagree, and a disagreement
+/// here is not a fault — it is a plausible wrong number, or an `i64` reinterpreted
+/// as a double. Every return site in this lowering goes through this function, so
+/// the conversion cannot be forgotten at one of them.
+fn build_typed_return<'ctx>(b: &Builder<'ctx>, func: FunctionValue<'ctx>, v: IntValue<'ctx>) {
+    let rt = func
+        .get_type()
+        .get_return_type()
+        .expect("every lowered chunk returns a value, never void");
+    if rt.is_float_type() {
+        // **WIDTH-AWARE.** A direct bitcast is only legal at eight bytes; a
+        // four-byte float takes the low half of the operand.
+        let ft = rt.into_float_type();
+        let fw = ft.get_bit_width() / 8;
+        let f = bits_to_float(b, v, ft, fw);
+        b.build_return(Some(&f)).unwrap();
+    } else {
+        b.build_return(Some(&v)).unwrap();
+    }
+}
+
+/// Fixed-layout host transfers check a variable body's actual length.
+fn guard_body_contract<'ctx>(
+    ctx: &'ctx Context,
+    st: &mut Lower<'ctx>,
+    trap: BasicBlock<'ctx>,
+    slot: usize,
+    bytes: u32,
+) -> Result<(), LowerError> {
+    let width = st.widths[slot];
+    if width == Width::Body(bytes) {
+        return Ok(());
+    }
+    if width != Width::Unknown || st.input_copy_bounds[slot].is_none_or(|maximum| maximum < bytes) {
+        return Err(LowerError::UnsupportedShape(format!(
+            "coroutine composite boundary body extent {width:?} differs from the {bytes}-byte contract"
+        )));
+    }
+    let valid =
+        st.b.build_int_compare(
+            IntPredicate::EQ,
+            st.input_body_sizes[slot],
+            ctx.i64_type().const_int(u64::from(bytes), false),
+            "body_contract_fits",
+        )
+        .unwrap();
+    let function = st.b.get_insert_block().unwrap().get_parent().unwrap();
+    let accepted = ctx.append_basic_block(function, "body_contract_checked");
+    st.b.build_conditional_branch(valid, accepted, trap)
+        .unwrap();
+    st.b.position_at_end(accepted);
+    st.widths[slot] = Width::Body(bytes);
+    Ok(())
+}
+
+/// A variable body must contain the complete field before its address is used.
+fn guard_body_read<'ctx>(
+    ctx: &'ctx Context,
+    st: &mut Lower<'ctx>,
+    trap: BasicBlock<'ctx>,
+    minimum: Width,
+    offset: u32,
+    bytes: u32,
+) -> Result<(), LowerError> {
+    if coroutine::ownership::require_extent(minimum, offset, bytes).is_ok() {
+        return Ok(());
+    }
+    let required = offset
+        .checked_add(bytes)
+        .ok_or_else(|| LowerError::UnsupportedShape("coroutine field extent overflows".into()))?;
+    let maximum = st.input_copy_bounds.last().copied().flatten();
+    if st.width_at(0) != Width::Unknown || maximum.is_none_or(|maximum| maximum < required) {
+        return coroutine::ownership::require_extent(minimum, offset, bytes);
+    }
+    let actual = *st.input_body_sizes.last().unwrap();
+    let valid =
+        st.b.build_int_compare(
+            IntPredicate::UGE,
+            actual,
+            ctx.i64_type().const_int(u64::from(required), false),
+            "body_read_fits",
+        )
+        .unwrap();
+    let function = st.b.get_insert_block().unwrap().get_parent().unwrap();
+    let accepted = ctx.append_basic_block(function, "body_read_checked");
+    st.b.build_conditional_branch(valid, accepted, trap)
+        .unwrap();
+    st.b.position_at_end(accepted);
+    Ok(())
+}
+
+/// Trap when a runtime array index is out of range, or REFUSE when the range is
+/// not statically known.
+///
+/// # Why this exists
+///
+/// The `Op::GetIndex` arms lowered `base + index * stride` and loaded, with no
+/// check, on the recorded premise that *"the compiler emits `Op::BoundsCheck`
+/// before the index"*. **It does not.** A three-element array indexed at 5
+/// returned the caller region's filler bytes where the reference faults
+/// `IndexOutOfBounds(5, 3)` — a silently wrong value and an out-of-bounds read
+/// at an attacker-influenced offset.
+///
+/// # Where the bound comes from
+///
+/// The array operand's tracked [`Width::Body`] is the body's byte size, and the
+/// element stride is known at the site, so the element count is their quotient.
+/// That is the same size the reference packs the body at, so the two agree by
+/// construction rather than by a second computation that could drift.
+///
+/// # Why an unknown size REFUSES rather than passes through
+///
+/// An unguarded load is the defect this function exists to close. When the body
+/// size is not tracked, no bound can be derived, and the only two options are to
+/// refuse or to emit the load that was just measured returning foreign memory.
+/// **Refusing is the conservative-verification stance and the whole reason this
+/// backend has refusals at all.**
+///
+/// # The comparison is UNSIGNED, deliberately
+///
+/// A negative index becomes a very large unsigned value and is caught by the
+/// same test, which is what `Op::BoundsCheck` already does. A signed comparison
+/// would need two branches and would let `-1` through one of them.
+fn guard_array_index<'ctx>(
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    st: &mut Lower<'ctx>,
+    trap_bb: BasicBlock<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    elem_bytes: u64,
+    op: &str,
+) -> Result<(), LowerError> {
+    let count = array_element_count(st, i64t, elem_bytes, op)?;
+    let index = st.peek();
+    let cont = ctx.append_basic_block(func, "idxinbounds");
+    let bad =
+        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
+            .unwrap();
+    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+    st.b.position_at_end(cont);
+    Ok(())
+}
+
+/// The element count of the array operand one beneath the index, as a Word.
+///
+/// Separate from [`guard_array_index`] since absorption 82, when flat Word and
+/// Byte reads became total and stopped trapping on the count they still need.
+fn array_element_count<'ctx>(
+    st: &mut Lower<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    elem_bytes: u64,
+    op: &str,
+) -> Result<IntValue<'ctx>, LowerError> {
+    // Stack shape at an index site is `[.., array, index]`, so the array is one
+    // deeper than the top.
+    if elem_bytes == 0 {
+        return Err(LowerError::unsupported_op(
+            op,
+            "an array whose element stride is zero, so the element count is not defined"
+                .to_string(),
+        ));
+    }
+    let count = match st.width_at(1) {
+        Width::Body(bytes) => i64t.const_int(u64::from(bytes) / elem_bytes, false),
+        Width::Unknown
+            if st
+                .input_copy_bounds
+                .get(st.depth - 2)
+                .copied()
+                .flatten()
+                .is_some() =>
+        {
+            // A coroutine join can select different bounded array sizes. Read
+            // the producer's selected extent, captured before output metadata
+            // reuses this stack slot. Using a minimum would reject valid indices
+            // in the larger array; using a maximum would permit an overread.
+            let bytes = st.input_body_sizes[st.depth - 2];
+            st.b.build_int_unsigned_div(bytes, i64t.const_int(elem_bytes, false), "array_length")
+                .unwrap()
+        }
+        other => {
+            return Err(LowerError::unsupported_op(
+                op,
+                format!(
+                    "an array indexed by a runtime value whose body size is not tracked ({other:?}), so no bound can be derived"
+                ),
+            ));
+        }
+    };
+    Ok(count)
+}
+
+fn lower_chunk_body<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    chunk: &Chunk,
+    func: FunctionValue<'ctx>,
+    callees: &[FunctionValue<'ctx>],
+    data: DataCtx<'_>,
+    cfg: BodyCfg<'_>,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    let BodyCfg {
+        opts,
+        retcon,
+        retcon_frame_bytes,
+        retcon_owned_bodies: owned_bodies,
+        retcon_reply_body_maximum,
+        retcon_sites,
+        retcon_facts,
+        retcon_native_bodies,
+        retcon_fallible_natives,
+        retcon_site_offset,
+        retcon_trap_offset,
+        op_meter,
+        retcon_resume_type,
+        retcon_resume_shape,
+        retcon_branches,
+        degenerate_yield,
+        delegated_call,
+        own_signature,
+        suspending_callee,
+        confinement,
+        yield_copy,
+        natives,
+        native_shapes,
+        chunk_signatures,
+        call_regions,
+        visited,
+        float_bytes,
+    } = cfg;
+    let owned_reply = matches!(
+        retcon_resume_shape,
+        Some(keleusma::bytecode::WireShape::Flat { .. })
+    );
+    let text_comparisons =
+        text::comparisons_reached_by_text(chunk, own_signature, chunk_signatures, native_shapes);
+    let retcon_delegate = coroutine::is_delegate(func);
+    let retcon_stream = (retcon || retcon_delegate) && chunk.block_type == BlockType::Stream;
+    let i64t = ctx.i64_type();
+    let i128t = ctx.i128_type();
+    let i8t = ctx.i8_type();
+
+    let b = ctx.create_builder();
+    let entry = ctx.append_basic_block(func, "entry");
+    let trap_bb = ctx.append_basic_block(func, "trap");
+
+    b.position_at_end(entry);
+    let retcon_reply = if retcon {
+        let header = func.get_first_basic_block().unwrap();
+        header.get_terminator().unwrap().erase_from_basic_block();
+        b.position_at_end(header);
+        b.build_unconditional_branch(entry).unwrap();
+        b.position_at_end(entry);
+        Some(func.get_last_param().unwrap().into_pointer_value())
+    } else {
+        None
+    };
+    // **A COROUTINE REPORTS A TRAP INSTEAD OF ABORTING.** Each `Trap` records
+    // its kind here before it branches to the trap block, and every other
+    // branch there is a contract guard, so the cell starts as
+    // `coroutine::TRAP_CONTRACT`. A `Trap` always branches at once, so a guard
+    // never reads a kind an earlier `Trap` left behind. Outside a coroutine
+    // the trap block aborts through `llvm.trap` and this cell is not built.
+    let trap_code = retcon_facts.is_some().then(|| {
+        let cell = b.build_alloca(i64t, "trap_code").unwrap();
+        b.build_store(cell, i64t.const_int(coroutine::TRAP_CONTRACT, false))
+            .unwrap();
+        cell
+    });
+    // The entry's frame record survives coro.end. Clearing it here serves the
+    // raw interface, whose host does not clear it before start.
+    let trap_record = retcon_trap_offset.map(|offset| {
+        let frame = func
+            .get_nth_param(func.count_params() - 2)
+            .unwrap()
+            .into_pointer_value();
+        let record = unsafe {
+            b.build_in_bounds_gep(
+                i8t,
+                frame,
+                &[i64t.const_int(u64::from(offset), false)],
+                "trap_record",
+            )
+            .unwrap()
+        };
+        b.build_store(record, i64t.const_zero()).unwrap();
+        record
+    });
+    let retcon_completion = match (
+        retcon_frame_bytes,
+        chunk.block_type,
+        own_signature.map(|signature| signature.ret),
+    ) {
+        (
+            Some(offset),
+            BlockType::Reentrant,
+            Some(keleusma::bytecode::WireShape::Flat { size, .. }),
+        ) => {
+            let frame = func
+                .get_nth_param(func.count_params() - 2)
+                .unwrap()
+                .into_pointer_value();
+            // lower() reserves size.max(1) bytes after the LLVM frame, inside
+            // the caller's frame_bytes reservation. This tail survives coro.end.
+            let destination = unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    frame,
+                    &[i64t.const_int(u64::from(offset), false)],
+                    "completion_body",
+                )
+                .unwrap()
+            };
+            Some((destination, size))
+        }
+        _ => None,
+    };
+    // The latest reply is distinct from local zero, which user code may assign.
+    let retcon_latest = retcon.then(|| {
+        let raw = if chunk.param_count == 0 {
+            i64t.const_zero().into()
+        } else {
+            func.get_nth_param(0).unwrap()
+        };
+        let bits = if raw.is_float_value() {
+            float_to_bits(&b, raw.into_float_value(), i64t, float_bytes)
+        } else {
+            raw.into_int_value()
+        };
+        let bits = coroutine::ownership::copy(
+            &b,
+            bits,
+            width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+            i64t.const_int(u64::from(owned_reply), false),
+        );
+        coroutine::ReplyState::new(
+            &b,
+            bits,
+            retcon_resume_shape.unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 }),
+        )
+    });
+
+    // **A RESUMABLE STREAM KEEPS ITS LOCALS IN THE ARENA, NOT ON THE MACHINE
+    // STACK.** It RETURNS at each `yield` and re-enters at the same point, and a
+    // machine frame does not survive that. The arena does — and because the arena
+    // is per-instance, the same lowered code driven with two arenas is two
+    // independent streams, which is what makes instances free.
+    //
+    // The block sits at `plan_chunk_region(chunk).bytes`, immediately after the
+    // composite map; `region::stream_locals_bytes` reserves it and
+    // `region_total_bytes` publishes it to the host.
+    //
+    // **EPHEMERAL, and that is deliberate**: `Op::Reset` clears every local, which
+    // is what an ephemeral region is for. The resume-state word is the other half
+    // of the frame and is `.bss`, so it lives in the PERSISTENT region instead.
+    let stream_frame_base: Option<PointerValue<'ctx>> = if !retcon_stream
+        && chunk.block_type == BlockType::Stream
+        && degenerate_yield.is_none()
+        && (data.has_data || data.needs_region)
+    {
+        Some(
+            func.get_nth_param(u32::from(chunk.param_count) + 2)
+                .expect("a non-degenerate stream declares the region pointer")
+                .into_pointer_value(),
+        )
+    } else {
+        None
+    };
+    let locals_off = u64::from(crate::region::plan_chunk_region(chunk).bytes);
+    // **THE SPILL SLICE SITS AFTER THE LOCALS**, both inside the ephemeral
+    // region. See `region::stream_spill_bytes` for why it is sized at
+    // `MAX_STACK` slots and why that bound cannot be exceeded.
+    let spill_off = locals_off + u64::from(crate::region::stream_locals_bytes(chunk));
+
+    // A general (non-degenerate) stream re-enters this function once per
+    // suspension, so anything emitted unconditionally here runs again on every
+    // resume. See the deferral below.
+    let general_stream_frame =
+        !retcon_stream && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+
+    let locals: Vec<_> = (0..chunk.local_count as usize)
+        .map(|i| match stream_frame_base {
+            Some(rb) => unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    rb,
+                    &[i64t.const_int(locals_off + (i as u64) * 8, false)],
+                    &format!("l{i}"),
+                )
+                .unwrap()
+            },
+            None => b.build_alloca(i64t, &format!("l{i}")).unwrap(),
+        })
+        .collect();
+    let ownership = owned_bodies.then(|| coroutine::ownership::Flags::new(&b, locals.len()));
+    let runtime_kinds = retcon_facts.map(|_| coroutine::kinds::Flags::new(&b, locals.len()));
+    if retcon {
+        let flags = runtime_kinds.as_ref().unwrap();
+        for (index, shape) in own_signature.unwrap().params.iter().copied().enumerate() {
+            b.build_store(
+                flags.locals[index],
+                i64t.const_int(
+                    u64::from(coroutine::types::kind(coroutine::types::shape(shape))),
+                    false,
+                ),
+            )
+            .unwrap();
+            let size = match shape {
+                keleusma::bytecode::WireShape::Flat { size, .. } => size,
+                _ => 0,
+            };
+            b.build_store(
+                flags.local_sizes[index],
+                i64t.const_int(u64::from(size), false),
+            )
+            .unwrap();
+        }
+    }
+    let ownership_context = (retcon_facts.is_some() && !retcon).then(|| {
+        func.get_nth_param(u32::from(chunk.param_count) + 3)
+            .unwrap()
+            .into_pointer_value()
+    });
+    let site_metadata = if retcon {
+        retcon_site_offset.map(|offset| {
+            let frame = func
+                .get_nth_param(func.count_params() - 2)
+                .unwrap()
+                .into_pointer_value();
+            // The dialogue plan reserves an aligned word outside both LLVM's
+            // continuation frame and any completion body, inside frame_bytes.
+            unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    frame,
+                    &[i64t.const_int(u64::from(offset), false)],
+                    "site_metadata",
+                )
+                .unwrap()
+            }
+        })
+    } else {
+        None
+    };
+    let delegate_context = if retcon {
+        let latest = retcon_latest.as_ref().unwrap();
+        let entry_metadata = if retcon_stream && chunk.param_count > 0 {
+            let flags = runtime_kinds.as_ref().unwrap();
+            [
+                ownership
+                    .as_ref()
+                    .map_or(latest.owned, |flags| flags.locals[0]),
+                flags.locals[0],
+                flags.local_sizes[0],
+            ]
+        } else {
+            [latest.owned, latest.kind, latest.bytes]
+        };
+        Some(coroutine::delegate_context(
+            ctx,
+            &b,
+            retcon_reply.unwrap(),
+            if retcon_stream && chunk.param_count > 0 {
+                locals[0]
+            } else {
+                latest.value
+            },
+            latest,
+            entry_metadata,
+            site_metadata,
+        ))
+    } else if retcon_delegate {
+        let inherited = func.get_last_param().unwrap().into_pointer_value();
+        Some(if retcon_stream && chunk.param_count > 0 {
+            let flags = runtime_kinds.as_ref().unwrap();
+            let owned = match &ownership {
+                Some(flags) => flags.locals[0],
+                None => b.build_alloca(i64t, "loop_parameter_owned").unwrap(),
+            };
+            coroutine::rebind_delegate_parameter(
+                ctx,
+                &b,
+                inherited,
+                locals[0],
+                [owned, flags.locals[0], flags.local_sizes[0]],
+            )
+        } else {
+            inherited
+        })
+    } else {
+        None
+    };
+    for (i, local) in locals.iter().enumerate().take(chunk.param_count as usize) {
+        // **A FLOAT PARAMETER ARRIVES AS A DOUBLE AND LIVES AS ITS BITS.** Local
+        // slots are `i64` because the operand stack is, so the boundary is where
+        // the representation changes — once, on entry, rather than at every use.
+        //
+        // Read off the DECLARED parameter type for the same reason the return is:
+        // the declaration is what the caller obeyed.
+        let raw = func.get_nth_param(i as u32).unwrap();
+        let stored = if raw.is_float_value() {
+            let fv = raw.into_float_value();
+            let fw = fv.get_type().get_bit_width() / 8;
+            float_to_bits(&b, fv, i64t, fw)
+        } else {
+            raw.into_int_value()
+        };
+        let width =
+            width_of_declared_shape(own_signature.and_then(|sig| sig.params.get(i)), float_bytes);
+        let flag = match ownership_context {
+            Some(context) => {
+                coroutine::ownership::load(&b, coroutine::ownership::field(&b, context, i))
+            }
+            None => i64t.const_int(
+                u64::from(owned_bodies && matches!(width, Width::Body(_))),
+                false,
+            ),
+        };
+        // Internal parameters borrow the caller's immutable snapshot. Owned
+        // bytecode calls are inlined before suspension frame capture.
+        let stored = if ownership_context.is_some() {
+            stored
+        } else {
+            coroutine::ownership::copy(&b, stored, width, flag)
+        };
+        b.build_store(*local, stored).unwrap();
+        if let Some(flags) = &ownership {
+            b.build_store(flags.locals[i], flag).unwrap();
+        }
+    }
+    // Non-parameter locals start DEFINED in the VM: `Op::Call` pushes
+    // `local_count - arg_count` copies of `GenericValue::Unit` into the callee's
+    // frame before entering it. An uninitialised `alloca` loads as `undef`, so
+    // without this a `GetLocal` of an unwritten slot is `Unit` in the VM and
+    // `undef` here -- and `undef` feeding a branch or an offset is worse than a
+    // wrong answer. Zero is this backend's `Unit`.
+    //
+    // `mem2reg` folds these stores away wherever the slot is later overwritten,
+    // so the cost is nil on every chunk the compiler actually emits.
+    //
+    // ⚠ **A GENERAL STREAM DEFERS THIS TO ITS FIRST-ENTRY EDGE, AND THAT IS A
+    // DEFECT FIX, NOT A TIDY-UP.** This preamble runs on EVERY call, and a
+    // resumable stream is called once per suspension. Zeroing the non-parameter
+    // locals here therefore wiped every local that was live ACROSS a suspension:
+    //
+    //     loop main(t: Word) -> Word { let keep = t + 100;
+    //                                  let r = yield 1; yield r + keep }
+    //
+    // yielded `[1, 3]` natively against the runtime's `[1, 108]` -- `keep` read
+    // back as zero. The locals live in the ephemeral region precisely so they
+    // survive the return at a `yield`, and this loop was undoing that on the way
+    // back in.
+    //
+    // **The parameter stores above are NOT deferred, and that asymmetry is the
+    // reference's, not an inconsistency.** The runtime's resume writes the
+    // incoming value into slot 0, which the same differential confirms: a stream
+    // reading its parameter after a suspension sees the RESUME value on both
+    // sides. So slot 0 must be written on every entry and the rest must not.
+    if !general_stream_frame {
+        for local in locals.iter().skip(chunk.param_count as usize) {
+            b.build_store(*local, i64t.const_zero()).unwrap();
+        }
+    }
+    // Operand slots are allocated LAZILY by `Lower::ensure_slot`, so a chunk
+    // that uses three of them pays for three. The previous unconditional
+    // `MAX_STACK` provisioning was measured to dominate the native frame.
+    let slots: Vec<PointerValue> = Vec::new();
+
+    // The trailing pointer parameter, present only when the module declares
+    // shared slots. Read once at entry; every access is an offset from it.
+    #[allow(clippy::type_complexity)]
+    let (shared_base, private_base, region_base): (
+        Option<PointerValue<'ctx>>,
+        Option<PointerValue<'ctx>>,
+        Option<PointerValue<'ctx>>,
+    ) =
+        // Bound whenever the three-pointer group is present, which is what
+        // decides where they sit. A module that builds a composite but declares
+        // no slot still HAS these parameters; the data arms refuse on
+        // `has_data` separately, so an unused pointer here is harmless.
+        if data.has_data || data.needs_region {
+            let n = chunk.param_count as u32;
+            (
+                Some(
+                    func.get_nth_param(n)
+                        .expect("data module declares the shared pointer")
+                        .into_pointer_value(),
+                ),
+                Some(
+                    func.get_nth_param(n + 1)
+                        .expect("data module declares the private pointer")
+                        .into_pointer_value(),
+                ),
+                Some(
+                    func.get_nth_param(n + 2)
+                        .expect("the trailing region pointer")
+                        .into_pointer_value(),
+                ),
+            )
+        } else {
+            (None, None, None)
+        };
+
+    let prologue_end = b.get_insert_block().unwrap();
+    b.position_at_end(trap_bb);
+    match (trap_code, trap_record, ownership_context) {
+        // The entry records the code plus one and ends the instance through the
+        // scaffold's single coro.end, which the stable handles report as
+        // status three.
+        (Some(code), Some(record), _) => {
+            let code = b
+                .build_load(i64t, code, "trap_kind")
+                .unwrap()
+                .into_int_value();
+            let marked = b
+                .build_int_add(code, i64t.const_int(1, false), "trap_mark")
+                .unwrap();
+            b.build_store(record, marked).unwrap();
+            let cleanup = func
+                .get_basic_blocks()
+                .into_iter()
+                .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                .unwrap();
+            b.build_unconditional_branch(cleanup).unwrap();
+        }
+        // A callee hands the code to its caller through the call context and
+        // returns at once. Its result is never read, because the caller
+        // tests the context before using it.
+        (Some(code), None, Some(context)) => {
+            let code = b
+                .build_load(i64t, code, "trap_kind")
+                .unwrap()
+                .into_int_value();
+            let marked = b
+                .build_int_add(code, i64t.const_int(1, false), "trap_mark")
+                .unwrap();
+            let field =
+                coroutine::ownership::trap_field(&b, context, usize::from(chunk.param_count) + 1);
+            b.build_store(field, marked).unwrap();
+            build_typed_return(&b, func, i64t.const_zero());
+        }
+        _ => {
+            let trapfn = trap_declaration(ctx, module);
+            b.build_call(trapfn, &[], "").unwrap();
+            b.build_unreachable().unwrap();
+        }
+    }
+    b.position_at_end(prologue_end);
+
+    // One basic block per jump target. Keleusma's structured control flow means
+    // the target set is exactly the operands of If and Else.
+    // NOTE `Loop`'s own operand is deliberately NOT collected. It duplicates the
+    // `Break` targets whenever a break exists, and manufactures a block with no
+    // incoming edge when one does not.
+    let mut targets: Vec<usize> = Vec::new();
+    for op in chunk.ops.iter() {
+        match op {
+            Op::If(t) | Op::Else(t) | Op::EndLoop(t) | Op::Break(t) | Op::BreakIf(t) => {
+                targets.push(*t as usize)
+            }
+            _ => {}
+        }
+    }
+    // **THE RESUMABLE STREAM'S CONTROL POINTS.**
+    //
+    // `Op::Reset` rewinds to the instruction AFTER `Op::Stream`, exactly as the
+    // virtual machine does, so that index needs a block for the back edge. And
+    // each `Op::Yield` RETURNS, so the instruction after it is a RESUME point
+    // reachable only from the entry dispatch — never by fall-through, because
+    // the yield terminated its block.
+    let general_stream =
+        !retcon_stream && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+    // **A GENERAL STREAM NEEDS THE FRAME POINTERS, AND `lower_chunk` HAS NONE.**
+    //
+    // The single-chunk entry point receives no module, so it declares neither the
+    // private pointer that carries the resume state nor the region pointer that
+    // carries the locals and the spill slice. Everything below `expect`s both.
+    //
+    // **Measured, in code written the same day**: driving `lower_chunk` over
+    // mutated corpus chunks panicked with *"a general stream declares the private
+    // pointer"*. A panic is unrecoverable for the caller, and this is a public
+    // entry point — the same class of defect this file has closed twice already,
+    // reached through the one path the earlier sweep did not drive.
+    //
+    // Found by re-reading a completion condition after judging the work done, not
+    // by a failing test.
+    if general_stream && (private_base.is_none() || stream_frame_base.is_none()) {
+        return Err(LowerError::UnsupportedShape(String::from(
+            "a resumable stream lowered without a module: the single-chunk entry point \
+             declares neither the private pointer that holds the resume state nor the \
+             region pointer that holds the locals and the spill slice, so there is \
+             nowhere for the coroutine frame to live",
+        )));
+    }
+    // **THE GENERAL PATH INHERITS THE DEGENERATE PREDICATE'S REJECTIONS, AND
+    // SOME OF THOSE WERE SOUNDNESS REFUSALS.**
+    //
+    // `general_stream` is defined immediately above as exactly "a stream the
+    // degenerate predicate declined". That was a correct definition while the
+    // only reason to decline was shape. It is not correct for the reasons that
+    // were about SAFETY — and one such reason, a callee that can itself suspend,
+    // was a bare `return None` inside that predicate.
+    //
+    // So the shape below silently moved from refused to lowered when general
+    // `Stream` support landed, and four ratchets fired. The check is restated
+    // here, at the point the general path is actually selected, rather than left
+    // to be implied by a `None` that now means two different things.
+    if general_stream && let Some((ip, callee)) = suspending_callee {
+        return Err(LowerError::UnsupportedShape(format!(
+            "this Stream chunk calls chunk {callee} at op {ip}, and that callee can              itself suspend. A stream's own yield lowers to a RETURN so the host              regains control, while a callee's yield lowers to the `kel_yield`              callback, which inverts it; the two do not compose, and the runtime              additionally overwrites this chunk's resume parameter on the callee's              suspension. Refused rather than lowered through two different doors"
+        )));
+    }
+    let stream_pos = chunk.ops.iter().position(|o| matches!(o, Op::Stream));
+    let yield_positions: Vec<usize> = if general_stream {
+        chunk
+            .ops
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| matches!(o, Op::Yield))
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // **A RESUME POINT MAY ALSO BE A BRANCH TARGET, AND IT IS NO LONGER REFUSED.**
+    //
+    // It was, on the reading that the two edges "disagree about the operand
+    // stack: the resume edge arrives with nothing on it, while the fall-through
+    // carries the branch's value". **Measured on the actual ops, they AGREE.**
+    // For `if t > 0 { let a = yield t; yield a } else { yield 0 }`:
+    //
+    // ```text
+    //  9 Yield          <- resume point 10
+    // 10 Else(13)       <- branches to 13
+    // 12 Yield          <- resume point 13   *** also the Else target ***
+    // 13 EndIf
+    // ```
+    //
+    // Both edges reach op 13 at depth ONE: the then-arm's `Else` carries the
+    // branch's value, and the resume edge delivers the resumed value. The
+    // disagreement was an artefact of the DISPATCH noting the resume point at
+    // depth zero and the block then pushing the resume value inside itself.
+    //
+    // The resume edge now gets its own block, which delivers the operands and
+    // branches to the shared block at the depth the branch edge already carries.
+    // See the `Op::Yield` arm.
+
+    let loop_top: Option<usize> = match (general_stream || retcon_stream, stream_pos) {
+        (true, Some(p)) if p + 1 < chunk.ops.len() => {
+            targets.push(p + 1);
+            for &y in &yield_positions {
+                if y + 1 < chunk.ops.len() {
+                    targets.push(y + 1);
+                }
+            }
+            Some(p + 1)
+        }
+        _ => None,
+    };
+
+    targets.sort_unstable();
+    targets.dedup();
+    let blocks: BTreeMap<usize, BasicBlock> = targets
+        .iter()
+        .map(|&t| (t, ctx.append_basic_block(func, &format!("op{t}"))))
+        .collect();
+    // One block per suspension, entered ONLY from the entry dispatch. It is
+    // filled in when the walk reaches the corresponding `Op::Yield`, because the
+    // operands it must deliver are known only then.
+    let resume_blocks: BTreeMap<usize, BasicBlock> = yield_positions
+        .iter()
+        .filter(|&&y| y + 1 < chunk.ops.len())
+        .map(|&y| (y, ctx.append_basic_block(func, &format!("resume{y}"))))
+        .collect();
+
+    // Parameter widths come from the chunk's declared signature, which is the
+    // only place they are stated. Everything else starts unknown so an
+    // unlabelled write cannot be mistaken for a word.
+    let mut local_widths = alloc_vec_unknown(locals.len());
+    for (i, t) in chunk.param_types.iter().enumerate() {
+        if i < local_widths.len() {
+            local_widths[i] = match (retcon || retcon_delegate, *t) {
+                (true, TypeTag::Unit) => Width::Scalar(0),
+                (true, TypeTag::Float) => Width::Scalar(float_bytes),
+                _ => width_of_tag(*t),
+            };
+        }
+    }
+    // **A COMPOSITE PARAMETER'S BODY SIZE COMES FROM THE SIGNATURE, NOT THE
+    // TAG.** `TypeTag::Composite` says only "not a scalar", so an array
+    // parameter's width was `Unknown` and every bound derived from it was
+    // unavailable — which cost two corpus chunks the moment array indexing
+    // started requiring a bound. `WireShape::Flat` carries the body's byte
+    // length at the module's declared widths, which is exactly the `Body`
+    // width's meaning, so the two agree by definition rather than by a second
+    // computation that could drift.
+    //
+    // The table is ADDITIVE and may be absent or short; an entry that is not
+    // `Flat` leaves the tag's answer in place rather than overwriting it.
+    if let Some(sig) = own_signature {
+        for (i, shape) in sig.params.iter().enumerate() {
+            if let keleusma::bytecode::WireShape::Flat { size, .. } = shape
+                && i < local_widths.len()
+            {
+                local_widths[i] = Width::Body(*size);
+            }
+        }
+    }
+
+    if let (Some(context), Some(flags)) = (ownership_context, &runtime_kinds) {
+        let count = usize::from(chunk.param_count) + 1;
+        for index in 0..usize::from(chunk.param_count) {
+            for (part, destination) in [(1, flags.locals[index]), (2, flags.local_sizes[index])] {
+                let source = coroutine::kinds::call_field(&b, context, count, index, part);
+                b.build_store(destination, coroutine::ownership::load(&b, source))
+                    .unwrap();
+            }
+        }
+    }
+
+    let mut st = Lower {
+        runtime_kinds,
+        borrowed_slots: Vec::new(),
+        input_copy_bounds: Vec::new(),
+        input_body_sizes: Vec::new(),
+        input_tags: Vec::new(),
+        output_copy_bounds: Vec::new(),
+        borrowed_locals: Vec::new(),
+        ownership,
+        ownership_width_unknown: false,
+        b,
+        i64t,
+        entry,
+        locals,
+        slots,
+        depth: 0,
+        stack_overflow: None,
+        stack_underflow: false,
+        widths: Vec::new(),
+        kinds: Vec::new(),
+        // **Parameter kinds start Unknown, not Int.** A float-typed parameter
+        // is exactly the case the entry ABI does not yet handle, and defaulting
+        // to `Int` would let it be read as an integer instead of refused.
+        local_kinds: vec![OperandKind::Unknown; local_widths.len()],
+        local_widths,
+    };
+
+    // **A FLOAT PARAMETER'S LOCAL IS TAGGED `Float`, so a `GetLocal` of it pushes
+    // an operand the float arms will act on.** Without this the bits stored by the
+    // prologue would read back as `Unknown` and every float operation on a
+    // parameter would refuse — the ABI would be right and the body unusable.
+    //
+    // The comment above says parameter kinds start `Unknown` because the entry ABI
+    // did not handle a float; this is that handling, and it seeds only the
+    // positions the DECLARATION says are floats.
+    for i in 0..chunk.param_count as usize {
+        if func
+            .get_nth_param(i as u32)
+            .is_some_and(|p| p.is_float_value())
+            && i < st.local_kinds.len()
+        {
+            st.local_kinds[i] = OperandKind::Float;
+        }
+    }
+
+    // **A `Fixed` parameter cannot be seeded from the LLVM type, because it IS an
+    // `i64`.** The float seeding above reads the declaration through
+    // `is_float_value`; the same trick does not exist here, so the SIGNATURE
+    // table is the only source. A chunk without a signature entry leaves its
+    // parameters `Unknown`, which is the sound direction: an operation that must
+    // know refuses rather than guesses.
+    if let Some(sig) = own_signature {
+        for (i, shape) in sig.params.iter().enumerate() {
+            if i < st.local_kinds.len()
+                && st.local_kinds[i] == OperandKind::Unknown
+                && shape_is_fixed(shape)
+            {
+                st.local_kinds[i] = OperandKind::Fixed;
+            }
+        }
+    }
+
+    // Every local this chunk writes anywhere, computed up front so the decision
+    // does not depend on instruction order. See the `GetLocal` arm.
+    // How many times each local is WRITTEN anywhere in the chunk, counted up
+    // front so the rule does not depend on instruction order.
+    //
+    // A local written EXACTLY ONCE has an unambiguous width: there is no second
+    // write to disagree with, whatever the control flow. That admits the `let`
+    // bindings the corpus is built from, which the previous rule refused
+    // outright — every composite assembled from a `let` was rejected for want of
+    // a width, including every array of arrays.
+    //
+    // Two or more writes stay unknown. Joining them would need a real dataflow
+    // pass: a LINEAR walk cannot see a back edge, so a local rewritten later in
+    // a loop body would be read at the width of the textually earlier write and
+    // packed wrongly on every iteration after the first. Coroutine lowering now
+    // supplies converged extent facts and overrides this fallback below.
+    let mut local_write_count: BTreeMap<usize, u32> = BTreeMap::new();
+    for o in &chunk.ops {
+        if let Op::SetLocal(n) = o {
+            *local_write_count.entry(*n as usize).or_default() += 1;
+        }
+    }
+    // Which of those multiply-written locals nonetheless have a knowable width,
+    // because every write agrees. Narrows the rule above without weakening it.
+    let certified_widths = certified_local_widths(chunk);
+
+    // Operand-stack depth at each merge point, recorded per incoming edge.
+    let mut tdepth: BTreeMap<usize, usize> = BTreeMap::new();
+    // What each `Op::Yield` pushed into the spill slice, by op index: the
+    // `(width, kind)` of every operand beneath the yielded value, bottom-first.
+    //
+    // **RECORDED, NEVER RE-INFERRED.** The resume point restores exactly these
+    // pairs. Re-deriving them would be a second computation of the same
+    // quantity, free to disagree with the first — and a value restored at the
+    // wrong width is a silently wrong number rather than a fault.
+    //
+    // The yield at `y` is always walked before its resume point at `y + 1`, so
+    // the entry is present by the time the reload needs it.
+    let mut spilled: BTreeMap<usize, Vec<(Width, OperandKind)>> = BTreeMap::new();
+    // **A DEPTH DISAGREEMENT IS REFUSED, NOT ASSERTED.**
+    //
+    // This was `assert_eq!` with the message *"the typed verifier guarantees
+    // agreement, so this is a lowering bug"*. **That reasoning holds for a
+    // VERIFIED module and `lower_module` is a public entry point that does not
+    // require one** — `Vm::new_unchecked` exists precisely because trust-skip is
+    // a supported mode, and this package already converted 58 panics on that
+    // entry point into refusals for the same reason.
+    //
+    // **Reachable, by construction rather than by search.** Retargeting the
+    // `If(6)` of `if t > 0 { 1 } else { 2 }` to `If(7)` makes op 7 arrive from
+    // the branch edge at depth 0 and from the then-arm's `Else` at depth 1. The
+    // mutation sweep was green throughout: its mutations change OPCODES, and this
+    // needs a JUMP TARGET moved. **A clean guard proves its own reach before it
+    // proves the tree.**
+    //
+    // **The invariant is unchanged.** Agreement is still required; only the
+    // failure mode moved from a panic to a refusal, so a caller can handle it.
+    // Dropping the check instead would trade a panic for a miscompilation, which
+    // is strictly worse: the depth is what decides which operand slots a block's
+    // code reads.
+    macro_rules! note {
+        ($t:expr, $d:expr) => {{
+            let (t, d) = ($t, $d);
+            if let Some(&prev) = tdepth.get(&t)
+                && prev != d
+            {
+                return Err(LowerError::MalformedInput(format!(
+                    "operand-stack depth disagreement entering op{t}: {prev} vs {d}. Two edges \
+                     reach that instruction with different operand-stack depths, so the block \
+                     cannot be given one well-defined entry state. A verified module cannot \
+                     present this; an unverified one can."
+                )));
+            }
+            tdepth.insert(t, d);
+        }};
+    }
+
+    // Whether the opcode stream has run past a terminator into code no edge
+    // reaches. The compiler emits this routinely: `break;` is an unconditional
+    // jump, and the arm's value push sits immediately after it, unreachable.
+    let mut dead = false;
+
+    // **THE ENTRY DISPATCH: WHICH SUSPENSION ARE WE RESUMING AFTER?**
+    //
+    // State 0 is the loop top, which is also what an all-zero arena gives on the
+    // first call and what `Op::Reset` restores — so a fresh instance and a reset
+    // instance take the same path with no distinguished first call.
+    if let Some(top) = loop_top.filter(|_| general_stream) {
+        // **ONE PARAMETER ONLY, REFUSED RATHER THAN GUESSED.** The runtime's
+        // resume writes the incoming value into slot 0 and nothing else, so a
+        // second parameter has no defined value on re-entry. Lowering one anyway
+        // would invent a convention the differential could not vouch for.
+        if chunk.param_count != 1 {
+            return Err(LowerError::unsupported_op(
+                "Stream",
+                format!(
+                    "a resumable stream with {} parameters: resume defines slot 0 only, \
+                     so any further parameter would have no defined value on re-entry",
+                    chunk.param_count
+                ),
+            ));
+        }
+        let pb = private_base.expect("a general stream declares the private pointer");
+        let sp = unsafe {
+            st.b.build_in_bounds_gep(
+                i8t,
+                pb,
+                &[i64t.const_int(u64::from(data.stream_state_off), false)],
+                "statep",
+            )
+            .unwrap()
+        };
+        let state = st.b.build_load(i64t, sp, "state").unwrap().into_int_value();
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        for (k, &y) in yield_positions.iter().enumerate() {
+            if y + 1 < chunk.ops.len() {
+                // **THE DISPATCH ENTERS A DEDICATED BLOCK, NOT THE SHARED ONE.**
+                // The resume block delivers the operands and then branches to
+                // `y + 1` at the depth every other edge carries, so the shared
+                // block has ONE depth agreed by all its predecessors. Entering
+                // `y + 1` directly is what made a resume point that is also a
+                // branch target look irreconcilable.
+                cases.push((i64t.const_int((k + 1) as u64, false), resume_blocks[&y]));
+            }
+        }
+        // **THE FIRST-ENTRY BLOCK: WHERE THE LOCAL INITIALISATION BELONGS.**
+        //
+        // The switch's DEFAULT edge is the only one that is not a resume, so it
+        // is the only one on which the non-parameter locals should be set to
+        // this backend's `Unit`. Routing the default through a block of its own
+        // costs one unconditional branch and is what keeps a local live across a
+        // suspension from being cleared on the way back in.
+        //
+        // `Op::Reset` branches to `top` DIRECTLY and not through here, which is
+        // correct on both counts: it has already cleared every local itself, and
+        // it must not re-run an initialisation the runtime performs only once.
+        let init_bb = ctx.append_basic_block(func, "streaminit");
+        note!(top, 0);
+        st.b.build_switch(state, init_bb, &cases).unwrap();
+        st.b.position_at_end(init_bb);
+        for local in st.locals.iter().skip(chunk.param_count as usize) {
+            st.b.build_store(*local, i64t.const_zero()).unwrap();
+        }
+        note!(top, 0);
+        st.b.build_unconditional_branch(blocks[&top]).unwrap();
+        // Back to the terminated entry block, which is where the walk below
+        // expects the builder to be: the first op emits only if the current
+        // block has no terminator, and entry has the switch.
+        st.b.position_at_end(entry);
+    }
+
+    for (i, op) in chunk.ops.iter().enumerate() {
+        if let Some(&bb) = blocks.get(&i) {
+            if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
+                note!(i, st.depth);
+                st.b.build_unconditional_branch(bb).unwrap();
+            }
+            st.b.position_at_end(bb);
+            match tdepth.get(&i) {
+                Some(&d) => {
+                    st.depth = d;
+                    dead = false;
+                    // **NOTHING IS DELIVERED HERE.** The resume edge
+                    // enters its own block, which pushes the operands and then
+                    // branches in at this depth. Doing it inside the shared block
+                    // gave the block two different depths depending on which edge
+                    // entered it, which is what made a resume point that is also a
+                    // branch target look irreconcilable.
+                }
+                // A block target no edge reaches. The exit of a `loop` with no
+                // `break` is the real case: it is a legitimate program, not a
+                // lowering bug, so it must not be an assertion failure.
+                None => {
+                    st.b.build_unreachable().unwrap();
+                    dead = true;
+                }
+            }
+        } else if !dead && st.b.get_insert_block().unwrap().get_terminator().is_some() {
+            dead = true;
+        }
+
+        if dead {
+            continue;
+        }
+
+        if let Some((meter, base)) = op_meter {
+            let word = unsafe {
+                st.b.build_in_bounds_gep(
+                    i64t,
+                    meter,
+                    &[i64t.const_int(base + i as u64, false)],
+                    "op_meter_word",
+                )
+                .unwrap()
+            };
+            let count =
+                st.b.build_load(i64t, word, "op_count")
+                    .unwrap()
+                    .into_int_value();
+            let next =
+                st.b.build_int_add(count, i64t.const_int(1, false), "op_count_next")
+                    .unwrap();
+            st.b.build_store(word, next).unwrap();
+        }
+
+        if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
+            if facts.stack.len() != st.depth {
+                return Err(LowerError::Internal(
+                    "coroutine extent depth disagrees with verified emission".into(),
+                ));
+            }
+            st.widths.resize(st.depth, Width::Unknown);
+            st.widths.copy_from_slice(&facts.extents.stack);
+            st.kinds = facts
+                .stack
+                .iter()
+                .map(|mask| coroutine::types::operand_kind(*mask))
+                .collect();
+            st.borrowed_slots = facts.flow_stack.iter().map(|flow| !flow.owned).collect();
+            st.borrowed_locals = facts.flow_locals.iter().map(|flow| !flow.owned).collect();
+            st.input_copy_bounds = facts.flow_stack.iter().map(|flow| flow.maximum()).collect();
+            st.output_copy_bounds.clear();
+            for output in &facts.outputs {
+                st.output_copy_bounds.resize(output.slot + 1, None);
+                st.output_copy_bounds[output.slot] = output.flow.maximum();
+            }
+            let (_, delta) = keleusma::verify::op_depth_effect(op, chunk);
+            let needed = st.depth + delta.max(0) as usize;
+            if needed > MAX_STACK {
+                return Err(LowerError::UnsupportedShape(
+                    "coroutine kind stack exceeds lowering capacity".into(),
+                ));
+            }
+            if needed > 0 {
+                st.ensure_slot(needed - 1);
+            }
+            let input = st.runtime_kinds.as_ref().unwrap().seed(&st.b, facts, op);
+            st.input_body_sizes = input.sizes;
+            st.input_tags = input.tags;
+            for (&slot, &mask) in &facts.guards {
+                let selected =
+                    st.b.build_and(
+                        st.input_tags[slot],
+                        i64t.const_int(u64::from(coroutine::types::kind(mask)), false),
+                        "accepted_kind",
+                    )
+                    .unwrap();
+                let valid = st
+                    .b
+                    .build_int_compare(IntPredicate::NE, selected, i64t.const_zero(), "kind_valid")
+                    .unwrap();
+                let accepted = ctx.append_basic_block(func, "kind_checked");
+                st.b.build_conditional_branch(valid, accepted, trap_bb)
+                    .unwrap();
+                st.b.position_at_end(accepted);
+                st.kinds[slot] = coroutine::types::operand_kind(mask);
+                st.widths[slot] =
+                    coroutine::types::guarded_width(mask, &facts.flow_stack[slot], float_bytes);
+            }
+        }
+        // The op is about to be lowered. See `BodyCfg::visited` for why this is
+        // recorded here rather than after the arm, and why only a CLEAN chunk's
+        // list may be read.
+        if let Some(v) = visited {
+            v.borrow_mut().push(i);
+        }
+
+        // **A tuple field read IS a struct field read.** `TupleField` and
+        // `StructField` carry the same three variants with the same fields, and
+        // a flat body does not record which composite kind it came from, so the
+        // emitted address arithmetic and load are identical.
+        //
+        // Normalised here rather than given its own arms. Two copies of ~50
+        // lines of pointer arithmetic is exactly the duplication that made one
+        // predicate wrong in three places on the `v0.2.3` line and that the
+        // `is_lowered` model needs a drift control to survive. One code path
+        // cannot drift from itself.
+        let normalised;
+        let op = match op {
+            Op::GetTupleField(tf) => {
+                use keleusma::bytecode::{StructField as SF, TupleField as TF};
+                normalised = Op::GetField(match tf {
+                    TF::Flat { offset, kind } => SF::Flat {
+                        offset: *offset,
+                        kind: *kind,
+                    },
+                    TF::FlatNested {
+                        offset,
+                        size,
+                        variant,
+                    } => SF::FlatNested {
+                        offset: *offset,
+                        size: *size,
+                        variant: *variant,
+                    },
+                    // The boxed form keeps its own refusal rather than being
+                    // mapped onto a struct's, so the message names what the
+                    // source actually contains.
+                    TF::Boxed { .. } => {
+                        return Err(LowerError::unsupported_op(
+                            "GetTupleField",
+                            format!("GetTupleField reading {tf:?} is not lowered"),
+                        ));
+                    }
+                });
+                &normalised
+            }
+            // An enum payload read is the same shape again: the operand carries
+            // an offset already measured PAST the discriminant word, so the
+            // arithmetic is identical to a struct field's and normalising costs
+            // nothing. Third consumer of one code path rather than a third copy.
+            Op::GetEnumField(ef) => {
+                use keleusma::bytecode::{EnumField as EF, StructField as SF};
+                normalised = Op::GetField(match ef {
+                    EF::Flat { offset, kind } => SF::Flat {
+                        offset: *offset,
+                        kind: *kind,
+                    },
+                    EF::FlatNested {
+                        offset,
+                        size,
+                        variant,
+                    } => SF::FlatNested {
+                        offset: *offset,
+                        size: *size,
+                        variant: *variant,
+                    },
+                    other => {
+                        return Err(LowerError::unsupported_op(
+                            "GetEnumField",
+                            format!("GetEnumField reading {other:?} is not lowered"),
+                        ));
+                    }
+                });
+                &normalised
+            }
+            other => other,
+        };
+
+        // **A FLOAT MAY ONLY REACH AN OPCODE THAT KNOWS IT IS ONE — a WHITELIST,
+        // not a per-opcode patch.**
+        //
+        // Before floats were lowered, a module with a float local was refused
+        // only because no float OPERATION was supported. `float_guard_routes.rs`
+        // names that plainly: *"a property of what is unimplemented, not a
+        // guard"*. Implementing the operations REMOVED that accidental block, so
+        // a module whose float arises from `as Float` with no float constant or
+        // signature now reaches lowering — and the module-level guard does not
+        // cover it, because it scans signatures, constants, native shapes and
+        // data slots, none of which such a module has.
+        //
+        // A blacklist would have to name every arm that must refuse, and missing
+        // one is a silently wrong number: `Op::Div` on a double's bit pattern is
+        // an integer division that produces a plausible value. **So the default
+        // is refusal**, and only the arms that were written to understand a
+        // float operand are exempt. Moves are exempt because they copy bits
+        // without interpreting them.
+        {
+            // **Only the operands the opcode actually POPS.** A first attempt
+            // checked the top two stack entries regardless, which refused
+            // `Op::Const` for a float sitting *below* it — `Const` consumes
+            // nothing. The count comes from `op_depth_effect`, which returns
+            // (required, delta), rather than from a guess about each opcode.
+            let (required, _) = keleusma::verify::op_depth_effect(op, chunk);
+            let consumes_float =
+                (0..required as usize).any(|i| st.kind_at(i) == OperandKind::Float);
+            // **A DATA STORE IS FLOAT-AWARE ONLY WHEN THE SLOT IS A FLOAT
+            // SLOT**, which is the same POSITIONAL shape as `Op::Call` and is
+            // handled the same way: not a blanket entry in the list below,
+            // because a blanket entry would also admit a float stored into a
+            // `Word` or `Byte` slot, where the reference writes a different
+            // number of bytes with a different meaning.
+            //
+            // A float into a FLOAT slot is a pure bit copy -- the reference's
+            // `write_scalar_le` stores IEEE-754 little-endian at the same
+            // offset, and the operand already IS that bit pattern -- so nothing
+            // is interpreted and there is nothing to get wrong.
+            //
+            // The converse direction needs no entry at all: an untagged operand
+            // carrying float bits, which is what a PRIVATE float slot's read
+            // produces, never reaches this check because it is not tagged
+            // `Float`.
+            //
+            // **A PRIVATE SLOT IS ADMITTED TOO, on a DIFFERENT ground, and the
+            // two reasons are kept apart on purpose.** A shared slot's layout is
+            // host-visible and the admission above rests on the reference
+            // writing the same bytes. A private slot's layout is this backend's
+            // own, unobservable from outside a running program, and the store is
+            // a full-width `i64` bit copy at `PRIVATE_SLOT_BYTES` -- it
+            // truncates nothing and interprets nothing.
+            //
+            // **The residual is named rather than left implicit**: a private
+            // slot's READ is not kind-tracked, so a float stored there comes
+            // back tagged `Int` and every float OPERATION on it refuses at the
+            // operand. Storing one is therefore useful only to move it, which is
+            // exactly what `s.x = h.f` does. Closing that would mean tracking
+            // kinds per private slot, which this increment does not do.
+            // **COMPOSITE CONSTRUCTION IS A BIT COPY INTO THE BODY**, so it is
+            // admitted whole rather than positionally. The pack places each
+            // operand at the OPERAND'S OWN width, and a float already carries
+            // `Width::Scalar(float_bytes)` from `push_k`, which is exactly where
+            // the reference puts it.
+            //
+            // ⚠ **THIS SAID `Width::Scalar(8)` AND `byte_size: 16` UNTIL
+            // 2026-09-24, WHICH IS THE DEFAULT CONFIGURATION STATED AS THE RULE.**
+            // Measured: `struct { x: Float, n: Word }` packs at **16** by default
+            // and at **12** under `narrow-float-32`, because the canonical layout
+            // is parameterised by `float_bytes` — 8 and 4 respectively. The CODE
+            // was always configuration-aware; only this comment was not.
+            //
+            // The cost of trusting the old figure is specific and was demonstrated
+            // the same day: hardcoding a float's width to 8 **passes the default
+            // gate and fails `narrow-float-32`**, caught by this backend's own
+            // layout check. `composite_field_widths.rs` pins the rule as
+            // `8 + float_bytes` so a configuration-dependent figure cannot be
+            // restated as an absolute one. Nothing is interpreted.
+            //
+            // **The existing exactness check is what makes the whole admission
+            // safe**: the arm requires the operand widths to account for the
+            // baked `byte_size` EXACTLY, so a float of some other width refuses
+            // rather than mispacking. The width guard below is therefore a
+            // second line and not the only one.
+            let float_into_a_composite_body =
+                float_width_lowered(float_bytes) && matches!(op, Op::NewComposite(_));
+            let float_store_into_a_float_slot = float_width_lowered(float_bytes)
+                && match op {
+                    Op::SetData(slot) | Op::SetDataIndexed(slot, _) => {
+                        data.has_data
+                            && if *slot < data.shared_count {
+                                data.shared_layout
+                                    .get(*slot as usize)
+                                    .is_some_and(|e| e.kind == SCALAR_FLOAT_TAG)
+                            } else {
+                                *slot < data.slot_count && PRIVATE_SLOT_BYTES == 8
+                            }
+                    }
+                    _ => false,
+                };
+            // **`Op::Yield` IS ADMITTED ONLY FOR A GENERAL STREAM, AND THE
+            // CONDITION IS THE POINT.** The degenerate form lowers to the host
+            // callback `kel_yield(i64) -> i64`; carrying a float through that
+            // signature is a HOST-FACING ABI CHANGE, not an emitter change. A
+            // blanket entry in the list below would admit both forms and
+            // silently mispass the degenerate one, handing the host a double's
+            // bit pattern in an `i64` parameter it reads as an integer.
+            //
+            // Both native stream paths preserve float bits across suspension.
+            // The callback path for a reentrant chunk remains outside this guard.
+            let float_yield_in_a_general_stream =
+                (general_stream || retcon || retcon_delegate) && matches!(op, Op::Yield);
+            let runtime_checked_arithmetic = st.runtime_kinds.is_some()
+                && matches!(
+                    op,
+                    Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedDiv(_)
+                );
+            let float_aware = runtime_checked_arithmetic
+                || float_store_into_a_float_slot
+                || float_into_a_composite_body
+                || float_yield_in_a_general_stream
+                || matches!(
+                    op,
+                    Op::Add
+                    | Op::Sub
+                    | Op::Mul
+                    | Op::FloatToInt
+                    // Division became float-aware on 2026-08-30. `Op::Mod` did
+                    // NOT: the reference's float remainder was not verified here,
+                    // so it still fails closed.
+                    | Op::Div
+                    // `Mod` and `Neg` joined on 2026-08-30, both checked against
+                    // the reference: `frem` and `fneg`.
+                    | Op::Mod
+                    | Op::Neg
+                    // Comparisons became float-aware on 2026-08-30, matching the
+                    // reference's NaN-as-Equal ordering rather than IEEE.
+                    | Op::CmpEq
+                    | Op::CmpNe
+                    | Op::CmpLt
+                    | Op::CmpGt
+                    | Op::CmpLe
+                    | Op::CmpGe
+                    | Op::SetLocal(_)
+                    | Op::GetLocal(_)
+                    | Op::Return
+                    | Op::PopN(_)
+                    | Op::Dup
+                    // **A CALL IS FLOAT-AWARE ONLY POSITIONALLY.** The arm
+                    // converts each argument to the callee's DECLARED parameter
+                    // type, so a float in a position the callee declares as a
+                    // float is correct. A float in an INTEGER position is not,
+                    // and is caught below rather than by this list — a blanket
+                    // entry here would admit both.
+                    | Op::Call(_, _)
+                );
+            // The positional half of the `Op::Call` admission.
+            if let Op::Call(idx, arg_count) = op
+                && consumes_float
+                && retcon_facts.is_none()
+            {
+                let n = usize::from(*arg_count);
+                let params = callees
+                    .get(*idx as usize)
+                    .map(|c| c.get_type().get_param_types())
+                    .unwrap_or_default();
+                for p in 0..n {
+                    // Argument `p` sits at depth `n - 1 - p`: the last argument
+                    // pushed is nearest the top. Getting this backwards is
+                    // invisible for a one-argument callee, which is why the
+                    // direction is stated rather than inferred.
+                    let is_float = st.kind_at(n - 1 - p) == OperandKind::Float;
+                    let wants_float = params.get(p).is_some_and(|t| t.is_float_type());
+                    if is_float != wants_float {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "argument {p} of Call({idx}, {arg_count}) is \
+                                 {} where the callee declares {}; the operand \
+                                 kind and the declared signature disagree, and \
+                                 reinterpreting either way is a plausible wrong \
+                                 number rather than a fault",
+                                if is_float { "a float" } else { "an integer" },
+                                if wants_float { "a float" } else { "an integer" }
+                            ),
+                        ));
+                    }
+                }
+            }
+            if consumes_float && !float_aware {
+                return Err(LowerError::unsupported_op(
+                    &op_variant_name(op),
+                    format!(
+                        "{op:?} would consume a float operand, and this arm was not \
+                         written for one. Interpreting a double's bit pattern as an \
+                         integer is a plausible wrong number rather than a fault, so \
+                         the operand kind fails closed here"
+                    ),
+                ));
+            }
+        }
+
+        if retcon_resume_type.is_some() {
+            // Reply body types are supplied by the host contract, rather than
+            // the bytecode signature. Prove every derived read and call copy.
+            let read_width = retcon_facts
+                .and_then(|facts| facts.get(&i))
+                .and_then(|facts| {
+                    let slot = facts.stack.len().checked_sub(1)?;
+                    facts.flow_stack[slot].minimum(
+                        facts
+                            .guards
+                            .get(&slot)
+                            .copied()
+                            .unwrap_or(facts.stack[slot]),
+                    )
+                })
+                .map_or(st.width_at(0), Width::Body);
+            match op {
+                Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
+                    let shape = keleusma::bytecode::WireShape::Scalar {
+                        kind: kind.to_tag(),
+                    };
+                    let Width::Scalar(bytes) = width_of_declared_shape(Some(&shape), float_bytes)
+                    else {
+                        return Err(LowerError::UnsupportedShape(
+                            "coroutine field has no proven scalar extent".into(),
+                        ));
+                    };
+                    guard_body_read(ctx, &mut st, trap_bb, read_width, u32::from(*offset), bytes)?;
+                }
+                Op::GetField(keleusma::bytecode::StructField::FlatNested {
+                    offset, size, ..
+                }) => {
+                    guard_body_read(
+                        ctx,
+                        &mut st,
+                        trap_bb,
+                        read_width,
+                        u32::from(*offset),
+                        u32::from(*size),
+                    )?;
+                }
+                Op::IsEnum(..) => {
+                    let size = retcon_facts
+                        .and_then(|facts| facts.get(&i))
+                        .and_then(|facts| facts.flow_stack.last())
+                        .and_then(|flow| flow.bodies[3].minimum());
+                    coroutine::ownership::require_extent(
+                        size.map_or(Width::Unknown, Width::Body),
+                        0,
+                        8,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        if matches!(op, Op::Yield) && (retcon || retcon_delegate) && retcon_site_offset.is_some() {
+            let (site, _) = retcon_sites.unwrap()[&i];
+            let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+            let ty = ctx.struct_type(&[ptr.into(); 10], false);
+            let field =
+                st.b.build_struct_gep(ty, delegate_context.unwrap(), 4, "site_slot")
+                    .unwrap();
+            let destination =
+                st.b.build_load(ptr, field, "site_destination")
+                    .unwrap()
+                    .into_pointer_value();
+            st.b.build_store(destination, i64t.const_int(site, false))
+                .unwrap();
+        }
+        let boundary_shape = if matches!(op, Op::Yield) {
+            retcon_sites
+                .and_then(|sites| sites.get(&i))
+                .map(|(_, contract)| contract.yielded)
+        } else {
+            own_signature.map(|signature| signature.ret)
+        };
+        // Coroutine payloads are untagged. The type pass proves the body kind;
+        // the emitter must check the exact extent at host boundaries. Internal
+        // callees transport actual lengths through their metadata context.
+        if retcon_resume_type.is_some()
+            && (matches!(op, Op::Yield) || (retcon && matches!(op, Op::Return)))
+            && let Some(keleusma::bytecode::WireShape::Flat { size, .. }) = boundary_shape
+            && st.width_at(0) != Width::Body(size)
+        {
+            let slot = st.depth - 1;
+            guard_body_contract(ctx, &mut st, trap_bb, slot, size)?;
+        }
+        match op {
+            Op::GetLocal(n) => {
+                // **A LOCAL INDEX OUT OF RANGE IS A REFUSAL, NOT A `Vec` PANIC.**
+                // The second of the two classes `lowering_robustness.rs`
+                // measured. `verify()` bounds this; `lower_module` does not
+                // require `verify()`.
+                let Some(slot) = st.locals.get(*n as usize).copied() else {
+                    return Err(LowerError::MalformedInput(format!(
+                        "GetLocal names slot {n} in a chunk with {} locals",
+                        st.locals.len()
+                    )));
+                };
+                let v = st.b.build_load(i64t, slot, "gl").unwrap().into_int_value();
+                // A local's width is trusted ONLY when the chunk never writes
+                // it, so its value is the parameter the signature described.
+                //
+                // A linear scan of `SetLocal` cannot establish more than that:
+                // it walks instructions in order and CANNOT SEE A BACK EDGE, so
+                // a local rewritten later in a loop body would be read here at
+                // the width of the write that appears earlier in the text and
+                // packed wrongly on every iteration after the first. Anything
+                // written is unknown, which costs coverage and cannot mispack.
+                // Trusted when the local is never written (a parameter, seeded
+                // from the signature) or written exactly once. In the
+                // single-write case the width is whatever that write recorded;
+                // a read that textually PRECEDES the write finds no recorded
+                // width and stays unknown, which is the conservative direction.
+                let idx = *n as usize;
+                let w = if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
+                    facts.extents.locals[idx]
+                } else {
+                    match local_write_count.get(&idx).copied().unwrap_or(0) {
+                        0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
+                        // **Trusted when every write agrees**, which is the only case
+                        // the back-edge objection does not reach. See
+                        // [`certified_local_widths`].
+                        _ => certified_widths
+                            .get(&idx)
+                            .copied()
+                            .unwrap_or(Width::Unknown),
+                    }
+                };
+                // **Restore the kind on the same rule as the width.** Only a
+                // singly-written local carries a trusted tag; anything else is
+                // `Unknown` and refuses at the use rather than being read as an
+                // integer, which is what a float would silently become.
+                let k = if let Some(facts) = retcon_facts.and_then(|facts| facts.get(&i)) {
+                    coroutine::types::operand_kind(facts.locals[idx])
+                } else {
+                    match local_write_count.get(&idx).copied().unwrap_or(0) {
+                        0 | 1 => st
+                            .local_kinds
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(OperandKind::Unknown),
+                        _ => OperandKind::Unknown,
+                    }
+                };
+                let owned = st.owned_local(idx);
+                st.push_owned(v, w, k, owned);
+            }
+            Op::SetLocal(n) => {
+                // Read the width BEFORE popping; `pop` lowers the depth and
+                // `width_at` is relative to it.
+                let w = st.width_at(0);
+                let k = st.kind_at(0);
+                let owned = st.owned_at(0);
+                let v = st.pop();
+                let bound = st.input_copy_bounds.get(st.depth).copied().flatten();
+                let v = st.copy_value(v, w, owned, st.depth, bound);
+                // **BOUNDED FOR THE SAME REASON `GetLocal` IS.** This one was
+                // missed on the first pass, and the robustness sweep did not
+                // catch the miss because its mutation set corrupted `GetLocal`
+                // and not `SetLocal`. The mutation-placement guard is what
+                // pointed here — its registered `SetLocal` entry sits on this
+                // line. **A sweep is only as wide as its mutation set**, which
+                // is the same lesson the census overhaul recorded.
+                let Some(slot) = st.locals.get(*n as usize).copied() else {
+                    return Err(LowerError::MalformedInput(format!(
+                        "SetLocal names slot {n} in a chunk with {} locals",
+                        st.locals.len()
+                    )));
+                };
+                st.b.build_store(slot, v).unwrap();
+                let idx = *n as usize;
+                if let Some(flags) = &st.ownership {
+                    st.b.build_store(flags.locals[idx], owned).unwrap();
+                }
+                if local_write_count.get(&idx).copied().unwrap_or(0) == 1 {
+                    if st.local_widths.len() <= idx {
+                        st.local_widths.resize(idx + 1, Width::Unknown);
+                    }
+                    st.local_widths[idx] = w;
+                    // **The KIND round-trips on the same rule as the width.** A
+                    // local written more than once could hold a float on one
+                    // path and an integer on another, and a tag that survived
+                    // only one of them would let a bitcast reinterpret the
+                    // other. Multiply-written locals therefore stay `Unknown`,
+                    // which refuses at the use.
+                    if st.local_kinds.len() <= idx {
+                        st.local_kinds.resize(idx + 1, OperandKind::Unknown);
+                    }
+                    st.local_kinds[idx] = k;
+                }
+            }
+            // **Recorded, not panicked**, for the reason `stack_underflow`
+            // states. Absorption 82 met this as 114 panics when the upstream
+            // outcome suffixes outgrew the pushes this backend still made.
+            Op::PopN(n) => match st.depth.checked_sub(*n as usize) {
+                Some(depth) => st.depth = depth,
+                None => {
+                    st.stack_underflow = true;
+                    st.depth = 0;
+                }
+            },
+            // The integer arithmetic surface. `Op::Add`, `Op::Sub`, `Op::Mul`
+            // and `Op::Neg` are NOT part of it: consolidation B narrowed those
+            // four away from `Int` operands, so the compiler emits
+            // `Checked*; PopN(2)` for every `Word` expression and reserves the
+            // unchecked opcodes for `Byte`, `Fixed` and `Float`. Verified
+            // against `src/compiler.rs` and the VM's dispatch arms, which raise
+            // a type error on an `Int` reaching `Op::Add`.
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Mod
+            | Op::Neg
+            | Op::CheckedAdd
+            | Op::CheckedSub
+            | Op::CheckedMul(_)
+            | Op::CheckedDiv(_)
+            | Op::CheckedMod
+            | Op::CheckedNeg
+                if st.runtime_kinds.is_some() =>
+            {
+                let count = if matches!(op, Op::CheckedNeg | Op::Neg) {
+                    1
+                } else {
+                    2
+                };
+                let base = st.depth - count;
+                let tags = st.input_tags[base..st.depth].to_vec();
+                let mut values: Vec<_> = (0..count).map(|_| st.pop()).collect();
+                values.reverse();
+                // `Div` and `Mod` push the checked triple since absorption 82.
+                let plain = matches!(op, Op::Add | Op::Sub | Op::Mul | Op::Neg);
+                if plain {
+                    let low = coroutine::arithmetic::plain(
+                        &st.b,
+                        &values,
+                        &tags,
+                        float_bytes,
+                        op,
+                        trap_bb,
+                    )?;
+                    // Keep the converged producer facts, including a known
+                    // packed width. Joined widths still use the actual tag at
+                    // consumers, but a singular width must not be discarded.
+                    let output =
+                        &retcon_facts.expect("runtime arithmetic has facts")[&i].outputs[0];
+                    st.push_k(
+                        low,
+                        output.width,
+                        coroutine::types::operand_kind(output.tag),
+                    );
+                } else {
+                    let triple = coroutine::arithmetic::checked(
+                        &st.b,
+                        &values,
+                        &tags,
+                        float_bytes,
+                        op,
+                        trap_bb,
+                    )?;
+                    st.push_triple(ctx, func, trap_bb, opts, triple);
+                }
+                let flags = st.runtime_kinds.as_ref().unwrap();
+                for offset in 0..if plain { 1 } else { 3 } {
+                    let tag = if offset == 2 {
+                        i64t.const_int(u64::from(coroutine::types::WORD), false)
+                    } else {
+                        tags[0]
+                    };
+                    st.b.build_store(flags.slots[base + offset], tag).unwrap();
+                    st.b.build_store(flags.slot_sizes[base + offset], i64t.const_zero())
+                        .unwrap();
+                }
+            }
+            Op::CheckedAdd | Op::CheckedSub => {
+                // **A `Byte` OPERAND TAKES A DIFFERENT ARM IN THE RUNTIME**, and
+                // taking the integer one returned an untruncated value: `200 + 100`
+                // gave 300 where the reference gives `Byte(44)`.
+                //
+                // The WIDTH discriminates here — `Byte` is `Scalar(1)` and `Word`
+                // is `Scalar(8)` — unlike `Fixed` versus `Word`, which it cannot.
+                // **Both operands must be known bytes**: an unknown width keeps
+                // the integer path, which is what every previously lowering
+                // program relies on, and is recorded as the residual it is.
+                let byte_operands =
+                    st.width_at(0) == Width::Scalar(1) && st.width_at(1) == Width::Scalar(1);
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "a128");
+                let c = st.widen(rhs, i128t, "b128");
+                let wide = match op {
+                    Op::CheckedAdd => st.b.build_int_add(a, c, "s128").unwrap(),
+                    _ => st.b.build_int_sub(a, c, "d128").unwrap(),
+                };
+                // `Op::CheckedSub` on `Byte` has no subject: the reference rejects
+                // an `overflow` arm there as an outcome that cannot arise. The
+                // branch is taken only by `CheckedAdd` in practice, and costs
+                // nothing to leave general.
+                if byte_operands {
+                    st.push_byte_checked(ctx, func, trap_bb, opts, wide);
+                } else {
+                    st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+                }
+            }
+            // Both halves of the product are load-bearing for big-number
+            // multiplication, so the 128-bit product is computed in full rather
+            // than reduced to a 64-bit multiply with an overflow predicate.
+            //
+            // The `u8` operand is the Q-format fraction-bit count. The compiler
+            // emits `CheckedMul(0)` for `Word * Word`, and zero fraction bits is
+            // exactly integer multiply. A non-zero count is fixed-point, whose
+            // VM arm shifts the product and classifies through a different
+            // helper; it is refused here rather than lowered as if the operand
+            // were absent.
+            Op::CheckedMul(0) => {
+                // See `Op::CheckedAdd` above: a `Byte` operand takes the
+                // runtime's byte arm, which wraps to eight bits and flags above
+                // `0xFF`. `200 * 100` gave 20000 here against the reference's
+                // `Byte(32)`.
+                let byte_operands =
+                    st.width_at(0) == Width::Scalar(1) && st.width_at(1) == Width::Scalar(1);
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "a128");
+                let c = st.widen(rhs, i128t, "b128");
+                let wide = st.b.build_int_mul(a, c, "p128").unwrap();
+                if byte_operands {
+                    st.push_byte_checked(ctx, func, trap_bb, opts, wide);
+                } else {
+                    st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+                }
+            }
+            // **THE CHECKED FIXED-POINT MULTIPLY.** `Op::CheckedMul(0)` above is
+            // the integer arm; a NON-ZERO fraction count is the Fixed one.
+            //
+            // ⚠ **THE COUNT IS THE STATIC TYPE SIGNAL, and that is an upstream
+            // premise.** The runtime dispatches this opcode on the operand's
+            // RUNTIME type, which the backend cannot see — `Fixed` and `Word` are
+            // both eight bytes and indistinguishable by width. The compiler emits
+            // a non-zero count only for the Fixed arm, so the count carries the
+            // type. Recorded here because that is a claim about what the compiler
+            // emits, which this package censuses.
+            //
+            // **Read from `src/vm.rs`, not inferred from the integer arm**, and
+            // it differs in all three of the ways that matter:
+            //
+            // | | integer `CheckedMul(0)` | Fixed `CheckedMul(n)` |
+            // |---|---|---|
+            // | middle slot | the product's HIGH half | **always zero** |
+            // | low slot | truncated | truncated, and the contract is WRAPPING |
+            // | shift | none | arithmetic right by `n` before classifying |
+            //
+            // **The middle slot is the trap.** Reusing the integer triple would
+            // hand an overflow arm a high half the runtime never produces.
+            //
+            // Distinct from `Op::FixedMul`, which SATURATES. Same arithmetic in
+            // the middle, different contract at the edges.
+            Op::CheckedMul(frac_bits) => {
+                // Fail closed exactly where the runtime does — it returns
+                // `InvalidBytecode` above the word width — and where `FixedMul`
+                // already does. The count is static, so this costs a refusal
+                // rather than a check.
+                if u64::from(*frac_bits) >= WORD_BITS {
+                    return Err(LowerError::unsupported_op(
+                        "CheckedMul",
+                        format!(
+                            "CheckedMul({frac_bits}) has a fraction count at or beyond the \
+                             {WORD_BITS}-bit word width; the runtime reports InvalidBytecode \
+                             and the count is static, so the lowering refuses"
+                        ),
+                    ));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "cfx.a");
+                let c = st.widen(rhs, i128t, "cfx.b");
+                let product = st.b.build_int_mul(a, c, "cfx.p").unwrap();
+                let shifted =
+                    st.b.build_right_shift(
+                        product,
+                        i128t.const_int(u64::from(*frac_bits), false),
+                        true,
+                        "cfx.sh",
+                    )
+                    .unwrap();
+                // `fixed_checked_outputs`: 0 in range, 1 above max, 2 below min,
+                // and the value WRAPS into the word.
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "cfx.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "cfx.min");
+                let over =
+                    st.b.build_int_compare(IntPredicate::SGT, shifted, max, "cfx.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(IntPredicate::SLT, shifted, min, "cfx.under")
+                        .unwrap();
+                let flag_under =
+                    st.b.build_select(under, i64t.const_int(2, false), i64t.const_zero(), "cfx.f2")
+                        .unwrap()
+                        .into_int_value();
+                let flag =
+                    st.b.build_select(over, i64t.const_int(1, false), flag_under, "cfx.flag")
+                        .unwrap()
+                        .into_int_value();
+                let low = st.b.build_int_truncate(shifted, i64t, "cfx.low").unwrap();
+                st.push_triple(ctx, func, trap_bb, opts, (low, i64t.const_zero(), flag));
+            }
+            // Negation in 128 bits rather than 64 is what makes `-i64::MIN`
+            // observable: at 64 bits it wraps to itself and the overflow flag
+            // would be unrecoverable.
+            Op::CheckedNeg => {
+                let v = st.pop();
+                let a = st.widen(v, i128t, "a128");
+                let wide = st.b.build_int_neg(a, "n128").unwrap();
+                st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+            }
+            // **THE BARE DIVISION FAMILY IS TOTAL SINCE ABSORPTION 82.**
+            //
+            // Upstream gave `Op::Div` and `Op::Mod` the checked contract: they
+            // push `low, high, flag` and never fault. Word and Byte source
+            // division now compiles to `CheckedDiv(0)` and `CheckedMod`, so a
+            // float operand is the only shape the compiler emits here, as
+            // `Div; PopN(2)`. Read from `src/vm.rs`:
+            //
+            // | operands | low | high | flag |
+            // |---|---|---|---|
+            // | Word or Byte, zero divisor | numerator | zero | `3` |
+            // | Word or Byte, otherwise | as `CheckedDiv(0)` / `CheckedMod` | | |
+            // | Float | `fdiv` / `frem` | `0.0` | `float_checked_flag` |
+            //
+            // The Word and Byte rows share the checked lowering below, so
+            // `i64::MIN / -1` is flag `1` with low `i64::MIN`, exactly as there.
+            //
+            // **A MATCHED FIXED PAIR IS LOWERED SINCE ABSORPTION 82**, which
+            // answered report 4 from the runtime side. The reference's Fixed
+            // arms divide the raw scaled bits with no fraction shift, wrap the
+            // low slot, report flag 1 only for `i64::MIN / -1`, and keep the
+            // high slot ZERO, unlike the integer arm's sign extension. So the
+            // shared lowering runs with the high slot forced to zero. Source
+            // `Fixed / Fixed` compiles to `FixedDiv` and does not arrive here.
+            // A Fixed operand beside any other kind is refused.
+            //
+            // **The float triple does not consult `OverflowPolicy::Trap`.** The
+            // reference never faults here, and infinity and NaN are ordinary
+            // IEEE results that the flag classifies rather than errors.
+            Op::Div | Op::Mod => {
+                let fixed = (st.kind_at(0) == OperandKind::Fixed) as u8
+                    + (st.kind_at(1) == OperandKind::Fixed) as u8;
+                if fixed == 1 {
+                    return Err(LowerError::unsupported_op(
+                        &op_variant_name(op),
+                        format!(
+                            "{} with one Fixed operand and one {:?}: the reference has \
+                             no arm for a mixed pair",
+                            op_variant_name(op),
+                            if st.kind_at(0) == OperandKind::Fixed {
+                                st.kind_at(1)
+                            } else {
+                                st.kind_at(0)
+                            }
+                        ),
+                    ));
+                }
+                if fixed == 2 {
+                    st.lower_checked_division(ctx, func, trap_bb, opts, matches!(op, Op::Div));
+                    let top = st.depth;
+                    st.kinds[top - 3] = OperandKind::Fixed;
+                    st.kinds[top - 2] = OperandKind::Fixed;
+                    let zero = i64t.const_zero();
+                    let high = st.slot(top - 2);
+                    st.b.build_store(high, zero).unwrap();
+                } else if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float
+                {
+                    if !float_width_lowered(float_bytes) {
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float division at a float width of {float_bytes} \
+                             bytes; only 4 and 8 are lowered"
+                            ),
+                        ));
+                    }
+                    let (kl, kr) = (st.kind_at(1), st.kind_at(0));
+                    if kl != OperandKind::Float || kr != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "Div with operand kinds {kl:?} and {kr:?}: one side \
+                                 is a float and the other is not"
+                            ),
+                        ));
+                    }
+                    let f64t = float_type(ctx, float_bytes);
+                    let rb = st.pop();
+                    let lb = st.pop();
+                    let l = bits_to_float(&st.b, lb, f64t, float_bytes);
+                    let r = bits_to_float(&st.b, rb, f64t, float_bytes);
+                    let q = if matches!(op, Op::Div) {
+                        st.b.build_float_div(l, r, "fdiv").unwrap()
+                    } else {
+                        st.b.build_float_rem(l, r, "frem").unwrap()
+                    };
+                    let flag = coroutine::arithmetic::float_flag(&st.b, q, i64t);
+                    let bits = float_to_bits(&st.b, q, i64t, float_bytes);
+                    st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
+                    st.push_k(
+                        i64t.const_zero(),
+                        Width::Scalar(float_bytes),
+                        OperandKind::Float,
+                    );
+                    st.push_w(flag, Width::Scalar(1));
+                } else {
+                    st.lower_checked_division(ctx, func, trap_bb, opts, matches!(op, Op::Div));
+                }
+            }
+            // The checked forms do NOT fault on a zero divisor. They reify it as
+            // flag 3 with the numerator in the low slot, so a handled
+            // `zero_divisor(n)` arm can bind it; only an UNHANDLED zero divisor
+            // traps, and that trap is emitted by the compiler as an ordinary
+            // `Op::Trap` in the flag dispatch rather than by this opcode.
+            //
+            // Because there is no fault, the whole thing is branch-free: the
+            // divisor is forced to a safe non-zero value and the triple is then
+            // overridden by selects. Branch-free matters beyond tidiness here --
+            // a new basic block would have to be reconciled with the per-block
+            // operand-stack depth bookkeeping, and selects sidestep that.
+            Op::CheckedDiv(0) | Op::CheckedMod => {
+                st.lower_checked_division(
+                    ctx,
+                    func,
+                    trap_bb,
+                    opts,
+                    matches!(op, Op::CheckedDiv(_)),
+                );
+            }
+            // **THE CHECKED FIXED-POINT DIVIDE.** The arm above is the integer
+            // one; a NON-ZERO fraction count is the Fixed one, and the count is
+            // the only static signal of that — the runtime dispatches on a type
+            // the backend cannot see, and `Fixed` and `Word` are both eight
+            // bytes.
+            //
+            // ⚠ **THE REASON THIS WAS REFUSED DID NOT DISTINGUISH IT.** The
+            // ground given was that it reaches for `__divti3`, the compiler
+            // runtime's 128-bit signed division. **That cost is already paid**:
+            // `linkage_symbol_census.rs` measured `Fixed` division as the ONE
+            // construct in its sweep needing a compiler-runtime symbol, and the
+            // bare `Op::FixedDiv` lowers. Any object doing fixed division already
+            // depends on it.
+            //
+            // Read from `src/vm.rs`, and it differs from the integer arm exactly
+            // as the checked multiply does — middle slot ZERO rather than the
+            // quotient's high half, low slot WRAPPING — plus a left shift of the
+            // dividend before the division.
+            //
+            // Branch-free for the same reason as the arm above: a new basic block
+            // would have to be reconciled with the per-block operand-depth
+            // bookkeeping, and selects sidestep that.
+            Op::CheckedDiv(frac_bits) => {
+                if u64::from(*frac_bits) >= WORD_BITS {
+                    return Err(LowerError::unsupported_op(
+                        "CheckedDiv",
+                        format!(
+                            "CheckedDiv({frac_bits}) has a fraction count at or beyond the \
+                             {WORD_BITS}-bit word width; the runtime reports InvalidBytecode \
+                             and the count is static, so the lowering refuses"
+                        ),
+                    ));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+
+                // A zero divisor is UNDEFINED in LLVM's `sdiv`, not a fault, so
+                // it is excluded before the division and the result discarded for
+                // that path. The runtime reifies it as flag 3 with the NUMERATOR
+                // in the low slot.
+                let iszero =
+                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "fdzero")
+                        .unwrap();
+                let nonzero =
+                    st.b.build_select(iszero, i64t.const_int(1, false), rhs, "fdnz")
+                        .unwrap()
+                        .into_int_value();
+
+                // `dividend = widen(x) << frac_bits`. **Widen FIRST**: shifting in
+                // 64 bits overflows for exactly the inputs that make the
+                // operation interesting.
+                let a = st.widen(lhs, i128t, "cfd.a");
+                let c = st.widen(nonzero, i128t, "cfd.b");
+                let dividend = st
+                    .b
+                    .build_left_shift(a, i128t.const_int(u64::from(*frac_bits), false), "cfd.sh")
+                    .unwrap();
+                let quotient = st.b.build_int_signed_div(dividend, c, "cfd.q").unwrap();
+
+                // `fixed_checked_outputs`: 0 in range, 1 above max, 2 below min,
+                // and the value wraps into the word.
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "cfd.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "cfd.min");
+                let over =
+                    st.b.build_int_compare(IntPredicate::SGT, quotient, max, "cfd.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(IntPredicate::SLT, quotient, min, "cfd.under")
+                        .unwrap();
+                let flag_under =
+                    st.b.build_select(under, i64t.const_int(2, false), i64t.const_zero(), "cfd.f2")
+                        .unwrap()
+                        .into_int_value();
+                let flag_ok =
+                    st.b.build_select(over, i64t.const_int(1, false), flag_under, "cfd.f1")
+                        .unwrap()
+                        .into_int_value();
+                let low_ok = st.b.build_int_truncate(quotient, i64t, "cfd.low").unwrap();
+
+                // The zero-divisor override: flag 3, numerator in low.
+                let low =
+                    st.b.build_select(iszero, lhs, low_ok, "cfd.zlow")
+                        .unwrap()
+                        .into_int_value();
+                let flag =
+                    st.b.build_select(iszero, i64t.const_int(3, false), flag_ok, "cfd.zflag")
+                        .unwrap()
+                        .into_int_value();
+                st.push_triple(ctx, func, trap_bb, opts, (low, i64t.const_zero(), flag));
+            }
+            // Comparisons. The VM's `compare_op` pops the right operand first,
+            // then the left, and compares left against right; the order below
+            // matches it. The result is 0 or 1 in an i64, which is the flat
+            // representation of the VM's tagged `Bool`.
+            Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
+                // **A `Text` IS COMPARED BY CONTENT OR NOT AT ALL.** Lowered as
+                // integers, two strings compared their addresses, and
+                // `"ab" == "ab"` was false. Two literal records compare by
+                // length and bytes. Any other comparison an operand of which
+                // may be `Text` is refused, see `text.rs`.
+                if text_comparisons.contains(&i) {
+                    let literals =
+                        st.kind_at(0) == OperandKind::Text && st.kind_at(1) == OperandKind::Text;
+                    if !(literals
+                        && st.runtime_kinds.is_none()
+                        && matches!(op, Op::CmpEq | Op::CmpNe))
+                    {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "{op:?} at op {i} may receive a Text, which is compared by \
+                                 content only between two string literals. Here the operand \
+                                 kinds are {:?} and {:?}",
+                                st.kind_at(1),
+                                st.kind_at(0)
+                            ),
+                        ));
+                    }
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let equal = text_equality(ctx, func, &st.b, lhs, rhs);
+                    let result = if matches!(op, Op::CmpNe) {
+                        st.b.build_not(equal, "text_ne").unwrap()
+                    } else {
+                        equal
+                    };
+                    let v = st.b.build_int_z_extend(result, i64t, "text_cmp").unwrap();
+                    st.push_w(v, Width::Scalar(1));
+                    continue;
+                }
+                if st.runtime_kinds.is_some() {
+                    let tags = [st.input_tags[st.depth - 2], st.input_tags[st.depth - 1]];
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let result = if matches!(op, Op::CmpEq | Op::CmpNe) {
+                        let equal = coroutine::kinds::equality(
+                            &st.b,
+                            [lhs, rhs],
+                            tags,
+                            float_bytes,
+                            trap_bb,
+                        );
+                        if matches!(op, Op::CmpNe) {
+                            st.b.build_not(equal, "not_equal").unwrap()
+                        } else {
+                            equal
+                        }
+                    } else {
+                        coroutine::kinds::ordering(
+                            &st.b,
+                            [lhs, rhs],
+                            tags,
+                            float_bytes,
+                            op,
+                            trap_bb,
+                        )
+                    };
+                    let value =
+                        st.b.build_int_z_extend(result, i64t, "comparison_value")
+                            .unwrap();
+                    st.push_w(value, Width::Scalar(1));
+                    continue;
+                }
+                // **FLOAT COMPARISON MATCHES THE REFERENCE, WHICH IS NOT IEEE.**
+                //
+                // The virtual machine compares floats with
+                // `x.partial_cmp(y).unwrap_or(Ordering::Equal)`, so **a NaN
+                // collapses to Equal** — it is equal to everything, rather than
+                // unordered. Emitting the obvious `fcmp oeq` would make
+                // `NaN == x` TRUE on the reference and FALSE natively, which is a
+                // silent divergence rather than a fault.
+                //
+                // `olt`, `ogt` and `one` are already false when either side is
+                // NaN, which is what NaN-as-Equal implies, so **only `Eq`, `Le`
+                // and `Ge` need forcing true**.
+                //
+                // **⚠ THAT WARNING HAS EXPIRED, AND IS KEPT ONLY AS HISTORY.**
+                // It read *"the NaN path is unexercised; no source construct
+                // produces a NaN today: the route is division, and
+                // `Op::CheckedDiv` is not lowered"*. **Division lowers now**, the
+                // NaN path is exercised, and writing it to MATCH rather than
+                // leaving it to diverge is what made the first NaN test pass on
+                // four of six predicates and fail on the two that were wrong.
+                // Relying on NaN being unreachable is the accidental protection
+                // this backend already lost once — see `FLOAT_SLICE_ONE.md`. The
+                // original reasoning rested on reading the
+                // reference, not on a differential.
+                if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
+                    if !float_width_lowered(float_bytes) {
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float comparison at a float width of {float_bytes} \
+                             bytes; only 4 and 8 are lowered"
+                            ),
+                        ));
+                    }
+                    let (kl, kr) = (st.kind_at(1), st.kind_at(0));
+                    if kl != OperandKind::Float || kr != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "{op:?} with operand kinds {kl:?} and {kr:?}: one \
+                                 side is a float and the other is not, so no \
+                                 comparison is correct for both"
+                            ),
+                        ));
+                    }
+                    let f64t = float_type(ctx, float_bytes);
+                    let rhs_bits = st.pop();
+                    let lhs_bits = st.pop();
+                    let l = bits_to_float(&st.b, lhs_bits, f64t, float_bytes);
+                    let r = bits_to_float(&st.b, rhs_bits, f64t, float_bytes);
+                    use inkwell::FloatPredicate as FP;
+                    // **THE REFERENCE USES TWO DIFFERENT PATHS, WITH DIFFERENT
+                    // NaN SEMANTICS. Measured, after getting it wrong.**
+                    //
+                    // `Op::CmpEq`/`CmpNe` go through **`PartialEq`**, which is
+                    // ordinary IEEE: NaN equals nothing, and `!=` is therefore
+                    // TRUE for NaN. `CmpLt`/`Gt`/`Le`/`Ge` go through
+                    // `compare_op`, which is
+                    // `partial_cmp(...).unwrap_or(Equal)` — **NaN as Equal**.
+                    //
+                    // A previous increment applied NaN-as-Equal to all of `Eq`,
+                    // `Le` and `Ge`, having read only `compare_op`. That made
+                    // `NaN == x` true natively and false on the reference. It was
+                    // written blind, because nothing could produce a NaN until
+                    // division landed; the test that could not be written then is
+                    // `nan_compares_equal_to_everything_as_the_reference_does`,
+                    // and it caught this immediately.
+                    let ordered = match op {
+                        // IEEE, via `PartialEq`: false for NaN.
+                        Op::CmpEq => FP::OEQ,
+                        // **UNORDERED not-equal**: `PartialEq::ne` is TRUE for a
+                        // NaN, and `ONE` would have been false.
+                        Op::CmpNe => FP::UNE,
+                        // `compare_op` maps NaN to Equal, so `<` and `>` are
+                        // false — which the ordered forms already give.
+                        Op::CmpLt => FP::OLT,
+                        Op::CmpGt => FP::OGT,
+                        // ...and `<=`/`>=` are TRUE, which they do not.
+                        Op::CmpLe => FP::OLE,
+                        _ => FP::OGE,
+                    };
+                    let base = st.b.build_float_compare(ordered, l, r, "fcmp").unwrap();
+                    // `uno` is true exactly when either operand is NaN.
+                    let unordered = st.b.build_float_compare(FP::UNO, l, r, "funo").unwrap();
+                    // Only `Le` and `Ge` need forcing: they go through
+                    // `compare_op`, where NaN is Equal. `Eq` does NOT — it is
+                    // `PartialEq`, which is false for NaN.
+                    let c = if matches!(op, Op::CmpLe | Op::CmpGe) {
+                        st.b.build_or(base, unordered, "nan_eq").unwrap()
+                    } else {
+                        base
+                    };
+                    let z = st.b.build_int_z_extend(c, i64t, "fcmpz").unwrap();
+                    st.push_w(z, Width::Scalar(1));
+                } else {
+                    let pred = match op {
+                        Op::CmpEq => IntPredicate::EQ,
+                        Op::CmpNe => IntPredicate::NE,
+                        Op::CmpLt => IntPredicate::SLT,
+                        Op::CmpGt => IntPredicate::SGT,
+                        Op::CmpLe => IntPredicate::SLE,
+                        Op::CmpGe => IntPredicate::SGE,
+                        _ => unreachable!("the outer match restricts this set"),
+                    };
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let c = st.b.build_int_compare(pred, lhs, rhs, "cmp").unwrap();
+                    let v = st.b.build_int_z_extend(c, i64t, "cmpz").unwrap();
+                    // **ONE BYTE, MATCHING THE FLOAT TWIN ABOVE.** A comparison
+                    // yields a `Bool`, which is one byte in the canonical flat
+                    // layout, and without the width a computed boolean cannot be
+                    // placed in a composite body: `[a > 0, a > 5]` compiled and
+                    // was then refused at `NewComposite` while `[true, false]`
+                    // worked. The float path already did this and the integer
+                    // path did not, with no reason recorded for the asymmetry.
+                    st.push_w(v, Width::Scalar(1));
+                }
+            }
+            // Logical NOT. The VM applies it only to `Bool` and raises a type
+            // error otherwise, so the operand here is always 0 or 1 and the
+            // comparison against zero is exact rather than merely truthy.
+            Op::Not => {
+                let v = st.pop();
+                let c =
+                    st.b.build_int_compare(IntPredicate::EQ, v, i64t.const_zero(), "not")
+                        .unwrap();
+                let z = st.b.build_int_z_extend(c, i64t, "notz").unwrap();
+                // **A bool is one byte, exactly as a comparison's result is.**
+                // This pushed an unknown width while the comparison arm three
+                // screens up pushed `Scalar(1)` for the same shape, so a negated
+                // comparison could not fill a `bool` field while an un-negated one
+                // could. Measured 2026-09-17, resolving an `unmeasured`
+                // disposition in `unknown_width_census.rs` — the fourth arm in
+                // this family, and the first found by answering the census's own
+                // open question rather than by a generated subject.
+                st.push_w(z, Width::Scalar(1));
+            }
+            Op::BitAnd | Op::BitOr | Op::BitXor => {
+                // The width the operands agree on, read BEFORE the pops discard
+                // it. Without this a composite field could not hold the result of
+                // any bitwise operation -- see `preserved_scalar_width`.
+                let kept = preserved_scalar_width(st.width_at(1), st.width_at(0));
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let v = match op {
+                    Op::BitAnd => st.b.build_and(lhs, rhs, "band").unwrap(),
+                    Op::BitOr => st.b.build_or(lhs, rhs, "bor").unwrap(),
+                    Op::BitXor => st.b.build_xor(lhs, rhs, "bxor").unwrap(),
+                    _ => unreachable!("the outer match restricts this set"),
+                };
+                match kept {
+                    Some(out) => st.push_w(mask_if_byte(&st.b, i64t, v, out), out),
+                    None => st.push(v),
+                }
+            }
+            // Shifts. THE MASK IS NOT OPTIONAL. The VM masks the count to the
+            // word width, `count & (word_bits - 1)`, so every count is defined.
+            // An LLVM shift by at least the bit width yields poison, so
+            // omitting the mask would be undefined behaviour on exactly the
+            // inputs the VM gives a defined answer for.
+            Op::Shl | Op::Shr => {
+                // **The SHIFTED VALUE's width, not a matched pair.** A shift
+                // amount is a count, not an operand of the same shape: `byte lsl
+                // 2` is a byte however the 2 is typed. Read before the pops.
+                //
+                // Refusing here cost the same as everywhere else in this family:
+                // no composite field could hold a shifted value, measured over all
+                // four of `lsl`, `lsr`, `asl` and `asr`.
+                let kept = match st.width_at(1) {
+                    w @ Width::Scalar(_) => Some(w),
+                    _ => None,
+                };
+                let count = st.pop();
+                let value = st.pop();
+                let masked =
+                    st.b.build_and(count, i64t.const_int(WORD_BITS - 1, false), "shmask")
+                        .unwrap();
+                let v = match op {
+                    Op::Shl => st.b.build_left_shift(value, masked, "shl").unwrap(),
+                    // Documented as an ARITHMETIC, sign-preserving right
+                    // shift, so `ashr` rather than `lshr`.
+                    Op::Shr => st.b.build_right_shift(value, masked, true, "shr").unwrap(),
+                    _ => unreachable!("the outer match restricts this set"),
+                };
+                match kept {
+                    Some(out) => st.push_w(mask_if_byte(&st.b, i64t, v, out), out),
+                    None => st.push(v),
+                }
+            }
+            // **THE FIXED-POINT CONVERSIONS, REPRODUCED FROM THE VM HANDLER**
+            // rather than from a definition of Q-format arithmetic. Rounding,
+            // saturation and the failure mode are decisions already made in
+            // `vm.rs`, and guessing any of them yields code that lowers, passes
+            // the support census, and computes the wrong number.
+            //
+            // The two opcodes fail DIFFERENTLY on an out-of-range fraction
+            // count, and the VM says why: `WordToFixed` converts an in-range
+            // integer whose result merely overflows the Fixed range, so it
+            // saturates; an out-of-range COUNT is corrupt input, for which
+            // `FixedToWord` fails closed. **The count is a static operand here**,
+            // so both guards become lowering-time refusals rather than emitted
+            // runtime checks — the structural verifier already bounds it, so
+            // neither refusal is reachable from a verified module.
+            // **`FixedMul` LOWERS; `FixedDiv` DOES NOT, and the difference is a
+            // RUNTIME FAULT rather than a difficulty.**
+            //
+            // Both are widen-shift-clamp in the VM and both SATURATE, unlike the
+            // checked families which wrap — `fixed_checked_outputs` says so
+            // directly. `FixedMul` has no runtime failure: an out-of-range
+            // fraction count is static and refused below, and every product
+            // saturates rather than faulting.
+            //
+            // **`FixedDiv` NOW LOWERS, and the reason it did not was STALE.**
+            // The note here read: reproducing the VM's unconditional
+            // `DivisionByZero` "needs the runtime-fault lowering, which
+            // `RUNTIME_FAULTS.md` defers to V0.4.0 — and the existing trap branch
+            // here is gated on `OverflowPolicy::Trap`, so it is a policy, not the
+            // unconditional fault the VM raises."
+            //
+            // **`Op::Div | Op::Mod` above already emits exactly that fault**,
+            // ungated: it compares the divisor to zero and branches to `trap_bb`.
+            // That path was built for the integer forms and this refusal was
+            // never revisited. **A stale blocker costs more than a stale figure:
+            // a wrong number misleads a reader, a wrong blocker stops work.**
+            Op::FixedMul(frac_bits) => {
+                // **The operands' shared width, read before the pops.** A
+                // fixed-point product or quotient is a `Fixed`, the same eight
+                // bytes its operands are, and dropping that meant no composite
+                // field or array element could hold one — the fifth arm-group in
+                // the family censused in `unknown_width_census.rs`, found by the
+                // same one-line probe as the others.
+                let kept_fx = preserved_scalar_width(st.width_at(1), st.width_at(0));
+                if u32::from(*frac_bits) >= WORD_BITS as u32 {
+                    return Err(LowerError::unsupported_op(
+                        "FixedMul",
+                        format!(
+                            "FixedMul({frac_bits}) has a fraction count at or beyond the \
+                         {WORD_BITS}-bit word width; the VM fails closed here and the \
+                         count is static, so the lowering refuses"
+                        ),
+                    ));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "fxm.a");
+                let c = st.widen(rhs, i128t, "fxm.b");
+                let product = st.b.build_int_mul(a, c, "fxm.p").unwrap();
+                // Arithmetic shift: the VM uses `product >> frac_bits` on a
+                // signed wide value, so a negative product keeps its sign.
+                let sh = i128t.const_int(u64::from(*frac_bits), false);
+                let shifted = st.b.build_right_shift(product, sh, true, "fxm.sh").unwrap();
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "fxm.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "fxm.min");
+                let over =
+                    st.b.build_int_compare(inkwell::IntPredicate::SGT, shifted, max, "fxm.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(inkwell::IntPredicate::SLT, shifted, min, "fxm.under")
+                        .unwrap();
+                let hi =
+                    st.b.build_select(over, max, shifted, "fxm.selhi")
+                        .unwrap()
+                        .into_int_value();
+                let clamped =
+                    st.b.build_select(under, min, hi, "fxm.sello")
+                        .unwrap()
+                        .into_int_value();
+                // The product of two Q-format values IS Q-format; see
+                // `arith_result_kind`.
+                st.push_k(
+                    st.b.build_int_truncate(clamped, i64t, "fxm").unwrap(),
+                    kept_fx.unwrap_or(Width::Unknown),
+                    OperandKind::Fixed,
+                );
+            }
+            // Reproduces `src/vm.rs` `Op::FixedDiv` in all three of its
+            // behaviours. **Read from that arm, not pattern-matched from
+            // `FixedMul` above** -- the two shift in OPPOSITE directions, and
+            // copying the neighbour would produce a plausible wrong answer that
+            // still agrees on zero.
+            Op::FixedDiv(frac_bits) => {
+                // **The operands' shared width, read before the pops.** A
+                // fixed-point product or quotient is a `Fixed`, the same eight
+                // bytes its operands are, and dropping that meant no composite
+                // field or array element could hold one — the fifth arm-group in
+                // the family censused in `unknown_width_census.rs`, found by the
+                // same one-line probe as the others.
+                let kept_fx = preserved_scalar_width(st.width_at(1), st.width_at(0));
+                // (1) The VM fails closed on an out-of-range fraction count. The
+                // count is a static operand, so this is a lowering-time refusal,
+                // exactly as `FixedMul` and `FixedToWord` already do.
+                if u32::from(*frac_bits) >= WORD_BITS as u32 {
+                    return Err(LowerError::unsupported_op(
+                        "FixedDiv",
+                        format!(
+                            "FixedDiv({frac_bits}) has a fraction count at or beyond the \
+                         {WORD_BITS}-bit word width; the VM fails closed here and the \
+                         count is static, so the lowering refuses"
+                        ),
+                    ));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+
+                // FixedDiv is total. Substitute before division to avoid LLVM
+                // poison, then select the numerator and flag 3 on zero.
+                let zero =
+                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "fxd.zero")
+                        .unwrap();
+                let divisor =
+                    st.b.build_select(zero, i64t.const_int(1, false), rhs, "fxd.safe")
+                        .unwrap()
+                        .into_int_value();
+
+                // (3) Widen, shift the DIVIDEND LEFT by the fraction count, then
+                // divide and SATURATE. `FixedMul` shifts its PRODUCT RIGHT; this
+                // is the asymmetry the VM specifies and the one place a copied
+                // idiom would be silently wrong.
+                let a = st.widen(lhs, i128t, "fxd.a");
+                let c = st.widen(divisor, i128t, "fxd.b");
+                let sh = i128t.const_int(u64::from(*frac_bits), false);
+                let dividend = st.b.build_left_shift(a, sh, "fxd.sh").unwrap();
+                // Fraction counts below 64 keep the shifted i64 dividend
+                // strictly above i128::MIN, so division by -1 cannot overflow.
+                let quotient = st.b.build_int_signed_div(dividend, c, "fxd.q").unwrap();
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "fxd.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "fxd.min");
+                let over =
+                    st.b.build_int_compare(IntPredicate::SGT, quotient, max, "fxd.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(IntPredicate::SLT, quotient, min, "fxd.under")
+                        .unwrap();
+                let hi =
+                    st.b.build_select(over, max, quotient, "fxd.selhi")
+                        .unwrap()
+                        .into_int_value();
+                let clamped =
+                    st.b.build_select(under, min, hi, "fxd.sello")
+                        .unwrap()
+                        .into_int_value();
+                let quotient = st.b.build_int_truncate(clamped, i64t, "fxd").unwrap();
+                let low =
+                    st.b.build_select(zero, lhs, quotient, "fxd.low")
+                        .unwrap()
+                        .into_int_value();
+                // Saturation is a successful result. Only zero sets a flag.
+                st.push_k(low, kept_fx.unwrap_or(Width::Unknown), OperandKind::Fixed);
+                st.push_k(i64t.const_zero(), Width::Scalar(8), OperandKind::Fixed);
+                let flag =
+                    st.b.build_select(
+                        zero,
+                        i64t.const_int(3, false),
+                        i64t.const_zero(),
+                        "fxd.flag",
+                    )
+                    .unwrap()
+                    .into_int_value();
+                st.push_k(flag, Width::Scalar(8), OperandKind::Int);
+            }
+            Op::FixedToWord(frac_bits) => {
+                // **The operand's width, carried through the conversion.**
+                //
+                // A `Fixed` and the `Word` it converts to are the same number of
+                // bytes, and the sibling `Op::WordToFixed` states `Scalar(8)`
+                // while this arm stated nothing — so a converted word could not
+                // fill a composite field while a converted fixed-point value
+                // could. **Read from the operand rather than hard-coded.**
+                //
+                // ⚠ **THE FIRST VERSION OF THIS NOTE JUSTIFIED THAT BY A NARROWER
+                // WORD CONFIGURATION, AND THERE IS NONE HERE.** `WORD_BITS` is a
+                // `const` 64 in this package and the only feature it forwards is
+                // `narrow-float-32`, so that build does not exist and the claim
+                // was reasoning about a configuration nobody can produce. The real
+                // reason is smaller and true: **a derived width cannot drift from
+                // what the operand actually carries**, where a literal can.
+                //
+                // The KIND stays `Unknown`, which is correct: the result is a
+                // `Word`, neither `Fixed` nor `Float`. Only the width was missing.
+                let kept_f2w = match st.width_at(0) {
+                    w @ Width::Scalar(_) => w,
+                    _ => Width::Unknown,
+                };
+                if u32::from(*frac_bits) >= WORD_BITS as u32 {
+                    return Err(LowerError::unsupported_op(
+                        "FixedToWord",
+                        format!(
+                            "FixedToWord({frac_bits}) has a fraction count at or beyond the \
+                         {WORD_BITS}-bit word width; the VM fails closed here and the \
+                         count is static, so the lowering refuses rather than emitting \
+                         a trap"
+                        ),
+                    ));
+                }
+                let v = st.pop();
+                // Arithmetic, sign-preserving: the VM uses `bits >> frac_bits`
+                // on a signed value, so negatives keep their sign.
+                let sh = i64t.const_int(u64::from(*frac_bits), false);
+                // **The one site that must NOT carry `Fixed` forward.** The
+                // scale is gone; calling the result Fixed would refuse a
+                // `Word` remainder the reference computes happily.
+                st.push_k(
+                    st.b.build_right_shift(v, sh, true, "fx2w").unwrap(),
+                    kept_f2w,
+                    OperandKind::Unknown,
+                );
+            }
+            Op::WordToFixed(frac_bits) => {
+                // The VM's corrupt-input arm saturates by sign when the count
+                // reaches the WIDE width. That arm is unreachable from a
+                // verified module and reproducing it would require emitting a
+                // branch for a case that cannot occur, so it is refused.
+                if u32::from(*frac_bits) >= 2 * WORD_BITS as u32 {
+                    return Err(LowerError::unsupported_op(
+                        "WordToFixed",
+                        format!(
+                            "WordToFixed({frac_bits}) has a fraction count at or beyond the \
+                         wide width; the VM treats this as corrupt input"
+                        ),
+                    ));
+                }
+                let v = st.pop();
+                // Widen, shift, CLAMP, narrow. The VM saturates at the word's
+                // MAX/MIN rather than wrapping, so the clamp is the semantics
+                // and not a safety afterthought.
+                let wide = st.widen(v, i128t, "w2fx.wide");
+                let sh = i128t.const_int(u64::from(*frac_bits), false);
+                let shifted = st.b.build_left_shift(wide, sh, "w2fx.shl").unwrap();
+                // MAX/MIN sign-extended from their 64-bit forms, so the
+                // constants cannot be got wrong by hand-writing 128-bit
+                // literals.
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "w2fx.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "w2fx.min");
+                let over =
+                    st.b.build_int_compare(inkwell::IntPredicate::SGT, shifted, max, "w2fx.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(inkwell::IntPredicate::SLT, shifted, min, "w2fx.under")
+                        .unwrap();
+                let clamped_hi =
+                    st.b.build_select(over, max, shifted, "w2fx.selhi")
+                        .unwrap()
+                        .into_int_value();
+                let clamped =
+                    st.b.build_select(under, min, clamped_hi, "w2fx.sello")
+                        .unwrap()
+                        .into_int_value();
+                // **EIGHT BYTES, AND THAT IS THE TREE'S OWN MEASUREMENT.** A
+                // Q-format value is an `i64` of fixed-point bits occupying a
+                // full slot; `width_of_tag` records the same fact from the
+                // reference packing `struct { a: Fixed<16>, b: Fixed<16> }` at
+                // sixteen bytes. Dropping the width here is why
+                // `[a as Fixed<16>, b as Fixed<16>]` compiled and was then
+                // refused at `NewComposite`.
+                st.push_k(
+                    st.b.build_int_truncate(clamped, i64t, "w2fx").unwrap(),
+                    Width::Scalar(8),
+                    OperandKind::Fixed,
+                );
+            }
+            Op::Dup => {
+                let w = st.width_at(0);
+                let k = st.kind_at(0);
+                let owned = st.owned_at(0);
+                let v = st.pop();
+                if owned_bodies {
+                    st.push_owned(v, w, k, owned);
+                    st.push_owned(v, w, k, owned);
+                } else {
+                    st.push(v);
+                    st.push(v);
+                }
+            }
+            // The compiler routes most literals here rather than through
+            // `PushImmediate`, including the bounds and stride of a range `for`,
+            // so this is required for iteration. A composite constant that
+            // `region::composite_constant_body` packs, such as a `Text<N>`
+            // literal cast, is copied into its region site, and any other
+            // composite constant is refused.
+            Op::Const(idx) => {
+                let cv = chunk.constants.get(*idx as usize).ok_or_else(|| {
+                    LowerError::MalformedInput(format!("Const({idx}) out of range"))
+                })?;
+                // The constant's own variant states its packed width exactly,
+                // which makes this the least ambiguous producer in the set.
+                // `Unit` stays unknown: it is a placeholder that nothing reads,
+                // and giving it a width would let it be packed into a body.
+                // A static string is a REFERENCE, not a packable scalar, so it
+                // cannot be produced as an `i64` literal like the others.
+                // **A float constant is pushed as its BIT PATTERN**, tagged
+                // `Float` so a later operation knows to bitcast rather than to
+                // treat the bits as an integer. The stack stays homogeneous
+                // `i64`; the tag is what carries the difference a width cannot.
+                if let ConstValue::Float(f) = cv {
+                    if !float_width_lowered(float_bytes) {
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "a float constant at a float width of {float_bytes} bytes; \
+                             only 4 and 8 are lowered, and another width is refused \
+                             rather than approximated because a float of the wrong \
+                             width is a silently wrong number, not a fault"
+                            ),
+                        ));
+                    }
+                    // **THE CONSTANT IS BUILT AT THE MODULE'S FLOAT WIDTH.** It
+                    // took the `f64` pattern unconditionally, and the low 32
+                    // bits of a small double are ZERO -- so under a four-byte
+                    // float every modest constant became 0.0 and `x * 2.0 + 1.0`
+                    // silently lost its `+ 1.0`. Caught by the differential, not
+                    // by review.
+                    let bits: u64 = if float_bytes == 4 {
+                        u64::from((*f as f32).to_bits())
+                    } else {
+                        (*f).to_bits()
+                    };
+                    let v = i64t.const_int(bits, false);
+                    st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
+                } else if let ConstValue::StaticStr(s) = cv {
+                    let g = static_string_global(ctx, module, s);
+                    let addr = st.b.build_ptr_to_int(g, i64t, "kstr").unwrap();
+                    // Unknown width, deliberately. The operand is an address,
+                    // and packing an address into a composite body as though it
+                    // were a scalar is exactly the mistake `Width::Unknown`
+                    // exists to make impossible. The kind says it is a literal
+                    // record, which is what lets two of them compare by content.
+                    st.push_k(addr, Width::Unknown, OperandKind::Text);
+                } else if let Some(body) = crate::region::composite_constant_body(cv) {
+                    // **A COMPOSITE CONSTANT IS A CONSTRUCTION SITE.** Its body
+                    // is copied from a constant global into the site that
+                    // `region::plan_chunk_region` reserves for this `Const`, so
+                    // the operand is a region address like a `NewComposite`'s,
+                    // and every region figure a host provisions counts it. The
+                    // copy runs on every execution and writes the same bytes,
+                    // which no later instruction changes in place.
+                    let region = region_base.ok_or_else(|| {
+                        LowerError::Internal(
+                            "a composite Const needs the region pointer, which lower_chunk \
+                             does not receive"
+                                .into(),
+                        )
+                    })?;
+                    let plan = crate::region::plan_chunk_region(chunk);
+                    let site = plan.sites.iter().find(|s| s.op_index == i).ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "no region placement for the composite Const at op {i}"
+                        ))
+                    })?;
+                    let size = u32::try_from(body.len()).map_err(|_| {
+                        LowerError::Internal(format!("the composite Const at op {i} is too large"))
+                    })?;
+                    let source = composite_constant_global(ctx, module, &body);
+                    let base = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(site.offset), false)],
+                            "const_body",
+                        )
+                        .unwrap()
+                    };
+                    st.b.build_memcpy(base, 1, source, 1, i64t.const_int(u64::from(size), false))
+                        .map_err(|e| {
+                            LowerError::unsupported_op(
+                                "Const",
+                                format!(
+                                    "the composite Const at op {i} could not copy its body: {e}"
+                                ),
+                            )
+                        })?;
+                    let bits =
+                        st.b.build_ptr_to_int(base, i64t, "const_body_bits")
+                            .unwrap();
+                    st.push_w(bits, Width::Body(size));
+                } else {
+                    let (v, w): (i64, Width) = match cv {
+                        ConstValue::Int(i) => (*i, Width::Scalar(8)),
+                        ConstValue::Byte(x) => (*x as i64, Width::Scalar(1)),
+                        ConstValue::Bool(b) => (*b as i64, Width::Scalar(1)),
+                        // Unit is pushed and popped without being read. Same
+                        // placeholder, same caveat, as `PushImmediate(0)`.
+                        ConstValue::Unit => (
+                            0,
+                            if retcon || retcon_delegate {
+                                Width::Scalar(0)
+                            } else {
+                                Width::Unknown
+                            },
+                        ),
+                        other => {
+                            return Err(LowerError::unsupported_op(
+                                "Const",
+                                format!("Const holding {other:?}"),
+                            ));
+                        }
+                    };
+                    let c = i64t.const_int(v as u64, true);
+                    st.push_w(c, w);
+                }
+            }
+            // Encoding per `Op::PushImmediate`: 0 = Unit, 1 = true, 2 = false,
+            // 3 = None, 4..=19 = Int(operand - 4).
+            Op::PushImmediate(imm) => {
+                let v: i64 = match *imm {
+                    // Unit carries no value the lowering can read. It is pushed
+                    // as a block's result and popped again, and every loop the
+                    // compiler emits contains one. Zero is a placeholder, sound
+                    // only because nothing consumes it; if Unit ever reaches a
+                    // comparison, this is wrong.
+                    0 => 0,
+                    1 => 1,
+                    2 => 0,
+                    // `None` needs an Option representation this backend has not
+                    // settled. Refusing beats inventing one silently.
+                    3 => {
+                        return Err(LowerError::MalformedInput("PushImmediate(None)".into()));
+                    }
+                    n @ 4..=19 => (n as i64) - 4,
+                    other => {
+                        return Err(LowerError::MalformedInput(format!(
+                            "PushImmediate({other}) is reserved"
+                        )));
+                    }
+                };
+                let c = i64t.const_int(v as u64, true);
+                // **THE PACKED WIDTH, WHICH THIS ARM USED TO DROP.** An operand
+                // with no width cannot be placed in a composite body, so
+                // `let xs = [true, false]` compiled and was then REFUSED at
+                // `NewComposite` -- a loud refusal, but for a width the flat
+                // layout already fixes. `Bool` is one byte there, and an `Int`
+                // immediate is a `Word`, which is eight throughout this backend.
+                //
+                // Unit retains the legacy unknown width outside retcon. The
+                // coroutine scalar boundary explicitly represents Unit by zero
+                // bits and a zero-byte payload. None remains refused above.
+                //
+                // Safe to widen because the construction arm requires the
+                // operand widths to account for the baked `byte_size` EXACTLY,
+                // so a width that is wrong refuses rather than mispacking.
+                match *imm {
+                    0 if retcon || retcon_delegate => st.push_w(c, Width::Scalar(0)),
+                    1 | 2 => st.push_w(c, Width::Scalar(1)),
+                    4..=19 => st.push_w(c, Width::Scalar(8)),
+                    _ => st.push(c),
+                }
+            }
+            // `Loop` is a runtime no-op. Its operand is the exit index, carried
+            // for `Break` and `BreakIf`, and the block for it is created from
+            // those rather than from here.
+            Op::Loop(_) => {}
+            // The back edge, and the whole of the backward-jump problem. The
+            // header's depth was established when it was first entered by
+            // fall-through, so the back edge only has to AGREE with it, which is
+            // exactly what `note!` asserts.
+            Op::EndLoop(t) | Op::Break(t) => {
+                note!(*t as usize, st.depth);
+                st.b.build_unconditional_branch(blocks[&(*t as usize)])
+                    .unwrap();
+            }
+            Op::If(t) | Op::BreakIf(t)
+                if retcon_branches.is_some_and(|facts| facts.contains_key(&i)) =>
+            {
+                st.pop();
+                let value = retcon_branches.unwrap()[&i];
+                if value == matches!(op, Op::BreakIf(_)) {
+                    note!(*t as usize, st.depth);
+                    st.b.build_unconditional_branch(blocks[&(*t as usize)])
+                        .unwrap();
+                    dead = true;
+                }
+            }
+            Op::BreakIf(t) => {
+                let c = st.pop();
+                let nz =
+                    st.b.build_int_compare(IntPredicate::NE, c, i64t.const_zero(), "brknz")
+                        .unwrap();
+                let cont = ctx.append_basic_block(func, &format!("nobrk{i}"));
+                note!(*t as usize, st.depth);
+                st.b.build_conditional_branch(nz, blocks[&(*t as usize)], cont)
+                    .unwrap();
+                st.b.position_at_end(cont);
+            }
+            Op::If(t) => {
+                let c = st.pop();
+                let nz =
+                    st.b.build_int_compare(IntPredicate::NE, c, i64t.const_zero(), "nz")
+                        .unwrap();
+                let then_bb = ctx.append_basic_block(func, &format!("then{i}"));
+                note!(*t as usize, st.depth);
+                st.b.build_conditional_branch(nz, then_bb, blocks[&(*t as usize)])
+                    .unwrap();
+                st.b.position_at_end(then_bb);
+            }
+            Op::Else(t) => {
+                note!(*t as usize, st.depth);
+                st.b.build_unconditional_branch(blocks[&(*t as usize)])
+                    .unwrap();
+            }
+            Op::EndIf => {}
+            Op::Trap(kind) => {
+                if let Some(cell) = trap_code {
+                    st.b.build_store(cell, i64t.const_int(u64::from(*kind), false))
+                        .unwrap();
+                }
+                st.b.build_unconditional_branch(trap_bb).unwrap();
+            }
+            // A direct call to another chunk. Only reachable through
+            // `lower_module`, which declares every chunk up front; `lower_chunk`
+            // passes no callees and therefore refuses.
+            //
+            // The VM sets the callee's frame base to `stack.len() - arg_count`,
+            // so the arguments sit in DECLARATION order with the last argument
+            // on top. Popping yields them in reverse, hence the reversal below.
+            // Getting this backwards is invisible for a one-argument callee and
+            // for any callee whose arguments happen to be equal, which is most
+            // of the obvious test cases.
+            Op::Call(idx, arg_count) => {
+                let callee = callees.get(*idx as usize).copied().ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "Call({idx}, {arg_count}) needs the whole module; lower_module resolves \
+                         it, lower_chunk cannot"
+                    ))
+                })?;
+
+                // The VM tolerates an argument count below the callee's local
+                // count by filling the remainder with Unit. That is a distinct
+                // calling convention from a plain native call, so it is refused
+                // rather than approximated: an arity mismatch here would produce
+                // a call LLVM accepts and the VM does not agree with.
+                let suspending = coroutine::is_delegate(callee);
+                let declared = callee.count_params()
+                    - trailing_ptrs(&data)
+                    - u32::from(suspending)
+                    - u32::from(retcon_facts.is_some());
+                if u32::from(*arg_count) != declared {
+                    return Err(LowerError::MalformedInput(format!(
+                        "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
+                         declaring {declared} parameters; the VM's Unit-fill convention for a \
+                         short call is not lowered"
+                    )));
+                }
+
+                let call_ownership = retcon_facts.is_some().then(|| {
+                    let context =
+                        st.b.build_alloca(
+                            i64t.array_type((u32::from(*arg_count) + 1) * 3 + 1),
+                            "call_metadata",
+                        )
+                        .unwrap();
+                    for parameter in 0..usize::from(*arg_count) {
+                        let flag = st.owned_at(usize::from(*arg_count) - parameter - 1);
+                        let field = coroutine::ownership::field(&st.b, context, parameter);
+                        st.b.build_store(field, flag).unwrap();
+                        let slot = st.depth - usize::from(*arg_count) + parameter;
+                        for (part, value) in
+                            [(1, st.input_tags[slot]), (2, st.input_body_sizes[slot])]
+                        {
+                            let destination = coroutine::kinds::call_field(
+                                &st.b,
+                                context,
+                                usize::from(*arg_count) + 1,
+                                parameter,
+                                part,
+                            );
+                            st.b.build_store(destination, value).unwrap();
+                        }
+                    }
+                    st.b.build_store(
+                        coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
+                        i64t.const_zero(),
+                    )
+                    .unwrap();
+                    st.b.build_store(
+                        coroutine::ownership::trap_field(
+                            &st.b,
+                            context,
+                            usize::from(*arg_count) + 1,
+                        ),
+                        i64t.const_zero(),
+                    )
+                    .unwrap();
+                    context
+                });
+                let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
+                args.reverse();
+                // LLVM captures operands across delegated suspension. Body
+                // addresses retain VM aliasing semantics in the caller-owned
+                // regions, whose allocation confinement is checked separately.
+                // **CONVERTED TO THE CALLEE'S DECLARED PARAMETER TYPES.** The
+                // operand stack hands over an `i64` even when the value is a
+                // float's bit pattern, so a float parameter needs the bitcast here
+                // or LLVM sees a type mismatch — and, were the declaration `i64`
+                // on both sides, the callee would read the wrong register with no
+                // complaint from anything.
+                let callee_params = callee.get_type().get_param_types();
+                let mut args: Vec<inkwell::values::BasicMetadataValueEnum> = args
+                    .into_iter()
+                    .enumerate()
+                    .map(|(p, a)| match callee_params.get(p) {
+                        Some(t) if t.is_float_type() => {
+                            // Width-aware: a direct bitcast is legal only at
+                            // eight bytes, and the argument carries its value in
+                            // the low half of the operand at four.
+                            bits_to_float(&st.b, a, t.into_float_type(), float_bytes).into()
+                        }
+                        _ => a.into(),
+                    })
+                    .collect();
+                // Forward the shared buffer. Every function in a module with
+                // shared slots takes the trailing pointer, so a call that
+                // omitted it would pass garbage where the callee expects the
+                // host's buffer.
+                if let (Some(sb), Some(pb), Some(rb)) = (shared_base, private_base, region_base) {
+                    args.push(sb.into());
+                    args.push(pb.into());
+                    // **A disjoint region block per CALL SITE**, not the caller's
+                    // own base. Two calls to one callee otherwise write to the
+                    // same offsets and the first result is destroyed by the
+                    // second; `composite_return_aliasing.rs` pins that case.
+                    let off = call_regions
+                        .iter()
+                        .find(|(ip, _)| *ip == i)
+                        .map(|(_, o)| *o)
+                        .unwrap_or(0);
+                    if off == 0 {
+                        args.push(rb.into());
+                    } else {
+                        let base = unsafe {
+                            st.b.build_in_bounds_gep(
+                                i8t,
+                                rb,
+                                &[i64t.const_int(u64::from(off), false)],
+                                "callee_region",
+                            )
+                            .unwrap()
+                        };
+                        args.push(base.into());
+                    }
+                }
+
+                if let Some(context) = call_ownership {
+                    args.push(context.into());
+                }
+                if suspending {
+                    let context = delegate_context.ok_or_else(|| {
+                        LowerError::UnsupportedShape("suspending call outside a coroutine".into())
+                    })?;
+                    args.push(context.into());
+                }
+                let call = st.b.build_call(callee, &args, "call").unwrap();
+                // A callee that trapped returned early with its code in the
+                // context. Forward the code to this function's own trap block.
+                if let (Some(context), Some(cell)) = (call_ownership, trap_code) {
+                    let field = coroutine::ownership::trap_field(
+                        &st.b,
+                        context,
+                        usize::from(*arg_count) + 1,
+                    );
+                    let mark = coroutine::ownership::load(&st.b, field);
+                    let trapped =
+                        st.b.build_int_compare(
+                            IntPredicate::NE,
+                            mark,
+                            i64t.const_zero(),
+                            "callee_trapped",
+                        )
+                        .unwrap();
+                    let forward = ctx.append_basic_block(func, "forward_trap");
+                    let completed = ctx.append_basic_block(func, "call_completed");
+                    st.b.build_conditional_branch(trapped, forward, completed)
+                        .unwrap();
+                    st.b.position_at_end(forward);
+                    let code =
+                        st.b.build_int_sub(mark, i64t.const_int(1, false), "callee_trap")
+                            .unwrap();
+                    st.b.build_store(cell, code).unwrap();
+                    st.b.build_unconditional_branch(trap_bb).unwrap();
+                    st.b.position_at_end(completed);
+                }
+                let ret = match call.try_as_basic_value() {
+                    // A float RESULT comes back as a double and rejoins the
+                    // homogeneous operand stack as its bits, mirroring the
+                    // prologue.
+                    ValueKind::Basic(v) if v.is_float_value() => {
+                        float_to_bits(&st.b, v.into_float_value(), i64t, float_bytes)
+                    }
+                    ValueKind::Basic(v) => v.into_int_value(),
+                    ValueKind::Instruction(_) => {
+                        unreachable!("every lowered chunk returns a value, never void")
+                    }
+                };
+                // A DELEGATED suspension. The callee returned at its `Yield`, so
+                // this value is the yielded one and the host must see it now.
+                // The `PopN(1)` and `Reset` that follow are the virtual
+                // machine's bookkeeping for a frame this side has already left,
+                // and the loop's `dead` tracking skips them.
+                if delegated_call == Some(i) {
+                    build_typed_return(&st.b, func, ret);
+                } else {
+                    // **SEEDED FROM THE CALLEE'S DECLARED RETURN**, which is
+                    // exactly what the native arm does with `native_shapes`.
+                    //
+                    // Without this an `Op::Call` result was pushed at
+                    // [`Width::Unknown`] unconditionally, so a composite packing
+                    // a call result was refused for a width the module already
+                    // declares. `Module::signatures` is the same table the typed
+                    // verifier uses to seed a call's result.
+                    //
+                    // # This was written, reverted, and re-landed, on purpose
+                    //
+                    // It changes no corpus chunk — no shipped module packs a
+                    // call result into a composite — so for one increment
+                    // nothing in the tree could execute it, and it was reverted
+                    // rather than shipped unverified. It returns with
+                    // `module_source_differential.rs`, which runs a
+                    // multi-function program written inline against the
+                    // reference. **That test is refused for an unknown packed
+                    // width without this line**, so it fails if this is removed.
+                    //
+                    // An undeclared or unsizable return still yields `Unknown`
+                    // and still fails closed at the use.
+                    let sg_ret = chunk_signatures.get(usize::from(*idx)).map(|sg| &sg.ret);
+                    let w = width_of_declared_shape(sg_ret, float_bytes);
+                    // The KIND comes from the same declaration as the width, so a
+                    // float call result is operable rather than `Unknown` — the
+                    // caller-side twin of the parameter seeding in the prologue.
+                    // **Fixed joined Float here 2026-09-12.** The same
+                    // declaration carries both, and taking only the float half
+                    // left `id(a) % id(a)` lowering an `Op::Mod` that `a % b`
+                    // refuses.
+                    let k = if sg_ret.is_some_and(shape_is_float) {
+                        OperandKind::Float
+                    } else if sg_ret.is_some_and(shape_is_fixed) {
+                        OperandKind::Fixed
+                    } else {
+                        OperandKind::Unknown
+                    };
+                    let owned = call_ownership.map_or(i64t.const_zero(), |context| {
+                        coroutine::ownership::load(
+                            &st.b,
+                            coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
+                        )
+                    });
+                    let (w, k) = if let Some(context) = call_ownership {
+                        let flags = st.runtime_kinds.as_ref().unwrap();
+                        let count = usize::from(*arg_count) + 1;
+                        for (part, destination) in
+                            [(1, flags.slots[st.depth]), (2, flags.slot_sizes[st.depth])]
+                        {
+                            let source = coroutine::kinds::call_field(
+                                &st.b,
+                                context,
+                                count,
+                                usize::from(*arg_count),
+                                part,
+                            );
+                            st.b.build_store(
+                                destination,
+                                coroutine::ownership::load(&st.b, source),
+                            )
+                            .unwrap();
+                        }
+                        let output = &retcon_facts.unwrap()[&i].outputs[0];
+                        (output.width, coroutine::types::operand_kind(output.tag))
+                    } else {
+                        (w, k)
+                    };
+                    st.push_owned(ret, w, k, owned);
+                }
+            }
+            // A call out to a host-registered native, as a direct call to an
+            // external symbol.
+            //
+            // # The argument-count byte is NOT a count
+            //
+            // Its high bit is the B35 P7 error-reify flag, and a site carrying it
+            // pushes TWO slots, the value or a host error code and then a flag,
+            // rather than one. Reading the byte as a count would both call with
+            // 128 too many arguments and leave the operand stack one slot short
+            // at every such site. The flag was refused while no corpus site set
+            // it. Since absorption 88 every compiled site sets it, and it is
+            // lowered as described below.
+            //
+            // # Why the result is pushed with an UNKNOWN width
+            //
+            // `Module::native_return_shapes` records `WireShape::Top` for a
+            // native declared without a resolving `use ... -> R` signature, and
+            // **zero of the 999 call sites in the corpus have anything else**. A
+            // design that refused an unknown return shape would lower none of
+            // them. `push` defaults to `Width::Unknown`, which fails closed at a
+            // USE of the width rather than at the call, and that is sound here
+            // for a reason the corpus shows directly: there are 1643 `PopN`
+            // against those 999 calls, so the results are overwhelmingly
+            // discarded, and a width that is never used is never needed.
+            //
+            // # Argument order
+            //
+            // `Vm::run` does `stack.drain(len - n..)`, so the native receives its
+            // arguments in DECLARATION order with the last on top of the stack.
+            // Popping yields them reversed, hence the reversal — the same trap
+            // the `Op::Call` arm above documents, and just as invisible for a
+            // one-argument native or one whose arguments happen to be equal.
+            // Sixty-eight of the corpus sites take one argument.
+            //
+            // # The reify flag, which every call carries since absorption 88
+            //
+            // The reference compiler reifies every native call: the flag pushes
+            // the value and a flag of zero on success, or the host's code and a
+            // flag of one on a soft host failure, and a bare call follows with a
+            // flag test and `Trap(HostError)`.
+            //
+            // **A native is infallible unless the host contract says otherwise.**
+            // An ordinary native is `i64 f(i64...)` and cannot report a soft
+            // failure, so its reified call pushes the result and a constant zero
+            // flag, and the trap arm lowers and is never taken. Since Order 4 a
+            // coroutine's `HostContracts::fallible_natives` names natives whose
+            // symbol is `{i64, i64} f(i64...)`, value then failure word, and their
+            // flag is the host's own. A coroutine reports the resulting default
+            // `Trap(HostError)` to its host. Outside a coroutine there is no
+            // contract and every native stays infallible.
+            Op::CallVerifiedNative(idx, n) | Op::CallExternalNative(idx, n) => {
+                let reified = n & 0x80 != 0;
+                let argc = usize::from(n & 0x7F);
+                let fallible = retcon_fallible_natives.is_some_and(|set| set.contains(idx));
+                if fallible && !reified {
+                    return Err(LowerError::UnsupportedShape(format!(
+                        "native #{idx} is declared fallible but this call site does not reify \
+                         its outcome, so a failure would have no destination"
+                    )));
+                }
+                let pair = ctx.struct_type(&[i64t.into(), i64t.into()], false);
+                let name = natives.get(usize::from(*idx)).ok_or_else(|| {
+                    LowerError::MalformedInput(format!(
+                        "native call #{idx} indexes a native table of {} entries; \
+                         lower_module resolves it, lower_chunk cannot",
+                        natives.len()
+                    ))
+                })?;
+                let sym = native_symbol(name);
+
+                // Reuse an existing declaration, as `yield_hook` and
+                // `trap_declaration` do, since a second chunk calling the same
+                // native must not redeclare it. An arity disagreement between
+                // two sites is refused: LLVM would accept the call and the host
+                // would read a garbage argument.
+                let f = match module.get_function(&sym) {
+                    Some(f) => {
+                        let declared = f.count_params() as usize;
+                        if declared != argc {
+                            return Err(LowerError::MalformedInput(format!(
+                                "native `{name}` is called with {argc} arguments \
+                                 here and {declared} at an earlier site; the \
+                                 lowering refuses rather than emitting a call \
+                                 whose arity disagrees with its declaration"
+                            )));
+                        }
+                        f
+                    }
+                    None => {
+                        let params: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                            (0..argc).map(|_| i64t.into()).collect();
+                        let ty = if fallible {
+                            pair.fn_type(&params, false)
+                        } else {
+                            i64t.fn_type(&params, false)
+                        };
+                        module.add_function(&sym, ty, None)
+                    }
+                };
+
+                let mut args: Vec<_> = (0..argc).map(|_| st.pop()).collect();
+                args.reverse();
+                let args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    args.into_iter().map(|a| a.into()).collect();
+
+                let returned = match st
+                    .b
+                    .build_call(f, &args, "native")
+                    .unwrap()
+                    .try_as_basic_value()
+                {
+                    ValueKind::Basic(v) => v,
+                    ValueKind::Instruction(_) => {
+                        unreachable!("every native is declared returning a value, never void")
+                    }
+                };
+                // Any nonzero failure word is a failure, as any `Err` is in the
+                // virtual machine. The flag the compiler tests is exactly one.
+                let (ret, failed) = if fallible {
+                    let outcome = returned.into_struct_value();
+                    let value =
+                        st.b.build_extract_value(outcome, 0, "native_value")
+                            .unwrap()
+                            .into_int_value();
+                    let word =
+                        st.b.build_extract_value(outcome, 1, "native_failed")
+                            .unwrap()
+                            .into_int_value();
+                    let failed =
+                        st.b.build_int_compare(IntPredicate::NE, word, i64t.const_zero(), "failed")
+                            .unwrap();
+                    let flag = st.b.build_int_z_extend(failed, i64t, "host_flag").unwrap();
+                    (value, flag)
+                } else {
+                    (returned.into_int_value(), i64t.const_zero())
+                };
+                // Take the declared return shape when the module carries one.
+                // `Top`, an absent entry, and a shape this backend does not
+                // model all fall back to `Width::Unknown`, which fails closed at
+                // a USE rather than here — the behaviour every unsignatured
+                // native still gets, and that is all of them in the shipped
+                // corpus today.
+                let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)), float_bytes);
+                if retcon_resume_type.is_some() && matches!(w, Width::Body(_)) {
+                    let contract = retcon_native_bodies
+                        .and_then(|contracts| contracts.get(idx))
+                        .ok_or_else(|| {
+                            LowerError::UnsupportedShape(
+                                "a native body return has no host-value ownership contract".into(),
+                            )
+                        })?;
+                    let owned = i64t.const_int(
+                        u64::from(*contract == coroutine::NativeBodyReturn::Snapshot),
+                        false,
+                    );
+                    st.push_owned(ret, w, OperandKind::Int, owned);
+                } else {
+                    st.push_w(ret, w);
+                }
+                if reified {
+                    st.push_w(failed, Width::Scalar(8));
+                }
+            }
+            // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
+            // **That invariant is what makes `ByteToWord` free**, and it is the
+            // representation the reference implementation already implies: the
+            // `v0.2.3` session measured that `Byte as Word` zero-extends, so
+            // `0xFF` reads as `255` rather than `-1`.
+            //
+            // Every producer of a `Byte` must maintain the invariant. Today the
+            // only one is `WordToByte` below, which masks. The unchecked
+            // arithmetic opcodes would be the others, and they remain
+            // unsupported for an unrelated reason recorded in the inventory:
+            // `Op::Add` cannot be lowered without knowing whether its operands
+            // are `Byte` or `Fixed`, and the opcode does not say.
+            // **THE GENERIC ARITHMETIC SURFACE: `Byte` and `Fixed` only.**
+            //
+            // These were recorded for a long time as blocked on the operator's
+            // float representation. **They were not.** `Op::Add` is emitted for
+            // `Byte`, `Fixed` AND `Float` -- three types, where two separate
+            // records each named two and disagreed. `Fixed` arithmetic is a
+            // plain wrapping `i64` operation because the format is
+            // scale-independent; `Byte` is the same operation plus a mask to
+            // eight bits. **Only `Float` needs a representation this backend
+            // lacks**, and the module-level guard now excludes it by every route
+            // it can take, tested per route in `float_guard_routes.rs`.
+            //
+            // Semantics taken from the virtual machine, not assumed:
+            // `binary_arith` computes a `Byte` in `i64` and masks with `& 0xFF`;
+            // `Fixed` is `wrapping_add`/`wrapping_sub` on the underlying bits.
+            // LLVM's `add`/`sub`/`mul` wrap by default (no `nsw`), which is the
+            // matching behaviour.
+            //
+            // **WIDTH IS THE DISCRIMINATOR AND IT REFUSES WHEN UNSURE.** A
+            // `GetLocal` carries a signature-derived width only where the chunk
+            // never writes that local; anything written is `Unknown`. An unknown
+            // or mismatched pair is REFUSED rather than guessed, which costs
+            // coverage and cannot mispack -- the same trade the composite
+            // packing already makes.
+            // **The two conversions, which are what makes a float REACHABLE.**
+            //
+            // The operand stack is homogeneous `i64`, so a float lives on it as
+            // its bit pattern and the `OperandKind` tag says so. `IntToFloat`
+            // converts a real integer to a real double and stores the bits;
+            // `FloatToInt` reads the bits back as a double and truncates toward
+            // zero, which is what `as Word` means on the reference side.
+            Op::IntToFloat | Op::FloatToInt => {
+                if !float_width_lowered(float_bytes) {
+                    return Err(LowerError::unsupported_float_width(
+                        float_bytes,
+                        format!(
+                            "{op:?} at a float width of {float_bytes} bytes; only 4 and 8 \
+                         are lowered, and another width is refused rather than \
+                         approximated"
+                        ),
+                    ));
+                }
+                let f64t = float_type(ctx, float_bytes);
+                // **Read the kind BEFORE popping.** `pop` lowers the depth and
+                // `kind_at` is relative to it, so checking after the pop asks
+                // about the wrong operand — or about an empty stack. The same
+                // rule is written at `SetLocal`, and this arm broke it.
+                let operand_kind = st.kind_at(0);
+                let v = st.pop();
+                if matches!(op, Op::IntToFloat) {
+                    let f = st.b.build_signed_int_to_float(v, f64t, "sitofp").unwrap();
+                    let bits = float_to_bits(&st.b, f, i64t, float_bytes);
+                    st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
+                } else {
+                    // **REFUSED unless the operand is KNOWN to be a float.** A
+                    // bitcast of an integer's bits to a double is a silently
+                    // wrong number, so an unknown or integer kind fails closed
+                    // here rather than reinterpreting.
+                    if operand_kind != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            "FloatToInt",
+                            format!(
+                                "operand kind is {operand_kind:?}, not Float. \
+                                 Reading an integer's bits as a double would be a \
+                                 silently wrong number rather than a fault"
+                            ),
+                        ));
+                    }
+                    let f = bits_to_float(&st.b, v, f64t, float_bytes);
+                    // **SATURATING, via the intrinsic, NOT `fptosi`.**
+                    //
+                    // The reference converts with Rust's `as`, which SATURATES:
+                    // NaN gives 0, and out-of-range gives `i64::MIN`/`MAX`.
+                    // LLVM's plain `fptosi` is **poison** for those inputs, so
+                    // the two agree only by whatever the target happens to do.
+                    //
+                    // **Measured: they DO agree on aarch64**, whose `fcvtzs`
+                    // saturates — and that is exactly the problem. On x86-64
+                    // `cvttsd2si` yields the integer-indefinite value
+                    // (`i64::MIN`) for every out-of-range input, so `+inf` would
+                    // give `MIN` where the reference gives `MAX`, and NaN would
+                    // give `MIN` where the reference gives 0.
+                    //
+                    // `llvm.fptosi.sat` is DEFINED to saturate on every target
+                    // and is the intrinsic Rust itself lowers `as` to, so this
+                    // matches the reference by construction rather than by
+                    // hardware accident. **Reachable today** through a runtime
+                    // out-of-range multiply, and more so once division lands.
+                    let sat = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat")
+                        .expect("llvm.fptosi.sat must exist");
+                    let decl = sat
+                        .get_declaration(module, &[i64t.into(), f64t.into()])
+                        .expect("fptosi.sat declaration");
+                    let i =
+                        st.b.build_call(decl, &[f.into()], "fptosisat")
+                            .unwrap()
+                            .try_as_basic_value();
+                    let i = match i {
+                        ValueKind::Basic(v) => v.into_int_value(),
+                        _ => {
+                            return Err(LowerError::Internal(String::from(
+                                "llvm.fptosi.sat returned no value, which is a \
+                                 defect in this crate rather than in the input",
+                            )));
+                        }
+                    };
+                    st.push_w(i, Width::Scalar(8));
+                }
+            }
+            Op::Add | Op::Sub | Op::Mul => {
+                // **FLOAT DISPATCH COMES FIRST, and it is decided by KIND.**
+                // `Op::Add` is emitted for `Byte`, `Fixed` AND `Float`, and a
+                // width cannot separate the third: a float and a word are both
+                // eight bytes. If EITHER operand is a float, BOTH must be, or
+                // the pair is refused — a mixed pair would mean bitcasting an
+                // integer's bits to a double, which is a silently wrong number.
+                let (kl, kr) = (st.kind_at(1), st.kind_at(0));
+                if kl == OperandKind::Float || kr == OperandKind::Float {
+                    if !float_width_lowered(float_bytes) {
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float arithmetic at a float width of {float_bytes} \
+                             bytes; only 4 and 8 are lowered"
+                            ),
+                        ));
+                    }
+                    if kl != OperandKind::Float || kr != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            "Add",
+                            format!(
+                                "{op:?} with operand kinds {kl:?} and {kr:?}: one \
+                                 side is a float and the other is not, so no \
+                                 lowering is correct for both. Refused rather \
+                                 than reinterpreted"
+                            ),
+                        ));
+                    }
+                    let f64t = float_type(ctx, float_bytes);
+                    let rhs_bits = st.pop();
+                    let lhs_bits = st.pop();
+                    let l = bits_to_float(&st.b, lhs_bits, f64t, float_bytes);
+                    let r = bits_to_float(&st.b, rhs_bits, f64t, float_bytes);
+                    let res = match op {
+                        Op::Add => st.b.build_float_add(l, r, "fadd").unwrap(),
+                        Op::Sub => st.b.build_float_sub(l, r, "fsub").unwrap(),
+                        _ => st.b.build_float_mul(l, r, "fmul").unwrap(),
+                    };
+                    let bits = float_to_bits(&st.b, res, i64t, float_bytes);
+                    st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
+                } else {
+                    let (wl, wr) = (st.width_at(1), st.width_at(0));
+                    // `Op::Mul` on `Fixed` does not exist: the compiler emits
+                    // `Op::FixedMul(n)` for it. Admitting an eight-byte operand here
+                    // would add a lowering arm for a case that cannot occur, which
+                    // is untested code that looks tested.
+                    let byte_only = matches!(op, Op::Mul);
+                    let out = arith_result_width(wl, wr, byte_only).ok_or_else(|| {
+                        LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
+                         lowers the generic arithmetic surface only for a matched \
+                         Byte pair (1 byte each) or, for Add and Sub, a matched \
+                         Fixed pair (8 bytes each). Refusing rather than guessing, \
+                         since a wrong choice here is a silent wrong answer"
+                            ),
+                        )
+                    })?;
+                    // A `Fixed` operand makes the result `Fixed`; see
+                    // `arith_result_kind`. Read BEFORE the pops, which discard
+                    // the kinds along with the values.
+                    let rk = arith_result_kind(kl, kr);
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let raw = match op {
+                        Op::Add => st.b.build_int_add(lhs, rhs, "gadd").unwrap(),
+                        Op::Sub => st.b.build_int_sub(lhs, rhs, "gsub").unwrap(),
+                        _ => st.b.build_int_mul(lhs, rhs, "gmul").unwrap(),
+                    };
+                    st.push_k(mask_if_byte(&st.b, i64t, raw, out), out, rk);
+                }
+            }
+            // The unary half of the same surface. The virtual machine negates a
+            // `Byte` with `u8::wrapping_neg`, which is `(-a) & 0xFF`, and a
+            // `Fixed` with `i64::wrapping_neg`.
+            Op::Neg => {
+                // **Float negation is `fneg`.** The reference's `Op::Neg` arm
+                // handles `Byte`, `Fixed` AND `Float`, negating a float with a
+                // plain `-x`. Without this branch the width-based path below
+                // would either refuse it or, worse, negate the bit pattern as an
+                // integer — which flips the sign bit of the mantissa's neighbour
+                // rather than the number.
+                if st.kind_at(0) == OperandKind::Float {
+                    if !float_width_lowered(float_bytes) {
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float negation at a float width of {float_bytes} \
+                             bytes; only 4 and 8 are lowered"
+                            ),
+                        ));
+                    }
+                    let f64t = float_type(ctx, float_bytes);
+                    let bits = st.pop();
+                    let f = bits_to_float(&st.b, bits, f64t, float_bytes);
+                    let n = st.b.build_float_neg(f, "fneg").unwrap();
+                    // **THROUGH `float_to_bits`, NOT A RAW BITCAST.**
+                    //
+                    // This arm open-coded `build_bit_cast(n, i64t)`, which is
+                    // correct for an eight-byte float and **INVALID IR for a
+                    // four-byte one**: `bitcast float to i64` changes the bit
+                    // width. Under `narrow-float-32`, `-(x as Float)` therefore
+                    // produced a module that failed `lm.verify()` — float
+                    // negation was broken outright in a supported configuration.
+                    //
+                    // Every other float path already routed through the helper,
+                    // which narrows to `i32` first and then extends. **This arm
+                    // was the one that duplicated the conversion instead of
+                    // calling it**, which is why it was the one that drifted.
+                    let out = float_to_bits(&st.b, n, i64t, float_bytes);
+                    st.push_k(out, Width::Scalar(float_bytes), OperandKind::Float);
+                } else {
+                    let w = st.width_at(0);
+                    let out = arith_result_width(w, w, false).ok_or_else(|| {
+                        LowerError::unsupported_op(
+                            "Neg",
+                            format!(
+                                "Neg with operand width {w:?}: lowered only for a Byte (1 \
+                         byte) or a Fixed (8 bytes) operand, and refused rather \
+                         than guessed otherwise"
+                            ),
+                        )
+                    })?;
+                    // Negation preserves the scale; see `arith_result_kind`.
+                    let nk = st.kind_at(0);
+                    let v = st.pop();
+                    let raw = st.b.build_int_neg(v, "gneg").unwrap();
+                    st.push_k(mask_if_byte(&st.b, i64t, raw, out), out, nk);
+                }
+            }
+            Op::WordToByte => {
+                let v = st.pop();
+                let m =
+                    st.b.build_and(v, i64t.const_int(0xFF, false), "tobyte")
+                        .unwrap();
+                st.push_w(m, Width::Scalar(1));
+            }
+            // A no-op, and deliberately written as one rather than as a
+            // redundant mask. If it ever needs to do work, the representation
+            // invariant above has been broken somewhere else and masking here
+            // would hide that rather than fix it.
+            //
+            // **It is a no-op in VALUE and not in WIDTH.** The bits are already
+            // correct, but the operand now packs into eight bytes rather than
+            // one. Leaving the old label would pack a `Word` into a single byte
+            // and silently truncate it, with every later field offset still
+            // looking right — so the relabel is the whole content of this arm.
+            Op::ByteToWord => st.set_top_width(Width::Scalar(8)),
+            // Peek-and-trap. **`BoundsCheck` does NOT pop**; the VM reads
+            // `stack.last()` and leaves the operand in place for the indexing
+            // opcode that follows. A lowering that consumed it would corrupt
+            // every subsequent slot, and the differential oracle would show it
+            // as a wrong value rather than as a stack error.
+            //
+            // One UNSIGNED compare covers both failure directions. The VM
+            // rejects `value < 0 || value >= bound`; reinterpreting a negative
+            // `i64` as unsigned makes it enormous, so `uge bound` catches the
+            // negative case in the same instruction. `bound` is a `u16`, so it
+            // can never itself be large enough to make that reinterpretation
+            // ambiguous.
+            //
+            // **TOTAL SINCE ABSORPTION 82.** The opcode no longer faults. It
+            // keeps the index and appends the bound limbs and a flag, and the
+            // compiler dispatches a set flag to `Trap(IndexOutOfBounds)`, which
+            // is where the fault now happens, natively as in the reference.
+            Op::BoundsCheck(bound) => {
+                let v = st.peek();
+                let bad =
+                    st.b.build_int_compare(
+                        IntPredicate::UGE,
+                        v,
+                        i64t.const_int(u64::from(*bound), false),
+                        "oob",
+                    )
+                    .unwrap();
+                st.push_bound_outcome(i64t.const_int(u64::from(*bound), false), bad);
+            }
+            // Data-segment access, shared and private.
+            //
+            // SHARED slots decode a host-owned byte buffer whose encoding is
+            // part of the wire format: a layout table gives each slot an offset
+            // and a kind tag, and scalars are stored little-endian there.
+            //
+            // PRIVATE slots use a flat word array of this backend's own
+            // choosing, at `PRIVATE_SLOT_BYTES` per slot indexed from the
+            // private boundary. That is legitimate because private storage is
+            // unreachable from outside a running program, so no external
+            // consumer can observe the layout, and the only quantity crossing
+            // the boundary is the region size.
+            //
+            // A private ARRAY is not a composite here. The compiler expands
+            // `h.a: [Word; 4]` into four consecutive scalar slots named
+            // `h.a[0]` through `h.a[3]`, so an indexed access is `base + index`
+            // in slot space and needs no stride table.
+            Op::GetData(_)
+            | Op::SetData(_)
+            | Op::GetDataIndexed(_, _)
+            | Op::SetDataIndexed(_, _) => {
+                let (slot, indexed, bound) = match op {
+                    Op::GetData(s) | Op::SetData(s) => (*s, false, 0u32),
+                    Op::GetDataIndexed(b, n) | Op::SetDataIndexed(b, n) => (*b, true, *n),
+                    _ => unreachable!("the outer match restricts this set"),
+                };
+                let is_read = matches!(op, Op::GetData(_) | Op::GetDataIndexed(_, _));
+                if !data.has_data {
+                    return Err(LowerError::UnsupportedDataSlot {
+                        slot,
+                        why: String::from(
+                            "no data layout is visible; lower_chunk receives one chunk and cannot \
+                             see the module's layout table",
+                        ),
+                    });
+                }
+
+                // **THE INDEXED FORMS ARE TOTAL SINCE ABSORPTION 82.** A read
+                // pops a fallback above its index and yields the fallback for an
+                // out-of-range index. A write performs no store for one. Both
+                // then push the index, the bound limbs and a flag, and the
+                // compiler dispatches a set flag to `Trap(IndexOutOfBounds)`.
+                //
+                // **The access below always uses an IN-RANGE index.** An
+                // out-of-range one is replaced by element zero for the read,
+                // whose result the select afterwards discards, and the write is
+                // branched around entirely. So no route below can address
+                // outside the declared span, which is what the trap used to
+                // guarantee. A zero-length span has no element zero, so it is
+                // refused. The compiler emits none.
+                //
+                // An indexed access pops its index first, and for a write the
+                // VM pops the index BEFORE the value, so the value is beneath
+                // it on the stack. A read's fallback sits above its index.
+                if indexed && bound == 0 {
+                    return Err(LowerError::UnsupportedDataSlot {
+                        slot,
+                        why: String::from(
+                            "an indexed access over a zero-length span has no in-range \
+                             element to address; every index takes the fallback",
+                        ),
+                    });
+                }
+                // **THE FALLBACK'S KIND IS NOT THE VALUE'S KIND, AND THAT IS
+                // CHECKED HERE RATHER THAN ASSUMED.** The value below keeps the
+                // slot's width and kind. The compiler's fallback is Unit for
+                // every element other than Word and Byte, so that label is
+                // right only where a Unit fallback is never observed. The bare
+                // read guarantees it, since the next four instructions send a
+                // set flag to `Trap(IndexOutOfBounds)`. Any other shape with a
+                // Unit fallback is refused, because a consumer of the label
+                // would compute where the reference faults.
+                if indexed
+                    && is_read
+                    && matches!(chunk.ops.get(i.wrapping_sub(1)), Some(Op::PushImmediate(0)))
+                {
+                    let one = |k: &u16| {
+                        matches!(
+                            chunk.constants.get(usize::from(*k)),
+                            Some(ConstValue::Int(1))
+                        )
+                    };
+                    let trap = keleusma::bytecode::TrapKind::IndexOutOfBounds.code();
+                    let guarded = matches!(
+                        chunk.ops.get(i + 1..i + 5),
+                        Some([Op::Const(k), Op::CmpEq, Op::If(_), Op::Trap(t)]) if one(k) && *t == trap
+                    );
+                    if !guarded {
+                        return Err(LowerError::UnsupportedDataSlot {
+                            slot,
+                            why: String::from(
+                                "an indexed read with a Unit fallback that is not followed by \
+                                 the bare bounds trap, so the fallback could reach a consumer \
+                                 that would be handed the slot's kind",
+                            ),
+                        });
+                    }
+                }
+                let fallback = if indexed && is_read {
+                    Some(st.pop())
+                } else {
+                    None
+                };
+                let raw_index = if indexed { Some(st.pop()) } else { None };
+                let out_of_range = raw_index.map(|ix| {
+                    st.b.build_int_compare(
+                        IntPredicate::UGE,
+                        ix,
+                        i64t.const_int(u64::from(bound), false),
+                        "dataoob",
+                    )
+                    .unwrap()
+                });
+                let index = match (raw_index, out_of_range) {
+                    (Some(ix), Some(bad)) => Some(
+                        st.b.build_select(bad, i64t.const_zero(), ix, "data_index")
+                            .unwrap()
+                            .into_int_value(),
+                    ),
+                    _ => None,
+                };
+                let write_done = match out_of_range {
+                    Some(bad) if !is_read => {
+                        let store = ctx.append_basic_block(func, "data_write");
+                        let done = ctx.append_basic_block(func, "data_write_done");
+                        st.b.build_conditional_branch(bad, done, store).unwrap();
+                        st.b.position_at_end(store);
+                        Some(done)
+                    }
+                    _ => None,
+                };
+                'access: {
+                    // ⚠ **A COMPOSITE DATA SLOT IS REFUSED, AND THIS CLOSES A
+                    // SILENT MISCOMPILATION RATHER THAN A GAP.**
+                    //
+                    // Every route below is ONE WORD: a load or a store of `i64`.
+                    // For a flat composite the operand is the ADDRESS of a body in
+                    // the ephemeral region, so the write stored a pointer where the
+                    // runtime copies bytes into the persistent composite pool — and
+                    // the read handed back a pointer into a region later iterations
+                    // overwrite.
+                    //
+                    // **It agreed with the runtime by luck wherever it was tested.**
+                    // `14_frame_log.kel` reads its slot in the same iteration that
+                    // wrote it, and the aliased bytes still hold the right values
+                    // there. The shape that separates a copy from an alias --
+                    // storing on one loop iteration, then rebuilding the SAME site
+                    // twice more, then reading back -- yields `0` on the runtime and
+                    // `2` here. See `private_slot_composite.rs`.
+                    //
+                    // **Two checks, because they see different things.** The
+                    // operand's width catches a composite going IN, including
+                    // through a shared slot; the module's own
+                    // `private_composite_layout` catches a composite coming OUT,
+                    // where no operand exists yet to have a width.
+                    //
+                    // **Refusing, not copying.** The correct lowering copies
+                    // `byte_size` bytes to the pool offset the table names, but the
+                    // pool's base in this ABI is not pinned against the runtime yet,
+                    // and guessing it would put a wrong answer where a refusal
+                    // belongs. That is the next increment, not this one.
+                    // **THE PERSISTENT COMPOSITE POOL.** A slot the module declares
+                    // as a flat composite is a BODY, not a word: the write copies
+                    // `size` bytes into the pool and the read hands back the pool
+                    // address, so the value survives `Op::Reset` in place exactly as
+                    // the runtime's copy does.
+                    //
+                    // The extent is derived from the module's own table and the
+                    // derivation is validated — see `private_composite_extent`.
+                    if data
+                        .private_composite_slots
+                        .iter()
+                        .any(|p| u32::from(p.slot) == slot)
+                    {
+                        // **INDEXED IS REFUSED, NOT EXTRAPOLATED.** An array of
+                        // composites gives every element slot its own entry, so
+                        // `base + index * size` needs the stride proven uniform
+                        // across the range first. No corpus module declares one, so
+                        // there is no subject to prove it against, and lowering it on
+                        // the strength of the direct case is how a differential
+                        // returns a wrong answer instead of a refusal.
+                        //
+                        // **INDEXED IS NOW LOWERED, with the stride VALIDATED across
+                        // the declared range** rather than extrapolated from the
+                        // direct case. The bound is the instruction's own operand and
+                        // the unsigned check against it was already emitted above, so
+                        // `index` here is in range.
+                        let (pool_off, size) = if indexed {
+                            indexed_composite_extent(&data, slot, bound)?
+                        } else {
+                            private_composite_extent(&data, slot)?
+                        };
+                        let base = private_base.expect("has_data implies the private pointer");
+                        // The element offset: constant for a direct access, and
+                        // `first + index * size` for an indexed one, where `index`
+                        // has already been bounds-checked against the declared count.
+                        let byte_off = match index {
+                            None => i64t.const_int(u64::from(pool_off), false),
+                            Some(ix) => {
+                                st.b.build_int_add(
+                                    i64t.const_int(u64::from(pool_off), false),
+                                    st.b.build_int_mul(
+                                        ix,
+                                        i64t.const_int(u64::from(size), false),
+                                        "poolstride",
+                                    )
+                                    .unwrap(),
+                                    "pooloff",
+                                )
+                                .unwrap()
+                            }
+                        };
+                        let addr = unsafe {
+                            st.b.build_in_bounds_gep(i8t, base, &[byte_off], "poolptr")
+                                .unwrap()
+                        };
+                        // **THE INITIALISATION WORD FOR THIS SLOT.**
+                        //
+                        // A composite slot's load-time value is `Unit`. A body
+                        // consumer faults on an unwritten slot. The legacy route
+                        // guards eagerly here. Coroutines preserve Unit on reads
+                        // and defer the fault to the consumer. The pool is
+                        // bytes, so zeros are indistinguishable from a written body of
+                        // zeros, and this backend answered `0` where the reference
+                        // faulted — measured on a slot written on one branch and read
+                        // on the other. The flag is a word OUTSIDE the body, because a
+                        // sentinel compared against the body would fault on a
+                        // legitimate body that happened to equal it.
+                        let init_index = data
+                            .private_composite_slots
+                            .iter()
+                            .position(|p| u32::from(p.slot) == slot)
+                            .expect("the slot was just found in this table");
+                        // **THE FLAG MOVES WITH THE ELEMENT.** Each element slot has
+                        // its own pool entry and therefore its own word; using the
+                        // base slot's would let one written element make every
+                        // sibling read as written.
+                        let init_byte = match index {
+                            None => i64t.const_int(
+                                u64::from(data.composite_init_off) + (init_index as u64) * 8,
+                                false,
+                            ),
+                            Some(ix) => {
+                                st.b.build_int_add(
+                                    i64t.const_int(
+                                        u64::from(data.composite_init_off)
+                                            + (init_index as u64) * 8,
+                                        false,
+                                    ),
+                                    st.b.build_int_mul(ix, i64t.const_int(8, false), "initstride")
+                                        .unwrap(),
+                                    "initoff",
+                                )
+                                .unwrap()
+                            }
+                        };
+                        let init_ptr = unsafe {
+                            st.b.build_in_bounds_gep(i8t, base, &[init_byte], "initp")
+                                .unwrap()
+                        };
+                        if is_read && st.runtime_kinds.is_none() {
+                            // **FAULT WHERE THE REFERENCE FAULTS.** One load and one
+                            // compare, both at fixed offsets, so the worst-case cost
+                            // moves by a constant and nothing dynamic is introduced.
+                            let flag =
+                                st.b.build_load(i64t, init_ptr, "initflag")
+                                    .unwrap()
+                                    .into_int_value();
+                            let cont = ctx.append_basic_block(func, "slotinit");
+                            let bad =
+                                st.b.build_int_compare(
+                                    IntPredicate::EQ,
+                                    flag,
+                                    i64t.const_zero(),
+                                    "uninitslot",
+                                )
+                                .unwrap();
+                            // An out-of-range index reads no slot in the reference,
+                            // so element zero's flag must not fault on its behalf.
+                            let bad = match out_of_range {
+                                Some(oob) => {
+                                    let in_range = st.b.build_not(oob, "data_in_range").unwrap();
+                                    st.b.build_and(bad, in_range, "uninit_in_range").unwrap()
+                                }
+                                None => bad,
+                            };
+                            st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+                            st.b.position_at_end(cont);
+                        }
+                        let scalar_ptr = if st.runtime_kinds.is_some() {
+                            let relative =
+                                i64t.const_int(u64::from(slot - data.shared_count), false);
+                            let relative = index.map_or(relative, |ix| {
+                                st.b.build_int_add(relative, ix, "private_value_index")
+                                    .unwrap()
+                            });
+                            let offset =
+                                st.b.build_int_mul(
+                                    relative,
+                                    i64t.const_int(8, false),
+                                    "private_value_offset",
+                                )
+                                .unwrap();
+                            Some(unsafe {
+                                st.b.build_in_bounds_gep(
+                                    i8t,
+                                    base,
+                                    &[offset],
+                                    "private_value_pointer",
+                                )
+                                .unwrap()
+                            })
+                        } else {
+                            None
+                        };
+                        if is_read {
+                            // The pool address IS the body, so it is pushed as a
+                            // `Body` at the derived size: every downstream field and
+                            // element offset is then bounded by the same figure the
+                            // write was.
+                            let as_int = st.b.build_ptr_to_int(addr, i64t, "poolint").unwrap();
+                            let width = retcon_facts
+                                .map_or(Width::Body(size), |facts| facts[&i].outputs[0].width);
+                            let mut value = as_int;
+                            if let Some(flags) = &st.runtime_kinds {
+                                let metadata =
+                                    st.b.build_load(i64t, init_ptr, "private_body_metadata")
+                                        .unwrap()
+                                        .into_int_value();
+                                let tag =
+                                    st.b.build_and(
+                                        metadata,
+                                        i64t.const_int(0xffff, false),
+                                        "private_body_kind",
+                                    )
+                                    .unwrap();
+                                let bytes =
+                                    st.b.build_right_shift(
+                                        metadata,
+                                        i64t.const_int(32, false),
+                                        false,
+                                        "private_body_size",
+                                    )
+                                    .unwrap();
+                                let tag =
+                                    st.b.build_select(
+                                        st.b.build_int_compare(
+                                            IntPredicate::EQ,
+                                            tag,
+                                            i64t.const_zero(),
+                                            "private_unwritten",
+                                        )
+                                        .unwrap(),
+                                        i64t.const_int(u64::from(coroutine::types::UNIT), false),
+                                        tag,
+                                        "private_actual_kind",
+                                    )
+                                    .unwrap()
+                                    .into_int_value();
+                                let scalar = st
+                                    .b
+                                    .build_load(i64t, scalar_ptr.unwrap(), "private_scalar_bits")
+                                    .unwrap()
+                                    .into_int_value();
+                                let body =
+                                    st.b.build_int_compare(
+                                        IntPredicate::UGE,
+                                        tag,
+                                        i64t.const_int(u64::from(coroutine::types::TUPLE), false),
+                                        "private_is_body",
+                                    )
+                                    .unwrap();
+                                value =
+                                    st.b.build_select(body, as_int, scalar, "private_value")
+                                        .unwrap()
+                                        .into_int_value();
+                                st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                                st.b.build_store(flags.slot_sizes[st.depth], bytes).unwrap();
+                            }
+                            st.push_w(value, width);
+                        } else {
+                            // **The operand's width is cross-checked against the
+                            // derived size.** They come from different places — the
+                            // operand's from the producing op, the size from the
+                            // module's table — so a disagreement means one of them is
+                            // wrong and neither may be used to size a copy.
+                            if st.runtime_kinds.is_some() {
+                                let operand = st.depth - 1;
+                                if st.input_copy_bounds[operand].is_none() {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: "private body extent has no producer bound".into(),
+                                    });
+                                }
+                                let tag = st.input_tags[operand];
+                                let bytes = st.input_body_sizes[operand];
+                                let bits = st.pop();
+                                coroutine::packing::store_private(
+                                    &st.b,
+                                    addr,
+                                    init_ptr,
+                                    scalar_ptr.unwrap(),
+                                    coroutine::packing::Operand {
+                                        bits,
+                                        tag,
+                                        body_bytes: bytes,
+                                    },
+                                    size,
+                                    trap_bb,
+                                );
+                                break 'access;
+                            }
+                            let w = st.width_at(0);
+                            match w {
+                                Width::Body(n) if n == size => {}
+                                Width::Body(n) => {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: format!(
+                                            "the operand is a {n}-byte body and the module's pool \
+                                         entry is {size} bytes; the two statements of this \
+                                         slot's size disagree"
+                                        ),
+                                    });
+                                }
+                                _ => {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: format!(
+                                            "a composite slot needs a body operand of known width to \
+                                         size the copy, and this one is {w:?}"
+                                        ),
+                                    });
+                                }
+                            }
+                            let tag = st
+                                .runtime_kinds
+                                .as_ref()
+                                .map_or(i64t.const_int(1, false), |flags| {
+                                    flags.load(&st.b, st.depth - 1)
+                                });
+                            let v = st.pop();
+                            let src =
+                                st.b.build_int_to_ptr(
+                                    v,
+                                    ctx.ptr_type(AddressSpace::default()),
+                                    "poolsrc",
+                                )
+                                .unwrap();
+                            // Alignment one on both sides: the pool packs bodies
+                            // cumulatively with no padding, so neither end is
+                            // guaranteed anything better, and declaring an alignment
+                            // the pointer lacks is undefined behaviour.
+                            st.b.build_memcpy(
+                                addr,
+                                1,
+                                src,
+                                1,
+                                i64t.const_int(u64::from(size), false),
+                            )
+                            .map_err(|e| {
+                                LowerError::UnsupportedDataSlot {
+                                    slot,
+                                    why: format!(
+                                        "could not copy a {size}-byte body into the pool: {e}"
+                                    ),
+                                }
+                            })?;
+                            // Marked AFTER the copy, so a trap inside it cannot leave
+                            // the slot claiming to hold a body it does not.
+                            st.b.build_store(init_ptr, tag).unwrap();
+                        }
+                        break 'access;
+                    }
+                    // **THE SLOTS WITH NO POOL ENTRY**: everything above has
+                    // returned or continued, so a body operand reaching here is
+                    // headed for a slot the module does not declare as a persistent
+                    // composite — a shared slot, or a private one the pool table
+                    // does not name. The one-word store would write its ADDRESS, so
+                    // it is refused. No corpus module declares a shared composite,
+                    // so this arm has no subject and is deliberately not lowered.
+                    // **A SLOT WITH A STATED PLACEMENT IS NOT "NOWHERE TO PUT
+                    // IT".** The shared layout marks a composite slot and states its
+                    // body length, so such a slot is copied below rather than
+                    // refused here. The refusal is NARROWED to its actual subject —
+                    // a body whose destination outlives the region and has no stated
+                    // placement — rather than deleted.
+                    let shared_composite = data.shared_layout.get(slot as usize).is_some_and(|e| {
+                        e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0
+                    });
+                    if !is_read && !shared_composite && st.width_at(0).is_body() {
+                        return Err(LowerError::UnsupportedDataSlot {
+                            slot,
+                            why: String::from(
+                                "the operand is a flat composite body and this slot has no \
+                             persistent pool entry: a one-word store would write the body's \
+                             ADDRESS rather than copy its bytes",
+                            ),
+                        });
+                    }
+
+                    if slot < data.shared_count {
+                        // Shared. An indexed shared access would need the layout
+                        // entries for the whole range proven contiguous, which the
+                        // table does not state, so it is refused rather than
+                        // assumed.
+                        let base = shared_base.expect("has_data implies the shared pointer");
+
+                        // **A SHARED COMPOSITE SLOT: COPY IN, ADDRESS OUT.**
+                        //
+                        // `SharedSlotLayout` STATES the body length, so unlike the
+                        // private pool this needs no derived size and no validated
+                        // partition — the length is a field, and recomputing it from
+                        // neighbouring offsets would be a second opinion free to
+                        // drift.
+                        //
+                        // **No initialisation word belongs here.** A private
+                        // composite slot's initial value is `Unit`, which is not a
+                        // body, so reading an unwritten one faults. The shared
+                        // segment has no such state: the host owns the buffer and
+                        // initialises it by contract, and the runtime copies out
+                        // whatever bytes are there and re-wraps them as the declared
+                        // kind. Inventing a fault here would be inventing one the
+                        // reference does not have.
+                        //
+                        // The address handed back on a read points into the HOST's
+                        // buffer, which outlives the call — which is why it is safe
+                        // where the same move into the ephemeral region would not be.
+                        if let Some(e) = data.shared_layout.get(slot as usize).filter(|e| {
+                            e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0
+                        }) {
+                            // **INDEXED USES THE SAME RESOLVER THE SCALAR RANGE
+                            // USES**, which proves the whole declared range
+                            // contiguous and uniform before striding — now including
+                            // that every element states the same body length, since a
+                            // matching composite kind is not a matching size.
+                            let (first_off, len) = if indexed {
+                                let (off, stride, _kind) =
+                                    resolve_shared_array(&data, slot, bound, float_bytes)?;
+                                (off, stride)
+                            } else {
+                                if e.len == 0 {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: String::from(
+                                            "a shared slot marked composite whose stated body length                                          is zero; the layout and the kind disagree",
+                                        ),
+                                    });
+                                }
+                                (e.offset, u32::from(e.len))
+                            };
+                            // The index was bounds-checked against the instruction's
+                            // own declared element count before the shared/private
+                            // split, and that remains the guard.
+                            let byte_off = match index {
+                                None => i64t.const_int(u64::from(first_off), false),
+                                Some(ix) => {
+                                    st.b.build_int_add(
+                                        i64t.const_int(u64::from(first_off), false),
+                                        st.b.build_int_mul(
+                                            ix,
+                                            i64t.const_int(u64::from(len), false),
+                                            "sharedstride",
+                                        )
+                                        .unwrap(),
+                                        "sharedoff",
+                                    )
+                                    .unwrap()
+                                }
+                            };
+                            let addr = unsafe {
+                                st.b.build_in_bounds_gep(i8t, base, &[byte_off], "sharedbody")
+                                    .unwrap()
+                            };
+                            if is_read {
+                                let as_int =
+                                    st.b.build_ptr_to_int(addr, i64t, "sharedbodyint").unwrap();
+                                st.push_w(as_int, Width::Body(len));
+                            } else {
+                                // The operand's width is cross-checked against the
+                                // stated length: two independent statements of one
+                                // number, and a disagreement sizes no copy.
+                                let w = st.width_at(0);
+                                match w {
+                                    Width::Body(n) if n == len => {}
+                                    other => {
+                                        return Err(LowerError::UnsupportedDataSlot {
+                                            slot,
+                                            why: format!(
+                                                "a shared composite slot of {len} bytes written from                                              an operand of {other:?}"
+                                            ),
+                                        });
+                                    }
+                                }
+                                let v = st.pop();
+                                let src =
+                                    st.b.build_int_to_ptr(
+                                        v,
+                                        ctx.ptr_type(AddressSpace::default()),
+                                        "sharedsrc",
+                                    )
+                                    .unwrap();
+                                st.b.build_memcpy(
+                                    addr,
+                                    1,
+                                    src,
+                                    1,
+                                    i64t.const_int(u64::from(len), false),
+                                )
+                                .map_err(|e| {
+                                    LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: format!(
+                                            "could not copy a {len}-byte body into shared: {e}"
+                                        ),
+                                    }
+                                })?;
+                            }
+                            break 'access;
+                        }
+                        // A direct access resolves one slot; an indexed access
+                        // proves the whole range contiguous and uniform first, then
+                        // computes `first + index * width`.
+                        let (addr, width, kind) = if let Some(ix) = index {
+                            let (first_off, w, k) =
+                                resolve_shared_array(&data, slot, bound, float_bytes)?;
+                            let byte =
+                                st.b.build_int_add(
+                                    i64t.const_int(u64::from(first_off), false),
+                                    st.b.build_int_mul(
+                                        ix,
+                                        i64t.const_int(u64::from(w), false),
+                                        "sstride",
+                                    )
+                                    .unwrap(),
+                                    "soff",
+                                )
+                                .unwrap();
+                            let a = unsafe {
+                                st.b.build_in_bounds_gep(i8t, base, &[byte], "sdataptr")
+                                    .unwrap()
+                            };
+                            // **THREE WIDTHS, NOT TWO.** This mapped anything but
+                            // eight to ONE BYTE, so a four-byte float element loaded
+                            // a single byte of its value once `f32` gave shared
+                            // slots a four-byte width. Caught by the differential
+                            // rather than by review: native returned 11 where the
+                            // reference returned 22.
+                            (
+                                a,
+                                match w {
+                                    8 => i64t,
+                                    4 => ctx.i32_type(),
+                                    _ => i8t,
+                                },
+                                k,
+                            )
+                        } else {
+                            let (byte_off, w, k) =
+                                resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;
+                            let a = unsafe {
+                                st.b.build_in_bounds_gep(
+                                    i8t,
+                                    base,
+                                    &[i64t.const_int(u64::from(byte_off), false)],
+                                    "sdataptr",
+                                )
+                                .unwrap()
+                            };
+                            (a, w, k)
+                        };
+                        if is_read {
+                            let raw =
+                                st.b.build_load(width, addr, "sdataload")
+                                    .unwrap()
+                                    .into_int_value();
+                            let v = if width == i64t {
+                                raw
+                            } else {
+                                st.b.build_int_z_extend(raw, i64t, "sdatazext").unwrap()
+                            };
+                            let v = if kind == SCALAR_BOOL {
+                                let nz =
+                                    st.b.build_int_compare(
+                                        IntPredicate::NE,
+                                        v,
+                                        i64t.const_zero(),
+                                        "sboolnz",
+                                    )
+                                    .unwrap();
+                                st.b.build_int_z_extend(nz, i64t, "sboolz").unwrap()
+                            } else {
+                                v
+                            };
+                            // **THE TAG IS THE WHOLE OF THE FLOAT WORK ON THIS
+                            // PATH.** The eight bytes loaded are already the value:
+                            // the reference stores IEEE-754 little-endian at this
+                            // offset and the operand stack carries a float as its
+                            // bit pattern. Push it untagged and the application
+                            // binary interface is correct while every float
+                            // operation downstream refuses the operand -- the same
+                            // detail a float PARAMETER's local needed.
+                            if retcon_resume_type.is_some() {
+                                let category = match kind {
+                                    SCALAR_FLOAT_TAG => OperandKind::Float,
+                                    SCALAR_FIXED_TAG => OperandKind::Fixed,
+                                    _ => OperandKind::Int,
+                                };
+                                // The shared layout already fixed the scalar load
+                                // width. Carry it into the coroutine yield check.
+                                st.push_k(v, Width::Scalar(width.get_bit_width() / 8), category);
+                            } else if kind == SCALAR_FLOAT_TAG {
+                                st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
+                            } else if kind == SCALAR_FIXED_TAG {
+                                // **The same reasoning as the float tag above, for
+                                // the same reason it was missed there once.** The
+                                // width is left `Unknown` deliberately: only the
+                                // KIND is being recovered here, and widening a slot
+                                // read is a separate change with its own
+                                // consequences.
+                                st.push_k(v, Width::Unknown, OperandKind::Fixed);
+                            } else {
+                                st.push(v);
+                            }
+                        } else {
+                            // **THE WRITE SIDE NEEDS NO KIND CHECK, AND THAT IS A
+                            // CONCLUSION RATHER THAN AN OMISSION.** `Op::Call`
+                            // refuses a kind-versus-declaration disagreement because
+                            // the bitcast to the callee's floating-point parameter
+                            // type is a REPRESENTATION change, and the wrong one
+                            // produces a plausible number. Nothing converts here:
+                            // the operand already IS the bit pattern, and the same
+                            // eight bytes are stored whatever the tag says. A guard
+                            // would therefore prevent no wrong byte while REFUSING
+                            // valid programs -- concretely `s.x = h.f` for a private
+                            // float slot `h.f`, whose read is not kind-tracked and so
+                            // arrives tagged `Int` while carrying correct float bits.
+                            // That program lowers, and `shared_data.rs` pins it
+                            // agreeing with the reference byte for byte.
+                            let v = st.pop();
+                            let narrowed = if width == i64t {
+                                v
+                            } else {
+                                st.b.build_int_truncate(v, width, "sdatatrunc").unwrap()
+                            };
+                            st.b.build_store(addr, narrowed).unwrap();
+                        }
+                    } else {
+                        // Private. Flat word array indexed from the boundary.
+                        if slot >= data.slot_count {
+                            return Err(LowerError::UnsupportedDataSlot {
+                                slot,
+                                why: String::from("slot index outside the declared slot table"),
+                            });
+                        }
+                        let base = private_base.expect("has_data implies the private pointer");
+                        let rel = slot - data.shared_count;
+                        let byte_index =
+                            st.b.build_int_mul(
+                                match index {
+                                    Some(ix) => {
+                                        st.b.build_int_add(
+                                            ix,
+                                            i64t.const_int(u64::from(rel), false),
+                                            "pidx",
+                                        )
+                                        .unwrap()
+                                    }
+                                    None => i64t.const_int(u64::from(rel), false),
+                                },
+                                i64t.const_int(u64::from(PRIVATE_SLOT_BYTES), false),
+                                "pbyte",
+                            )
+                            .unwrap();
+                        let addr = unsafe {
+                            st.b.build_in_bounds_gep(i8t, base, &[byte_index], "pdataptr")
+                                .unwrap()
+                        };
+                        // **Alignment is part of this ABI, not an accident.** A
+                        // slot is a whole word, so the region must be aligned to
+                        // `PRIVATE_SLOT_BYTES` and every access is naturally
+                        // aligned within it. The alignment is set explicitly
+                        // because the default inkwell emits is narrower than the
+                        // access, and a store whose declared alignment exceeds the
+                        // pointer's true alignment is undefined behaviour that
+                        // presents as a bus fault rather than a wrong answer. A
+                        // caller passing a `Vec<u8>` base, whose alignment contract
+                        // is one byte, violates this; the harness allocates a word
+                        // slice for exactly that reason.
+                        let private_kind = if st.runtime_kinds.is_some() {
+                            let relative = match index {
+                                Some(ix) => {
+                                    st.b.build_int_add(
+                                        ix,
+                                        i64t.const_int(u64::from(rel), false),
+                                        "private_relative_slot",
+                                    )
+                                    .unwrap()
+                                }
+                                None => i64t.const_int(u64::from(rel), false),
+                            };
+                            Some((
+                                coroutine::private::pointer(&st.b, base, &data, relative)?,
+                                relative,
+                            ))
+                        } else {
+                            None
+                        };
+                        if is_read {
+                            let load = st.b.build_load(i64t, addr, "pdataload").unwrap();
+                            load.into_int_value()
+                                .as_instruction()
+                                .expect("a load is an instruction")
+                                .set_alignment(PRIVATE_SLOT_BYTES)
+                                .expect("PRIVATE_SLOT_BYTES is a power of two");
+                            if let Some((pointer, relative)) = private_kind {
+                                let tag = coroutine::private::load(
+                                    &st.b, module, pointer, &data, relative,
+                                );
+                                let flags = st.runtime_kinds.as_ref().unwrap();
+                                st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                                st.b.build_store(flags.slot_sizes[st.depth], i64t.const_zero())
+                                    .unwrap();
+                                let output = &retcon_facts.unwrap()[&i].outputs[0];
+                                st.push_k(
+                                    load.into_int_value(),
+                                    output.width,
+                                    coroutine::types::operand_kind(output.tag),
+                                );
+                            } else {
+                                st.push(load.into_int_value());
+                            }
+                        } else {
+                            if let Some((pointer, _)) = private_kind {
+                                st.b.build_store(pointer, st.input_tags[st.depth - 1])
+                                    .unwrap()
+                                    .set_alignment(1)
+                                    .unwrap();
+                            }
+                            let v = st.pop();
+                            let store = st.b.build_store(addr, v).unwrap();
+                            store
+                                .set_alignment(PRIVATE_SLOT_BYTES)
+                                .expect("PRIVATE_SLOT_BYTES is a power of two");
+                        }
+                    }
+                }
+                if let Some(done) = write_done {
+                    if st.b.get_insert_block().unwrap().get_terminator().is_none() {
+                        st.b.build_unconditional_branch(done).unwrap();
+                    }
+                    st.b.position_at_end(done);
+                }
+                if let (Some(raw), Some(bad)) = (raw_index, out_of_range) {
+                    // A read's value keeps the slot's width and kind; see the
+                    // upstream premise recorded in `coroutine/types.rs`.
+                    if let Some(fallback) = fallback {
+                        let (w, k) = (st.width_at(0), st.kind_at(0));
+                        let loaded = st.pop();
+                        let value =
+                            st.b.build_select(bad, fallback, loaded, "data_value")
+                                .unwrap()
+                                .into_int_value();
+                        st.push_k(value, w, k);
+                    }
+                    st.push_w(raw, Width::Scalar(8));
+                    st.push_bound_outcome(i64t.const_int(u64::from(bound), false), bad);
+                }
+            }
+            // Flat composite construction. The body goes at a COMPILE-TIME
+            // offset in the host-supplied region, so there is no allocator, no
+            // cursor and nothing that can fail at run time. See `region.rs`.
+            Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                count,
+                byte_size,
+                ..
+            }) => {
+                let region = region_base.ok_or_else(|| {
+                    LowerError::Internal(
+                        "NewComposite needs the region pointer, which lower_chunk does not \
+                         receive"
+                            .into(),
+                    )
+                })?;
+                let plan = crate::region::plan_chunk_region(chunk);
+                let site = plan.sites.iter().find(|s| s.op_index == i).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "no region placement for the NewComposite at op {i}"
+                    ))
+                })?;
+
+                // **THE ONE PLACEMENT THIS PASS MAKES THAT FAILS SILENTLY.**
+                // The offset just chosen is fixed for the life of the chunk, so
+                // a site inside a loop rewrites it every iteration. That is
+                // sound for a value confined to its iteration and UNSOUND for
+                // one the host receives by `yield`, because the host holds a
+                // handle and an overwrite advances no epoch.
+                //
+                // Refused HERE, at the placement, rather than in a preflight, so
+                // the next reader of this arm meets the constraint where the
+                // decision is actually made.
+                //
+                // The refusal consumes an over-approximation and only ever
+                // REFUSES on it. That is what keeps the recorded objection to
+                // verdict-consuming placement intact: a wrong verdict here
+                // rejects a sound program loudly, and never places a value
+                // where the defect can occur.
+                // **Unless the entry copies at its yields**, operator question
+                // 24. `region::yield_copy` exists only when the yields are the
+                // only route out of the iteration, so the copy below closes the
+                // hazard this refusal reports, and both refusals give way to it.
+                if let Some(h) = crate::region::yield_escape_hazards(chunk)
+                    .into_iter()
+                    .find(|h| h.site_op == i && yield_copy.is_none())
+                {
+                    return Err(LowerError::YieldEscapingLoopComposite {
+                        site_op: h.site_op,
+                        yield_op: h.yield_op,
+                    });
+                }
+
+                // **THE CONFINEMENT VERDICT, CONSUMED TO REFUSE AND ONLY TO
+                // REFUSE.** The operator ruled the region planner's soundness
+                // obligation discharged by analysis, with an inconclusive
+                // verdict declining. See
+                // `docs/decisions/CONFINEMENT_CONSUMPTION_BRIEF.md`.
+                //
+                // **THE PLACEMENT IS THE SAFETY ARGUMENT.** This sits AFTER the
+                // syntactic hazard check above, and adds a refusal without ever
+                // removing one. So a verdict wrong in the unsafe direction --
+                // `Confined` for a site that escapes -- costs a refusal this
+                // pass would have added and leaves the lowering exactly where it
+                // was before the analysis was consulted. Nothing that is refused
+                // today can be admitted by a wrong verdict. That is what buys
+                // the soundness half of the obligation without the exposure that
+                // OVERLAPPING sites on a verdict would take on, which
+                // `region.rs` warns about and which this does not do.
+                //
+                // **`Scope::Iteration` only.** `Scope::Invocation` asks about
+                // reuse across calls, where the region is caller-provided per
+                // call and the composite-return ABI governs; 144 of 252 corpus
+                // sites decline at that scope, so consuming it here would refuse
+                // a large part of a corpus that must keep lowering.
+                if yield_copy.is_none()
+                    && let Some(verdicts) = confinement
+                    && let Some(v) = verdicts.iter().find(|v| v.ip == i)
+                    && matches!(v.scope, keleusma::confine::Scope::Iteration { .. })
+                    && !matches!(v.verdict, keleusma::confine::Confinement::Confined)
+                {
+                    return Err(LowerError::EscapesItsIteration {
+                        site_op: i,
+                        verdict: format!("{:?}", v.verdict),
+                        reason: format!("{:?}", v.reason),
+                    });
+                }
+
+                // Widths, in OPERAND order. `width_at(0)` is the top of the
+                // stack, which is the LAST operand, so the run is reversed.
+                let n = *count as usize;
+                if st.runtime_kinds.is_some() {
+                    let start = st.depth - n;
+                    let mut values: Vec<_> = (0..n).map(|_| st.pop()).collect();
+                    values.reverse();
+                    let inputs: Vec<_> = values
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, bits)| coroutine::packing::Operand {
+                            bits,
+                            tag: st.input_tags[start + index],
+                            body_bytes: st.input_body_sizes[start + index],
+                        })
+                        .collect();
+                    let base = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(site.offset), false)],
+                            "packed_body",
+                        )
+                        .unwrap()
+                    };
+                    let padded = matches!(
+                        chunk.ops[i],
+                        Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                            kind: keleusma::value_layout::CompositeKind::Struct
+                                | keleusma::value_layout::CompositeKind::Enum,
+                            ..
+                        })
+                    );
+                    let bytes = coroutine::packing::pack(
+                        &st.b,
+                        base,
+                        &inputs,
+                        float_bytes,
+                        padded,
+                        u32::from(*byte_size),
+                        trap_bb,
+                    );
+                    st.b.build_store(st.runtime_kinds.as_ref().unwrap().slot_sizes[start], bytes)
+                        .unwrap();
+                    let bits =
+                        st.b.build_ptr_to_int(base, i64t, "packed_body_bits")
+                            .unwrap();
+                    let width = retcon_facts.unwrap()[&i].outputs[0].width;
+                    st.push_w(bits, width);
+                    continue;
+                }
+                let mut widths: Vec<Width> = Vec::with_capacity(n);
+                for back in (0..n).rev() {
+                    // An unknown width cannot be placed. Refusing is the whole
+                    // point of the default: a guess here mispacks silently, and
+                    // a Byte and a Word are indistinguishable on this stack.
+                    let w = st.width_at(back);
+                    if w.bytes().is_none() {
+                        return Err(LowerError::unsupported_op(
+                            "NewComposite",
+                            format!(
+                                "NewComposite at op {i} has an operand of unknown packed \
+                             width: operand {} of {n} counting from the first, \
+                             which is {back} back from the top of the stack",
+                                n - back
+                            ),
+                        ));
+                    }
+                    widths.push(w);
+                }
+
+                // The reference packs fields cumulatively with NO padding, so
+                // the widths must account for the baked body exactly. A
+                // mismatch means this backend's model of the layout has drifted
+                // from the compiler's, and emitting anyway would write a body
+                // the VM reads differently.
+                let total: u32 = widths.iter().filter_map(|w| w.bytes()).sum();
+                // **AN ENUM BODY IS SIZED BY ITS LARGEST VARIANT.** A smaller
+                // variant packs fewer bytes than the instruction bakes, and the
+                // reference zero-fills the rest, which `coroutine::packing`
+                // already does on the coroutine route. Only that shortfall is
+                // admitted, and only for an enum. A struct or tuple that packs
+                // short, or anything that packs long, is still the drift this
+                // check exists to catch. Found by `language_construct_census.rs`
+                // on Order 6, where a two-variant payload enum was refused.
+                let enum_slack = matches!(
+                    chunk.ops[i],
+                    Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                        kind: keleusma::value_layout::CompositeKind::Enum,
+                        ..
+                    })
+                ) && total < u32::from(*byte_size);
+                if total != u32::from(*byte_size) && !enum_slack {
+                    return Err(LowerError::unsupported_op(
+                        "NewComposite",
+                        format!(
+                            "NewComposite at op {i} packs {total} bytes but the instruction bakes \
+                         {byte_size}; the layout model has drifted"
+                        ),
+                    ));
+                }
+
+                let vals: Vec<IntValue<'ctx>> = {
+                    let mut v: Vec<_> = (0..n).map(|_| st.pop()).collect();
+                    v.reverse();
+                    v
+                };
+
+                let mut off = site.offset;
+                for (v, w) in vals.iter().zip(widths.iter()) {
+                    let addr = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(off), false)],
+                            "cfieldptr",
+                        )
+                        .unwrap()
+                    };
+                    // Truncate to the field's width, then store UNALIGNED. The
+                    // layout is chosen for density: a Word can sit at offset 1.
+                    // Declaring an alignment the pointer does not have is
+                    // undefined behaviour that presents as a bus fault.
+                    let n_bytes = w.bytes().expect("checked above");
+                    if w.is_body() {
+                        // A NESTED BODY: the operand holds the ADDRESS of
+                        // `n_bytes` of body, so placing it is a COPY. Storing it
+                        // as a scalar would write the pointer into the parent
+                        // while every downstream offset still looked correct.
+                        //
+                        // Both sides are alignment 1. The layout packs
+                        // cumulatively, so neither the source body nor this
+                        // field is guaranteed anything better, and declaring an
+                        // alignment the pointer lacks is undefined behaviour.
+                        //
+                        // **This was written, deleted as unverifiable, and
+                        // restored.** The claim was wrong: it was unobservable
+                        // only through the VM differential. The test owns the
+                        // region buffer, so it can read the copied bytes back
+                        // directly, and a nested field's neighbour is readable
+                        // through the already-supported flat path. "The
+                        // differential cannot see X" was a fact about that
+                        // differential, not about X.
+                        let src = st
+                            .b
+                            .build_int_to_ptr(*v, ctx.ptr_type(AddressSpace::default()), "cnestsrc")
+                            .unwrap();
+                        st.b.build_memcpy(
+                            addr,
+                            1,
+                            src,
+                            1,
+                            i64t.const_int(u64::from(n_bytes), false),
+                        )
+                        .map_err(|e| {
+                            LowerError::unsupported_op(
+                                "NewComposite",
+                                format!(
+                                    "NewComposite at op {i} could not copy a {n_bytes}-byte nested \
+                                 body: {e}"
+                                ),
+                            )
+                        })?;
+                        off += n_bytes;
+                        continue;
+                    }
+                    let store = match n_bytes {
+                        8 => st.b.build_store(addr, *v).unwrap(),
+                        // **FOUR BYTES ARRIVED WITH `f32`.** The packer handled
+                        // eight and one, so a narrow float field was refused
+                        // rather than mispacked -- the conservative direction,
+                        // and the reason this surfaced as a refusal instead of a
+                        // wrong number. The operand carries the value in its LOW
+                        // 32 BITS, per `float_to_bits`, so the store truncates.
+                        4 => {
+                            let t = st.b.build_int_truncate(*v, ctx.i32_type(), "pk32").unwrap();
+                            st.b.build_store(addr, t).unwrap()
+                        }
+                        1 => {
+                            let t = st.b.build_int_truncate(*v, i8t, "cfbyte").unwrap();
+                            st.b.build_store(addr, t).unwrap()
+                        }
+                        other => {
+                            return Err(LowerError::unsupported_op(
+                                "NewComposite",
+                                format!(
+                                    "NewComposite at op {i} has a {other}-byte scalar field; \
+                                 only 1 and 8 are lowered"
+                                ),
+                            ));
+                        }
+                    };
+                    store.set_alignment(1).expect("1 is a power of two");
+                    off += n_bytes;
+                }
+                // The enum tail a smaller variant leaves, zeroed as the reference
+                // zeroes it. The region slot holds `byte_size` bytes from the
+                // site offset, so the tail lies inside the site's reservation.
+                if enum_slack {
+                    let tail = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(off), false)],
+                            "enum_slack",
+                        )
+                        .unwrap()
+                    };
+                    let bytes = u32::from(*byte_size) - total;
+                    st.b.build_memset(
+                        tail,
+                        1,
+                        i8t.const_zero(),
+                        i64t.const_int(u64::from(bytes), false),
+                    )
+                    .map_err(|e| {
+                        LowerError::unsupported_op(
+                            "NewComposite",
+                            format!("NewComposite at op {i} could not zero its enum slack: {e}"),
+                        )
+                    })?;
+                }
+
+                // The composite operand IS its address. Its packed width is the
+                // body length, so a nested construction places it correctly.
+                let base = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        region,
+                        &[i64t.const_int(u64::from(site.offset), false)],
+                        "cbody",
+                    )
+                    .unwrap()
+                };
+                let as_int = st.b.build_ptr_to_int(base, i64t, "cbodyint").unwrap();
+                // A construction pushes the body's ADDRESS, so it is a `Body`:
+                // placing it inside another body copies from that address.
+                st.push_w(as_int, Width::Body(u32::from(*byte_size)));
+            }
+            // Flat array element read. The same address-plus-typed-load as a
+            // field, with a RUNTIME index and a compile-time element size.
+            //
+            // ⚠ **THIS ARM CARRIED A FALSE PREMISE UNTIL 2026-09-08.** It said:
+            // *"The bound is not checked here: the compiler emits
+            // `Op::BoundsCheck` before the index."* **The compiler does not.**
+            // Measured — `fn main(i: Word) -> Word { let xs = [1, 2, 3]; xs[i] }`
+            // compiles to
+            //
+            // ```text
+            // ... NewComposite(Array, count 3) SetLocal(1) GetLocal(1) GetLocal(0) GetIndex(Flat)
+            // ```
+            //
+            // with no `BoundsCheck` anywhere. The premise was written into a
+            // comment and never checked, and the lowering rested on it.
+            //
+            // **What that cost**: with `i = 5` the reference faults
+            // `IndexOutOfBounds(5, 3)` and native code returned
+            // `0xabababababababab`, the filler byte of the caller's region — an
+            // out-of-bounds read at `base + index * stride` for a RUNTIME index,
+            // returned as a value. Both halves of the worst case at once: a
+            // silently wrong answer, and a read the host did not authorise.
+            //
+            // The bound is now checked here, from the array operand's tracked
+            // body size, and the shape is REFUSED when that size is unknown.
+            // See [`guard_array_index`].
+            Op::GetIndex(keleusma::bytecode::ArrayElem::Flat { kind }) => {
+                use keleusma::value_layout::ScalarKind as SK;
+                let elem: u64 = match kind {
+                    // **`Fixed` IS HANDLED EXACTLY LIKE `Int`, and that is
+                    // measured rather than assumed.** A Q-format value is an
+                    // `i64` of fixed-point bits occupying a full slot, and the
+                    // reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at
+                    // sixteen bytes -- identical to a pair of `Word`s. THE BITS
+                    // ARE THE VALUE: no zero-extension, no mask, no rescale.
+                    // Scaling lives in the opcodes that consume them.
+                    // An opaque element is the host's pointer, one address word,
+                    // which `linkage` requires to be eight bytes. Native code
+                    // carries it and never reads through it.
+                    SK::Int | SK::Fixed | SK::Opaque => 8,
+                    SK::Byte | SK::Bool => 1,
+                    // **A FLOAT ELEMENT IS THE SAME EIGHT RAW BYTES.** A body
+                    // field is INTERNAL -- the compiler packs it, the same
+                    // program reads it back, nothing outside sees the layout --
+                    // so agreeing with the reference is a measured fact and not
+                    // an interface choice. That is the same ground on which
+                    // `Fixed` is lowered here and refused in a shared slot.
+                    SK::Float if float_width_lowered(float_bytes) => u64::from(float_bytes),
+                    SK::Float => {
+                        return Err(LowerError::unsupported_op(
+                            "GetIndex",
+                            format!(
+                                "a Float array element in a module whose Float is \
+                                 {float_bytes} bytes wide; only 4- and 8-byte Floats \
+                                 are lowered, because the reference sizes the body by \
+                                 that width and a wrong one mispacks silently"
+                            ),
+                        ));
+                    }
+                    other => {
+                        return Err(LowerError::unsupported_op(
+                            "GetIndex",
+                            format!("GetIndex reading {other:?} is not lowered"),
+                        ));
+                    }
+                };
+                // **FLAT WORD AND BYTE READS ARE TOTAL SINCE ABSORPTION 82.**
+                // An out-of-range index yields a zero of the element kind and
+                // the six-Word bounds suffix follows the value. The compiler
+                // dispatches a set flag to `Trap(IndexOutOfBounds)`. The other
+                // flat kinds keep the faulting contract and its guard.
+                //
+                // The load sits behind a branch rather than a clamped index,
+                // because a zero-length array has no element zero to read.
+                //
+                // **GUARD BEFORE POPPING**: the widths are read off the stack
+                // while the operands are still on it.
+                let total =
+                    keleusma::bytecode::ArrayElem::Flat { kind: *kind }.has_bounds_outcome();
+                let count = if total {
+                    Some(array_element_count(&mut st, i64t, elem, "GetIndex")?)
+                } else {
+                    guard_array_index(ctx, func, &mut st, trap_bb, i64t, elem, "GetIndex")?;
+                    None
+                };
+                // The index is popped BEFORE the array, matching the virtual
+                // machine's order; reversing them reads the array handle as an
+                // index and indexes by a pointer.
+                let index = st.pop();
+                let addr_int = st.pop();
+                let outcome = count.map(|count| {
+                    let bad =
+                        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
+                            .unwrap();
+                    let before = st.b.get_insert_block().unwrap();
+                    let read = ctx.append_basic_block(func, "index_read");
+                    let done = ctx.append_basic_block(func, "index_done");
+                    st.b.build_conditional_branch(bad, done, read).unwrap();
+                    st.b.position_at_end(read);
+                    (count, bad, before, done)
+                });
+                let base = st
+                    .b
+                    .build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cibase")
+                    .unwrap();
+                let byte =
+                    st.b.build_int_mul(index, i64t.const_int(elem, false), "cistride")
+                        .unwrap();
+                let addr = unsafe {
+                    st.b.build_in_bounds_gep(i8t, base, &[byte], "ciaddr")
+                        .unwrap()
+                };
+                let (v, w) = if elem == 8 {
+                    let iv =
+                        st.b.build_load(i64t, addr, "ciint")
+                            .unwrap()
+                            .into_int_value();
+                    iv.as_instruction()
+                        .expect("a load is an instruction")
+                        .set_alignment(1)
+                        .expect("1 is a power of two");
+                    (iv, 8u32)
+                } else if elem == 4 {
+                    // **THE FOUR-BYTE CASE, WHICH THIS BRANCH DID NOT HAVE.**
+                    // It read eight bytes or one, so a narrow float element
+                    // would have loaded a SINGLE BYTE of its value. Added with
+                    // `f32`; zero-extended, per the operand convention.
+                    let iv =
+                        st.b.build_load(ctx.i32_type(), addr, "cif32")
+                            .unwrap()
+                            .into_int_value();
+                    iv.as_instruction()
+                        .expect("a load is an instruction")
+                        .set_alignment(1)
+                        .expect("1 is a power of two");
+                    (st.b.build_int_z_extend(iv, i64t, "cif32z").unwrap(), 4u32)
+                } else {
+                    let bv =
+                        st.b.build_load(i8t, addr, "cibyte")
+                            .unwrap()
+                            .into_int_value();
+                    bv.as_instruction()
+                        .expect("a load is an instruction")
+                        .set_alignment(1)
+                        .expect("1 is a power of two");
+                    // Zero, not sign: a `Byte` holds `0..=255` in a full slot.
+                    (st.b.build_int_z_extend(bv, i64t, "cizext").unwrap(), 1u32)
+                };
+                let v = match outcome {
+                    Some((_, _, before, done)) => {
+                        let read = st.b.get_insert_block().unwrap();
+                        st.b.build_unconditional_branch(done).unwrap();
+                        st.b.position_at_end(done);
+                        let merged = st.b.build_phi(i64t, "index_value").unwrap();
+                        merged.add_incoming(&[(&i64t.const_zero(), before), (&v, read)]);
+                        merged.as_basic_value().into_int_value()
+                    }
+                    None => v,
+                };
+                // **THE TAG, WHICH IS THE HALF THAT KEEPS BEING FORGOTTEN.**
+                // Untagged, the element is packed and read correctly and then
+                // refused by every float operation downstream -- the same miss
+                // the entry ABI and the shared slot each made once.
+                st.push_k(v, Width::Scalar(w), operand_kind_of(*kind));
+                if let Some((count, bad, _, _)) = outcome {
+                    st.push_w(index, Width::Scalar(8));
+                    st.push_bound_outcome(count, bad);
+                }
+            }
+            // Enum discriminant test. **PEEKS, like `BoundsCheck`**: the virtual
+            // machine reads `stack.last()` and leaves the enum in place for the
+            // field read that follows, so popping here would consume a value the
+            // next opcode still needs.
+            //
+            // A flat enum's discriminant is the first packed value, so it is the
+            // word at offset ZERO of the body. Only the flat representation is
+            // lowered: the boxed form compares TYPE AND VARIANT NAMES, which
+            // needs string data this backend has no representation for. The
+            // `v0.2.3` line established that the boxed construction path is
+            // unreachable at a 64-bit word, so refusing it costs nothing real —
+            // but it is refused rather than assumed away.
+            Op::IsEnum(_enum_const, _var_const, disc_const) => {
+                let expected = match chunk.constants.get(*disc_const as usize) {
+                    Some(ConstValue::Int(v)) => *v,
+                    other => {
+                        return Err(LowerError::MalformedInput(format!(
+                            "IsEnum discriminant constant is {other:?}, not an Int"
+                        )));
+                    }
+                };
+                if let Some(flags) = &st.runtime_kinds {
+                    let tag = flags.load(&st.b, st.depth - 1);
+                    let value = st.peek();
+                    let result = coroutine::kinds::enum_test(&st.b, value, tag, expected);
+                    st.push_w(result, Width::Scalar(1));
+                    continue;
+                }
+                let addr_int = st.peek();
+                let base =
+                    st.b.build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cenum")
+                        .unwrap();
+                // Unaligned, like every other body access: the layout packs
+                // cumulatively and guarantees nothing about the body's address.
+                let disc =
+                    st.b.build_load(i64t, base, "cdisc")
+                        .unwrap()
+                        .into_int_value();
+                disc.as_instruction()
+                    .expect("a load is an instruction")
+                    .set_alignment(1)
+                    .expect("1 is a power of two");
+                let eq =
+                    st.b.build_int_compare(
+                        IntPredicate::EQ,
+                        disc,
+                        i64t.const_int(expected as u64, true),
+                        "cisenum",
+                    )
+                    .unwrap();
+                let z = st.b.build_int_z_extend(eq, i64t, "cisenumz").unwrap();
+                // A boolean packs into one byte, like every other `Bool`.
+                st.push_w(z, Width::Scalar(1));
+            }
+            // Nested composite read: a sub-range of the parent, so it is
+            // POINTER ARITHMETIC and nothing else.
+            //
+            // A composite operand is an address and a nested body is contiguous
+            // inside its parent, so re-wrapping is just `parent + offset` with
+            // the child's length. No copy, no load, and `variant` does not reach
+            // the machine: it says how to interpret bytes, which only the reader
+            // of a scalar field needs.
+            Op::GetField(keleusma::bytecode::StructField::FlatNested { offset, size, .. }) => {
+                let owned = st.owned_at(0);
+                let parent = st.pop();
+                let addr =
+                    st.b.build_int_add(
+                        parent,
+                        i64t.const_int(u64::from(*offset), false),
+                        "cnestoff",
+                    )
+                    .unwrap();
+                st.push_owned(addr, Width::Body(u32::from(*size)), OperandKind::Int, owned);
+            }
+            // The same, indexed: the element offset is `index * size`.
+            // **THE NESTED ARM HAD THE SAME UNGUARDED SHAPE.** It produces an
+            // ADDRESS rather than a loaded value, so an out-of-range index here
+            // hands the rest of the lowering a pointer outside the body and the
+            // wrong read happens later, at a field access that looks correct.
+            //
+            // **TOTAL SINCE ABSORPTION 88**, as upstream's Order 3 made it. An
+            // invalid index yields the address of a zero-filled placeholder of
+            // the element's size, then the index, the four bound limbs and the
+            // flag, the layout the flat Word and Byte reads already push. The
+            // compiler dispatches a set flag to `Trap(IndexOutOfBounds)` or to an
+            // `invalid_index` arm, so no compiled path reads the placeholder. It
+            // is a module constant of the element's size, so a hand-built read
+            // of it stays in bounds.
+            Op::GetIndex(keleusma::bytecode::ArrayElem::FlatNested { size, .. }) => {
+                let count = array_element_count(&mut st, i64t, u64::from(*size), "GetIndex")?;
+                let owned = st.owned_at(1);
+                let index = st.pop();
+                let parent = st.pop();
+                let bad =
+                    st.b.build_int_compare(IntPredicate::UGE, index, count, "nestoob")
+                        .unwrap();
+                let byte =
+                    st.b.build_int_mul(index, i64t.const_int(u64::from(*size), false), "cnstride")
+                        .unwrap();
+                let addr = st.b.build_int_add(parent, byte, "cnestidx").unwrap();
+                let name = format!("kel_index_placeholder_{size}");
+                let placeholder = module.get_global(&name).unwrap_or_else(|| {
+                    let ty = i8t.array_type(u32::from(*size).max(1));
+                    let g = module.add_global(ty, None, &name);
+                    g.set_initializer(&ty.const_zero());
+                    g.set_constant(true);
+                    g.set_linkage(inkwell::module::Linkage::Private);
+                    g
+                });
+                let placeholder =
+                    st.b.build_ptr_to_int(placeholder.as_pointer_value(), i64t, "placeholder")
+                        .unwrap();
+                let addr =
+                    st.b.build_select(bad, placeholder, addr, "nestaddr")
+                        .unwrap()
+                        .into_int_value();
+                st.push_owned(addr, Width::Body(u32::from(*size)), OperandKind::Int, owned);
+                st.push_w(index, Width::Scalar(8));
+                st.push_bound_outcome(count, bad);
+            }
+            // Flat field read: a constant offset from the body address and one
+            // unaligned typed load, which is what `GetData` already does.
+            Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
+                use keleusma::value_layout::ScalarKind as SK;
+                let addr_int = st.pop();
+                let base = st
+                    .b
+                    .build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cfbase")
+                    .unwrap();
+                let addr = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        base,
+                        &[i64t.const_int(u64::from(*offset), false)],
+                        "cfaddr",
+                    )
+                    .unwrap()
+                };
+                let (v, w) = match kind {
+                    // **`Fixed` READS EXACTLY LIKE `Int`.** Eight raw bytes of
+                    // Q-format bits, unaligned like every other body access. The
+                    // bits ARE the value -- do not zero-extend, mask, or rescale
+                    // them; the consuming opcode knows the scale.
+                    //
+                    // It fell to the catch-all until 2026-08-21, one increment
+                    // after the operand WIDTH was widened. Packing a field and
+                    // reading it back are separate arms, and only packing
+                    // followed from the width.
+                    //
+                    // **An `Opaque` field reads the same eight bytes**, the
+                    // host's pointer as question 14 types it. The reference
+                    // holds a registry index in the same eight-byte field, so
+                    // the layouts agree and the bytes differ by representation,
+                    // which no Keleusma operation can observe.
+                    SK::Int | SK::Fixed | SK::Opaque => {
+                        let iv =
+                            st.b.build_load(i64t, addr, "cfint")
+                                .unwrap()
+                                .into_int_value();
+                        iv.as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(1)
+                            .expect("1 is a power of two");
+                        (iv, 8u32)
+                    }
+                    // A `Byte` occupies a full `i64` slot holding `0..=255`, so
+                    // the extension is ZERO and not sign. Sign-extending would
+                    // read `0xFF` as `-1` and break the invariant that makes
+                    // `ByteToWord` free.
+                    SK::Byte | SK::Bool => {
+                        let bv =
+                            st.b.build_load(i8t, addr, "cfbyte")
+                                .unwrap()
+                                .into_int_value();
+                        bv.as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(1)
+                            .expect("1 is a power of two");
+                        let z = st.b.build_int_z_extend(bv, i64t, "cfzext").unwrap();
+                        (z, 1u32)
+                    }
+                    // **A FLOAT FIELD READS EXACTLY LIKE `Int`**, for the
+                    // reason a body field is not an interface: the layout is
+                    // internal and agreement with the reference is measured.
+                    // The width is guarded because the reference sizes the body
+                    // by `float_bytes`.
+                    SK::Float if float_width_lowered(float_bytes) => {
+                        // **THE LOAD IS `float_bytes` WIDE.** A four-byte float
+                        // loaded as eight would read its neighbour, and the
+                        // narrow value is ZERO-extended into the operand, which
+                        // is the convention `float_to_bits` states.
+                        let lt = if float_bytes == 8 {
+                            i64t
+                        } else {
+                            ctx.i32_type()
+                        };
+                        let iv =
+                            st.b.build_load(lt, addr, "cffloat")
+                                .unwrap()
+                                .into_int_value();
+                        iv.as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(1)
+                            .expect("1 is a power of two");
+                        let iv = if float_bytes == 8 {
+                            iv
+                        } else {
+                            st.b.build_int_z_extend(iv, i64t, "cffloatz").unwrap()
+                        };
+                        (iv, float_bytes)
+                    }
+                    SK::Float => {
+                        return Err(LowerError::unsupported_op(
+                            "GetField",
+                            format!(
+                                "a Float field in a module whose Float is {float_bytes} \
+                                 bytes wide; only 4- and 8-byte Floats are lowered, \
+                                 because the reference sizes the body by that width and a \
+                                 wrong \
+                                 one mispacks silently"
+                            ),
+                        ));
+                    }
+                    other => {
+                        return Err(LowerError::unsupported_op(
+                            "GetField",
+                            format!("GetField reading {other:?} is not lowered"),
+                        ));
+                    }
+                };
+                // The tag, for the same reason as the array element above.
+                st.push_k(v, Width::Scalar(w), operand_kind_of(*kind));
+            }
+            // Suspension. **`Yield` is pop-one, push-one**: it pops the value
+            // to yield and pushes the value the host resumes with. Treating it
+            // as pop-only underflows the very next instruction, which is how the
+            // opcode's shape was originally established.
+            // In a DEGENERATE stream chunk this `Yield` is the return, not a
+            // suspension. The value it would have pushed is the resume value,
+            // which the following `PopN(1)` discards, and the following `Reset`
+            // clears state that a fresh native frame does not carry. Both become
+            // unreachable and the loop's own `dead` tracking skips them.
+            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {
+                let v = st.pop();
+                build_typed_return(&st.b, func, v);
+            }
+            // The envelope of a degenerate stream. `Stream` marks the point
+            // `Reset` rewinds to, and with an empty prologue that is the entry
+            // block, so it lowers to nothing. `Reset` is unreachable after the
+            // return above and is accepted rather than refused so that the
+            // `dead` path does not have to special-case it.
+            Op::Stream | Op::Reset if degenerate_yield.is_some() => {}
+            // **`Op::Stream` MARKS THE LOOP TOP AND EMITS NOTHING.** The block
+            // after it is entered from the dispatch or by the `Reset` back edge.
+            Op::Stream if general_stream || retcon_stream => {
+                // The copy at the yield starts each instance at its first slot.
+                // The `Reset` below returns the cursor there at every rewind.
+                if retcon && let (Some(copy), Some(region)) = (yield_copy, region_base) {
+                    yield_cursor_reset(&st.b, region, copy, i64t);
+                }
+            }
+
+            // **`Op::Yield` SAVES THE RESUME POINT AND RETURNS.**
+            //
+            // Not a callback. The host regains control at every suspension, which
+            // is what makes a divergent `loop fn` drivable at all: `kel_yield`
+            // inverts control and would spin inside native code with no way for
+            // the host to stop it, which is why `Op::Stream` was refused before
+            // this existed.
+            //
+            // The state word says which yield to continue after; the arena holds
+            // the locals. Together they ARE the coroutine instance, which is why
+            // the same lowered code driven with two arenas is two independent
+            // streams.
+            Op::Yield if retcon_delegate => {
+                let (site, contract) = retcon_sites.unwrap()[&i];
+                let retcon_resume_shape = Some(contract.reply);
+                let reply_type = coroutine::dialogue::tag(contract.reply);
+                let owned_reply =
+                    matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
+                if !matches!(st.width_at(0), Width::Scalar(_) | Width::Body(_)) {
+                    return Err(LowerError::UnsupportedShape(format!(
+                        "a coroutine yield needs a scalar or flat value in {} at {i}, found {:?}",
+                        chunk.name,
+                        st.width_at(0)
+                    )));
+                }
+                let value = st.pop();
+                let helper = coroutine::delegate_yield(ctx, module, retcon_resume_shape, site)?;
+                let reply =
+                    st.b.build_call(
+                        helper,
+                        &[value.into(), delegate_context.unwrap().into()],
+                        "delegate_reply",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let (width, kind) = match reply_type {
+                    TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
+                    TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
+                    TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
+                    TypeTag::Composite => (
+                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        OperandKind::Int,
+                    ),
+                    tag => (width_of_tag(tag), OperandKind::Int),
+                };
+                st.push_owned(
+                    reply,
+                    width,
+                    kind,
+                    i64t.const_int(u64::from(owned_reply), false),
+                );
+            }
+            Op::Yield if retcon => {
+                let (_, contract) = retcon_sites.unwrap()[&i];
+                let retcon_resume_shape = Some(contract.reply);
+                let reply_type = coroutine::dialogue::tag(contract.reply);
+                let owned_reply =
+                    matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
+                // **THE COPY AT THE YIELD, operator question 24.** The yielded
+                // body is copied into the cursor's slot, and the host receives
+                // the slot, which nothing overwrites before the `Reset`. The
+                // body's width must be the slot's, proven rather than assumed.
+                let v = match (yield_copy, region_base) {
+                    (Some(copy), Some(region)) => {
+                        match st.width_at(0) {
+                            Width::Body(n) if n == copy.slot_bytes => {}
+                            other => {
+                                return Err(LowerError::UnsupportedShape(format!(
+                                    "the yield at op {i} copies {} bytes into its slot, and its \
+                                     operand's width is {other:?}",
+                                    copy.slot_bytes
+                                )));
+                            }
+                        }
+                        let body = st.pop();
+                        yield_copy_body(&st.b, ctx, func, region, copy, body, trap_bb, i64t)?
+                    }
+                    _ => st.pop(),
+                };
+                let suspend = module
+                    .get_function("llvm.coro.suspend.retcon.i1")
+                    .unwrap_or_else(|| {
+                        module.add_function(
+                            "llvm.coro.suspend.retcon.i1",
+                            ctx.bool_type().fn_type(&[], true),
+                            None,
+                        )
+                    });
+                let unwind =
+                    st.b.build_call(suspend, &[v.into()], "suspend")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                let cleanup = func
+                    .get_basic_blocks()
+                    .into_iter()
+                    .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                    .unwrap();
+                let resume = ctx.append_basic_block(func, &format!("retcon.resume{i}"));
+                st.b.build_conditional_branch(unwind, cleanup, resume)
+                    .unwrap();
+                st.b.position_at_end(resume);
+                let reply =
+                    st.b.build_load(i64t, retcon_reply.unwrap(), "reply")
+                        .unwrap()
+                        .into_int_value();
+
+                let (width, kind) = match reply_type {
+                    TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
+                    TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
+                    TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
+                    TypeTag::Composite => (
+                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        OperandKind::Int,
+                    ),
+                    tag => (width_of_tag(tag), OperandKind::Int),
+                };
+                let owned = i64t.const_int(u64::from(owned_reply), false);
+                let latest = coroutine::ownership::copy(&st.b, reply, width, owned);
+                retcon_latest
+                    .as_ref()
+                    .unwrap()
+                    .store(&st.b, latest, contract.reply);
+                if retcon_stream && chunk.param_count > 0 {
+                    let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
+                    st.b.build_store(st.locals[0], parameter).unwrap();
+                    let flags = st.runtime_kinds.as_ref().unwrap();
+                    st.b.build_store(
+                        flags.locals[0],
+                        i64t.const_int(
+                            u64::from(coroutine::types::kind(coroutine::types::shape(
+                                contract.reply,
+                            ))),
+                            false,
+                        ),
+                    )
+                    .unwrap();
+                    let size = match width {
+                        Width::Body(size) => size,
+                        _ => 0,
+                    };
+                    st.b.build_store(flags.local_sizes[0], i64t.const_int(u64::from(size), false))
+                        .unwrap();
+                    if let Some(flags) = &st.ownership {
+                        st.b.build_store(flags.locals[0], owned).unwrap();
+                    }
+                }
+                st.push_owned(reply, width, kind, owned);
+            }
+            Op::Yield if general_stream => {
+                // **SPILLED, NO LONGER REFUSED.** Everything beneath the yielded
+                // value has to survive the return; operands are SSA values and do
+                // not, so they go to the ephemeral slice and come back at the
+                // resume point.
+                //
+                // **A `Body` OPERAND IS STILL REFUSED, AND THAT IS THE POINT.** A
+                // `Width::Body` is a POINTER INTO THE FIXED-OFFSET REGION.
+                // Preserving it faithfully across the suspension would hand the
+                // host a handle to bytes the next iteration overwrites — a second
+                // route to exactly the hazard the yield-escape refusal exists to
+                // stop. The spill must not become the thing that defeats it.
+                let deep = st.depth.saturating_sub(1);
+                let mut saved: Vec<(Width, OperandKind)> = Vec::new();
+                if deep > 0 {
+                    let fb = stream_frame_base
+                        .expect("a general stream addresses its frame from the region");
+                    for slot in 0..deep {
+                        // `width_at` is measured from the TOP, so the entry at
+                        // stack index `slot` is `depth - 1 - slot` from the top.
+                        let back = st.depth - 1 - slot;
+                        let w = st.width_at(back);
+                        if let Width::Body(bytes) = w {
+                            return Err(LowerError::UnsupportedShape(format!(
+                                "a yield with a {bytes}-byte composite BODY stacked beneath the \
+                                 yielded value. Its operand is a pointer into region storage the \
+                                 next iteration overwrites, so carrying it across the suspension \
+                                 would defeat the yield-escape refusal rather than honour it"
+                            )));
+                        }
+                        let k = st.kind_at(back);
+                        let v = st.slot_value(slot);
+                        let addr = unsafe {
+                            st.b.build_in_bounds_gep(
+                                i8t,
+                                fb,
+                                &[i64t.const_int(spill_off + (slot as u64) * 8, false)],
+                                "spillp",
+                            )
+                            .unwrap()
+                        };
+                        let ins = st.b.build_store(addr, v).unwrap();
+                        ins.set_alignment(1).expect("1 is a power of two");
+                        saved.push((w, k));
+                    }
+                }
+                spilled.insert(i, saved);
+                // **FILL THIS SUSPENSION'S RESUME BLOCK NOW**, while the
+                // operands it must deliver are known. It pushes them and branches
+                // to `i + 1` at the resulting depth, so the shared block agrees
+                // with every other edge entering it.
+                //
+                // The builder position and the operand depth are SAVED AND
+                // RESTORED around this: a leaked position writes the return
+                // instruction below into the resume block instead of here.
+                if let Some(&rb) = resume_blocks.get(&i) {
+                    let here = st.b.get_insert_block().expect("mid-chunk");
+                    let saved_depth = st.depth;
+                    st.b.position_at_end(rb);
+                    st.depth = 0;
+                    if let Some(saved) = spilled.get(&i).cloned() {
+                        let fb = stream_frame_base
+                            .expect("a general stream addresses its frame from the region");
+                        for (slot, (w, k)) in saved.into_iter().enumerate() {
+                            let addr = unsafe {
+                                st.b.build_in_bounds_gep(
+                                    i8t,
+                                    fb,
+                                    &[i64t.const_int(spill_off + (slot as u64) * 8, false)],
+                                    "spillrp",
+                                )
+                                .unwrap()
+                            };
+                            let lv =
+                                st.b.build_load(i64t, addr, "spillr")
+                                    .unwrap()
+                                    .into_int_value();
+                            lv.as_instruction()
+                                .expect("a load is an instruction")
+                                .set_alignment(1)
+                                .expect("1 is a power of two");
+                            st.push_k(lv, w, k);
+                        }
+                    }
+                    // **A FLOAT PARAMETER IS NOT AN INT, AND THIS PANICKED ON
+                    // ONE.** `.into_int_value()` was unconditional here, so
+                    // `lower_module` PANICKED -- *"Found FloatValue but expected
+                    // the IntValue variant"* -- on a perfectly well-formed
+                    // `loop main(t: Float)`. A panic on a public entry point is a
+                    // defect class this line has recorded before.
+                    //
+                    // **The sibling restore in the `Op::Reset` path below already
+                    // guarded this**, with `if raw.is_float_value()`. Two sites
+                    // restoring the SAME resume parameter, one handling floats and
+                    // one panicking on them: the disagreement is the defect, and
+                    // it is why a single shared conversion is preferable to two.
+                    let rv_raw = func
+                        .get_nth_param(0)
+                        .expect("a stream declares its resume parameter");
+                    let rv = if rv_raw.is_float_value() {
+                        float_to_bits(&st.b, rv_raw.into_float_value(), i64t, float_bytes)
+                    } else {
+                        rv_raw.into_int_value()
+                    };
+                    // **THE RESUMED VALUE CARRIES ITS DECLARED KIND, AND THE
+                    // KIND COMES FROM THE TAG RATHER THAN FROM THE LLVM VALUE.**
+                    //
+                    // This was `push_w`, which marks the slot `Int` — correctly,
+                    // and that default is deliberately left alone: the operand
+                    // stack reuses slots, so a stale `Float` tag would otherwise
+                    // leak into a later integer pushed at the same depth. What
+                    // was wrong is that a float stream's reply took that default
+                    // too, so after a `yield` the reply was an integer-kinded
+                    // operand and the next float operation on it refused.
+                    //
+                    // The tag is the source, not `is_float_value()`. For FLOAT
+                    // the two agree, but the habit does not generalise — a
+                    // `Fixed` IS an `i64` at the LLVM level, so the machine type
+                    // cannot discriminate it, which this file already records
+                    // about the `Fixed` parameter seeding.
+                    //
+                    // Everything that is not a declared `Float` keeps exactly the
+                    // marking `push_w` gave it, so no non-float behaviour moves.
+                    let declared = chunk.param_types.first().copied();
+                    let resumed_kind = if declared == Some(TypeTag::Float) {
+                        OperandKind::Float
+                    } else {
+                        OperandKind::Int
+                    };
+                    // **A FLOAT'S WIDTH COMES FROM THE MODULE, NOT FROM THE TAG,
+                    // AND THAT IS WHY `width_of_tag` IS LEFT ALONE.**
+                    //
+                    // `width_of_tag` returns `Unknown` for `Float` and is right to:
+                    // it takes a TAG and a float's packed width is not on it. Its
+                    // own comment says a body width for a float field *"would be a
+                    // guess, which is the one thing this function exists not to
+                    // do."* Widening it would make it guess, for every caller,
+                    // including ones holding no module.
+                    //
+                    // **This site is not in that position.** `float_bytes` is in
+                    // scope — `float_to_bits` uses it two lines above — and it is
+                    // `1 << module.float_bits_log2 >> 3`: measured as **8** by
+                    // default and **4** under `narrow-float-32`, read from the
+                    // module's own header rather than from a cargo feature.
+                    //
+                    // That it is the RIGHT width is not an inference: the canonical
+                    // layout is `flat_byte_size(word_bytes, float_bytes,
+                    // addr_bytes)`, so the reference's own packing is parameterised
+                    // by exactly this figure.
+                    //
+                    // Without it a resumed float reply carried `Width::Unknown` and
+                    // `NewComposite` refused it — sound, but it meant a float reply
+                    // could never enter a composite while a `Byte` reply could.
+                    let resumed_width = if declared == Some(TypeTag::Float) {
+                        Width::Scalar(float_bytes)
+                    } else {
+                        declared.map(width_of_tag).unwrap_or(Width::Unknown)
+                    };
+                    st.push_k(rv, resumed_width, resumed_kind);
+                    note!(i + 1, st.depth);
+                    st.b.build_unconditional_branch(blocks[&(i + 1)]).unwrap();
+                    st.depth = saved_depth;
+                    st.b.position_at_end(here);
+                }
+                let k = yield_positions
+                    .iter()
+                    .position(|&y| y == i)
+                    .expect("this Yield is in the collected set")
+                    + 1;
+                let pb = private_base.expect("a general stream declares the private pointer");
+                let sp = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        pb,
+                        &[i64t.const_int(u64::from(data.stream_state_off), false)],
+                        "statep",
+                    )
+                    .unwrap()
+                };
+                st.b.build_store(sp, i64t.const_int(k as u64, false))
+                    .unwrap();
+                let v = st.pop();
+                build_typed_return(&st.b, func, v);
+                dead = true;
+            }
+
+            // **`Op::Reset`: CLEAR THE LOCALS, REWIND THE STATE, JUMP TO THE TOP.**
+            //
+            // The runtime clears every local to `Unit`, truncates the operand
+            // stack, resets the arena's ephemeral region and rewinds to just after
+            // `Op::Stream`. The first and last are emitted here.
+            //
+            // ⚠ **THE EMPTY-OPERAND-STACK PREMISE IS NOW CHECKED RATHER THAN
+            // ASSERTED IN PROSE.** This comment used to say the stack "is already
+            // empty, since the compiler emits `Stream ; body ; PopN(1) ; Reset`",
+            // and nothing verified it. **A premise in a comment is the
+            // least-tested thing in a codebase**, and one sentence away — in the
+            // `Op::GetIndex` arm — an identical "the compiler emits" claim was
+            // FALSE and cost an out-of-bounds read returned as a value.
+            //
+            // The runtime TRUNCATES the operand stack at `Reset`; native code
+            // does not, because its operands are SSA values with no stack to
+            // truncate. If a value were live across the back edge, the loop top
+            // would be re-entered at a depth the entry dispatch does not produce,
+            // and the two paths would disagree about the operand stack in exactly
+            // the way a resume point colliding with a branch target does.
+            //
+            // Checking costs one comparison at lowering time and refuses only
+            // programs for which the old prose was wrong.
+            //
+            // **It does NOT return.** The runtime reports `VmState::Reset` as a
+            // leg of its own, but the native driver collapses it — `step(a)`,
+            // `step(r1)`, `step(r2)` reproduces the yielded sequence — so the back
+            // edge is taken inside the same call.
+            //
+            // **THE COMPOSITE REGION NEEDS NO EXPLICIT RESET — but not for the
+            // reason this comment used to give.**
+            //
+            // It read: *"every site has a fixed offset, so the next iteration
+            // overwrites exactly the bytes a reset would have reclaimed"*. **That
+            // over-claims, and the tree now contradicts it.** An iteration that
+            // takes a branch skipping a construction site does not overwrite it,
+            // and the previous iteration's body is still sitting in the host's
+            // buffer when the stream suspends. `reset_region_retention.rs` reads
+            // those retained bytes back out and discriminates them from the
+            // poison and from a rebuilt body.
+            //
+            // What actually makes the retention unobservable is two premises:
+            //
+            // - **provenance** — a site's bytes are reachable only through a
+            //   pointer produced by that site's own `NewComposite`, and no two
+            //   sites share storage (`region_nonreuse.rs`);
+            // - **no pointer outlives its iteration** — locals are cleared just
+            //   above, the depth goes to zero so the operand slots and the spill
+            //   slice are abandoned, a composite that escapes through a `yield` is
+            //   REFUSED, and a slot-homed composite is copied into persistent
+            //   bytes rather than aliased.
+            //
+            // The escape routes are tabulated in `reset_region_retention.rs`,
+            // including the two it closes only indirectly. **Emitting a clear here
+            // would buy nothing**: it would pay per iteration to hide bytes
+            // nothing can name.
+            Op::Reset if retcon_stream => {
+                st.depth = 0;
+                if let Some(flags) = &st.runtime_kinds {
+                    flags.reset(&st.b);
+                }
+                if let Some(flags) = &st.ownership {
+                    for flag in &flags.locals {
+                        st.b.build_store(*flag, i64t.const_zero()).unwrap();
+                    }
+                }
+                for l in &st.locals {
+                    st.b.build_store(*l, i64t.const_zero()).unwrap();
+                }
+                // The resume after a Reset writes the parameter of the
+                // innermost stream frame, so a delegated `loop` restores the
+                // latest reply into its own parameter as the entry does. Until
+                // upstream 704 the reference wrote the entry's slot instead,
+                // and the delegated parameter read Unit after its first Reset.
+                let inherited = (retcon_delegate && chunk.param_count > 0)
+                    .then(|| coroutine::inherited_latest(ctx, &st.b, delegate_context.unwrap()));
+                if chunk.param_count > 0 && (retcon || inherited.is_some()) {
+                    let latest = inherited.as_ref().or(retcon_latest.as_ref()).unwrap();
+                    let reply = coroutine::ownership::load(&st.b, latest.value);
+                    let owned = coroutine::ownership::load(&st.b, latest.owned);
+                    let kind = coroutine::ownership::load(&st.b, latest.kind);
+                    let bytes = coroutine::ownership::load(&st.b, latest.bytes);
+                    let reply = coroutine::ownership::copy_bounded(
+                        &st.b,
+                        reply,
+                        retcon_reply_body_maximum,
+                        bytes,
+                        owned,
+                    );
+                    st.b.build_store(st.locals[0], reply).unwrap();
+                    let flags = st.runtime_kinds.as_ref().unwrap();
+                    st.b.build_store(flags.locals[0], kind).unwrap();
+                    st.b.build_store(flags.local_sizes[0], bytes).unwrap();
+                    if let Some(flags) = &st.ownership {
+                        st.b.build_store(flags.locals[0], owned).unwrap();
+                    }
+                }
+                // Bodies yielded in the cycle that ends here are released, as
+                // the virtual machine's epoch releases them, so the next cycle
+                // copies into the first slot again.
+                if retcon && let (Some(copy), Some(region)) = (yield_copy, region_base) {
+                    yield_cursor_reset(&st.b, region, copy, i64t);
+                }
+                let top = loop_top.unwrap();
+                note!(top, 0);
+                st.b.build_unconditional_branch(blocks[&top]).unwrap();
+                dead = true;
+            }
+            Op::Reset if general_stream => {
+                // **TRUNCATE, DO NOT REFUSE — AND THIS CORRECTS A REFUSAL ADDED
+                // EARLIER THE SAME DAY.**
+                //
+                // That refusal said native code "cannot" truncate the operand
+                // stack and so the loop top would be re-entered at a depth the
+                // entry dispatch never produces. **The premise was wrong in the
+                // half that mattered.** `src/vm.rs` at `Op::Reset` truncates the
+                // stack to just the locals, so DISCARDING the operands is
+                // exactly what the reference does — and discarding them leaves
+                // depth zero, which is precisely the depth the dispatch produces.
+                //
+                // The values are abandoned rather than stored: they live in
+                // operand slots nothing reads again. Nothing is emitted for this.
+                //
+                // The earlier refusal was not wrong to exist — it replaced a
+                // prose premise with a check, which is the right instinct. It was
+                // wrong to assume the disagreement was unresolvable without
+                // reading what the reference does at the same opcode.
+                st.depth = 0;
+                let top = loop_top.expect("general_stream implies a loop top");
+                for l in st.locals.iter() {
+                    st.b.build_store(*l, i64t.const_zero()).unwrap();
+                }
+                // **THEN PUT THE RESUME VALUE BACK IN SLOT 0.**
+                //
+                // The runtime's rewind is a SUSPENSION: `Op::Reset` returns
+                // `VmState::Reset`, the host resumes, and the resume writes slot
+                // 0 before the loop top runs again. Collapsing that leg into the
+                // same native call — which the driver's `step(a), step(r1), ...`
+                // shape requires — drops the write, so it is re-applied here.
+                //
+                // **Measured, not reasoned about.** Without this the first yield
+                // of every iteration after the first returned 0 where the runtime
+                // returned the resume value: `[7, 11, 0, 31]` against
+                // `[7, 11, 20, 31]`. The harness re-sends the SAME reply to the
+                // Reset leg and the Yielded leg that follows it, which is why
+                // parameter 0 is the right value to restore.
+                if let Some(l0) = st.locals.first() {
+                    let raw = func
+                        .get_nth_param(0)
+                        .expect("a stream declares its resume parameter");
+                    // **THROUGH THE HELPER, NOT A RAW BITCAST.** This was
+                    // `build_bit_cast(.., i64t)`, which is invalid IR for a
+                    // four-byte float -- the identical open-coding that broke
+                    // `Op::Neg` under `narrow-float-32`. Found by censusing every
+                    // `build_bit_cast` outside the two helpers after that fix:
+                    // this was the only one left.
+                    let stored = if raw.is_float_value() {
+                        float_to_bits(&st.b, raw.into_float_value(), i64t, float_bytes)
+                    } else {
+                        raw.into_int_value()
+                    };
+                    st.b.build_store(*l0, stored).unwrap();
+                }
+                let pb = private_base.expect("a general stream declares the private pointer");
+                let sp = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        pb,
+                        &[i64t.const_int(u64::from(data.stream_state_off), false)],
+                        "statep",
+                    )
+                    .unwrap()
+                };
+                st.b.build_store(sp, i64t.const_zero()).unwrap();
+                note!(top, st.depth);
+                st.b.build_unconditional_branch(blocks[&top]).unwrap();
+                dead = true;
+            }
+
+            Op::Yield => {
+                let v = st.pop();
+                let hook = yield_hook(ctx, module);
+                let resumed = match st
+                    .b
+                    .build_call(hook, &[v.into()], "yield")
+                    .unwrap()
+                    .try_as_basic_value()
+                {
+                    ValueKind::Basic(b) => b.into_int_value(),
+                    ValueKind::Instruction(_) => {
+                        unreachable!("kel_yield returns an i64, never void")
+                    }
+                };
+                st.push(resumed);
+            }
+            Op::Return if retcon => {
+                // Retcon completion payloads are undefined. Persist the final
+                // result in the caller's reply cell before destroying the frame.
+                let owned = st.owned_at(0);
+                let value = st.pop();
+                let value = retcon_completion.map_or(value, |(destination, size)| {
+                    coroutine::ownership::copy_to(&st.b, value, size, owned, destination)
+                });
+                st.b.build_store(retcon_reply.unwrap(), value).unwrap();
+                let cleanup = func
+                    .get_basic_blocks()
+                    .into_iter()
+                    .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                    .unwrap();
+                st.b.build_unconditional_branch(cleanup).unwrap();
+                dead = true;
+            }
+            Op::Return => {
+                if let Some(context) = ownership_context {
+                    let count = usize::from(chunk.param_count) + 1;
+                    for (part, value) in [
+                        (1, st.input_tags[st.depth - 1]),
+                        (2, st.input_body_sizes[st.depth - 1]),
+                    ] {
+                        let destination =
+                            coroutine::kinds::call_field(&st.b, context, count, count - 1, part);
+                        st.b.build_store(destination, value).unwrap();
+                    }
+                    let flag = st.owned_at(0);
+                    st.b.build_store(
+                        coroutine::ownership::field(&st.b, context, usize::from(chunk.param_count)),
+                        flag,
+                    )
+                    .unwrap();
+                }
+                let v = st.pop();
+                build_typed_return(&st.b, func, v);
+            }
+            other => {
+                return Err(LowerError::unsupported_op(
+                    &op_variant_name(other),
+                    String::new(),
+                ));
+            }
+        }
+    }
+
+    // A chunk whose ops end without `Op::Return`. The current verifier rejects
+    // this shape, but lower_module may receive unverified input. Historically
+    // verification admitted it. The VM pops a result, or uses Unit if its entire
+    // stack is empty, without truncating the departing frame. The legacy native
+    // route retains its historical behavior here. Coroutine lowering refuses
+    // this path, preserving the verified completion contract.
+    //
+    // Zero is this backend's `Unit`. `st.depth > 0` is guarded because `pop`
+    // decrements a `usize` unconditionally and would underflow on an empty
+    // stack, matching the VM's `stack.pop().unwrap_or(Unit)`.
+    //
+    // DELIBERATELY NOT bug-compatible: the VM additionally leaves the callee's
+    // whole frame on the shared operand stack in this path, unlike `Op::Return`
+    // which truncates to `old_frame.base`. That leak is a worst-case-memory
+    // under-count reported to the runtime owner. Reproducing a defect for
+    // fidelity would be the wrong call; revisit if the VM side is fixed.
+    if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
+        if retcon {
+            // coroutine::lower verifies first. The current verifier requires
+            // every reachable path to terminate through Return, Trap or Reset.
+            return Err(LowerError::UnsupportedShape(
+                "coroutine completion requires an explicit Return".into(),
+            ));
+        }
+        let v = if st.depth > 0 {
+            st.pop()
+        } else {
+            i64t.const_zero()
+        };
+        build_typed_return(&st.b, func, v);
+    }
+
+    // Checked once at the end rather than at each push, because the slot array
+    // is a provisioning decision and the useful diagnostic is the depth the
+    // chunk actually needed.
+    if st.ownership_width_unknown {
+        return Err(LowerError::UnsupportedShape(
+            "a potentially owned host body has no proven transfer extent".into(),
+        ));
+    }
+    if let Some(needed) = st.stack_overflow {
+        return Err(LowerError::OperandStackTooDeep {
+            needed: needed + 1,
+            provisioned: MAX_STACK,
+        });
+    }
+    // Same shape, opposite direction: an op stream that pops more than it
+    // pushes. A verified module cannot, but `lower_module` does not require
+    // verification and a panic is unrecoverable for its caller.
+    if st.stack_underflow {
+        return Err(LowerError::MalformedInput(String::from(
+            "an opcode popped an operand the stack did not hold; the chunk's op \
+             stream is not stack-balanced, which `verify()` would have rejected",
+        )));
+    }
+
+    Ok(func)
+}
+
+/// Check that the build host is little-endian, which shared-slot access
+/// requires.
+///
+/// The runtime decodes a shared slot with an explicit little-endian reader. An
+/// LLVM `load` uses TARGET endianness. The two agree only on a little-endian
+/// target, and every target on the committed list is one, so this refuses
+/// rather than silently byte-swapping the host's buffer.
+///
+/// **The check is on the build host, not on the emitted target**, because the
+/// lowering is not given a target triple. That is sufficient for the just-in-time
+/// path and for ahead-of-time emission to the host, and it is NOT sufficient for
+/// cross-compilation to a big-endian target. Making it sufficient means moving
+/// the check onto the `TargetMachine`, which is a change to the entry points
+/// rather than to this function.
+pub fn check_target_endianness() -> Result<(), LowerError> {
+    if cfg!(target_endian = "little") {
+        Ok(())
+    } else {
+        Err(LowerError::UnsupportedDataSlot {
+            slot: 0,
+            why: String::from(
+                "shared slots are stored little-endian and this host is big-endian; an LLVM load \
+                 would byte-swap them",
+            ),
+        })
+    }
+}
+
+/// Check that a module's declared word width is one this backend lowers.
+///
+/// Only 64-bit words (`word_bits_log2 == 6`) are supported. A narrower width
+/// would need every arithmetic result masked to the declared width, which is a
+/// later increment; refusing is correct until then.
+pub fn check_word_width(word_bits_log2: u8) -> Result<(), LowerError> {
+    if word_bits_log2 == 6 {
+        Ok(())
+    } else {
+        Err(LowerError::UnsupportedWordWidth(word_bits_log2))
+    }
+}
+
+#[cfg(test)]
+mod certification_tests {
+    use super::*;
+    use keleusma::bytecode::{NewCompositeOperand, Op};
+    use keleusma::value_layout::CompositeKind;
+
+    /// A chunk carrying only what the pre-pass reads, built from a real compile
+    /// so its other fields stay whatever the compiler considers valid rather
+    /// than being invented here and drifting from it.
+    fn chunk_with(ops: Vec<Op>) -> Chunk {
+        let src = "fn main(v: Word) -> Word { v + 1 }";
+        let m = keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse"),
+        )
+        .expect("compile");
+        let mut c = m.chunks.into_iter().next().expect("one chunk");
+        c.ops = ops;
+        c
+    }
+
+    /// The accepting case: two writes, both from sources whose width is fixed by
+    /// the instruction, and both the same.
+    ///
+    /// **`Const(0)` is an `Int` in the chunk this borrows**, which is what makes
+    /// it a word; the assertion below would be meaningless if it were not.
+    #[test]
+    fn two_agreeing_writes_certify_the_local() {
+        let c = chunk_with(vec![
+            Op::Const(0),
+            Op::SetLocal(0),
+            Op::GetLocal(0),
+            Op::Const(0),
+            Op::CheckedAdd,
+            Op::PopN(2),
+            Op::SetLocal(0),
+            Op::Return,
+        ]);
+        assert!(
+            matches!(
+                c.constants.first(),
+                Some(keleusma::bytecode::ConstValue::Int(_))
+            ),
+            "this subject needs an Int constant to be about word widths at all"
+        );
+        let certified = certified_local_widths(&c);
+        assert_eq!(certified.get(&0), Some(&Width::Scalar(8)));
+    }
+
+    /// **THE REFUSING CASE.** One write comes from a `GetLocal`, whose width is a
+    /// property of the operand rather than of the instruction, so the local is
+    /// not certified at all — rather than the unclassifiable write being ignored
+    /// as though the others agreed.
+    ///
+    /// Exercised here rather than from source because **no program this line can
+    /// currently write reaches it**: locals written more than once are, in the
+    /// shipped corpus and in every source form tried, loop counters, and those
+    /// are always a constant plus an arithmetic result. That is a fact about the
+    /// compiler's output, not a reason to leave the path untested.
+    #[test]
+    fn one_unclassifiable_write_sinks_the_local() {
+        let c = chunk_with(vec![
+            Op::Const(0),
+            Op::SetLocal(0),
+            Op::GetLocal(1),
+            Op::SetLocal(0),
+            Op::Return,
+        ]);
+        assert_eq!(
+            certified_local_widths(&c).get(&0),
+            None,
+            "a local with an unclassifiable write must not be certified"
+        );
+    }
+
+    /// A multi-push instruction is distinguished by WHICH push is taken. The
+    /// flag slot of a checked triple is not the arithmetic result, and
+    /// certifying on the instruction alone would label it a word.
+    #[test]
+    fn the_flag_slot_of_a_triple_is_not_certified_as_a_word() {
+        assert_eq!(
+            instruction_fixed_width(&chunk_with(vec![Op::CheckedAdd]), 0, 0),
+            Some(Width::Scalar(8)),
+            "push 0 of a checked triple is the arithmetic result"
+        );
+        assert_eq!(
+            instruction_fixed_width(&chunk_with(vec![Op::CheckedAdd]), 0, 2),
+            None,
+            "push 2 of a checked triple is the overflow flag, not a word"
+        );
+    }
+
+    /// A composite construction is not a fixed-width source: nothing about the
+    /// instruction alone says how a local holding one should be packed.
+    #[test]
+    fn a_composite_construction_is_not_a_fixed_width_source() {
+        let c = chunk_with(vec![Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: 0,
+            byte_size: 8,
+        })]);
+        assert_eq!(instruction_fixed_width(&c, 0, 0), None);
+    }
+}

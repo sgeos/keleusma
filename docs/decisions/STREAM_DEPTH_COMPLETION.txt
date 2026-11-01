@@ -1,0 +1,39 @@
+COMPLETION CONDITION — stream agreement depth
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test drives resumable streams against the reference for a number of ticks
+   substantially greater than the previous maximum in this package, and asserts
+   the two implementations produce identical sequences.
+
+2. More than one stream shape is covered, including one that carries a local
+   binding across a yield and one whose control flow branches.
+
+3. At least one covered stream completes and is re-entered, so the rewind path is
+   exercised rather than only the suspend-and-resume path.
+
+4. The replies fed to the streams vary across ticks rather than repeating a single
+   value.
+
+5. The test fails if the number of compared values falls below a recorded floor,
+   so a shortened run cannot pass as a deep one.
+
+6. The tree records why a single-yield stream is not driven by the same helper,
+   stating the structural difference rather than treating it as an error.
+
+7. Any claim the tree makes about this measurement is limited to what was
+   measured; in particular it does not claim anything about memory growth unless
+   memory was measured.
+
+8. Every assertion added is accompanied by evidence that it fails when the
+   condition it describes is violated.
+
+9. The recorded test population figures and the handoff's state-table figures
+   agree with the tree, and the backend gate passes in both float configurations.
+
+10. Files under src/ and tests/ at the repository root carry no changes
+    originating from this line.

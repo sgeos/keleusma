@@ -1,0 +1,48 @@
+COMPLETION CONDITION — absorb, verify, publish
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE SUITE'S STATE IS OBSERVED, NOT INFERRED
+   The tree records a run of the main workspace suite performed after the
+   upstream fix was absorbed, giving both the runner's exit status and the summed
+   pass, fail and binary counts, with the two agreeing. No document describes the
+   suite as passing on the strength of an upstream change alone.
+
+2. THE SUBPROJECT GATE IS ALSO RUN
+   The tree records a run of the detached subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, again with exit status and counts agreeing.
+
+3. A RUN THAT ENDED EARLY IS NOT A RESULT
+   Any run terminated by a signal or a time limit is identified as such and
+   repeated, and its numbers are not recorded as an outcome.
+
+4. THE KNOWN-RED RECORD MATCHES REALITY
+   If the previously failing test now passes, the record describing it as a known
+   red is removed or marked resolved, and the tree names the run that showed it
+   clear. If it still fails, the record stays and says so.
+
+5. PUBLICATION STATE IS TRUE AND VISIBLE
+   Either the branch agrees with its remote, or the tree records that it is ahead
+   and why. No verification gate was bypassed to reach either state.
+
+6. THE ABSORPTION IS MEASURED, NOT ASSUMED
+   A prediction for the incoming change is recorded before it is merged, and the
+   outcome is compared against it. Where a count moves for more than one reason,
+   the arithmetic is stated rather than a single number asserted. The check that
+   shared trees carry no local edits is run and its result reported, including
+   whether it could have detected one.
+
+7. FIGURES THAT COULD HAVE MOVED ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed.
+
+8. CLAIMS MATCH THE TREE
+   No document asserts a figure, blocker, or status the tree contradicts.
+   Anything corrected is visible as corrected rather than silently replaced.
+
+9. OWNED FILES ARE UNTOUCHED
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory. No uncommitted changes remain.

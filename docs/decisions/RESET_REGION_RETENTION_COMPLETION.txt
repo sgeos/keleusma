@@ -1,0 +1,50 @@
+COMPLETION CONDITION — the Op::Reset region-retention premise
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. RETAINED BYTES ARE DEMONSTRATED, NOT ASSUMED.
+   A test runs a general stream natively for at least two iterations over a
+   region buffer pre-filled with a non-zero poison value, and asserts that after
+   the run a composite site's bytes hold data written by an iteration that did
+   NOT rewrite them. The assertion distinguishes three states -- poison, the
+   earlier iteration's value, the later iteration's value -- so it cannot pass by
+   reading an uninitialised or coincidentally-zero buffer. The site offset is
+   obtained from the backend's own region planner rather than written as a
+   literal.
+
+2. THE SAME PROGRAM IS SHOWN TO AGREE WITH THE RUNTIME.
+   The yielded sequence of the program used in (1), over the same iterations, is
+   compared against the virtual machine and matches. The comparison refuses to
+   run if the backend declines the program.
+
+3. EVERY ESCAPE ROUTE IS ENUMERATED WITH A LIVE MECHANISM.
+   A single place in the tree lists the ways a pointer into the ephemeral region
+   could outlive the iteration that created it -- at minimum: a local, an operand
+   stack entry, a spilled operand, a value handed to the host at a yield, and
+   persistent storage -- and for each one either asserts the closing mechanism is
+   present in the emitted lowering or cites the test that already asserts it. A
+   route with no mechanism is stated as open rather than omitted.
+
+4. AT LEAST ONE ROUTE'S CHECK CARRIES A MUST-FIRE CONTROL.
+   Some assertion in (3) is accompanied by a case proving the check can report a
+   violation -- for example a probe whose shape makes the count differ, or a
+   program the mechanism refuses paired with one it accepts. A check that would
+   pass against an empty or unrelated input does not satisfy this.
+
+5. THE CODE COMMENT NO LONGER OVER-CLAIMS.
+   The comment in the Reset lowering that justifies emitting no region reset does
+   not state or imply that the next iteration necessarily overwrites the site's
+   bytes. It rests the argument on pointer provenance and on pointers not
+   outliving their iteration, and it points to the test carrying the evidence.
+
+6. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+7. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with the test count
+   re-derived rather than quoted from an earlier record.
+
+8. WHAT THE NEW CHECK CANNOT SEE IS WRITTEN DOWN next to it, naming at least one
+   concrete class of program or route outside its reach.

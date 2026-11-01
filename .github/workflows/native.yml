@@ -1,0 +1,179 @@
+name: Native gate
+
+# The complete native gate runs here in both float configurations, as the
+# operator directed on 2026-10-22. Until then this workflow ran only the
+# default-feature non-corpus subset, and the corpus differential and the
+# narrow-float configuration ran only when someone ran tools/backend-gate.sh.
+#
+# Paths: every input the native suite reads, plus its build inputs. The read set
+# is REACH in native_codegen/tools/gate-status.sh, which reach_census.rs checks
+# against the suite's actual reads, and native_workflow.rs checks that every
+# REACH entry is listed here, so the two cannot drift apart silently.
+on:
+  push:
+    branches: [main, 'v0.3.0']
+    paths:
+      - 'native_codegen/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'compiler/kel/**'
+      - 'docs/decisions/ABSORPTION_*_BRIEF.md'
+      - 'docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md'
+      - 'docs/process/REVERSE_PROMPT.md'
+      - 'docs/process/handoffs/v0.3.0.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'keleusma-arena/**'
+      - 'keleusma-macros/**'
+      - 'keleusma-wire/**'
+      - 'keleusma-wire-derive/**'
+      - '.github/workflows/native.yml'
+  pull_request:
+    branches: [main, 'v0.3.0']
+    paths:
+      - 'native_codegen/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'compiler/kel/**'
+      - 'docs/decisions/ABSORPTION_*_BRIEF.md'
+      - 'docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md'
+      - 'docs/process/REVERSE_PROMPT.md'
+      - 'docs/process/handoffs/v0.3.0.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'keleusma-arena/**'
+      - 'keleusma-macros/**'
+      - 'keleusma-wire/**'
+      - 'keleusma-wire-derive/**'
+      - '.github/workflows/native.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native gate (${{ matrix.label }})
+    runs-on: macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: default features
+            flag: ''
+          - label: narrow-float-32
+            flag: '--narrow'
+    defaults:
+      run:
+        working-directory: native_codegen
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+      NEXTEST_TEST_THREADS: 2
+      # Tests that need llc and llvm-readobj FAIL rather than skip when absent.
+      KEL_REQUIRE_LLVM_TOOLS: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Native provenance tests inspect historical commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          # The Rust host is also built for x86_64 and run under Rosetta,
+          # operator question 15.
+          targets: x86_64-apple-darwin
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Install and verify LLVM 22
+        run: |
+          test "$(uname -m)" = arm64
+          brew install llvm@22 shellcheck
+          native_llvm_prefix="$(brew --prefix llvm@22)"
+          case "$("$native_llvm_prefix/bin/llvm-config" --version)" in
+            22.1.*) ;;
+            *) echo 'Expected LLVM 22.1' >&2; exit 1 ;;
+          esac
+          "$native_llvm_prefix/bin/llc" --version
+          "$native_llvm_prefix/bin/llvm-readobj" --version
+          cc --version
+          {
+            echo "LLVM_SYS_221_PREFIX=$native_llvm_prefix"
+            echo "KEL_LLVM_BIN=$native_llvm_prefix/bin"
+            echo "RUSTFLAGS=-L native=$(brew --prefix)/lib"
+            echo "SDKROOT=$(xcrun --show-sdk-path)"
+          } >> "$GITHUB_ENV"
+      - name: Lockfile is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: Shell analysis
+        run: shellcheck tools/*.sh
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
+      - name: Complete native gate
+        # fmt, clippy, the suite outside the corpus, the corpus differential,
+        # and the suite outside the corpus again under the middle end. The
+        # script exits non-zero on any phase failure.
+        run: tools/backend-gate.sh ${{ matrix.flag }}
+      - name: Gate record written by this run
+        if: always()
+        run: cat GATE_RECORD.md
+
+  # The operator ruled on question 12, 2026-10-28, that the two Linux targets
+  # execute on hosted Ubuntu runners, limited to the two tests that build, link
+  # and run a library. On its own triple `tier_one_targets.rs` links with the
+  # system `cc` and fails if that triple did not execute.
+  linux:
+    name: Native Linux targets (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: native_codegen
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      KEL_REQUIRE_LLVM_TOOLS: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install and verify LLVM 22
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 22
+          sudo apt-get install -y llvm-22-dev libpolly-22-dev libzstd-dev zlib1g-dev
+          native_llvm_prefix=/usr/lib/llvm-22
+          case "$("$native_llvm_prefix/bin/llvm-config" --version)" in
+            22.1.*) ;;
+            *) echo 'Expected LLVM 22.1' >&2; exit 1 ;;
+          esac
+          "$native_llvm_prefix/bin/llc" --version
+          "$native_llvm_prefix/bin/llvm-readobj" --version
+          cc --version
+          {
+            echo "LLVM_SYS_221_PREFIX=$native_llvm_prefix"
+            echo "KEL_LLVM_BIN=$native_llvm_prefix/bin"
+            echo "RUSTFLAGS=-L native=$native_llvm_prefix/lib"
+          } >> "$GITHUB_ENV"
+      - name: Build, link and run on this triple
+        run: cargo test --locked --test tier_one_targets --test kel_native_cli -- --nocapture

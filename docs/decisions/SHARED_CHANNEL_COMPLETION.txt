@@ -1,0 +1,37 @@
+COMPLETION CONDITION — the shared channel files
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. This line's handoff no longer states a rule about which shared process files
+   this line writes that is contradicted by the repository history. What it states
+   matches what this line does.
+
+2. The outgoing channel file shared with the other line contains both lines'
+   material: this line's section is present, and substantial content from the
+   other line precedes it. A test asserts both, and fails if either is lost.
+
+3. That test keys on markers this line controls and on structural properties, not
+   on wording the other line owns, so that ordinary edits by the other line do not
+   fail it.
+
+4. If the enumeration or search the test performs finds nothing, it fails as a
+   broken probe rather than passing.
+
+5. Any collision hazard that has not actually occurred is recorded as predicted
+   and not as observed, and the tree distinguishes the two.
+
+6. The open question of where this line's outgoing reports should live is left to
+   the operator, recorded once, and not answered unilaterally in the tree.
+
+7. This line's open reports to the other line are still present and still watched
+   by the instrument that fails when a report's subject changes.
+
+8. The recorded test population figures and the handoff's state-table figures
+   agree with the tree, and the backend gate passes in both float configurations.
+
+9. Files under src/ and tests/ at the repository root carry no changes originating
+   from this line.
