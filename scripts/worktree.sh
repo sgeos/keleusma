@@ -26,8 +26,8 @@
 # SCRATCH_PACKAGES whose Cargo.toml exists in the new tree. `new` refuses a leaf whose
 # scratch folder already exists, or that another worktree already uses, because
 # scratch.sh would link the new tree to that output. `rm` deletes the tree's scratch
-# folder once the tree is gone, and `list` reports scratch folders that no tree uses,
-# deleting none. Without SCRATCH_BASE nothing changes. The operator approved this on
+# folder once the tree is gone, and `list` reports scratch folders that no tree uses
+# and package targets of live trees that are not links, deleting none. Without SCRATCH_BASE nothing changes. The operator approved this on
 # 2026-10-31, in docs/process/kaizen/2026-10-31-scratch-volume-proposal.md.
 set -euo pipefail
 
@@ -131,10 +131,29 @@ cmd_new() {
   fi
 }
 
+# Report each package `target` of a live tree that is a directory rather than a link,
+# which is build output on the tree's own volume. Trees made without this script, such
+# as Claude Code's agent trees under .claude/worktrees/, are the expected case.
+report_unlinked() {
+  local paths tree target
+  paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
+  while IFS= read -r tree; do
+    [ -n "$tree" ] && [ -d "$tree" ] || continue
+    while IFS= read -r target; do
+      if [ -n "$target" ] && [ -d "$tree/$target" ] && [ ! -L "$tree/$target" ]; then
+        printf 'build output not on the scratch volume: %s (%s)\n' \
+          "$tree/$target" "$(du -sh "$tree/$target" | cut -f1)"
+      fi
+    done <<< "$(package_targets "$tree")"
+  done <<< "$paths"
+}
+
 cmd_list() {
   git worktree list
-  [ -n "${SCRATCH_BASE:-}" ] && [ -d "$SCRATCH_BASE/$REPO_NAME" ] || return 0
-  # Report, never delete. The operator decides what happens to an orphaned folder.
+  [ -n "${SCRATCH_BASE:-}" ] || return 0
+  # Report, never delete or move. The operator decides what happens to the output.
+  report_unlinked
+  [ -d "$SCRATCH_BASE/$REPO_NAME" ] || return 0
   local used folder
   used="$(tree_names)"
   for folder in "$SCRATCH_BASE/$REPO_NAME"/*/; do
