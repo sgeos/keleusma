@@ -666,9 +666,13 @@ extension to 26 modules and its inferred-empty entry stacks. Their `f90fe688`, #
 the four closing pins in `tests/composite_escape_routes.rs`, now eight tests, all named in
 their evidence index so the index guard fails on any rename, merged at 22 of 22 with the tip
 at `71792ecc` and subsequently `f9a7b3e4`, carrying the landed confinement analysis of the
-Appendix D row. The merge sequence is ruled, this line into V0.2.X with V0.3.X rebasing,
-authorized on the V0.2.X side, awaiting this line's operator. B2 adoption and the accounting
-change remain explicitly unruled.
+Appendix D row. This line merges into V0.2.X. Three operators ruled on how the lines absorb
+one another, and each ruling stays attributed to its operator. This line's operator ruled that
+the V0.2.X line is then merged into the V0.3.X line. The V0.2.X operator ruled that V0.3.X
+rebases. The V0.3.X operator ruled sync with no mechanism mandated, and the V0.3.X line
+absorbed this result by merge. This line's operator released the branch for its merge into
+V0.2.X on 2026-10-30, a ruling relayed by the V0.2.X line and confirmed first-hand in this
+line's session on 2026-10-31. B2 adoption and the accounting change remain explicitly unruled.
 
 **The audits and revisions.** Round one, 2026-08-24, five contexts against `de8b3f68`,
 record in [`AUDIT_2026-08-24.md`](./AUDIT_2026-08-24.md), repaired at `15532455`. Round two,

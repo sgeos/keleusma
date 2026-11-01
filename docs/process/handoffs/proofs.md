@@ -6,14 +6,15 @@ The proof line's mailbox and its self-contained resume prompt in one file, follo
 per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 `git show origin/proofs:docs/process/handoffs/proofs.md`.
 
-> **REFRESHED 2026-08-29, second stamp, describing the state at `391f0b51` with only handoff
-> commits atop it.** Every validity check below was re-run and passed at refresh time, and both
-> peer mailboxes were swept, the V0.3.X mailbox independently recording the topology correction
-> and the backend-row retraction consistently with this file. The line's first proof is
-> complete and landed on both peer lines. Nothing is in flight, nothing is owed to or by either
-> peer, no loop, cron, or monitor is armed, and every open item is an operator decision. A
-> resuming session should validate below, read the three audit records, and then wait for the
-> operator.
+> **REFRESHED 2026-10-31, third stamp, describing the release of this line into V0.2.X.**
+> The operator released the branch, a ruling relayed by the V0.2.X line on 2026-10-30 and
+> confirmed first-hand in this line's session on 2026-10-31. This line merged `origin/v0.2.3`
+> at `364e33fa` into `proofs` at `5921a7c5`, which replaced the five lines in four files that
+> matched the kept private term list, scanned to zero at the merged tip. The queued Appendix E
+> correction is folded in. A pull request from `proofs` into `v0.2.3` carries this file and
+> the correction, the only work of this line not already on `v0.2.3`. The interline mailbox is
+> this line's message channel, `interline inbox --line proofs`, and its five notices up to
+> 2026-11-01 were read and acknowledged on 2026-10-31.
 
 ## Validity
 
@@ -22,7 +23,7 @@ Validate by ancestry and by content, never by a hash match.
 ```sh
 # Ancestry. All three must succeed.
 git merge-base --is-ancestor 8414a1a1 origin/v0.2.3     # the proof's landing merge
-git merge-base --is-ancestor f779be7d origin/proof/composite-region-reuse   # the CLEAN-verdict tip
+git merge-base --is-ancestor f779be7d origin/v0.2.3     # the CLEAN-verdict tip, its own branch pruned 2026-10-31
 git merge-base --is-ancestor 613a2b98 origin/proofs     # the no-ff merge into this line
 
 # Content, measured at 391f0b51. If any differs, say so rather than acting on the state below.
@@ -40,8 +41,8 @@ ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | the merged proof plus this file, `391f0b51` and handoff commits |
-| `proof/composite-region-reuse` | the first proof's feature branch | complete, tip `f779be7d`, merged |
+| `proofs` | top-level integration branch | `v0.2.3` merged in at `5921a7c5`, then the release commit |
+| `proof/composite-region-reuse` | the first proof's feature branch | complete, tip `f779be7d`, merged, remote branch pruned by the V0.2.X line on 2026-10-31 |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
 proofs are cut from `proofs` as feature branches and merged back with no-fast-forward merges.
@@ -110,14 +111,12 @@ ruling it is and how it arrived.**
 
 ## QUEUED FOR THE NEXT LANDING
 
-One item only. The proof's Appendix E contains the one-clause relayed-rebase wording, "with
-V0.3.X rebasing", to be corrected to the attributed three-ruling form the topology record
-above carries, folded into whatever this line lands next rather than a single-sentence pull
-request through the full gate.
+Nothing. The Appendix E correction to the attributed three-ruling form landed with the
+release commit on 2026-10-31.
 
 ## OPEN, ALL WITH THE OPERATOR
 
-1. **`src/verify.rs:1079`**, adopting confined-site accounting, explicitly unruled, lowering a
+1. **`src/verify.rs:1337`**, the loop accounting the proof's Appendix E cites, adopting confined-site accounting, explicitly unruled, lowering a
    published worst-case-memory-usage figure. The V0.2.X line's landed `src/confine.rs`
    analysis is assembling the measured consequence, and the proof's Theorem C remark is the
    piece to read first, footprint can exceed the branch-max bound on branch-dominated shapes,
