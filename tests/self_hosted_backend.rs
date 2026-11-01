@@ -81,11 +81,13 @@ fn non_host_target_is_refused() {
 /// retry hint.
 #[test]
 fn out_of_subset_program_is_rejected_loudly() {
-    // A nested destructuring `let`, which the reference compiles and the self-hosted
-    // destructuring filter refuses. It replaced a pipe into a generic template, which both
-    // compilers instantiate byte-identically since 2026-10-31, and that one replaced a
-    // newtype, which compiles since Order 6 erased newtypes.
-    let src = "fn main() -> Word { let (a, (b, c)) = (1, (2, 3)); a + b + c }";
+    // A typed destructuring `let`, which the reference compiles and the self-hosted
+    // destructuring filter refuses. It replaced a nested destructuring `let`, which both
+    // compilers compile byte-identically since the operator's ruling of 2026-10-31. That one
+    // replaced a pipe into a generic template, which both compilers instantiate
+    // byte-identically since 2026-10-31, and that one a newtype, which compiles since Order 6
+    // erased newtypes.
+    let src = "fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }";
     match self_hosted_compile(src, &Target::host()) {
         Err(e @ SelfHostError::Unsupported { .. }) => {
             // An out-of-subset limitation: retrying with the Rust backend helps.

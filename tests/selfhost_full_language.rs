@@ -790,12 +790,17 @@ fn destructuring_and_wildcard_lets_compile_and_stale_equality_flags_are_cleared(
             "loop main(r: Word) -> Word { let _ = yield 0; 1 }",
             Identical,
         ),
-        // Refused: a nested pattern and an annotated wildcard.
+        // A nested pattern, refused until the operator's ruling of 2026-10-31.
         (
             "fn f() -> ((Word, Word), Word) { ((1, 2), 3) }\nfn main() -> Word { let ((a, b), c) = f(); a }",
+            Identical,
+        ),
+        // Refused: an annotated wildcard and a typed pattern.
+        ("fn main() -> Word { let _: Word = 3; 2 }", Unsupported),
+        (
+            "fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
             Unsupported,
         ),
-        ("fn main() -> Word { let _: Word = 3; 2 }", Unsupported),
         // Stale whole-value flags.
         ("fn main() -> bool { let a = [1, 2]; 1 == a[0] }", Identical),
         (
@@ -1749,8 +1754,9 @@ fn delegation_types_and_shadowed_pipe_targets_have_their_pinned_outcomes() {
 
 /// The `let` pattern follow-ups of 2026-10-31. A flat struct pattern destructures through
 /// the lexer's destructuring filter, which rewrites it to the reference's own lowering,
-/// `let T = e; let x = T.x;`. A nested pattern and a single-variant enum pattern, which the
-/// reference admits, are refused here as unsupported, so neither can diverge. A refutable
+/// `let T = e; let x = T.x;`. A nested pattern and a single-variant enum pattern, refused
+/// here until the operator's ruling later that day, compile byte-identically since, and
+/// `let_patterns_nest_and_bind_variants_byte_identically` covers them in depth. A refutable
 /// pattern is refused by the reference type checker, and the self-hosted pipeline reports
 /// that rejection.
 #[test]
@@ -1823,18 +1829,18 @@ fn let_struct_patterns_compile_and_refutable_lets_are_rejected() {
             ),
             Identical,
         ),
-        // Admitted by the reference and refused here.
+        // Refused here until the operator's ruling of 2026-10-31.
         (
             format!(
                 "{P}struct Q {{ p: P, z: Word }}\nfn main() -> Word {{ let Q {{ p: P {{ x, y }}, z }} = Q {{ p: P {{ x: 1, y: 2 }}, z: 3 }}; x + y + z }}"
             ),
-            Unsupported,
+            Identical,
         ),
         (
             String::from(
                 "enum W { A(Word, Word) }\nfn main() -> Word { let W::A(x, y) = W::A(3, 4); x * 10 + y }",
             ),
-            Unsupported,
+            Identical,
         ),
         // A mismatched struct name and every refutable form are reference rejections.
         (
@@ -1874,6 +1880,353 @@ fn let_struct_patterns_compile_and_refutable_lets_are_rejected() {
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Nested `let` patterns and single-variant enum patterns, the operator's ruling of
+/// 2026-10-31. The lexer's destructuring filter gives each nested pattern a hidden binding of
+/// its own, as the reference gives it a fresh local, and reads a variant's payload through the
+/// parser's enum payload read, the reference's `GetEnumField`. Every combination of tuple,
+/// struct and variant patterns the reference admits is here, with grouping parentheses,
+/// wildcards, trailing commas, Byte, bool, Float, array and composite elements, and the
+/// statement in a branch, a loop body, a stream and a generic template. `Identical` is the
+/// shipping cross-check, and the bytes are compared again directly so the claim does not rest
+/// on the classifier.
+///
+/// The forms still refused are refused by the filter or by the parser, never compiled to
+/// different bytes. They are a typed pattern, a nesting deeper than six open patterns, more
+/// than twenty-four pattern items, and a variant whose payload holds an enum, whose payload
+/// layout the parser does not model. The last is a `match` divergence too, which the
+/// cross-check refuses, so the `let` form stays outside what the `match` form already
+/// reaches.
+#[test]
+fn let_patterns_nest_and_bind_variants_byte_identically() {
+    const P: &str = "struct P { x: Word, y: Word }\n";
+    const Q: &str = "struct Q { p: P, z: Word }\n";
+    const W: &str = "enum W { A(Word, Word) }\n";
+    let cases: Vec<(String, Class)> = vec![
+        // Tuples in tuples.
+        (
+            String::from(
+                "fn main() -> Word { let (a, (b, c)) = (1, (2, 3)); a * 100 + b * 10 + c }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main(p: (Word, (Word, Word))) -> Word { let (a, (b, c)) = p; a + b + c }",
+            ),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let ((a, b), c) = ((1, 2), 3); a + b + c }"),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let ((a, _), (_, d)) = ((1, 2), (3, 4)); a + d }"),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (a, (b, (c, (d, e)))) = (1, (2, (3, (4, 5)))); a + b + c + d + e }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (a, (b, c), (d, e), (f, g)) = (1, (2, 3), (4, 5), (6, 7)); a + c + e + g }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (x, (y, z)) = (true, (7 as Byte, 9)); if x { (y as Word) + z } else { 0 } }",
+            ),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let (x, (y, z)) = (1.5, (2, 3)); y + z }"),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn mk() -> (Word, (Word, Word)) { (1, (2, 3)) }\nfn main() -> Word { let (a, (b, c)) = mk(); a + b + c }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (a, (b, c)) = (1, (2, 3)); let (d, (e, f)) = (a, (b, c)); d + e + f }",
+            ),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let(a,(b,c))=(1,(2,3));a+b+c }"),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let (a, (b, c,),) = (1, (2, 3)); a + b + c }"),
+            Identical,
+        ),
+        // Grouping parentheses are transparent, as in the reference.
+        (
+            String::from("fn main() -> Word { let (a) = 5; a }"),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let ((a, b)) = (5, 6); a + b }"),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let (a, (b)) = (5, 6); a + b }"),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let (a, (_)) = (1, 2); a }"),
+            Identical,
+        ),
+        (
+            String::from("fn main() -> Word { let ((_)) = 3; 4 }"),
+            Identical,
+        ),
+        // Structs in structs and tuples, and tuples in structs.
+        (
+            format!(
+                "{P}{Q}fn main(q: Q) -> Word {{ let Q {{ p: P {{ x, y }}, z }} = q; x + y + z }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}{Q}struct R {{ q: Q, w: Word }}\nfn main(r: R) -> Word {{ let R {{ q: Q {{ p: P {{ x, y: _ }}, z }}, w: k }} = r; x + z + k }}"
+            ),
+            Identical,
+        ),
+        (
+            format!("{P}fn main(p: P) -> Word {{ let (P {{ x, y }}, c) = (p, 3); x + y + c }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn main() -> Word {{ let (P {{ x: a, y: b }}, P {{ x: c, y: d }}) = (P {{ x: 1, y: 2 }}, P {{ x: 3, y: 4 }}); a + b + c + d }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn mk() -> (P, Word) {{ (P {{ x: 1, y: 2 }}, 3) }}\nfn main() -> Word {{ let (P {{ x, y }}, c) = mk(); x + y + c }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "struct S { t: (Word, Word), z: Word }\nfn main(s: S) -> Word { let S { t: (a, b), z } = s; a + b + z }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "struct S { t: (Word, bool), z: Word }\nfn main(s: S) -> Word { let S { t: (a, f), z: _ } = s; if f { a } else { 0 } }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{P}fn main(p: P) -> Word {{ let (P {{ x, y }}) = p; x + y }}"),
+            Identical,
+        ),
+        // Single-variant enum patterns, alone and nested either way.
+        (
+            format!("{W}fn main(w: W) -> Word {{ let W::A(x, y) = w; x * 10 + y }}"),
+            Identical,
+        ),
+        (
+            format!("{W}fn main(w: W) -> Word {{ let W::A(_, y) = w; y }}"),
+            Identical,
+        ),
+        (
+            format!("{W}fn main(w: W) -> Word {{ let W::A(x, (y)) = w; x + y }}"),
+            Identical,
+        ),
+        (
+            format!("{W}fn main(w: W) -> Word {{ let (W::A(x, y)) = w; x + y }}"),
+            Identical,
+        ),
+        (
+            String::from("enum W { A }\nfn main(w: W) -> Word { let W::A = w; 3 }"),
+            Identical,
+        ),
+        (
+            String::from("enum W { A() }\nfn main(w: W) -> Word { let W::A() = w; 3 }"),
+            Identical,
+        ),
+        (
+            String::from(
+                "enum W { A(Word, Byte) }\nfn main(w: W) -> Word { let W::A(_, b) = w; b as Word }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "enum W { A(Word, (Word, Word)) }\nfn main(w: W) -> Word { let W::A(x, (y, z)) = w; x + y + z }",
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}enum W {{ A(P, bool) }}\nfn main(w: W) -> Word {{ let W::A(P {{ x, y }}, b) = w; if b {{ x + y }} else {{ 0 }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}enum W {{ A(P, bool) }}\nfn main(w: W) -> Word {{ let W::A(p, _) = w; p.x }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "enum W { A([Word; 3]) }\nfn main(w: W) -> Word { let W::A(a) = w; a[1] }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{W}fn main(w: W) -> Word {{ let (W::A(x, y), c) = (w, 2); x + y + c }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{W}struct S {{ w: W, z: Word }}\nfn main(s: S) -> Word {{ let S {{ w: W::A(x, y), z }} = s; x + y + z }}"
+            ),
+            Identical,
+        ),
+        // The statement in other positions.
+        (
+            String::from(
+                "fn main(c: bool) -> Word { if c { let (a, (b, d)) = (1, (2, 3)); a + b + d } else { 0 } }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { for i in 0..3 { let (a, (b, c)) = (1, (2, 3)); } 7 }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "loop main(r: Word) -> Word { let (a, (b, c)) = (r, (2, 3)); let n = yield a + b + c; yield n }",
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{W}loop main(r: Word) -> Word {{ let W::A(x, y) = W::A(r, 2); let n = yield x + y; yield n }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn id<T>(x: T) -> T { let (a, (b, c)) = (1, (2, 3)); x }\nfn main() -> Word { id(4) }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "use shell::run\nfn main() -> Word { let ((code, details)) = shell::run(\"x\"); code }",
+            ),
+            Identical,
+        ),
+        // At the filter's capacities. Six open patterns and twenty-four items are admitted.
+        (
+            String::from(
+                "fn main() -> Word { let (a, (b, (c, (d, (e, (f, g)))))) = (1, (2, (3, (4, (5, (6, 7)))))); a + g }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (a, (b, (c, (d, (e, (f, (g, h))))))) = (1, (2, (3, (4, (5, (6, (7, 8))))))); a + h }",
+            ),
+            Unsupported,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v) = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22); a + v }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main() -> Word { let (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w) = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23); a + w }",
+            ),
+            Unsupported,
+        ),
+        // Still refused, and never compiled to different bytes.
+        (
+            String::from("fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }"),
+            Unsupported,
+        ),
+        (
+            String::from(
+                "enum V { B(Word) }\nenum W { A(V, Word) }\nfn main(w: W) -> Word { let W::A(V::B(x), y) = w; x + y }",
+            ),
+            Unsupported,
+        ),
+        // Reference rejections, which the pipeline reports as such.
+        (
+            format!("{W}fn main(w: W) -> Word {{ let v = w; v.0 }}"),
+            RefRejects,
+        ),
+        (
+            String::from("fn main() -> Word { let (a, (b,)) = (1, (2,)); a }"),
+            RefRejects,
+        ),
+        (
+            String::from("fn main() -> Word { let () = (); 4 }"),
+            RefRejects,
+        ),
+        (
+            String::from(
+                "enum E { A(Word), B }\nfn main() -> Word { let (E::A(x), y) = (E::A(4), 2); x + y }",
+            ),
+            RefRejects,
+        ),
+    ];
+    let mut identical = 0usize;
+    let mut mismatches = Vec::new();
+    for (src, expected) in &cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+            continue;
+        }
+        if *expected != Identical {
+            continue;
+        }
+        let target = keleusma::target::Target::host();
+        let ours = self_hosted_compile(src, &target).expect("classified Identical");
+        let tokens = keleusma::lexer::tokenize(src).expect("lex");
+        let program = keleusma::parser::parse(&tokens).expect("parse");
+        let reference = keleusma::compiler::compile(&program).expect("reference");
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{src}"
+        );
+        identical += 1;
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    // Non-vacuity. The direct byte comparison ran for every case expected to be identical.
+    let expected_identical = cases.iter().filter(|(_, c)| *c == Identical).count();
+    assert_eq!(
+        identical, expected_identical,
+        "a byte comparison was skipped"
+    );
+    assert!(
+        identical >= 40,
+        "only {identical} cases reached the byte comparison"
+    );
 }
 
 /// `assert`, which the reference compiles out of a release build. The self-hosted parser
