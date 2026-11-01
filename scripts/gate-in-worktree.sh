@@ -102,8 +102,10 @@ GATE_DIR="$TREES_DIR/${KEL_GATE_NAME:-gate}"
 # deleted from ../keleusma-worktrees on the operator's decision of 2026-10-31, which
 # also adopted this default.
 if [ -n "${SCRATCH_BASE:-}" ]; then
-  [ -d "$SCRATCH_BASE" ] && [ -w "$SCRATCH_BASE" ] \
-    || { echo "gate-worktree: SCRATCH_BASE '$SCRATCH_BASE' is not a writable directory" >&2; exit 1; }
+  if [ ! -d "$SCRATCH_BASE" ] || [ ! -w "$SCRATCH_BASE" ]; then
+    echo "gate-worktree: SCRATCH_BASE '$SCRATCH_BASE' is not a writable directory" >&2
+    exit 1
+  fi
   DEFAULT_GATE_TARGET="$SCRATCH_BASE/$(basename "$REPO_ROOT")/.gate-target"
 else
   DEFAULT_GATE_TARGET="$TREES_DIR/.gate-target"
