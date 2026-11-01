@@ -140,6 +140,37 @@ cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 step "Detached compiler/ subproject (fmt, clippy, tests — also the selfhost-compiler CI job)"
 ( cd compiler && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
 
+# The LLVM backend at native_codegen/ is a DETACHED workspace for the same
+# reasons as compiler/, plus one it does not have: it needs an LLVM 22.1
+# development install. As a workspace member it would make LLVM a hard build
+# dependency of the entire repository, for every developer and for CI.
+#
+# So this step SKIPS when LLVM is absent -- but it skips LOUDLY. A silent skip
+# is the same shape of hole that let four broken intra-doc links in
+# src/selfhost/ survive four releases: a step that quietly does nothing reads
+# as a step that passed. Anyone whose gate prints the skip notice has been told,
+# in terms, that the native lowering was not verified by this run.
+KEL_LLVM_PREFIX_DEFAULT=/opt/local/libexec/llvm-22
+if [ -n "${LLVM_SYS_221_PREFIX:-}" ] || [ -d "$KEL_LLVM_PREFIX_DEFAULT" ]; then
+  # Until 2026-10-22 the label claimed this package had no other gate. The native
+  # workflow has covered it on v0.3.0 integrations since 2026-10-01.
+  step "Detached native_codegen/ subproject (fmt, clippy, tests — also the native CI workflow)"
+  # `cargo doc` belongs here for the reason the comment above this step
+  # gives about the workspace Doc job: this package declares its own
+  # `[workspace]` and is absent from the parent's `members`, so
+  # `cargo doc --workspace` NEVER sees it. Without this line a broken
+  # intra-doc link in `native_codegen/` is caught nowhere, by anything —
+  # the same hole, one directory over, from the one the step above closed.
+  ( cd native_codegen && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test \
+    && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps )
+else
+  step "Detached native_codegen/ subproject — SKIPPED"
+  printf '  \033[1;33mNO LLVM 22.1 DEVELOPMENT INSTALL FOUND. THIS STEP DID NOT RUN.\033[0m\n'
+  printf '  The native lowering is UNVERIFIED by this gate. To run it, install\n'
+  printf '  LLVM 22.1 (MacPorts: sudo port install llvm-22) or set\n'
+  printf '  LLVM_SYS_221_PREFIX to an existing install. See native_codegen/README.md.\n'
+fi
+
 if [ "$RUN_MIRI" -eq 1 ]; then
   step "Miri — Tree Borrows (memory-safety regressions)"
   MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p keleusma-arena

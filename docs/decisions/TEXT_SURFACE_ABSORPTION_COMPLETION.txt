@@ -1,0 +1,51 @@
+COMPLETION CONDITION — absorption 47 (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. A PREDICTION WITH TWO INDEPENDENT PARTS WAS RECORDED BEFORE MEASURING.
+   One part concerns whether the package builds; the other concerns test
+   movement. Each has its own named falsifier, and both were written before the
+   measurement.
+
+2. THE BUILD IS CHECKED SEPARATELY FROM THE TESTS.
+   The record reports whether the package compiled as its own observation, not
+   inferred from a test count, since a test count cannot distinguish a package
+   that failed to build from one nobody built.
+
+3. THE ABSORPTION IS MEASURED ALONE.
+   The package results are obtained with no other change in flight. If any
+   repair was required to make it build, the record says so and states that the
+   repair was minimal.
+
+4. BOTH FLOAT CONFIGURATIONS ARE REPORTED.
+   Results are given for default features and for the narrow float
+   configuration, each with its own figure.
+
+5. THE PREDICTION IS RESOLVED AGAINST EACH FALSIFIER.
+   The record states, for each named falsifier, whether it fired, and does not
+   restate the prediction to match the outcome.
+
+6. ANY CONCERN FOUND DURING A REPAIR IS RECORDED RATHER THAN FIXED INLINE.
+   If repairing the build exposes a separate issue, it is written down with
+   enough detail to act on later, and not folded into the same change.
+
+7. THE LIMITS OF EXISTING VERIFICATION ARE STATED.
+   Where a prior gate run does not cover the current tree, the record says which
+   steps carry over and why, rather than implying full coverage.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass/fail claim corresponds to output appearing in the
+   transcript. Carried figures are marked as carried.
+
+9. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+   The native_codegen suite passes under both configurations, or each failure is
+   named with its cause and with a statement of whether the cause belongs to
+   this package.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the nine properties above,
+or whether any other goal in the same session advanced.

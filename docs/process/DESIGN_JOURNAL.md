@@ -1,5 +1,5063 @@
 # Design Journal
 
+## 2026-09-17 — a pre-committed stop condition triggered, and I honoured it
+
+I set out to write the `Op::Yield` float arm, having committed in the brief to a
+boundary: **if the change reaches beyond the yield arm into the reply parameter or
+the resume restore, stop and report the shape rather than half-implementing a
+feature across three sites at the end of a long session.**
+
+It reaches the reply parameter.
+
+The assessment was worth doing and most of it was encouraging. The general-stream
+yield **already returns through `build_typed_return`**, which is width-aware; the
+spill slice **already carries operand kinds** through a suspension; and the resume
+restore **already handles a float parameter**, as of this morning's panic fix.
+Three of four pieces are in place, all landed today.
+
+**The fourth is `push_w`, which deliberately marks its slot `Int`** — because the
+operand stack reuses slots and a stale `Float` tag would leak into a later integer
+operand. That is correct defensive behaviour, not an oversight. But the resumed
+value is pushed with `push_w`, so **after a yield the reply is integer-kinded even
+in a float stream**, and admitting `Op::Yield` without addressing it would compute
+on a float's bit pattern as an integer — exactly the silent wrong number the
+refusal prevents.
+
+**And the degenerate yield is worse**: it calls the host hook `kel_yield(i64) ->
+i64`, so carrying a float through it is a HOST-FACING ABI change, not an emitter
+change. A blanket `float_aware` entry would admit both forms and mispass that one.
+
+Scoped in `FLOAT_YIELD_SCOPE.md` with the three steps and the recommendation to do
+it as its own increment with the differential switched on in the same change.
+
+**This is the third pre-commitment today that changed what I did rather than
+decorating it** — after the revert contingency for the byte width fix, and the
+demand that generated breadth outperform the hand-written subjects. **A stop
+condition written after the assessment would have been a rationalisation; written
+before, it was a decision.** The temptation to continue was real: three of four
+pieces fit, and the fourth looked like one more small change.
+
+
+## 2026-09-17 — the third external lint name, and what three of them mean
+
+The citation checker rejected `useless_conversion` in a comment. It is a clippy
+lint, real and external, and **the third one to need the same excuse** —
+`unexpected_cfg_condition_value` and `function_casts_as_integer` are already
+there.
+
+**Three is the point, not the third.** A comment explaining why code is shaped
+oddly almost always has to name the lint that shaped it, and every such name lands
+in this list. That is not a defect in the checker: it resolves backticked
+identifiers against the tree, which is exactly what makes it useful, and an
+external name genuinely cannot resolve. **But the excuse list is now accumulating
+a predictable category rather than exceptions**, and a reader should know that
+before adding a fourth and wondering whether they are working around a guard.
+
+Recorded in the entry itself rather than as a separate note, since the list is
+where someone will be standing when the question occurs to them.
+
+**I also killed the narrow gate rather than let it run ten more minutes to a
+verdict I already knew.** It was failing on the identical citation; the default
+gate had already shown it. Discarding a run whose outcome is determined is not the
+same as discarding one whose subject moved — the first is economy, the second is
+the recorded discipline — and conflating them would be an excuse to stop waiting
+when waiting is what the tree needs.
+
+
+## 2026-09-17 — the gate script caught what my by-hand reading would have missed
+
+The default gate reported **FAIL** with all three suite phases showing *628 tests,
+0 failed*. The narrow gate, identical suite results, reported PASS.
+
+The difference was **clippy**: `useless conversion to the same type: f64`, four
+times in the new float file. `Flt` is `f32` under `narrow-float-32`, where
+`f64::from` is required, and `f64` by default, where it is a lint error. **Correct
+in one configuration and a failure in the other**, which is exactly what running
+both is for.
+
+**This is the first time this session the SCRIPT caught something my by-hand phase
+runs would have missed.** I have run phases individually all day and read their
+summaries; three summaries saying 628 passed is precisely the shape I would have
+called green. The `fail=1` accumulation is the whole difference, and the ninth
+catalogue row — *an assembled verdict is only as complete as the assembler's list*
+— was added by me this morning after a clippy failure stood for four commits
+behind a true suite figure. **The same class, caught this time, by the mechanism
+added because of it.**
+
+Repaired by splitting the widening helper per configuration rather than searching
+for one spelling clean in both. There isn't one: the conversion is a no-op at eight
+bytes and mandatory at four.
+
+
+## 2026-09-17 — I edited the tree during a running gate, having avoided it all day
+
+A census I had not met — `host_buffer_census.rs` — failed the default gate on my
+new float driver. It pins the set of harnesses that build host buffers, because
+**three in this package once sized the private region by a literal and one of those
+reached the gate as a SIGSEGV**. My driver sizes it from the contract, so it
+complies; the census simply demands that a new harness be REGISTERED rather than
+appearing silently. That is the idiom working.
+
+**Then I registered it while the narrow gate was still running.**
+
+The frozen check exists precisely to catch that, and the discipline is recorded in
+this project's own catalogue: *a run whose subject was edited while it was in
+flight belongs to no tree; discard it rather than reading it as a pass.* I have
+quoted that several times today and waited for gates specifically to avoid it —
+and then did it anyway, in the same minute as fixing something else.
+
+**Killed the run rather than spending thirteen minutes on a verdict I would have to
+throw away.** Scoped the kill to this worktree's script and its own
+`target/debug/deps`, so it could not reach a sibling checkout.
+
+**The useful observation is not "be careful".** It is that the dangerous moment was
+not the long wait — it was the SHORT edit that felt too small to matter, made while
+attention was on a different failure. Every deliberate wait today succeeded; the
+one lapse came when the edit looked like a one-line registration. **The frozen
+check is the only reason this is a recoverable annoyance rather than a figure I
+would have quoted.**
+
+
+## 2026-09-17 — the differential I set out to build turned out to be impossible, correctly
+
+My own new float guard had the gap I had found in four other instruments today: it
+checked that a float-parameter stream **reaches a decision**, not that the decision
+is **right**. Lowering tested, agreement not.
+
+So I set out to build the missing differential, and pre-recorded both outcomes:
+either it agrees, or the driver cannot carry a float parameter and the finding is
+that the path has no coverage. **The second happened, and then a third thing
+happened that I had not listed.**
+
+The reference **does** run float streams — `Value::Float(3.0)` in, `Yielded(Float(3.0))`
+out — and **rejects `Value::Int`** for that parameter. The general driver passes
+`Value::Int`, so it cannot drive one. That confirmed the predicted gap.
+
+**But the differential is impossible for a better reason than a harness
+limitation**: `Op::Yield` REFUSES a float operand, deliberately —
+
+> *"this arm was not written for one. Interpreting a double's bit pattern as an
+> integer is a plausible wrong number rather than a fault, so the operand kind
+> fails closed here"*
+
+That is the conservative stance's second category working exactly as designed: a
+case provable in principle whose analysis is not yet written. **The reference runs
+these streams and this backend declines to lower them.** An asymmetry, recorded
+rather than repaired.
+
+**And my fix this morning is what makes that refusal REACHABLE.** Before it,
+`lower_module` panicked before the refusal could be produced. **A panic and a
+refusal look equally red from a distance; only one of them is a decision.**
+
+The file pins the asymmetry from BOTH sides — the reference still yields, the
+backend still refuses, and the refusal still names the `Yield` arm. A register
+stale in one direction only is a bias, which this line has recorded before. If the
+backend starts lowering these, the test fails and says to switch the differential
+on, because **a lowered float stream with nothing comparing it is precisely the
+state that let a panic sit unnoticed on that path.**
+
+The driver is kept and kept compiling. Rebuilding it later would cost the same care
+twice: the signature is configuration-dependent and hand-named, which is how a
+probe here has already taken a SIGBUS.
+
+
+## 2026-09-17 — censusing the float defect's MECHANISM found two more, one a panic
+
+The `Op::Neg` defect was not "float negation is wrong". It was **an arm that
+open-coded a conversion instead of calling the shared helper**, and so drifted when
+the helper learned about four-byte floats. That is a family, and the width work had
+already shown that generalising beats chasing.
+
+**The census is small and was decisive**: six `build_bit_cast` sites, four INSIDE
+the two width-aware helpers where they belong, one a comment, and **one genuine
+open-coding left** — in the `Op::Reset` path, restoring a stream's resume parameter
+when it is a float. Same raw cast, same invalidity at four bytes.
+
+**Testing that candidate found something worse than predicted.** I expected invalid
+IR under `narrow-float-32`. Instead `lower_module` **PANICKED**, in BOTH
+configurations, on a well-formed `loop main(t: Float)`:
+
+> `Found FloatValue { .. llvm_type: "double" } but expected the IntValue variant`
+
+**Two sites restore the same resume parameter. One guarded floats; the other called
+`.into_int_value()` unconditionally.** The panic fired at the unguarded one before
+the raw bitcast at the guarded one could even be reached — which is why the census
+found the second defect and the probe found the first.
+
+**A panic on a public entry point** is a class this line already tracks:
+`lowering_robustness.rs` exists to assert that MALFORMED bytecode refuses rather
+than panicking, and this module was not malformed.
+
+Both sites route through `float_to_bits` now, and both guards were perturbed:
+restoring the panic fails only the decision guard; restoring the raw bitcast fails
+only the count guard. **Each catches its own defect and not the other's.**
+
+### The shape worth keeping
+
+**The disagreement between the two sites WAS the defect.** Not either site alone —
+one of them was correct. A quantity restored in two places, by two different
+pieces of code, is the same hazard as a quantity computed twice, and this package
+already refuses to re-derive things for exactly that reason. The count guard now
+pins the number of raw casts, so a third open-coding fails closed.
+
+**And the citation checker caught a third correction note citing what it retired.**
+All three were caught; the note now names the removed row without backticks.
+
+
+## 2026-09-17 — float negation emitted INVALID IR under narrow-float-32
+
+**The first invalid-IR defect this session, and the first found by a prediction
+being wrong.**
+
+I filed two predictions before probing `Float` as a composite field value: that it
+would behave like the other types with division and the conversions as likely
+gaps, and that any difference between the configurations would be a hard-coded
+eight. **Both were falsified.** All seven float producers lower in both
+configurations — because every float path pushes `Width::Scalar(float_bytes)`, a
+DERIVED width, while the integer path in the very same `match` arm pushed nothing.
+
+Then the VALUES disagreed under `narrow-float-32`, and the cause was not a width
+at all:
+
+```
+fn main(a: Word, b: Word) -> Word { (-(a as Float)) as Word }
+  InvalidIr("Invalid bitcast\n  %nbits = bitcast float %fneg to i64")
+```
+
+**`Op::Neg` open-coded its conversion back to bits as a raw `build_bit_cast`.**
+Correct at eight bytes, invalid at four, because a bitcast may not change a bit
+width. Every other float path routes through the `float_to_bits` helper, which
+narrows to `i32` and extends. **The one arm that duplicated the conversion instead
+of calling it is the one that drifted** — the same shape as a second computation of
+a quantity being free to disagree with the first.
+
+**Float negation was broken outright in a supported configuration**, and the gate
+runs that configuration.
+
+### Why nothing caught it
+
+`scalar_operator_matrix.rs` enumerates *"every cell, from the types and the
+operators"*. **Its type list is `byte`, `word`, `fixed`.** A scalar type is absent
+from the scalar-operator matrix, its `raw` helper panics on a float calling it a
+non-scalar, and its header discusses float dispatch. **The omission looked
+deliberate and was stated nowhere.**
+
+That is the same class as the census whose population was narrower than its title,
+and it is now written at the point where the list is defined rather than in a
+journal nobody greps.
+
+### The guard, and the sharpest reach evidence yet
+
+`float_ir_validity.rs` lowers every float operator and calls `verify()` — no
+execution, so it needs none of the bit-pattern marshalling that has produced probe
+defects here. **Restoring the defect fails it under `narrow-float-32` and leaves it
+GREEN under default features**, matching the bug's configuration-dependence
+exactly. A guard that fires precisely where the defect lives and nowhere else.
+
+**A seventh probe implicated itself on the way**: a `to_word` subject that
+double-cast a `Word` to a `Word`, which the backend correctly refused.
+
+
+## 2026-09-17 — the optimised run becomes a gate phase, and a fresh claim of mine is already wrong
+
+`KEL_OPTIMIZE` existed, was documented, and no script set it. It is a **phase**
+now, for the half where the cost measured to nothing: 155-173s optimised against
+165-175s at `-O0`, covering every hand-written differential and all the generated
+programs. **The corpus half stays manual at ~420s**, because adding it would double
+the gate's worst phase, and the script now carries both numbers so the next person
+weighing it has figures rather than an impression.
+
+**Both configurations were run end to end, and that is the first time this session
+the script itself has been executed** rather than its phases retyped by hand. That
+matters: only a real run demonstrates the `fail=1` accumulation works across all
+five steps, which is exactly what the assembled-verdict failure broke.
+
+> ⚠ **AND A CLAIM I ADDED TO THAT HEADER AN HOUR AGO IS ALREADY WRONG.** I wrote
+> that under `narrow-float-32` the corpus phase *"alone exceeds"* the ten-minute
+> ceiling. **It was killed once, under load; the same phase then completed in 415s
+> inside the script.** So it is load-dependent, not structural. I generalised one
+> observation into a property — in a file whose entire purpose is to stop
+> measurements being taken on faith — and the correcting evidence arrived within
+> the hour, from the very run I added the claim to justify.
+
+**Two waiters were killed mid-wait and the gate survived both.** A dead waiter is
+not a dead run; `pgrep` and the log said it was still in phase one. Reading the
+notification as "the gate stopped" would have been the killed-run-read-as-a-result
+error, arriving through the harness rather than through the command.
+
+
+## 2026-09-17 — re-optimising after my own six changes, and the generators' first O2 run
+
+The corpus `default<O2>` sweep was green at `d99ed3de`. **Six emitter changes
+landed after it**, and `-O0` is a codegen setting rather than a pass pipeline, so
+every gate run since exercised the new lowerings **without the middle end ever
+seeing them**. A green sweep from before the changes is evidence about the code
+before the changes — the FIRST row in this project's catalogue of how a green run
+under-reports.
+
+**Re-run on the current emitter: 619 tests and the 10 corpus tests, all green,
+both frozen.** The several thousand generated scalar, byte, composite and nesting
+programs went through the middle end for the first time.
+
+**The clock said nothing again**: 155s optimised against roughly 175s unoptimised,
+i.e. faster. The probe is what settles it — with the variable set a panic inside
+the hook fires, without it the test passes. **That check was in the brief because
+the same flat runtime nearly produced a false negative the first time**, and
+writing it down in advance is why it got run rather than rationalised.
+
+**No guard could have found this gap.** Every gate since those changes was green
+and every one ran at `-O0`. It surfaced only from asking what the last sweep
+actually covered, rather than that it passed — which is the difference between a
+result and a reassurance.
+
+
+## 2026-09-17 — the stream-width file tested a different path than it claimed
+
+Asked whether the six repaired widths survive a `yield`. Five subjects carried
+values across suspensions and agreed over sixty ticks. **Then the perturbation
+showed they reach the wrong mechanism entirely.**
+
+There are TWO width tables. **`local_widths`** is what a local carries;
+**`spilled`** holds the `(width, kind)` pairs of operands BENEATH the yielded
+value, saved at the suspension and restored at the resume point — and its own
+comment warns that a value restored at the wrong width is *"a silently wrong number
+rather than a fault"*.
+
+**Every one of the five subjects stored its value in a `let`**, so all five used
+`local_widths` and none touched the spill slice. Corrupting the restored widths to
+`Unknown` left all five passing, and `stream_depth.rs` too.
+
+A sixth subject fixes it: a `Byte` left on the OPERAND STACK across the suspension
+and consumed afterwards by a byte add, which needs a matched one-byte pair. **With
+the restore corrupted it refuses; with it intact it agrees.** That is now the only
+thing in this package known to detect a width lost on the resume path.
+
+**The file's header said it was testing the resume path. It was not.** The claim
+and the subjects disagreed, and only the perturbation could tell them apart —
+because a value carried in a local across a yield LOOKS exactly like a value
+carried on the stack across a yield, from the source text.
+
+**That is the seventh instrument this session that looked like coverage and was
+not**, and the third whose author was told by a perturbation rather than a guard.
+
+
+## 2026-09-17 — a scoping stated, and checked mechanically
+
+The record correction is a COMMENT in `src/lib.rs` plus one test file, so the two
+corpus phases were not re-run. **Stated rather than silently skipped**, and the
+basis checked rather than reasoned about: the two censuses that read emitter source
+live in the phase that WAS run, in both configurations, and `corpus_differential`
+contains zero references to `src/lib.rs` or to the census file.
+
+**The ninth catalogue row says an assembled verdict is only as complete as the
+assembler's list.** The corrective is not "never assemble" — the ten-minute ceiling
+forces it — but to say what the assembly covered and how it was checked. That is
+the third time today this scoping has been written down instead of taken.
+
+## 2026-09-17 — two of my own records, an hour old, already overstating
+
+**A justification reasoning about a configuration nobody can build.** I wrote that
+`FixedToWord`'s width is read from the operand *"so a narrower word configuration
+cannot make it a lie"*. **There is no narrower word configuration in this
+package**: `WORD_BITS` is a `const` 64 and the only feature forwarded is
+`narrow-float-32`. The change is still right; the reason I gave for it was about a
+build that does not exist. The real reason is smaller and true — **a derived width
+cannot drift from what the operand actually carries, where a literal can.**
+
+**And two `unmeasured` markers that had been measured an hour earlier.** The probe
+that answered `Op::Not` answered `Op::Dup` and `Op::PushImmediate` in the same run.
+**Only the one that found a gap got its disposition updated**, because that was the
+one I was interested in. The other two sat in the file still saying nobody had
+looked.
+
+That is this session's own recurring class, at one more level of recursion: **a
+record outliving its subject, inside the census whose purpose is to stop records
+outliving their subjects.** The `unmeasured` population is now zero, and the note
+says why it lingered rather than quietly dropping to zero.
+
+**Both were caught by re-reading my own work rather than by any guard.** Nothing in
+the tree could have flagged either: a comment's reasoning is not checkable, and a
+disposition marked `unmeasured` is valid whether or not someone has since measured
+it. **The guards close the classes they were built for; they do not close the class
+of writing something slightly untrue in passing.**
+
+
+## 2026-09-17 — the census's population was narrower than its title, and hid two more
+
+A one-line probe asked whether `Fixed` producers can fill a composite field.
+**`FixedMul` and `FixedDiv` could not** — a fifth arm-group. Then, widening the
+census to catch them, **`FixedToWord` surfaced as a sixth**: its sibling
+`WordToFixed` states `Scalar(8)` and it stated nothing, so a converted word could
+not fill a field while a converted fixed-point value could.
+
+**The census could not have found either, and its title said it should.** It is
+called *every place the emitter pushes an unknown width* and it counted only
+`st.push(` — the SUGARED form. Both Fixed arms push `push_k(.., Width::Unknown,
+..)` explicitly. **The title was broader than the population**, which is a record
+outliving its subject arriving through the matcher rather than the prose, and it is
+the second keying flaw in this one file.
+
+Widened to count explicit `Width::Unknown` too, which surfaced five more arms.
+**Each was measured before being dispositioned**, not assumed: `Const`, `GetLocal`
+and `SetLocal` narrow nothing — a field filled from a literal, a local, a computed
+local or a byte local all lower today — `Yield` is genuinely shapeless, and
+`FixedToWord` was the sixth gap.
+
+**Six arm-groups, and the last two were invisible to the instrument built to
+enumerate the first four.** The lesson is not "widen matchers"; it is that **a
+census names a population, and the name is a claim that has to be checked like any
+other.** Three of this session's findings came from asking what an instrument was
+keyed by, and this is the fourth.
+
+The `FixedToWord` width is read from the operand rather than hard-coded to eight,
+so a narrower word configuration cannot make it a lie — the sibling arm does
+hard-code it, and that is now the asymmetry worth watching rather than this one.
+
+
+## 2026-09-17 — the nesting subjects cannot catch the thing they were written for
+
+180 generated nested composites agree with the reference, no refusals. **And the
+perturbation the brief demanded shows they do not catch the failure that motivated
+them.**
+
+The `Width` documentation names the dangerous case: storing a nested body as a
+scalar writes the POINTER into the parent while every downstream offset still looks
+correct — *a silent wrong answer rather than a fault* — and one of the ten recorded
+defects was exactly that. So the brief required turning a `Body` width into a
+`Scalar` of the same size and watching the comparison fail.
+
+**All three sites that produce a `Body` were perturbed in turn. Every test in the
+new file stayed green each time**, as did the composite-field and array-element
+suites.
+
+**`composite_return_aliasing.rs` catches it** — three of its tests fail on that
+perturbation. The distinction matters where a body crosses a CALL, not where one is
+built and read inside a single function, which is all these subjects do.
+
+**Writing the perturbation into the brief BEFORE the run is what turned a green
+result into a finding.** Without it I would have reported 180 nestings agreeing on
+the surface where a mistake is a wrong answer, and that sentence would have been
+true and misleading in equal measure. The file now says what it is worth —
+exercising the repaired widths one level down — and points at the file the
+`Body`/`Scalar` guarantee actually rests on.
+
+**Three times today a brief's pre-committed check changed the conclusion**: the
+revert contingency for the byte fix, the demand for a perturbation the generated
+composites catch and the hand-written ones do not, and this. **A prediction written
+after the result is a description.**
+
+
+## 2026-09-17 — the repair was broader than its framing, and the wider half was unpinned
+
+Probed whether the width family reaches ARRAY elements. It does, identically:
+reverting `preserved_scalar_width` refuses `div`, `mod` and `band` in an array
+literal exactly as in a composite field.
+
+**So the four repairs restored array-element capability as well, and nothing
+pinned it.** Every test written for them checks a composite field, because that is
+where the refusals surfaced — the framing followed the symptom rather than the
+mechanism. **A capability restored by accident and guarded nowhere is one refactor
+away from being lost again with nothing going red.**
+
+All three producer lists now run in both positions: 19 word, 11 byte and 8 bool
+producers, as a field and as an element.
+
+**The lesson is about framing, not about arrays.** Every instrument I wrote today
+was named for where the problem appeared. The mechanism was "a packed width is
+consumed", and it is consumed anywhere a flat body is built. **Asking what
+consumes the thing, rather than where it was noticed, would have covered both
+positions the first time** — and it took a deliberate probe to notice, because all
+the tests were green either way.
+
+
+## 2026-09-17 — answering my own `unmeasured` markers found a fourth gap
+
+The census recorded three arms as `unmeasured` — *nobody has checked whether a
+width is determinable here*. **Leaving that indefinitely would be a record
+outliving its usefulness**, so I measured all three.
+
+- **`Op::Not` — REFUSED.** A negated comparison could not fill a `bool` field
+  while an un-negated one could, because the comparison arm pushes `Scalar(1)` and
+  the negation arm pushed nothing, **for results of exactly the same shape**. A
+  bool is one byte either way. Fourth arm in the family.
+- **`Op::Dup` — no narrowing.** The short-circuit `andalso` form fills a bool field
+  fine; the duplicate's width never reaches a composite.
+- **`Op::PushImmediate` — no narrowing.** Emitted by the loop-index construct, but
+  its value is not what a field receives.
+
+**Two of the three were fine, and that is the useful shape of the result.** An
+`unmeasured` marker is not a defect claim; it is an admission, and two thirds of
+this one turned out to be nothing. Recording them as unmeasured rather than as
+suspected gaps is what made answering them cheap and honest.
+
+`BOOL_PRODUCERS` now pins all eight bool-valued producers in a field position, so
+the fix has a regression test. Reverting `Op::Not` fails **only** the bool tests —
+the word and byte halves stay green, so the guard is precisely targeted rather than
+broadly sensitive.
+
+**This is the fourth arm-group of the same family in one day**, and the first found
+by answering a question the census itself recorded rather than by a generated
+subject stumbling on it. **A census that admits what it has not looked at is a
+to-do list, not just a record.**
+
+
+## 2026-09-17 — a third instance, then a census, which caught its own author
+
+All four shifts join the family: `lsl`, `lsr`, `asl`, `asr` could not fill a
+composite field either. The rule differs slightly — **a shift takes the SHIFTED
+value's width, not a matched pair**, since a count is not an operand of the same
+shape — and that is the third arm-group repaired today by the same reasoning.
+
+**Chasing instances one at a time is how a family gets half-closed**, so
+`unknown_width_census.rs` now enumerates every bare push in the emitter and fails
+on one without a disposition. Four are `fallback` (the arm preserves a width when
+it can), two `sound`, and **three `unmeasured` — recorded as such rather than
+asserted correct**. Saying "not measured" is the honest half of a census, and a
+reader deciding where to look next needs it distinguishable from "measured and
+sound".
+
+> ⚠ **THE CENSUS'S FIRST MATCHER COULD NOT SEE THE SITES IT WAS WRITTEN FOR.**
+> It keyed on `starts_with("st.push(")` and missed every `None => st.push(v),`
+> arm — **the exact form the three repairs it generalises had just introduced**.
+> A census whose matcher cannot see its own subject reports a clean population and
+> means nothing; this package catalogues that class three times over, and I
+> reproduced it inside the file built to close it. Caught only because the STALE
+> half of the check fired, naming four arms that had supposedly stopped pushing.
+
+The two accumulated leaks were recorded in one edit, as the batching note asks.
+**The instruction worked on its author**, which is the only evidence that matters
+for a process note. The sentinel-band test has now leaked three times and still
+does not reproduce on demand — a third occurrence retires "one-off" for it
+entirely.
+
+
+## 2026-09-17 — the same gap again, five arms wide, found the same way
+
+Generated composites refused on the **second** program. Characterised before
+touching anything: of eleven `Word` producers, `param`, `add`, `sub`, `mul`, `neg`
+and a literal can fill a composite field; **`div`, `mod`, `band`, `bor` and `bxor`
+cannot.** The byte fix earlier today covered `Div`/`Mod` for a matched byte pair —
+this is the same family across two more arms and the other scalar type.
+
+One rule replaces both special cases: when both operands are scalars of equal
+width, the result keeps it. **`Body` is excluded deliberately**, because a `Body`
+operand points at its data and labelling a computed scalar as a pointer is exactly
+what the `Scalar`/`Body` split exists to prevent. It cannot reach these arms today;
+excluding it means a later change cannot make it silently wrong.
+
+**The brief asked whether generated breadth adds power over the five hand-written
+packing subjects, and warned against assuming it does.** The answer is concrete:
+every hand-written subject fills its `Word` field with a plain parameter — `w: b`,
+`lo: a`, `hi: b` — so **none of them ever puts a computed word in a field**, and
+none could have reached the `Word` half. The generator varies field type and field
+value independently and hit it immediately.
+
+**That is the second time today a generated subject found what enumeration could
+not**, and the mechanism is identical both times: a width lost on the way OUT of an
+operation is invisible until something consumes the result, and hand-written
+subjects consume what their author thought to consume.
+
+**Neither gap was a wrong answer.** Both were refusals, erring safely for as long
+as they existed. What they cost was capability, silently — no composite field could
+hold a division, a modulo, or any bitwise result.
+
+
+## 2026-09-17 — discharging the obligation my own fix created
+
+I propagated a `Byte` width through `Op::Div`/`Op::Mod` on the strength of 1500
+generated scalar trees agreeing. **A scalar differential never packs anything** —
+a returned value is not a value stored at an offset — and the refusal I removed
+existed precisely to stop a silent wrong answer in composite packing. So the
+riskiest consequence of my change was the one my evidence did not touch.
+
+Five subjects, each storing a byte-derived field beside a neighbour, because **a
+single-field struct returns the right answer under a wrong width**: nothing
+follows it. A wrong width shifts subsequent offsets, so the symptom shows in the
+neighbour. **All five agree.**
+
+**Both perturbations fire**, which is what makes the green meaningful:
+
+- a WRONG width (`Scalar(8)`) produces a wrong value, caught by the comparison;
+- a DROPPED width produces `NewComposite at op 6 has an operand of unknown packed
+  width`, caught by the refusal assertion.
+
+**That second message is the best description of the original gap I have.**
+Composite packing is what consumes the width; the refusal was `NewComposite`
+declining an unknown-width operand. So the conservative design was blocking
+capability at exactly the point the brief worried about, and the fix restores it
+rather than bypassing a check.
+
+**I wrote the revert contingency before running**: if packing had been wrong, the
+correct response was to restore the refusal, not to patch the packing — refusing
+was the conservative position and I was the one who moved off it. It was not
+needed. **Writing it first is what made the run a test rather than a formality.**
+
+
+## 2026-09-17 — the generator earned itself on its fourth byte program
+
+Widened on the two safe axes — five seeds, and `Byte` operands at a depth derived
+from the type rather than inherited. `Fixed` was excluded for stated reasons.
+
+**1500 `Word` trees: no divergence. 1500 `Byte` trees: a refusal on program
+four.** `Op::Div` and `Op::Mod` pushed `Width::Unknown` unconditionally, which is
+right for a `Word` and wrong by omission for a matched `Byte` pair — the reference
+divides two bytes to a byte. **A byte quotient could therefore feed nothing**,
+since the generic arithmetic surface admits only a matched pair.
+
+**Characterised before being touched**: all nine byte producers lower alone, and
+only `/` and `%` refuse once their result is consumed. That shape is the point.
+**The 90-cell and 42-cell matrices apply one operator each**, and a width lost on
+the way OUT of an operation is invisible until something consumes the result. No
+enumerated cell could have seen it; the census keyed by opcode name probes `Word`,
+where the behaviour is correct.
+
+**This is the first defect found by a generated subject in this package**, and it
+is the argument for generating rather than enumerating, made concretely rather
+than in a brief.
+
+Repaired narrowly — matched `Byte` pair only, `Word` untouched and pinned — and
+**verified by the same 1500 trees that found it**. Perturbing the emitter to emit
+`sdiv` where `srem` belongs fails the differential, so the reach is real.
+**Dropping the byte mask does NOT fail it, and that is correct**: a quotient of two
+masked bytes cannot exceed the dividend, so the mask is provably inert there. It is
+applied anyway, so the invariant is held by construction rather than by that
+argument.
+
+**A refusal is not a wrong answer**, and this one erred safely for as long as it
+existed. What it cost was capability: composed byte arithmetic through a division
+was unlowerable, and nothing said so.
+
+
+## 2026-09-17 — the first generated subjects, and the first reach proven by breaking the lowering
+
+Every subject in this package was hand-written: 74 corpus modules, 132 operator
+cells, four witness families, three stream shapes. **All of them test operators
+one at a time.** Nothing tested composition, and the backend had produced no
+defect since `Fixed % Fixed` under every hand-written instrument — the classic
+signal that the next one lives in a shape nobody wrote down.
+
+**300 generated expression trees, depth 3, compared against the reference: no
+divergence, 0.58 seconds.**
+
+**The interesting half is the reach demonstration.** Every previous instrument
+this session was perturbed by shrinking a buffer, stubbing a helper or moving a
+pinned constant. This one was perturbed **at the lowering**: `Op::BitXor`
+temporarily emitted `build_or`. It failed on program 0, because `b bxor b` is zero
+and `b bor b` is `b`, and the message named the program and both values. **A real
+defect in the real emitter, caught by the real comparison.**
+
+**Trapping is why the generator is narrower than it looks**, and the header says
+so: `+`, `-`, `*` are checked, and on overflow the native side executes
+`llvm.trap` — a dead test binary rather than a comparison. Leaves are `0..=9`,
+depth is capped so an all-multiply tree reaches at most about 43 million, and every
+divisor is a literal in `1..=9`. Nothing here touches the trap paths, floats,
+composites or streams.
+
+**A negative result that the fixed matrices could not have produced.** Worth
+having, and bounded: one seed, one depth, one type. The cheap strengthening is
+more seeds, not more machinery — and deliberately left for later, because one
+seeded run that is understood beats a wider one added in the same breath as the
+harness that produces it.
+
+
+## 2026-09-17 — consolidation, two negative leads, and a scoping stated rather than assumed
+
+The measurable work this line owns alone is finished. Backlog zero. Two leads
+chased and both empty: **both declared cargo features are covered by the gate**,
+and **the one test that can skip on a missing toolchain is already named by
+`skippable_tests.rs` and does not skip here**. Recorded so they are not re-chased.
+
+The handoff's newest session block now covers the last four increments —
+absorption 63, the stage arena measurement, report six, and the optimiser work —
+by EXTENDING that block rather than adding a rival section. The file once carried
+seven titled *RESUME HERE*, with the one labelled LAST above the one labelled
+LATEST. An ancestry anchor for the optimiser work joins the block; **149 anchors
+run, 0 failures.**
+
+**A scoping decision, stated because this session catalogued the failure of not
+stating them.** The consolidation is documentation-only, so the two corpus phases
+were not re-run. That is not a forgotten phase: the three tests that read the
+handoff — `handoff_figures`, `corpus_fingerprint`, `delegated_subject_census` —
+all live in the phase that WAS run, in both configurations, and
+`corpus_differential` reads no path under `docs/` at all. **Checked mechanically,
+not reasoned about.**
+
+The distinction matters because the ninth catalogue row added today says an
+assembled verdict is only as complete as the assembler's list. **The corrective is
+not "never assemble" — the ten-minute ceiling forces it — but "say what the
+assembly covered and how you know".**
+
+
+## 2026-09-17 — the optimiser sweep nobody had run, and the coverage that would have survived it being dead
+
+Three checkable facts made a gap: every execution differential runs at `-O0`,
+which is a codegen setting rather than a pass pipeline; the corpus-wide
+`default<O2>` path is gated on `KEL_OPTIMIZE`, which **no script sets**; and the
+unconditional guard checks that optimised IR still VERIFIES, which is not whether
+it still computes the same values. **The corpus had been optimised and validated,
+and never optimised and run.**
+
+**Ran it: 10 tests, 0 failed, frozen, 382.5s** — inside the 379-433s range of six
+unoptimised runs the same day. The middle end costs approximately nothing here, so
+the cost argument for keeping the sweep opt-in does not hold.
+
+**The flat timing nearly became a false negative.** My first reading was that the
+variable had not reached the test process. A probe settles it: with it set the hook
+panics, without it the test passes. **The timing was weak evidence and the probe
+was strong evidence**, and I had committed in the brief to asking what the command
+covered before believing it.
+
+**The larger finding came from perturbing my own new coverage.** Four subjects
+driven through the middle end on every run, passing first time. Stub
+`force_optimize` to return immediately and **all three tests still pass** —
+including `the_o2_pipeline_measurably_transforms_a_real_module`, which ran
+`run_passes` INLINE and therefore guarded a pipeline nothing else used.
+
+That file's header already warns: *"An unguarded 'it passes under O2' would be the
+same mistake in a new place."* **It was already the same mistake, one helper away
+from where the header was looking.** Routed through the shared helper; a dead
+optimiser now fails the suite.
+
+A fifth probe implicated itself on the way: a subject written with `let mut`, and
+there is no mutable local in this language. A `ParseError`, not a divergence.
+
+
+## 2026-09-17 — the arena finding is reported, and the measurement stops here
+
+Report six is filed in the shared channel: the arena figure my backend publishes
+is 27% to 98% flat reservation across 28 streaming modules, and the twelve
+compiler stages touch none of their plan at all.
+
+**Framed as a disclosure rather than an accusation, deliberately, and the guard
+enforces the framing.** The reservation is in `native_codegen/src/region.rs` —
+**this line's own code** — so the report is about a figure I publish and their
+hosts would consume. Two days ago this same channel credited this line's census to
+the other line; getting the attribution right is not a courtesy here, it is the
+difference between a disclosure and a false accusation. `report_six` fails if the
+phrases *"not a defect claim"*, *"The code is MINE"* and *"does NOT establish"*
+leave the text.
+
+**The other five reports are reproductions; six is a measurement**, so its guard
+re-derives the figures from the instruments rather than re-running a program. Both
+halves were perturbed: moving a pinned figure fires it, and so does deleting the
+framing.
+
+**AND THE MEASUREMENT STOPS HERE, ON PURPOSE.** The obvious next step was driving
+the other sixteen streaming corpus modules. I declined, and the reasoning is in
+`ARENA_LOOSENESS_REPORT_BRIEF.md` so it can be overturned: the drive machinery is
+private to a 380-second phase that already had to be split to fit the harness
+ceiling, duplicating it would be a second computation of the drive contract, and
+**two disjoint methods already agree on the answer**. Breadth would be bought with
+the gate's worst phase and would not change the conclusion.
+
+Two backticked identifiers in the report would not have resolved against the root
+citation scan, which does not walk the detached package. **Caught before filing
+this time**, after it caught this line twice.
+
+
+## 2026-09-17 — I repeated a wrong turn I had written down four increments earlier
+
+`cargo clippy ... 2>&1 | tail -1 && <next step>` reads **`tail`'s** exit status,
+not clippy's. Clippy failed with `field region_extent is never read`; the chain
+continued; the suite then ran green, because that is a LINT error and nextest
+builds the binary without the lint. **A green suite and a red gate at the same
+moment, and the chain reported the green one.**
+
+**I wrote this exact wrong turn into `ABSORPTION_62_BRIEF.md` the same session**,
+under the heading *"Reading a pipeline's exit status as the command's"*, after
+catching it in a `merge-tree` probe. Knowing the failure did not prevent
+reproducing it — which is the same lesson `CLAUDE.md` already draws about its
+eighth row, committed by the author of the seventh two increments later.
+
+**The structural fix is not resolving to be careful.** It is that the gate script
+exists and accumulates `fail=1` across phases precisely so no human reads a
+pipeline's status. Running phases by hand is what re-opens this, and the
+ten-minute ceiling is what forces running them by hand. The ninth catalogue row
+added earlier today says the same thing from the other direction.
+
+The lint itself was real and the repair is a simplification: `Outcome` carried a
+`region_extent` field nobody read, because the assertion lives where the value is
+computed. The field is gone.
+
+## 2026-09-17 — the compiler stages touch none of the arena they are provisioned
+
+The static census said the flat spill reservation is 98% of the published arena
+figure for the twelve self-hosted stages. **The dynamic measurement is stronger:
+they touch ZERO of it.**
+
+Filled the region with a pattern in `stage_differential`'s native driver and took
+the highest index that no longer holds it, across all five native stage drives:
+**0 bytes of plans of 520 and 600**. They lower as degenerate streams with no
+composite sites, so the locals block and the spill block are both reserved and
+neither is written.
+
+**A zero is the one result that must never be believed on its face**, and this
+package has twice found a guard that could not produce a finding. So the
+instrument was perturbed before the number was written down: a single byte poked
+into the region at offset 17 makes it report 18. **The zero can become non-zero,
+so the zero means something.**
+
+It is a standing assertion now rather than a recorded measurement. A stage that
+begins using the arena fails the driver every stage test runs through, and the
+message asks which construct it gained rather than for a new constant.
+
+**What this does and does not say.** These modules, driven with these seeds, write
+nothing to the region. It does not bound what they would write on other inputs —
+that is the static plan's job, and the plan is exactly what looks loose. The two
+halves are complementary and neither substitutes for the other.
+
+> ⚠ **THE COMMIT THAT LANDED THE TEST CLAIMED MORE THAN IT CONTAINED.** The doc
+> edit and this journal entry were chained after it with `&&`; the doc edit's
+> guard assertion failed on a pattern that did not match, and **the commit ran
+> anyway** because it sat in the same chain. `8505a15b` therefore carries the test
+> alone while its message describes the whole increment. **This is the same shape
+> as `6603c399`, recorded in `corpus_differential.rs`'s own header** — an edit
+> raised inside a chain whose failure was never read. Twice now, in one session,
+> from the same cause: a guarded edit and a commit in one `&&` chain, where the
+> guard protects the edit and nothing protects the commit.
+
+
+## 2026-09-16 — twelve new assertions, and two of them cannot fail
+
+Every assertion added this session passed on the day it was written, which is
+evidence about the checker before it is evidence about the backend. Each was
+perturbed AT ITS SUBJECT — never by editing the assertion or its expected value,
+which this line has already twice recorded as testing nothing.
+
+**Nine fire.** The one that matters most is the central claim of the whole memory
+increment: injecting one byte of arena creep per tick fails
+`the_arena_extent_does_not_grow_with_tick_count`. Until that was shown, the
+finding "the arena does not grow" rested on a check nobody had seen produce a
+result.
+
+**The discrimination is as informative as the firing.** A per-tick creep fires the
+growth test and NOT the planned-bound test, because 200 bytes of creep stays
+inside a 520-byte plan. A single write past the plan fires the bound test and NOT
+the growth test, being constant in tick count. **The two assertions detect
+different defects**, which neither passing alone would have shown.
+
+**Two cannot fail, and that is the result rather than a shortfall.**
+
+- `a_zero_fill_reproduces_the_shipping_driver` **passes with a non-zero fill**, so
+  it establishes nothing about the fill. What it does establish — that the
+  measuring driver is the same program as the shipping one — is worth asserting,
+  and it is renamed to that. The fill-independence it appeared to check is
+  genuinely checked elsewhere, by the two-complementary-fills comparison inside
+  `extent`.
+- `the_extent_instrument_sees_something` cannot be fired by choosing a subject:
+  every stream this driver can carry reserves locals in the region, so none
+  touches zero arena. It guards an instrument regression, not a reachable state.
+
+**A name that overstates what a check discriminates is the same defect class as a
+record outliving its subject**, arriving through a different door: a reader
+counting assertions would have counted that one as fill coverage. The census
+found it because it perturbed rather than read.
+
+
+## 2026-09-16 — a leak observation I did not capture, recorded as the omission it is
+
+The default-features `corpus_differential` phase reported **"2 leaky"** in its
+summary line. **I do not know which two**, because the command was piped through
+`tail` and the per-test `LEAK` lines scrolled past unread.
+
+That is the seventh entry in this project's own catalogue -- *"a log truncated by
+`tail`/`head` looks identical to a clean one"* -- committed by someone who had
+read it the same day. The LEAK register in `corpus_differential` has six rows and
+records the honest shape as one test that leaks somewhat repeatably with an
+obvious mechanism plus sporadic one-offs elsewhere. **This run is consistent with
+that and adds nothing to it**, which is exactly why it must not be written in as
+though it did.
+
+Recorded rather than silently dropped, and not attributed to any named test.
+Capture the whole output when the result will be quoted.
+
+## 2026-09-16 — the corpus refuted the generalisation drawn from three shapes
+
+`arena_high_water.rs` found the published arena figure dominated by a flat
+512-byte spill reservation those three streams barely touched, and I wrote that
+finding into `stream_spill_bytes`'s own documentation. **Three subjects is not a
+corpus**, and `arena_gap_explanation.rs` already states the rule this violated:
+the module that motivated a hypothesis cannot also be its evidence.
+
+The census across every corpus module with an entry point:
+
+- **28 modules have a stream chunk** on the entry path. My pin said 3, which was
+  a guess written before measuring and rejected on the first run.
+- **Every one reserves the same flat block**, independent of what it does. That
+  is the documented property, and it is now asserted rather than assumed.
+- **The reservation is NOT the majority everywhere.** `piano_roll_0` and
+  `piano_roll_1` sit at 27% of an 1840-byte figure. The first version of the
+  share test asserted "dominates every streaming module" at 50% or more, and the
+  corpus refuted it immediately. **The claim was corrected to the measurement.**
+- **It is 98% for the twelve self-hosted compiler stages**, which plan almost
+  nothing else. That is the figure worth carrying: the compiler this line exists
+  to support has a published arena demand that is nearly all reservation, of
+  which the deepest observed use is one slot.
+
+**The check that made this more than arithmetic** was asserting the decomposition
+ACCOUNTS for the published figure rather than assuming it. This file recomputes
+the planner's sum, which is a second computation free to drift; the named terms
+must not exceed the total and the remainder must fit alignment. It held across
+the corpus, so the reading of `region_total_bytes` is verified rather than
+believed.
+
+**Over-provisioning is safe and the reservation's rationale stands.** The finding
+is the size of the looseness in a bound sold as definitive, and what to do about
+it is an arena-accounting question for the operator, exactly as
+`host_arena_supplement_bytes` says of itself. **The planner was not touched** --
+it carries an open soundness obligation and this increment had no mandate for it.
+
+
+## 2026-09-16 — the other line's checker caught this line crediting its own work to them
+
+The push hook runs the WORKSPACE gate, and `comment_citations` rejected two bare
+backticked identifiers in this line's addendum to the shared channel: a
+compiler-runtime symbol and a census file. Both exist — in `native_codegen/`,
+which that scan does not walk, because it is a detached package.
+
+**The interesting half is not the dangling citation.** The sentence read *"your
+linkage_symbol_census"*. That census is MINE; it lives entirely inside this
+line's package. **This line credited its own instrument to the other line, in the
+channel whose whole purpose is keeping the two lines' claims apart** — and the
+misattribution was surfaced by the other line's guard, not by any of this line's
+six.
+
+**The citations date from absorption 60 and were present at `92cf5303`, which is
+on origin.** The rejecting test has not changed since before then. So the tree on
+origin fails it, and the push that put it there did not surface it. Whether the
+hook was skipped or bypassed is not recorded and cannot be recovered; what is
+certain is that a red workspace test reached the remote on this branch.
+
+**And the first version of the correction failed the same scan again**, by
+quoting the old wording with its backticks intact — the note describing the
+defect reproduced it. Fixed by naming the file as a path and the symbol as prose,
+which a reader can act on and the scan can see.
+
+## 2026-09-16 — the arena does not grow, and the plan is mostly reservation
+
+The gap named at the end of the last increment, and repeated as the handoff's
+third pickup item: nothing measured whether the arena grows across ticks. The
+canaries added two days earlier answer *"did anything write past the buffer?"*
+and are silent on *"how much of it is used?"* — and a creep of a few bytes per
+tick would pass every one of them for hundreds of ticks while the sequences kept
+agreeing, both implementations reading a buffer one had already overrun.
+
+**Method: fill the region with a known byte, drive, take the highest index that
+no longer holds it.** No consultation of the backend's own bookkeeping, which
+would report what it believes rather than what it did. **Two complementary fills,
+taking the larger extent**, because a byte written with the same value as the
+fill is invisible and one pattern would silently under-report.
+
+**The result: identical at 2, 20 and 200 ticks, for all three shapes.** And the
+instrument is not blind — it returns 16, 24 and 48 for a plain two-yield stream,
+one carrying a local across a yield, and one building a composite each tick.
+Varying with the right variable and constant in the wrong one is the whole of the
+reach argument.
+
+**The second finding was not the one being looked for.** Those extents sit inside
+plans of 520, 536 and 552 bytes. The dominant term is `stream_spill_bytes`, a
+flat 512-byte reservation for every stream chunk, of which **the deepest reach is
+one eight-byte slot**. The reservation is deliberate, fixed, static and safe, and
+its stated rationale holds. But its own comment called the waste *"a few unused
+bytes"*, and measured it is 504 of 512 and 93% to 97% of the whole plan a host is
+told to provision. Corrected at the source, with the measurement cited.
+
+**The test's first version claimed the block was untouched ENTIRELY, and its own
+assertion refuted that on the first run** — touched extents of 16 and 48 run eight
+bytes past the chunk-plus-locals prefix. The claim was corrected to the
+measurement. That is the third time this session an instrument has caught its
+author rather than the backend, and it is the reason the figure is worth quoting.
+
+**Also found, and not caused by the absorption it surfaced in**: `cargo clippy -D
+warnings` had been failing on an unused binding for four commits, including the
+one the state table cites for a gate *"assembled from six runs"*. The suite figure
+was true; the clippy phase was not among the six. **A gate run phase by phase,
+with the verdict assembled by hand, is only as complete as the assembler's list** —
+the script accumulates `fail=1`, and an assembly has no equivalent.
+
+
+## 2026-09-14 — the stream driver had slack and no canary
+
+Following the gap named at the end of the last increment rather than inventing a
+new one: I had written that nothing measured whether the arena stays bounded
+across ticks, and that worst-case memory usage rests on it.
+
+**`general_native_sequence` sizes three buffers from the published contract plus
+slack — 64 bytes, 4096, and 4096 — and planted no sentinel in any of them.** A
+write past the bound landed in the slack and was invisible; a write past the slack
+corrupted whatever followed. The scalar driver `vm_and_native_two_arg` was given
+canaries after literal-sized buffers there produced a SIGSEGV within a day; **this
+driver, behind every general-stream comparison, was never given the same
+treatment.**
+
+It matters more since the depth test. At 200 ticks a creep of a few bytes per tick
+would be absorbed silently for tens of ticks and then corrupt, **while the
+sequences kept agreeing right up until they did not** — both implementations
+computing the same values from a buffer one of them had already overrun.
+
+Canaries added, and **reach measured rather than assumed**, which is where the
+increment earned itself:
+
+- **arena region: PROVEN.** Shrink it to 16 bytes and the check fires over 200
+  ticks. This is the canary the arena-is-the-instance claim rests on.
+- **private region: PROVEN, but only after adding a stream that WRITES a private
+  slot.** With the three original shapes nothing wrote there and that canary could
+  never have fired — a guard with no reach, sitting in the file looking like
+  coverage. Shrinking to 8 still does not fire, because one `Word` slot occupies
+  exactly 8 bytes; zero is what demonstrates it.
+- **shared segment: NOT PROVEN, and not provable by this helper.**
+  `general_vm_sequence` calls without supplying a shared segment, so the reference
+  refuses a shared-slot stream and no drivable shape writes there. Kept because it
+  costs nothing, **recorded as evidence of nothing today.**
+
+The slack is retained rather than removed: it may be load-bearing for an alignment
+or a write the bound legitimately excludes, and a canary tells you whether anything
+reaches it where deletion would only tell you something broke.
+
+**No overrun found.** What is claimed is that nothing wrote past these buffers over
+these ticks — **not that the arena is statically bounded**, which is a different
+claim this cannot establish.
+
+## 2026-09-13 — streams had been driven six ticks; now two hundred
+
+This line's central claim is that **the arena IS the coroutine instance**, with
+`Op::Reset` rewinding it. Measured: the deepest any hand-written stream witness
+drives is **six replies**, the whole suite ranging 2 to 6. A drift that needs tens
+of ticks — a creeping pointer, state surviving a rewind — would be invisible
+there. The stage differential reaches 180 to 300 comparisons, but on stage sources
+with particular shapes; a general stream carrying a local across a yield is a
+different subject, and is the shape that already carried one fixed defect.
+
+**No divergence at depth 200**, across three shapes, plus a completing stream
+agreeing across repeated rewinds over 40 ticks. Not a defect found — **a floor
+raised from 6 to 200** on the claim everything else rests on.
+
+**A single-yield stream is DEGENERATE**, and the general driver refusing it is
+correct: measured signatures are 1 parameter against the two-yield form's 4, which
+is `declared + 3`. Pinned by assertion so the distinction is measured rather than
+remembered. **Fourth probe self-implication this session** — the others were a
+float argument passed as `i64::MIN`, a float return read as an integer, and a
+hand-named signature that took a SIGBUS.
+
+**And a property that cannot be mutation-tested, recorded as such.** The replies
+vary across ticks to raise detection power; replacing them with a constant leaves
+every assertion passing, because with no defect present both implementations agree
+either way. **It is a design choice, not a guarded invariant.** Saying so is the
+second application this increment of the rule that a mutation must attack the
+claim — the first being a bounds-check witness whose index could be changed
+freely because both forms emit the opcode.
+
+Deliberately not claimed: **anything about memory.** Whether the arena grows
+across ticks is not measured here, only that the sequences match. A bounded arena
+is this line's claim elsewhere and this file is no evidence for it.
+
+## 2026-09-13 — 62 of 66, and a producer narrowed twice
+
+`Dup` and `BoundsCheck` closed, taking the driven count to **62 of 66**.
+
+**`Op::Dup`'s three producers in `compiler.rs` are all the short-circuit
+booleans**, so `(a > 0) andalso (b > 0)` witnesses it — an unknown closed by
+reading the emission sites rather than guessing at constructs.
+
+**The `BoundsCheck` producer has now been narrowed twice.** First from "a local
+`xs[a]`" (which emits none) to "a data-slot array index". That was still too
+broad: a FLAT data-slot array with a variable index emits none either. It is the
+**NESTED** form, `g.cells[a][b]` on `[[Word; 2]; 2]`, which is why
+`opcode_witness.kel`'s `grid.cells[i][j]` was the corpus's only producer. Each
+narrowing came from driving the next-most-specific shape rather than from
+reasoning about it.
+
+**A mutation that fires is not automatically the right mutation.** Changing the
+witness's index from `[1][1]` to `[0][0]` was SILENT — both forms emit
+`BoundsCheck`, so the mutation tested nothing. Removing the NESTING fires, and
+that is the property the witness actually rests on. A mutation must attack the
+claim, not merely edit the subject.
+
+**The partition guard caught a regex overreach for the third time.** The pattern
+for the single-line `Dup` row had no `\n    ),` terminator of its own, so with
+DOTALL it consumed everything through the next multi-line row's end, deleting
+`Len` and `IsStruct`. Two opcodes in neither column, caught immediately.
+
+The four that remain are honest: `Len` and `IsStruct` are emitted nowhere by the
+reference, and the two native-call opcodes need registration machinery that lives
+inside `corpus_differential` rather than in a reusable helper — a fact about where
+the machinery sits, not about whether the opcodes work.
+
+## 2026-09-13 — absorption 61, and a brief that predicted the GUARDS
+
+Backlog had reached 15, so absorption outranked the tail of the witness table.
+Fifteen commits touching **one `src/` file** — `src/selfhost/mod.rs` — and five
+upstream test files. No `.kel` changed; `native_codegen/` and `examples/`
+untouched.
+
+**Every prediction held, figures and guards alike.** The guard half is the part
+worth keeping: absorption 60's brief predicted six figures, got all six right, and
+still missed `corpus_fingerprint.rs` firing, because that pins corpus CONTENT by
+hash rather than counts. This brief predicted the guards explicitly and named the
+fingerprint as the sharpest case — **it stayed silent, as predicted, because no
+`.kel` moved.** Predicting the figures is not predicting which guards trip, and
+the fix is to write the second list down.
+
+**A fifth `LEAK`, and the first repeat**:
+`a_trapping_programs_native_side_dies_with_sigtrap`, the same test as the fourth.
+That SHARPENS the record rather than confirming it. The honest shape is now **one
+test leaking somewhat repeatably with an obvious mechanism** — its purpose is to
+make a process die with `SIGTRAP` — **plus sporadic one-offs elsewhere**. Neither
+the whole-binary cause first guessed nor a shapeless scatter. Second revision of
+that record as data accumulated, which is exactly what it was built for.
+
+**Every phase ran in the FOREGROUND and completed first time**, against three
+consecutive background kills of the long phase in the previous increment. Two
+phases were re-run after a comment-only edit, because two censuses here READ
+SOURCE TEXT and a comment is not inert in this package.
+
+Also found, and held for the next increment: **`Op::Dup` is emitted by the
+short-circuit booleans** `andalso` and `orelse` — three sites in `compiler.rs`,
+all of them that. A witness compiles, emits it and agrees, which would take the
+driven count to 61 of 66. Verified in a scratch file and deleted, so the
+absorption could be measured on a clean tree.
+
+## 2026-09-13 — 60 of 66 driven; the limitation was one driver, not the package
+
+The census recorded its `Word`-return constraint as if it bounded what could be
+driven. **It bounded ONE DRIVER.** `common::assert_general_stream_agrees` already
+existed, drives a resumable entry across ticks and compares every yield — so the
+three stream opcodes were never out of reach, only out of reach of the helper I
+happened to be using.
+
+Seven more moved: `CheckedDiv` and `CheckedMod` through the checked-match form
+`a / b { ok(v) => v, zero_divisor(n) => 0 }`, which is how the corpus's
+`checked_ratio` produces them and which a plain Word `/` does not; `GetDataIndexed`
+and `SetDataIndexed` through an indexed private slot; and `Stream`, `Yield`,
+`Reset` through the stream driver. **60 of 66, from 32 two increments ago.**
+
+**`Reset` is claimed carefully.** The program containing it agrees tick for tick,
+while `opcode_denominator.rs` separately records that the lowering never VISITS
+the instruction — the native stream rewinds its arena at the host boundary
+instead. Both are true, and the table claims only the weaker one. Writing "Reset
+is driven" without that distinction would have been the overclaim this session
+keeps finding in other people's records.
+
+Six remain, each for a reason rather than a shrug: `Len` and `IsStruct` have no
+producer at all; the two natives need registration the simple drivers do not do;
+`BoundsCheck` needs a VARIABLE data-slot index, which the driver declines; and
+`Dup`'s producer is still unidentified.
+
+**Three failures inside the increment, all caught.** The both-columns assertion
+caught two rows that survived in the not-driven table after being added to the
+driven one — the regex missed them because one had a wrapped reason string and the
+other was the table's LAST row, with no trailing newline inside the slice. And an
+assertion raised before its `open(..., 'w')`, so nothing was written; I saw the
+traceback only because the command was not chained behind another. That is the
+same heredoc failure that once let a commit message record work absent from the
+tree, and the habit of not chaining is what surfaced it this time.
+
+## 2026-09-13 — 34 unverified coverage claims, cut to 13 by driving them
+
+The driven-witness census shipped with **34 rows asserting "driven by X"** — the
+exact unverified-coverage pattern the same increment had built machinery to avoid,
+left sitting in the same file. The honest fix is not to check the claims but to
+**remove the need for them**.
+
+**Twenty-one moved from claimed to verified.** `Add`, `Sub`, `Mul` and `Neg` via
+`((a as Byte) + (b as Byte)) as Word`; `FixedMul` and `FixedDiv` the same way
+through `Fixed`; all six comparisons via `if a == b { 1 } else { 0 }`, which
+returns `Word` and so fits the driver. One loop witness emits **five** opcodes at
+once — `Loop`, `EndLoop`, `Break`, `BreakIf`, `PushImmediate` — and one data-slot
+witness emits `GetData` and `SetData`. Three more were already covered by
+witnesses in the table: the `If` witness emits `Else` and `EndIf`, the enum
+witness emits `Trap`.
+
+**53 of 66 driven, 13 recorded**, up from 32 and 34.
+
+Two syntax facts learned by being wrong. **Local bindings are immutable** — there
+is no mutable local, so every accumulator loop I wrote failed to parse, and the
+corpus comment says so plainly: *"local bindings are immutable and each iteration
+rebinds its own."* And **a private data block that is never mutated is refused**,
+with the compiler directing the author to `const data` instead; the witness needs a
+write before its read.
+
+**The partition test caught me deleting rows from both columns.** A regex meant to
+strip the moved rows from the not-driven table matched the identically-shaped rows
+I had just added to the driven one, leaving nineteen opcodes in neither. Bounding
+the deletion to the table between its own `const` and its terminator fixed it.
+
+**And two mutation checks were silent for the fourth and fifth time — both
+application failures, not missing reach.** One pattern had been re-wrapped by
+`cargo fmt`; the other appears five times, and `replace(..., 1)` changed a copy the
+assertion does not read. Both fire once the edit is asserted to have landed.
+**A mutation check must verify its own edit before it can report anything about a
+guard**, which is the same discipline as clearing a probe before reporting a
+divergence.
+
+## 2026-09-13 — a driven witness per opcode, and four rows that proved nothing
+
+Three questions of increasing strength: does the backend LOWER it
+(`opcode_denominator`), does the corpus EXECUTE a module containing it
+(`differential_coverage`), and **is there a program that emits it, runs on both,
+and agrees?** Nothing answered the third.
+
+**The emission check earned itself four times in one increment.** A witness that
+compiles and agrees but does not emit the opcode it is listed against proves
+nothing, and four rows were exactly that: `BoundsCheck` (a local `xs[a]` emits
+NONE — a data-slot array index is the producer), `CheckedDiv` and `CheckedMod`
+(Word `/` and `%` emit `Div` and `Mod`), and `Div`/`Mod` themselves, which I had
+recorded as Byte/Fixed-only when they are precisely what a Word `/` and `%` emit.
+
+The `BoundsCheck` result is the one worth keeping: **a local array index emits no
+bounds check at all.** That is the exact premise that once caused a defect here —
+the emitter assumed *"the compiler emits `Op::BoundsCheck` before the index"* and
+the compiler does not. Recorded with what was learned rather than forced into a
+contrived witness.
+
+**Three apparent divergences while building this were the harness, not the
+backend.** A float argument passed as `i64::MIN` instead of its bit pattern; a
+float return read as an integer; and a hand-named function signature that took a
+**SIGBUS** on the first composite witness. `common/mod.rs` warns about the last in
+as many words — *"a harness that names a signature cannot see it change … ten
+tests kept passing on the calling convention's good manners"* — and delegating to
+the canonical driver, which reads `count_params` and sizes buffers from the
+published contract, fixed it.
+
+**A probe reporting a divergence has implicated itself first.** This one
+implicated itself three times before producing a trustworthy row, and had I
+reported any of them as backend defects they would have been false alarms — the
+mirror of the missed-defect failure this session has spent its length on.
+
+The driver returns `Word` only, panicking on any other finish value. Witnesses are
+shaped around that — `(a as Byte) as Word` witnesses `WordToByte` without asking
+for a `Byte` return — and the constraint is stated rather than left implicit.
+
+## 2026-09-12 — lowered is not executed, and four opcodes sat in the gap
+
+Four increments of stale-record work was enough; back to lowering behaviour, where
+this session's earlier increments found four real defects.
+
+**Every coverage instrument here measures LOWERING.** `isa_coverage_census` asks
+what nothing has lowered; `spike_corpus_coverage` reports instances lowering;
+`opcode_denominator` classifies all 66 and says in its own header that `Lowered`
+*"does not mean the emitted code is correct"*. **None asked which opcodes are
+lowered but never differentially EXECUTED** — which is precisely where
+`Fixed % Fixed` sat.
+
+Intersecting the differential's own module classification (**63 executed, 1
+vacuous, 10 exempt**) with per-module opcode sets: **`BitAnd`, `BitOr`, `BitXor`
+and `Shr` have no executed witness in the corpus.** All four appear only in
+`wire.kel`, which the virtual machine refuses to resume, so it is compared by the
+FAULT observable rather than by a result. My executed/not-executed counts match
+the differential's report exactly, which is what licenses transcribing its list
+rather than reimplementing its exemption logic — a private copy of a canonical
+walk already cost this package once.
+
+They are covered, by `scalar_operator_matrix.rs`. **But "covered elsewhere" is the
+claim this session keeps finding false, so it is not asserted here.** The first
+attempt checked that the other file CONTAINED the witness text and failed: the
+matrix generates its expressions from an operator list rather than spelling them,
+so the check was coupling to a formatting accident. **The witnesses are now DRIVEN
+in this file**, virtual machine against native, which is stronger and depends on
+nothing but this file.
+
+This also revises what that matrix is for. Built to find type-dispatch defects, it
+is the sole result-comparing evidence for four opcodes — which raises the cost of
+ever trimming it, and is a fact neither file recorded before.
+
+**A fourth formatting trap, this time in my own mutation check.** Renaming
+`"BitOr"` in the record was supposed to fire the guard and did not: `cargo fmt`
+splits the tuple across lines, so the pattern matched nothing and the mutation was
+vacuous. Re-run correctly, it fires. **A mutation test that silently mutates
+nothing reports the same "SILENT" as a guard with no reach**, and the two are
+indistinguishable without checking the edit landed.
+
+## 2026-09-12 — the test that said it does not run, and ran
+
+Set out to make the gate cheaper: six commands, ~25 minutes, with
+`how_deep_does_the_undetected_set_go` at 419s default and 429s narrow, killed once
+at >360s under contention. **Investigating first showed that would have been a
+mistake.**
+
+Its doc block read *"⚠ OPT-IN: this does NOT run in the everyday gate … measured
+at 710s … it is over, so it stays opt-in … its last green result is a dated
+measurement, not a standing guarantee."* **Every statement false.** It carries
+`#[test]` and no `#[ignore]`, and has run on every gate since `e55f307e`
+(2026-08-29), which restored it deliberately after removing a duplicated variant
+axis took it from 712s to 401s — *"the saving came from removing a duplicated axis
+rather than trading coverage"*, with site depth not reduced and the family not
+narrowed.
+
+**A sixth record outliving its subject, and the most expensive.** The others
+misstated a figure or a report's status; this one misdescribed the gate's cost
+structure to whoever was deciding what to do about it. Read as current it
+justifies deleting coverage that was restored on purpose. **I found it while
+looking for something to make cheaper**, which is the only reason it surfaced.
+
+Two limits share the number 600 and are unrelated: the **affordability
+threshold** this project fixed for a test earning its gate place, and the
+**harness ceiling** on one command. At 419–429s the test is comfortably under the
+first and close to the second, so load decides whether a phase completes. That is
+a property of the runner, not a reason to shrink the test.
+
+**Three errors inside the increment, each caught by an instrument rather than by
+care.** I wrote *"on an otherwise-idle machine"* without checking — the load was
+27 — in the same paragraph that warns a duration without its conditions is not
+comparable. The new guard's phrase matcher found nothing because `cargo fmt` had
+wrapped it across two doc lines; only the non-vacuity check revealed it, the third
+such save this session, and it is now keyed on a single unsplittable token. And
+the guard accepted a MENTION of `#[ignore]` in prose as the attribute itself — my
+own correction names the attribute — so it passed on the exact historical state it
+exists to catch, until mutation-testing against that state exposed it. **A mention
+is not an attribute**; the check now requires a real attribute line.
+
+## 2026-09-12 — a commitment recorded as kept while being broken every increment
+
+Absorption 60's conflict on `REVERSE_PROMPT.md` turned up a stale line in this
+line's own handoff: *"I touch **none** of `REVERSE_PROMPT.md`,
+`DESIGN_JOURNAL.md`, or `TASKLOG.md`."*
+
+**This line has written two of the three continuously.** Eight of the last twelve
+commits touching the journal are this line's, interleaved with the other line's,
+and reports 4 and 5 went into `REVERSE_PROMPT.md` this session. That handoff
+catalogues four records that outlived their subjects; **this is a fifth, pointed
+inward** — not a claim about someone else that went stale, but a rule about this
+line's own conduct, recorded as kept while being broken every increment.
+`TASKLOG.md` is genuinely untouched, so the correction is a correction and not a
+retraction.
+
+The two files behave differently and only one has bitten. `REVERSE_PROMPT.md` is
+**overwritten wholesale by both lines**, 106 lines against 1988, so it conflicts
+whenever both write between absorptions. `DESIGN_JOURNAL.md` is **prepended by
+both at the same anchor** — the classic conflict shape — and auto-merged at
+absorption 60 by luck of position. **It has not conflicted**, and recording it as
+having done so would repeat the two figure errors this session already made.
+Predicted is not observed.
+
+`shared_channel_discipline.rs` asserts the resolution shape: this line's section
+present, and substantial content before it. **It keys on this line's own marker
+and a structural property, never on the other line's wording** — a guard that
+failed when they edited their own channel would be this line imposing a format on
+them, and it was checked against exactly that case: their half rewritten entirely,
+guard still green. Four mutations fire, including the one that matters, a
+wholesale overwrite by this line.
+
+**Where this line's outgoing reports should live is left open.** It is the
+operator's call, it is asked in the file itself, and answering it unilaterally
+would be worse than the collision.
+
+## 2026-09-12 — absorption 60, and a commitment this line had broken
+
+Three consecutive increments examining this line's own records had let the other
+line reach **46 unabsorbed commits**. Taken now, with the prediction filed and
+stamped first, per the rule added after absorption 59.
+
+**Every prediction held.** One conflicting file; no backend behaviour change; the
+corpus still 74 modules with 1 refused; the ISA still 63 of 66 — that last flagged
+in the brief as the most likely to be wrong, because `parse.kel` IS a corpus
+source and a stage gaining a construct could emit a currently unemitted opcode.
+Their 46 commits touch two `src/` files, both in the self-hosted compiler;
+`bytecode.rs`, `vm.rs`, `compiler.rs` and `value_layout.rs` are untouched.
+
+**And the brief still missed the instrument that fired.** `corpus_fingerprint.rs`
+pins corpus CONTENT by hash, not counts. The brief listed only count-based figures,
+predicted every one correctly, and did not anticipate the hash pin. **Predicting
+the figures is not the same as predicting which guards a change trips** — a
+distinction worth carrying into the next absorption brief.
+
+The instrument then did exactly its job: named the moved file, declared every
+corpus-derived figure *"a prediction rather than a fact"*, and listed five
+censuses to re-derive. All five were re-run on the absorbed tree and held, so the
+re-pin records a re-derivation instead of standing in for one.
+
+**The conflict exposed a commitment this line had made and broken.** The handoff
+says plainly: *"I touch none of `REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`, or
+`TASKLOG.md`."* This session wrote reports 4 and 5 into `REVERSE_PROMPT.md`. Both
+lines overwrite that file wholesale — 106 lines against 1988 — so the conflict
+recurs at every absorption while both write there. Resolved by keeping the other
+line's document entire and appending this line's reports, attributed, so nothing
+is dropped. **That is the least destructive option available without a ruling, not
+the right one**, and the question is now asked in the file rather than settled
+here. Note the same hazard applies to `DESIGN_JOURNAL.md`, which this line writes
+every increment and which auto-merged this time by luck of position.
+
+## 2026-09-12 — the guard's population was the rows I had just fixed
+
+Last increment's completion condition said *"no figure in that table is both
+underivable and unattributed"*. **It was not met, and I said it was.** Of six
+figure rows the guard checked three and attributed one. The two left unchecked
+were **both stale**: the corpus said 69 modules against 74, and the unabsorbed
+count said 26 against 46.
+
+**The rows I checked were exactly the rows I had just been correcting by hand.**
+The stale ones were, by construction, outside that set — if I had been attending
+to them they would not have been stale. A census keyed to the analyst's attention
+finds nothing the analyst had not already noticed. This is the session's recurring
+failure in its sharpest form, and this time the instrument I built to stop drift
+had it.
+
+The fix is structural, not arithmetic: **the rows are now enumerated from the
+table** and each must carry a disposition — `checked`, `measured at <commit>`, or
+`no figure`. A row with none fails. The mutation that matters is the fourth: a
+NEWLY ADDED row fails closed instead of joining silently. The individual
+corrections are secondary to that rule.
+
+Two details worth keeping. The `unabsorbed` row read *"26 at the stamp, and
+MOVING — re-derive, never quote"*; **the hedge did not stop the number being wrong
+by twenty, it only made it defensible.** A number that must not be quoted should
+not be printed, so the row now carries the command instead. And the corpus figure
+is derived through the harness's own enumeration with the rtos prelude composed
+in, not by globbing files — an earlier increment recorded five scripts as compiler
+failures when the missing prelude was the cause.
+
+A smaller lesson from the build itself: the disposition was first read as the
+third table cell, and a cell containing an escaped pipe splits into more than
+three, so prose was silently mistaken for a disposition. Reading the LAST cell
+fixes it, and the derivation command was rewritten to need no pipe at all.
+
+## 2026-09-12 — I stamped the handoff five times while its state table drifted
+
+`v0.3.0.md` carries a table headed *"State, every figure re-derived at the
+stamp"*, inside `► RESUME HERE`, the one section that declares itself
+authoritative. **The stamp above it was refreshed on five consecutive increments
+and the table was not.** One quantity held three values in one file: the banner
+said 561 tests, the table said 562, the tree ran 576. The `test files` row said
+120 against 124.
+
+The file warns about exactly this. It records four cases of records outliving
+their subjects and states plainly that six instruments fire on drift in code and
+none on drift in prose. I then produced a fifth case, in the section headed *every
+figure re-derived*, by hand-patching a stamp while leaving the figures beneath it.
+
+**A general prose-drift census was attempted before and rejected ON MEASUREMENT**
+— two candidate matchers returned 169 and 32 lines, both dominated by narrative,
+where a sentence about a corrected claim is indistinguishable from the claim. That
+reasoning stands and is not overturned. **But this table is not general prose**: it
+is a fixed set of labelled rows holding numbers at one anchor. The population is
+the table and the signal is the whole population, which is the property the
+rejected instrument lacked.
+
+**The row that cannot be derived is the interesting one.** The suite figure is a
+RUN RESULT — no guard re-derives it by reading files, because it is the outcome of
+executing them, and an approximate derivation that passed would be worse than no
+check. It carries the commit it was measured at instead, and the guard asserts the
+attribution is present. **A figure that is neither derivable nor attributed is
+exactly the shape that drifted.**
+
+The guard's first act was to catch its own file: 125 test files, not 124.
+
+Scoping is its whole correctness. The document is thousands of lines and most of
+it is deliberate history under `◄ RECORD`, carrying older figures that are correct
+AS HISTORY; a guard reading the whole file would report those as drift and be
+wrong. All six checks were mutation-tested, including a parse that matches
+nothing.
+
+**This closes the figures in one table and nothing wider**, and the handoff still
+says so. The next stale sentence will be somewhere none of these instruments look.
+
+## 2026-09-12 — 42 refusals, and a default I had assumed
+
+The mixed-type half of the operator matrix was named as an open gap in two
+successive hand-offs. Driven: **all 42 cells are refused by the reference.**
+Keleusma has no implicit numeric conversion.
+
+A uniformly negative matrix is worth an instrument, because it converts *"nobody
+tried mixed operands"* into *"the reference refuses all of them, for this stated
+reason"*. But a refusal is worthless without its cause, so this one checks four
+things: the message names both operand types; a matched-pair control compiles, so
+it is the MIXING that fails; `-> Byte` and `-> Word` fail identically at the same
+span, excluding the return type as the cause; and an explicit cast compiles, so
+the conversion exists and is merely not implicit. That four-part shape is what
+would have prevented filing an unknown type name as a fact about comparisons two
+increments ago.
+
+**A fifth axis appeared while measuring.** `Fixed<16>` and `Fixed<32>` are
+mutually unassignable — the same nominal type at different const parameters is a
+different type.
+
+**And the measurement corrected me.** Bare `Fixed` is `Fixed<32>`; the compiler
+emits `FixedMul(32)`. The previous increment's prose described the `Fixed % Fixed`
+divergence as `4.0` for `200.0 % 7.0`, reading the raw operands as Q16.16. The
+divergence, the mechanism and the fix are unaffected — the integer remainder of
+the raw words is identical either way and the reference traps regardless of scale
+— but the decimal figures in three artifacts were wrong. Corrected where the
+artifacts are editable; the commit message stands, since rewriting a pushed branch
+costs more than the error does. **The default is now pinned by a test**, so it
+cannot be assumed a second time.
+
+For the backend this is a negative result with a precise consequence: it **never
+sees a mixed scalar pair from source**, so the mixed-kind arm of
+`arith_result_kind` is unreachable from the surface while staying reachable
+through hand-built bytecode. Recorded as unreachable, not as verified — the
+distinction the whole `NotEmitted` discipline rests on.
+
+## 2026-09-12 — the fix I called precise reached one route in four
+
+Yesterday's increment refused `Op::Mod` and `Op::Div` on a `Fixed` operand and the
+commit said the refusal was precise. **Driving it found nine of sixteen routes
+open.** `OperandKind::Fixed` was seeded at chunk parameters only, so
+`(a + b) % (a + b)` lowered the very opcode `a % b` refused.
+
+I had named this gap at the end of the previous increment and still had to measure
+it to learn it was three times larger than I described. **A passing check is
+evidence about the checker's reach before it is evidence about the tree**, and a
+guard tested only on the shape that prompted it has an unknown reach by
+construction.
+
+**The lattice was wrong, not merely incomplete.** `OperandKind` was
+`Int | Float | Unknown`, and every site that already held a scalar kind discarded
+all of it but `Float`: `StructField::Flat` and `ArrayElem::Flat` carry a
+`ScalarKind` in the baked operand and the arms asked only `matches!(kind,
+SK::Float)`; a call result read the callee signature and took the float half; a
+shared slot read its layout tag and did the same. Built for floats, never widened
+when `Fixed` started mattering.
+
+Fifteen of sixteen routes now close. **One cannot be closed from here:** a `Fixed`
+read back from a private data slot. `DataSlot` carries a name and a visibility and
+no scalar kind, where `SharedSlotLayout` carries a tag — an asymmetry that costs
+the reference nothing, since it holds a tagged `Value` at run time, and costs a
+native backend the information entirely. Refusing every operand of unknown
+provenance would refuse ordinary `Word` remainders the reference runs correctly,
+so the residual is pinned by a test that fails when it closes and filed as report
+5.
+
+**One near-miss worth keeping.** Factoring the two field-read sites into a helper,
+I wrote `#[cfg(feature = "floats")]` — a feature of the `keleusma` crate, not of
+this package, so the guard is always false, the `Float` arm vanished, and float
+field reads would have pushed `Unknown`. A regression hidden inside a refactor
+that looked like a simplification. Clippy's `unexpected_cfg_condition_value` was
+the only thing that saw it.
+
+## 2026-09-12 — an instrument can only find defects it has a vocabulary for
+
+The opcode denominator closed one variant axis: the opcode's own operand field.
+**The other axis is the runtime TYPE of the operands, which has no field in the
+bytecode at all** — `Op::Add`, `Op::Mod` and `Op::Shl` carry nothing, and the
+virtual machine dispatches on the values it pops. That axis produced the three
+defects this line had already fixed, and it was covered by 27 hand-written cases
+with no denominator.
+
+Enumerated properly — three scalar types against the operator surface, **90
+cells** — it found one divergence. **`Fixed % Fixed`.** The reference compiler
+accepts it and emits a plain `Op::Mod`; the virtual machine traps with
+`TypeError("cannot modulo Fixed by Fixed")`, its arm handling `Int`, `Byte` and
+`Float` but not `Fixed`; and this backend lowered an integer remainder and
+returned an integer remainder where the reference produces nothing —
+**arithmetically right, and not what the reference does, which is the only
+contract that matters.**
+
+**Correction, 2026-09-12.** This entry first named those operands `200.0` and
+`7.0`, reading them as Q16.16. **Bare `Fixed` is `Fixed<32>`** — the compiler
+emits `FixedMul(32)` — so the raw words used were approximately `0.003052` and
+`0.0001068`, and the result approximately `0.000061`. The divergence, the
+mechanism and the fix are unaffected: the integer remainder of the raw words is
+the same under either reading and the reference traps regardless of scale. Only
+the decimal figures were wrong. Pinned now by
+`fixed_point_widths_do_not_mix_and_the_bare_spelling_is_q32`.
+
+`OperandKind` was `Int | Float | Unknown`. **A `Fixed` parameter IS an `i64`**, so
+the float seeding trick — reading the LLVM parameter type — has no analogue, and
+Fixed was indistinguishable from Word at every arithmetic site. That is the
+mechanism of the defect, not an incidental detail. The kind is now seeded from the
+chunk signature's `ScalarKind::Fixed` tag, and `Op::Mod`/`Op::Div` refuse a Fixed
+operand. `word %` still lowers.
+
+**The methodological finding, which is the reusable part.** The previous defect
+hid behind an instrument's KEYING. This one hid behind an instrument's **OUTCOME
+TYPE**: `run_both` panics on any virtual-machine result that is not `Finished`, so
+a trapping cell could not be added to that matrix at all — the attempt panics
+rather than recording. The harness could say *agree* and *disagree* and had no
+word for *the reference refuses*. **An instrument can only find defects it has a
+vocabulary for.** Ask of any differential what outcomes it can represent, not just
+what inputs it covers.
+
+Two smaller things worth keeping. The shift rows are recorded by AMOUNT type: a
+`Byte` value shifts by a `Word` amount or a literal and agrees; a `Byte` amount is
+refused; `Fixed` is refused in all three forms. Recording "byte shifts are
+refused" would have repeated the `Bool` conflation of the same morning exactly.
+And the upstream half — a statically-known type error escaping to run time — is
+filed as report 4 and guarded from BOTH sides, because the two plausible repairs
+are distinguishable and this line should not assert which is right.
+
+## 2026-09-12 — the census that found three defects had no denominator
+
+`backend_support_census.rs` is titled *"WHICH OPCODES CAN THE BACKEND ACTUALLY
+LOWER?"*. The `Op` enum declares **66** opcodes. That file probes **17**, and
+nothing in it related the two numbers, so an opcode's absence meant *covered
+elsewhere*, *unprobeable*, or *forgotten*, indistinguishably.
+
+Three defects had already hidden behind its keying. Its header says so, and closes
+by admitting it *"cannot know which variants exist, only which it was given."*
+This line has an idiom for exactly that — pin a population, fail on growth, demand
+classification rather than a patched number, carry a non-vacuity check — applied
+to test functions, pointer offsets, panic sites, value movement, host buffers and
+upstream premises. **It had never been applied to the census whose blind spot
+produced the defects.**
+
+`opcode_denominator.rs` derives the denominator from `src/bytecode.rs` at test
+time and classifies all 66 by measurement: **63 lowered, 1 emitted-but-unvisited
+(`Reset`), 2 never emitted (`Len`, `IsStruct`)**. Each non-lowered entry carries an
+account, and the two unemitted ones are driven by mutation into a loud
+`UnsupportedOp` refusal, because absence alone says nothing about the backend.
+
+**The generalisable part.** The rad-hard minimal-ISA constraint manufactures this
+blind spot. The P4 consolidation took 69 opcodes to 66 by moving a discriminant
+out of the opcode NAME and into an operand FIELD, and every future consolidation
+does the same. `NewComposite` now carries eight operand variants under one name,
+and the census had no row for it at all. The variant axis is enumerated
+separately: all four `Flat` kinds lower, no `Boxed` form is emitted, and the
+emitter matches only `Flat` — so a `Boxed` construction reaching the corpus would
+be one the backend refuses, and that is now a failure rather than a silence.
+
+**A discipline copied rather than invented.** Upstream records `IsStruct` as
+having no producer *found by a bounded search*, explicitly not as unreachable,
+because an earlier producerless claim there was falsified within the hour. The
+`NotEmitted` class is worded to the same standard: it says this corpus emitted
+none, and nothing stronger.
+
+No lowering defect. The finding is that the instrument measuring progress toward
+"the whole language lowers" could not state its own coverage.
+
+## 2026-09-12 — [v0.3.0] A "rejected shape" that was a type-name error, filed the same day
+
+`operand_variant_sweep.rs` carries a table of shapes the reference rejects, asserted so that their
+absence from the matrix is a fact rather than an untested gap. One entry read:
+
+> `byte comparison to Bool` — `fn main(a: Byte, b: Byte) -> Bool { a < b }`
+
+**The reference does reject it — because `Bool` is not a type name.** Keleusma's boolean is lowercase
+`bool`, and spelled correctly, `Byte`, `Fixed` and `Word` comparisons all compile and all lower.
+
+> **A typo was recorded as a language property, in the very table built to stop absences being
+> mistaken for facts.** The table exists to separate "cannot" from "untested"; that entry conflated
+> them, hours after being written.
+
+### What it hid, now measured
+
+**Comparisons were absent from the matrix entirely** — the family where type-specific semantics have
+the clearest precedent, since the emitter notes that float comparison matches the reference and is
+deliberately NOT IEEE.
+
+Driven now: byte, fixed and word comparisons agree, including a byte pair straddling 127 where a
+sign-extending load would invert the answer, and `i64::MIN` against `i64::MAX`. **No defect** — but
+the sweep now covers the family rather than believing a typo about it.
+
+### The surviving entry was re-checked rather than inherited
+
+`Byte` subtraction with an overflow arm is still rejected, for a real reason the reference states.
+One of two entries was wrong, and assuming the other had rotted too would have been the opposite
+error.
+
+### Two details worth keeping
+
+**`Bool` is a scalar here and 0/1 is its flat form** — the emitter says so at the comparison site, and
+the sweep's converter had to learn it before any comparison could be driven.
+
+**The case count moved 21 to 27 and the test-function count did not.** Cases are data in a matrix,
+not test functions, and the population guard now says so — a reader reconciling this increment against
+that number would otherwise hunt for a change that does not exist.
+
+## 2026-09-12 — [v0.3.0] The prose-drift instrument, attempted and rejected on measurement
+
+The handoff named one structural gap: **six instruments fire on drift in code, none on drift in
+prose**, after four records were found outliving their subjects in two days.
+
+**It was attempted.** Two matchers, both measured:
+
+| matcher | population | live status |
+|---|---|---|
+| status phrases — `not repaired`, `still open`, `is refused`, `UNEXERCISED` | **169 lines**, 16 with a nearby date | a small minority |
+| claims naming a test AND a state (`#[ignore]`, "`x.rs` … refuses") | **32 lines** | a small minority |
+
+**Both are dominated by narrative.** *"`fixed_shared_scale.rs` opened by stating that this backend
+REFUSES a `Fixed` shared data slot"* is a sentence ABOUT a corrected claim, and no matcher separates
+it from the claim itself.
+
+> **A census whose population is ten times its signal reads as coverage while being none.** That is
+> the failure this package names repeatedly, and the reason the premise census declined a widening
+> from 29 rows to 132. Shipping it anyway would have been the mistake, not the omission.
+
+### What was available instead
+
+A guard per corrected record, so the state cannot revert unnoticed. Three of four already had one; the
+fourth was missing and is trivial: `composite_return_aliasing.rs` now fails if it ever carries an
+ignored test again — which is exactly the claim its decision record made for a month after the repair.
+**Proven to fire** by inserting an `#[ignore]` and watching it fail with the right message.
+
+### The residual, which is the honest deliverable
+
+**Prose drift is closed claim by claim. Nothing general exists**, and the measurement above says why.
+The next stale sentence will be somewhere none of these guards look.
+
+**Dating prose would not fix it either.** A date records when someone wrote a thing, not whether it is
+still true. The prediction stamp works because a prediction is COMPARED against an outcome; a
+description has nothing to be compared against — which is the difference between a claim that can rot
+detectably and one that cannot.
+
+## 2026-09-12 — [v0.3.0] Sixteen "unexercised" kind arms were one label over three situations
+
+`kind_arm_census.rs` reported 32 combinations the corpus never reaches, 16 resolved to named tests and
+**16 "UNEXERCISED by corpus or by any named test"**. Its header names the hazard exactly: *"an
+accepted path that no test executes ships a plausible wrong number."*
+
+**Measured, only ONE of the sixteen was that.**
+
+| combination | measured | disposition |
+|---|---|---|
+| four flat reads × `Unit` | a `Unit` struct field does not compile | unconstructible |
+| four flat reads × `Opaque` | no way to make the value | unconstructible |
+| four flat reads × `Text` | declaration compiles; **construction REFUSED**, unknown packed width | refused |
+| `shared slot` × `Unit`, `Text`, `Opaque` | the value cannot be made | unconstructible |
+| **`shared slot` × `Fixed`** | **lowered, and nothing drove it** | driven now, and it agrees |
+
+**The count barely moved — 16 to 15 — and the meaning changed entirely.** A reader now sees one live
+gap closed instead of sixteen undifferentiated entries, and the fifteen are unreachable rather than
+neglected. Each verdict is a measurement: the shape was compiled and the result read.
+
+### The stale record found on the way
+
+`fixed_shared_scale.rs` opened by saying this backend REFUSES a `Fixed` shared data slot. **It does
+not**: `shared_scalar_width` maps `SCALAR_FIXED` to eight bytes, and the driven read agrees —
+`Fixed(196608)` on both sides.
+
+**Its assertions were never wrong.** `Fixed<16>` and `Fixed<8>` still produce identical host-visible
+layouts, so the ABI gap it pins is real and open. Only the framing described a world that no longer
+exists.
+
+> **The fourth record this session found outliving its subject.** The pattern is not carelessness
+> about any one file — **it is that nothing re-reads a header when the code under it changes.** Four
+> instruments now fire on drift in code. None fires on drift in prose.
+
+### And the host-buffer census caught its author a second time
+
+The new driven test builds host buffers, so `host_buffer_census.rs` refused the increment until the
+file was registered — **the second time it has fired on the very person who wrote it**, one day apart.
+It derives every buffer from the published contract, so registration was all that was owed.
+
+**That is the argument for pinning a population rather than trusting a sweep**, made by the instrument
+rather than about it: a hand sweep would have missed this file exactly as the first draft of that
+census missed seven.
+
+## 2026-09-12 — [v0.3.0] The operand-variant sweep, and an arm arity that varies by type
+
+Four defects hid behind one instrument's keying. This is the instrument that asks the question that
+was missing: **for each operation, does every operand type it accepts AGREE?** — not "does it lower",
+which is what `backend_support_census.rs` asks and says plainly it asks.
+
+**21 cases, both sides executed, all agreeing.** No new divergence, which is what to expect from an
+instrument built immediately after its defects were fixed. Its value is forward.
+
+### It caught something while being written
+
+The `Word` control would not compile: **a `Word` overflow arm binds the high AND low halves,
+`overflow(h, l)`, where `Byte` and `Fixed` bind one** — because their middle slot is unused where the
+integer arm carries a high half.
+
+**The arm's ARITY varies by operand type**, not merely the arithmetic. One more way the operand
+decides the shape while the opcode name does not — found by writing the control rather than by
+reasoning about it.
+
+### Values chosen so a case cannot agree by being too small
+
+`3 * 4` agrees under every wrong lowering repaired this session. Each case carries an input that
+overflows a byte, or exceeds a word after scaling, so agreement means something.
+
+### The rejected shapes are asserted, not skipped
+
+`Byte` subtraction with an overflow arm, and a `Byte` comparison in the obvious `Bool` spelling, are
+rejected by the reference. Asserting that makes their absence from the matrix a fact rather than an
+untested combination, and the message says to add them if the reference ever admits them.
+
+### And the limit is stated
+
+**It covers the variants it was GIVEN.** The matrix is hand-written — the same limitation the support
+census now states about itself. A clean run is evidence about these combinations, not proof that no
+variant diverges. **The blind spot that hid four defects was a hand-written list too**, and saying so
+is the only honest way to ship another one.
+
+## 2026-09-12 — [v0.3.0] Checked byte arithmetic returned untruncated values, behind a census blind spot
+
+```
+200 * 100 : reference Byte(32),  this backend 20000
+255 * 255 : reference Byte(1),   this backend 65025
+200 + 100 : reference Byte(44),  this backend 300
+```
+
+**The runtime's `Byte` arm is not its integer arm at a narrower type.** The result is computed wide,
+the low EIGHT BITS become the low slot, the middle slot is unused and zero where the integer arm puts
+a high half, and the flag is 1 above `0xFF` and never 2 — unsigned byte arithmetic cannot underflow.
+
+**The flag was as wrong as the value.** The integer classifier asks whether the result left the
+64-bit range, which a byte product never does, so every byte overflow reported flag 0 and took the
+`ok` arm. The natural subject — both arms returning the wrapped value — agrees even then, so the
+arm-selection test uses arms returning different constants.
+
+### Scope probed, not inferred from the two that were found
+
+| operation on `Byte` | status |
+|---|---|
+| `*`, `+` | diverged; fixed |
+| `-` | **no subject** — the reference rejects an `overflow` arm as an outcome that cannot arise |
+| `/`, `%` | already agreed: a byte quotient cannot leave the byte range |
+
+### The census blind spot is the real finding
+
+`backend_support_census.rs` reported **0 refused** while THREE variants were broken. **It is keyed by
+opcode NAME, and both support and semantics are decided by the OPERAND** — every `Checked*` row probed
+`Word`.
+
+> **Three defects behind one blind spot**, across two increments: the `Fixed` pair found by reading
+> refusals, the `Byte` pair by asking what else that table could not see. A row per opcode reports
+> whichever variant happens to be probed.
+
+The variants are probed now, and the file states what it still cannot do: it cannot know which
+variants exist, only which it was given.
+
+### The residual is recorded rather than closed
+
+The byte arm is taken when both operand widths are KNOWN bytes. An unknown width keeps the integer
+path — which every previously lowering program relies on, and which would still be wrong for a byte.
+Refusing on unknown would withdraw support from programs that work today, so the limit is named
+instead.
+
+## 2026-09-12 — [v0.3.0] The checked fixed divide, and a reason I gave that did not distinguish
+
+One increment after lowering the checked fixed MULTIPLY, the DIVIDE lowers too — and the interesting
+part is why it was still refused.
+
+**The ground was `__divti3`**, the compiler runtime's 128-bit signed division. I wrote that myself, in
+the multiply's brief, as the reason the divide should stay refused.
+
+**It is true and it does not distinguish.** `linkage_symbol_census.rs` measured `Fixed` division as
+the ONE construct in its sweep needing a compiler-runtime symbol — and the bare `Op::FixedDiv`
+**lowers**. Any object performing a fixed division already depends on that symbol. The checked form
+adds nothing the object did not already have.
+
+> **A cost already paid by supported code cannot justify refusing more of it.**
+
+The reason is marked withdrawn in the document that made it, not quietly superseded in the one that
+supersedes it.
+
+### Three paths, and the zero divisor is the one that needed care
+
+| case | result |
+|---|---|
+| zero divisor | flag **3**, low is the NUMERATOR — the runtime does not fault |
+| quotient outside the word range | classified and **wrapped** |
+| otherwise | `widen(x) << frac_bits`, divided in 128 bits |
+
+A zero divisor is **undefined** in LLVM's `sdiv` rather than a fault, so it is excluded before the
+division and overridden by selects afterwards — branch-free, because a new basic block would have to
+be reconciled with the per-block operand-depth bookkeeping the emitter maintains.
+
+**The zero-divisor path is driven and shown distinct** from an ordinary quotient. Agreement alone
+would hold even if the flag were never set, which is the same non-vacuity the multiply's arm-selection
+test needed.
+
+### What the pair of increments says
+
+Two refusals, examined a day apart, both turned out to be gaps rather than decisions — and the second
+was held in place by a reason the first increment supplied. **The claim "no capability work remains"
+was wrong twice**, and both times the evidence was already in the tree: a test comment saying the
+boundary had moved before, and a census measuring the very cost being cited.
+
+## 2026-09-12 — [v0.3.0] The checked fixed multiply lowers, and a census that could not see its own phrases
+
+**A capability gap, not a decision.** `Op::FixedMul` and `Op::FixedDiv` — the bare forms — both
+lower. The CHECKED form, with `ok` and `overflow` arms, was refused. Its own test said the boundary
+*"must be changed deliberately — as the division case above had to be when multiplication arrived"*,
+and it has now moved the same way.
+
+**Read from `src/vm.rs`, because the integer arm is a trap.** `CheckedMul(0)` pushes the product's
+high half in the middle slot; the Fixed arm pushes **zero**, wraps rather than saturates, and shifts
+arithmetically by the fraction count first. Reusing the integer triple would have handed an overflow
+arm a value the runtime never produces.
+
+`CheckedDiv(n)` stays refused: it shifts the dividend left into 128 bits and divides, reaching for
+`__divti3`, which the bare-metal census already flagged.
+
+### The test's arithmetic was wrong before the lowering was
+
+`the_overflow_arm_is_actually_selected` expected `wrapped_only - 1` and measured `-65536`. **`w - 1`
+is fixed-point subtraction** — the literal is one UNIT, `1 << 16` in Q16 bits. Worth recording because
+the first instinct on a red differential is to suspect the backend, and here the backend was right.
+
+### ⚠ The premise census should have refused this increment and could not
+
+The new comment states an upstream premise — *"The compiler emits a non-zero count only for the Fixed
+arm"* — and the census did not fire. **Its phrases are lowercase and it matched case-SENSITIVELY**, so
+a premise opening a sentence never matched.
+
+**Three did.** Two predate this increment, and one of those — the `break;` dead-code entry — **was
+already dispositioned in the census's own table while never once being matched.**
+
+> **The start of a sentence is where a premise naturally appears.** Not an edge case: the common case.
+> The count of 29 that file defended so carefully was measuring two thirds of a phrase.
+
+Found by writing a premise, expecting a refusal, and noticing none came — **the same shape as the word
+boundary that hid `debug_assert_eq!` from the panic census one increment earlier.** Two matchers, two
+silent narrowings, both caught by watching for a guard that should have fired and did not.
+
+## 2026-09-12 — [v0.3.0] A prediction inherits the tree it was computed against
+
+Absorption 59's brief predicted **zero conflicting files**. `merge-tree` computed **one**, in output
+printed by the same command that filed the brief.
+
+**Stale, not mistaken.** Its `merge-tree` had run an iteration earlier against a FOUR-commit backlog;
+by filing time the backlog was seven and both lines had rewritten `REVERSE_PROMPT.md` in between.
+
+> **This is the session's recurring class arriving inside the discipline meant to catch it.** The
+> bounds-transfer numbers, a repaired unsoundness still asserted, a "none acted on" resting on
+> recollection — every one a figure separated from the measurement that produced it. A prediction is
+> the one artefact whose entire purpose is to be compared, and nothing compared it to its own tree.
+
+### The rule joins its siblings rather than starting a fifth document
+
+The absorption protocol has three rules learned over 59 instances — measure it alone, record the
+prediction before merging, verify ownership non-vacuously — and they live in the handoff's
+`DO THIS FIRST`. **The fourth now lives there too.** A competing process document is the duplication
+this package has unpicked three times.
+
+### The guard is deliberately narrow, and was proven to fire
+
+It checks **only the newest** absorption brief: what matters is the next prediction, and a guard over
+all sixty would rot into a list. It **does not demand the stamp from the fifty-nine written before the
+rule** — a guard that fails against documents authored before it would be disabled within the day.
+And it **does not claim the recorded figures are right**; it cannot know the true backlog, only that
+one was recorded, which is the whole difference between a prediction that goes stale unnoticed and one
+that cannot.
+
+**Passing is not evidence a guard works**, so the stamp was removed and the failure observed before
+restoring it.
+
+## 2026-09-12 — [v0.3.0] The panic-site census, and two arithmetics that did not close
+
+The previous increment found a panic on a public entry point by hand. This is the deliberate version:
+**which panic-capable sites in the emitter encode an assumption about the MODULE**, given that
+`lower_module` does not require a verified one?
+
+**22 sites, six families, no live defect.** The live one was fixed yesterday; this makes the next one
+visible rather than hoping someone thinks to construct it.
+
+### Scope was the hard part, and it is enforced rather than declared
+
+`src/lib.rs` carries **208 `.unwrap()` calls**, nearly all on inkwell results that cannot fail. A
+table over those is one nobody maintains — the premise census already measured a proposed widening at
+29 rows to 132 and declined. So the matcher keeps only sites whose MESSAGE names module vocabulary:
+`.expect("a stream declares its resume parameter")` is a claim about the module,
+`.expect("the builder is positioned")` is not. **The message decides, not the construct.**
+
+The census then **asserts its own filter stays narrow** — fewer than half the panic-capable lines it
+sees — so a filter that started admitting the infallible ones fails instead of quietly rotting.
+
+### Two arithmetics failed to close, and both were caught before filing
+
+**The probe said 21; the committed matcher says 22.** The difference is `debug_assert_eq!`: the
+probe's regex used `\bassert_eq!`, and a word boundary does not match inside `debug_assert_eq!`. **A
+debug assertion panics in exactly the build this suite runs**, so the blind spot sat over the most
+easily overlooked family there is.
+
+**And the first family table summed to 23 against a count of 21** — neither figure right, the table
+having double-counted the stream-frame sites.
+
+> **An arithmetic that does not close is the cheapest available signal that a population was not
+> actually read.** It fired twice in one increment, and both times before anything was recorded.
+
+### Two dispositions were tested rather than argued
+
+The largest family — the three trailing pointers being present — rests on the signature and the
+`DataCtx` being built from one predicate. Rather than assert that, two routes were driven: a data op
+in a module with NO layout, and a `NewComposite` inserted after compilation. **Both refuse before
+reaching the site.** The remaining nineteen are arguments, and the table says which are which: an
+argument recorded beats one re-derived, and loses to a test.
+
+## 2026-09-12 — [v0.3.0] A panic on a public entry point, and a race in the sweep that hid its class
+
+`lower_chunk` required operand-depth agreement at every branch target with `assert_eq!`, whose message
+read *"the typed verifier guarantees agreement, so this is a lowering bug"*.
+
+**True of a verified module — and `lower_module` does not require one.** `Vm::new_unchecked` exists
+because trust-skip is supported, and this package already converted 58 panics on that entry point into
+refusals for the same reason.
+
+**Reachable by construction.** Retargeting the `If(6)` of `if t > 0 { 1 } else { 2 }` to `If(7)` makes
+op 7 arrive from the branch edge at depth 0 and from the then-arm's `Else` at depth 1. It panicked; it
+now refuses, naming the disagreement.
+
+**The invariant is untouched.** Only the failure mode moved. Dropping the check would trade a panic for
+a miscompilation, which is strictly worse: the depth decides which operand slots a block's code reads.
+
+### Why the sweep was green, and what it says about sweeps
+
+`lowering_robustness.rs` mutates OPCODES. A depth disagreement needs a JUMP TARGET moved to a
+valid-but-wrong index — an out-of-range target, which the sweep does generate, is refused for being out
+of range and never reaches the check. **A clean guard proves its own reach before it proves the tree**,
+and the sweep now carries a retarget mutation so the class is covered rather than the instance.
+
+### The new mutation exposed a race in the sweep itself
+
+Panic volume went from a handful to forty-nine, and the file began failing **only when its three tests
+ran together**. The panic-origin hook wrote to a process-global `Mutex<Option<String>>` while the
+harness ran those tests on parallel threads: one test's clear raced another's set, the origin came back
+`unknown`, fell outside the `confine.rs` allowance, and was reported as a panic inside this backend.
+
+**A green or red result that depends on thread scheduling is neither.** The hook runs on the panicking
+thread, so the value is now thread-local — the right home for it rather than a workaround: the question
+is always *where did THIS thread's panic come from*. Three consecutive full-file runs are green.
+
+### A fourth guard fired, and its demand was the right one
+
+The upstream-premise census refused the increment until the new comment was dispositioned. It exists
+because a comment claiming what the compiler emits was once false and cost an out-of-bounds read
+returned as a value, and it requires each premise-shaped line to be **checked at its site or recorded
+as harmless**.
+
+**This one is harmless in the strongest sense: the site no longer relies on it.** The comment still
+observes that a verified module cannot present a depth disagreement, but the refusal fires whether or
+not that is true. **A premise the code does not depend on costs nothing when it is false** — which is
+the disposition the table records, and the reason the census asks for a disposition rather than a
+number.
+
+> **Five guards have now fired on this session's own work**: the pointer census, the value-movement
+> census, the host-buffer census, the population guard, the skippable-tests pin — and now the premise
+> census. Each demanded classification rather than a patched number, and each was satisfied by
+> answering its question rather than by editing its expectation.
+
+> **Third harness defect of the session**, after two sized a buffer by a literal. The instruments are
+> code, and nothing was auditing them as code. This one had been latent for as long as the file has had
+> three tests; the volume made it certain rather than creating it.
+
+## 2026-09-12 — [v0.3.0] The register was stale in BOTH directions
+
+The previous increment found a defect report that outlived its defect. This one asked which OTHER
+claims this line makes about unrepaired defects — and found the mirror image as well.
+
+**252 decision documents; 103 mention the other line's code; 19 contain an unrepaired-defect phrase;
+three are live claims.** The narrowing is recorded with its matcher, because a hand-written population
+in this package has already been wrong twice in one increment.
+
+| claim | outcome |
+|---|---|
+| `NATIVE_COMPOSITE_RETURN_ABI.md`: "reported and pinned, not repaired" | **STALE** — repaired 2026-08-14 **by this line**; the test says so and carries no ignored cases |
+| `ORDER_1_VERIFY_TYPES_BRIEF.md` finding 1: `cmd` declared, documented, never read | **ACTED ON by the `v0.2.3` line**, and nothing here said so |
+| the same brief's finding 2: `ty_max_steps()` is 1801 against a 60-tick drive | **still true**, measured rather than assumed to follow |
+| `INVALID_BYTECODE_CENSUS.md`: a column headed "unrepaired" | **false positive** — it compares a suite before and after a repair |
+
+### The mirror is the finding
+
+An un-retracted report becomes an accusation; that was last increment. **An unacknowledged repair is
+the same failure with the sign flipped**, and this line had one of each. A register stale only in the
+accusing direction would be a bias. Stale in both is simply unmaintained — the more accurate and less
+flattering diagnosis.
+
+**The other line fixed something this line reported and explained their reasoning in the file**: `cmd`
+stays at slot 0 because deleting it would shift every other slot and send the seeding to the wrong
+place. That is a better answer than the report asked for, and it sat unrecorded.
+
+### The brief's own framing was too narrow
+
+It scoped the audit to "claims about the other line's code", on the theory that those are the
+dangerous ones. **One of the three is about this line's own backend** — a defect repaired here,
+recorded as open for a month. The class is not *claims about others*; it is **status recorded once and
+never revisited.**
+
+### Measured separately, because one repair does not imply another
+
+Finding 2 was checked on its own rather than assumed to have gone with finding 1: `ty_max_steps()`
+still sums to 1801. It is now the only live item of the three, and it is **unwatched on purpose** — it
+is a design constraint on subject sizing, not a defect, and a guard would pin a number this line does
+not own.
+
+## 2026-09-11 — [v0.3.0] The reports made self-verifying, before one of them rotted
+
+The previous increment found a defect report that outlived its defect by four weeks. **The same
+document type carries two more**, and `REVERSE_PROMPT.md` said *"STILL WITH YOU, NONE ACTED ON"* on
+the strength of an absorption scan made thirty-six absorbed commits earlier.
+
+**Measured today, all three still reproduce:**
+
+| report | evidence |
+|---|---|
+| the `confine.rs` index panic | still fires — and was ALREADY self-verifying |
+| a multi-parameter stream after its rewind | `TypeError` on `Int and Unit`, arriving after a RESET |
+| the flow-insensitive write-before-read check | unconditional still rejected, conditional still accepted |
+
+So the claim was true. **It was also unguarded**, which is the part that needed fixing: being right by
+recollection and being right by evidence look identical until the day they do not.
+
+### The pattern already existed and was written before the lesson
+
+`lowering_robustness.rs` allows the `confine.rs` panic BY ORIGIN FILE and asserts it **still fires**,
+with a message saying to delete the carve-out when the upstream fix lands. That is the shape; the
+other two had nothing.
+
+### A guard watches a behaviour, not a ruling
+
+Two of these are questions — should a multi-parameter stream compile at all; is the write-before-read
+check meant to be flow-insensitive — and a question has no answer this line can assert. What it can
+assert is **what the reference does today**, so a change reaches this line as a failure rather than as
+silence. Each message says to retract or update the report; **a failure there is not a defect in this
+backend.**
+
+### Two places the guards were made harder to satisfy
+
+- The multi-parameter check asserts it **reached a rewind** before the fault. A run that faulted
+  earlier would satisfy a naive "it still faults" and be testing something else.
+- The write-before-read check asserts the unconditional shape is **still rejected** as well as the
+  conditional one accepted. Acceptance alone is consistent with the check having been removed
+  entirely, which is a larger change than the report describes.
+
+One tightening on review: the first guard matched three OR'd fragments of wrapped prose. **A
+three-way OR passes on the weakest member**, so it now matches the distinctive instruction only.
+
+## 2026-09-11 — [v0.3.0] A defect report that outlived its defect by four weeks
+
+The bounds-transfer drift was found by accident. The deliberate version asked which OTHER recorded
+findings rest on measurements that cannot fail. Its first target was the one the same document calls
+*"the finding that matters most"*:
+
+> `wcmu_region` drives its own running depth NEGATIVE on 17 of 826 shipped chunks, reaching -5 at
+> worst. An operand stack cannot hold a negative number of slots.
+
+**The expectation was a stale number over a grown corpus. The finding is that the claim is FALSE**, and
+has been since **2026-08-17**, when the `v0.2.3` line repaired it: `Op::Yield` declared a net `-1`
+against a true net `0`, so every stream `main` went under at the `PopN` after the yield.
+
+`spike_bounds_transfer.rs` Q4 measures **0 of 1085** and **asserts zero**. The guard has known for four
+weeks. `NATIVE_BOUNDS_TRANSFER.md` went on saying, in its summary table, its section heading, and its
+verdict's *"still reported, not repaired"*, that the reference's own worst-case memory bound is
+unsound.
+
+> **A report that is never re-checked becomes a standing accusation.** It is one thing to carry a
+> stale count; it is another to assert, in a document a reader treats as settled, that another line's
+> analysis is unsound when it has been correct for a month.
+
+### The harder case: the instrument was right and the record was wrong
+
+Q4 carries a comment explaining that it deliberately asserted NOTHING while the defect was open —
+asserting zero would have failed the suite over code this line does not own, and asserting the
+then-current count would have failed the moment the other line repaired it — and that the reason
+expired when the repair landed. **The instrument reasoned about its own lifecycle correctly and
+nothing carried that reasoning back to the document.**
+
+### What was NOT wrong, and the easy error in the other direction
+
+| claim | status |
+|---|---|
+| the walk goes negative on shipped code | **false since 2026-08-17** |
+| the WCMU bound does not TRANSFER to native code | **still true** — it counts virtual-machine operand slots and the native frame counts something else |
+
+The repair fixes the bound's soundness, not its relevance to native code. Retracting both would have
+been as wrong as retracting neither.
+
+### The audit's premise was itself too narrow
+
+It assumed the risk was numbers drifting. **The measured risk is a conclusion inverting while the
+paperwork holds still.** A drifted number misleads about magnitude; an un-retracted defect report
+misleads about whether something is broken.
+
+The document now carries a table at its head saying which of its figures are guarded and which are
+as-of-date, so the remaining stale numbers are visible as such rather than silently repaired or left
+to look current.
+
+## 2026-09-11 — [v0.3.0] A recorded refutation had drifted, and my attribution of it was wrong
+
+`NATIVE_BOUNDS_TRANSFER.md` carries the sharpest result this line has about the project's central
+premise: the bytecode bound does not even ORDER chunks the way the native code does. Recorded
+2026-08-14 as **9 of 190 comparable pairs over 20 stream chunks, 4.7%**.
+
+**The tree measures 27 chunks, 24 of 351, 6.8%.** The conclusion is unchanged — inversions exist, so
+the ordering is not a proxy — but every number had moved and **nothing would ever have said so**:
+`spike_bounds_transfer.rs` printed its figures and asserted nothing about them.
+
+> **A printing test is a test that cannot fail.** This line applies that rule to censuses and
+> coverage; it had not applied it to the one measurement that bears on why the project exists.
+
+It now asserts the conclusion — the test fails if no inversion is found, which would contradict the
+decision record — and pins the population, with a failure message demanding the cause be established
+rather than the number edited.
+
+### The truncation was hiding the evidence
+
+The spike printed the first twelve of twenty-seven. A reader could not tell which chunks the rate was
+computed over, and the rate is the figure the file exists to produce. Printing all of them is what
+made the next paragraph possible.
+
+### My attribution was a plausible story, and the printed list refuted it
+
+I wrote, in the pin's own failure message, that **the population depends only on the corpus and the
+bytecode analyses, neither of which this line owns** — which would have made the growth someone
+else's. Then the full list showed `14_frame_log.kel::main` at 184 native instructions.
+
+**A chunk enters the population only if its module LOWERS.** This line's refusals remove chunks and
+its implementations restore them, and that module spent part of the same day refused. The claim was
+false and was corrected before it was filed.
+
+**The cause of the movement is left OPEN, explicitly.** Establishing it needs the spike re-run against
+the 2026-08-14 tree, which was not done. Between naming that and offering a story that reads well,
+the record takes the first.
+
+## 2026-09-11 — [v0.3.0] The last data-slot shape, and a limitation that recurred within the day
+
+`io.items[i]` on a SHARED array of composites lowers. **Every data-slot form now agrees with the
+reference**: private direct, private indexed, shared direct, shared indexed.
+
+### It was a small change because two pieces already existed
+
+- `resolve_shared_array` already proved a range contiguous and uniform for scalars, and refused a
+  composite base with a placeholder reason naming a workstream.
+- The layout **states** each element's body length: a three-element field gives entries at offsets
+  0, 16, 32, each with `len` 16.
+
+So the stride is READ and the offsets are CHECKED against it — **the opposite direction from the
+persistent pool**, where the size is inferred and the offsets are the evidence for it. Worth stating
+because the two look alike and are not.
+
+One addition the scalar path did not need: **a matching composite kind is not a matching size.** Two
+elements can carry the same kind and different lengths, and the copy is sized from the length, so the
+uniformity check compares both.
+
+### The placeholder outlived its workstream
+
+The refusal read *"shared array of composite bodies; Workstream C"*. A label pointing at work that no
+longer has that name is a stale pointer, so it is gone rather than updated.
+
+### The same census limitation, twice in one day
+
+The pointer census records that **a count cannot see a site change class**. It happened again: the
+indexed shared composite turned the host-buffer address from a compile-time constant into
+`first + index * len` on the same line, the count held steady, and the table had to be revised by
+hand — for the second time today.
+
+> **A limitation that recurs within hours of being written down is not a hypothetical.** It is not
+> fixed by the note; the note is what makes the manual revision happen at all.
+
+### A guard I had not met caught a test that could pass without testing
+
+`skippable_tests.rs` pins the population of tests whose body can return before asserting anything —
+because such a test reports as passed and joins the total this line quotes as evidence. My new test
+skipped when the reference declined the shape, and the guard refused it.
+
+**The early return was removed rather than registered.** A C compiler's absence is an environment
+fact and a legitimate skip; **the reference's acceptance of a `.kel` shape is a fact of this tree**,
+and skipping on it would hide a real regression as a pass. If the reference ever stops compiling that
+shape, a loud failure is the honest outcome.
+
+### And a replacement, not a weakening
+
+The test asserting the indexed shared form is refused was DELETED. Its claim became false, and a
+softened version would have been kept green by not implementing the form. Its replacement asserts
+agreement at a constant and a runtime index, checks the bodies land at the offsets the layout states,
+and carries a scalar shared array as the control that the resolver's composite branch did not change
+its scalar answer.
+
+## 2026-09-11 — [v0.3.0] The shared composite slot, and a refusal that became unreachable
+
+The last refused shape in the data-slot story now lowers. A composite written into a shared slot is
+**copied** to the offset the layout states, for the length it states; a read hands back a pointer into
+the host's buffer.
+
+### Easier than the private pool, and the reason is worth keeping
+
+`SharedSlotLayout` carries `len` — **the body length is a field, not a derivation.** The private pool
+needed a size inferred from neighbouring offsets and therefore a validated partition; this needed
+neither. Recomputing a stated quantity is the drift this line already refuses for widths and pool
+offsets.
+
+### The semantic difference, stated rather than assumed
+
+A private composite slot's initial value is `Unit`, which is not a body, so reading an unwritten one
+FAULTS — that is what the per-slot initialisation word buys. **The shared segment has no such state**:
+the host owns the buffer and initialises it by contract, and the reference copies out whatever bytes
+are there. **So no initialisation word belongs here**, and a subject exists that would fail if one
+were ever added — it seeds the host buffer with `a = 7, b = 9` and reads them back through a slot the
+program never wrote.
+
+### The value alone would not have been enough
+
+The test compares the returned scalar **and the host's bytes after the call**, and then checks the
+body is at the offset the layout states. A lowering that put the body somewhere else and read it back
+from there would satisfy a scalar comparison.
+
+### A refusal that stopped being reachable
+
+The value-movement census asserted that a composite written into a shared slot is refused. **That
+became false**, and a weakened version would have been kept green by not implementing the copy. The
+replacement is the stronger claim behind it: a composite operand can only be assigned to a
+composite-typed slot, and **every composite-typed slot now has a stated placement** — a pool entry, or
+a composite-flagged layout entry with a non-zero length. The general refusal remains as a backstop for
+bytecode the compiler did not produce, and the census says so.
+
+### The host-buffer census fired on its author's next increment
+
+Written one increment earlier, it refused this one until the new harness was registered. **Three
+censuses have now caught their own author within a day of being written** — the pointer census, the
+value-movement census, and this one.
+
+## 2026-09-11 — [v0.3.0] Looking for the other instances, and the hand sweep failing twice
+
+The previous increment ended by recording a lesson: **repairing one instance of a class without
+looking for the others is the failure.** This one applied it, and the application is the finding.
+
+### The hand sweep found one more. The census found four.
+
+I swept by eye and found `stage_differential.rs` sizing its private region by the slot count — the
+third harness to do so. Measured before repairing: it masks nothing today, because every stage lowers
+as a DEGENERATE stream, so no resume-state word exists, and no corpus module declares a private
+composite slot or a non-zero initializer. Repaired anyway. For `parse.kel` the slot array is 173 KB
+against a 693 KB contract.
+
+**Then I wrote the census, and my hand-written list of harnesses was wrong twice.**
+
+| draft | claimed | actual |
+|---|---|---|
+| first | 7 files | **14**, three of which asked no contract figure at all |
+| second | added one, dropped one | still wrong in both directions |
+
+`composite_yield_witness.rs` and `native_calls.rs` each allocated a **one-word** private buffer, one
+of them unguarded. **A one-word buffer's canary catches a write AT it and misses a write PAST it**,
+which is exactly how a literal-sized region fails. Both now derive from the contract and assert a
+canary.
+
+> **A hand sweep over a population is the thing this census replaces, and its first two drafts
+> demonstrated why in the same increment.** Both corrections came from the matcher, not from looking
+> again.
+
+### What the census refuses, and what it cannot do
+
+It refuses a NEW harness that calls a three-pointer entry without asking the published contract for
+its private size. It cannot verify that an existing harness's arithmetic is right — the canaries do
+that at run time — only that every harness asks instead of guessing.
+
+`module_source_differential.rs` is the one member that legitimately derives nothing: its programs
+declare no data, it says so in its own text, and the census requires that sentence to be there.
+
+## 2026-09-11 — [v0.3.0] The indexed composite slot, and two guards catching their author
+
+The refusal added when the direct composite copy landed is now an implementation. `log.items[i]` on
+`private data log { items: [F; 3], .. }` lowers, at constant and runtime indices, and agrees.
+
+**The stride is validated, not extrapolated.** `src/compiler.rs` gives an array-of-composite field one
+pool entry per element in a single loop, each advancing the running total by the same body size — so
+the entries are uniform by construction. That is a fact about the producer, and because it is
+checkable in the table this backend already reads, the whole declared range is walked. **Two
+consecutive offsets prove nothing about the third.**
+
+**Each element has its own initialisation word.** A lowering that used the base slot's word would
+answer where the reference faults, and every test of the indexed path would still pass — they all
+write the element they read. The subject that separates them writes element 0 and reads element 2; it
+is a trap subject, because proving the native side FAULTS needs its own process. Four guard subjects
+now die with `SIGTRAP`.
+
+### A count cannot see a site change class
+
+The indexed path turned the pool address from a compile-time constant into `first + index * size`.
+**It is the same line** — the same gep, fed a computed offset — so the pointer census's count did not
+move and nothing forced its classification table to be revisited.
+
+A first attempt widened the matcher to bare `build_int_add`, taking the count from 22 to 38 by
+sweeping in every ordinary integer operation in the emitter. **That is not a stricter census, it is a
+broken one**: conflating value arithmetic with address arithmetic would make every future increment
+move the number for unrelated reasons. The matcher was reverted, the table now carries a direct row
+and an indexed row, and the limitation is written into the file: **it catches new sites, not
+reclassified ones, and no mechanism there enforces the difference.**
+
+### ⚠ THE GATE FOUND A SIGSEGV, AND IT WAS THE MORNING'S DEFECT IN A HARNESS I DID NOT FIX
+
+`a_runtime_index_agrees_with_the_reference` **segfaulted under the default configuration, passed
+under narrow, and passed in isolation.** All three are the same fact: `common::vm_and_native_two_arg`
+sized its private region as `vec![0u64; 8]` — a literal — and the indexed composite path was the first
+subject in that harness to write into the persistent pool. For its module the pool alone ends at 80
+bytes and the initialisation flags at 200, against a 64-byte buffer.
+
+**A buffer sized from a literal fails by corrupting whatever is next to it**, which is not a stable
+observable: it depends on the allocator, on what else the process is doing, and on how many tests run
+in parallel. Hence green alone, green narrow, segfault in the gate.
+
+> **This is the corpus harness's defect, in a second harness, hours later.** That one was repaired
+> this morning when its canary fired; this one had no canary and no contract-derived sizing, and
+> nothing connected the two. Repairing one instance of a class and not looking for the others is the
+> failure, and it is recorded rather than tidied away.
+
+Every buffer in that harness is now sized from the published contract — the region figure
+**transitively**, since a per-chunk sum under-counts a module whose entry calls anything — and each
+carries a canary asserted after the call, so this class fails as an assertion rather than as a
+corruption.
+
+### The population guard caught a deletion I did not intend
+
+Removing the now-false refusal test took a text slice, and the slice swallowed its neighbour:
+`the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one` — the only subject that tells
+survival across `Op::Reset` apart from a pool that is merely never rewritten, and itself added hours
+earlier after auditing a completion condition that turned out too weak.
+
+> **The count came out one short of the accounting, which is the entire reason the accounting is
+> written out instead of the number being patched.** A guard that only compared totals would have
+> been satisfied by editing a digit.
+
+Restored, and the near-loss recorded next to the figure.
+
+## 2026-09-11 — [v0.3.0] The host contract stated one of three buffers, and the example taught guessing
+
+The entry takes three pointers. The generated header stated the layout of **one** of them.
+
+| buffer | in the header before | what the shipped C host did |
+|---|---|---|
+| shared segment | yes, with a named offset per slot | sized from the macro |
+| private/persistent region | **no** | `int64_t private_region[8]` |
+| composite region | **no** | `int64_t composite_region[64]` |
+| the private initial image | **no** | `memset(..., 0, ...)` |
+
+Every figure existed — in Rust, published to a host written in C.
+
+### Why it mattered even though nothing was wrong
+
+`policy.kel` declares no private data, so both guesses were harmless. **They would have stopped being
+harmless the moment the example grew a `private data` block**, and nothing would have said so. The
+example is the one artefact that turns a stated obligation into a demonstrated one, and it was
+demonstrating the opposite.
+
+This is the weakest part of the design and the backend's own documentation concedes it: *"a figure
+the host must remember to add is not one the runtime's sizing function includes, and publishing the
+figure does not change that."*
+
+### Two things the test had to avoid
+
+**The subject is not `policy.kel`.** Its private figure is 0 and it builds no composite, so it cannot
+tell a correct emitter from one that prints zeros. **A test whose subject makes every figure zero
+proves only that zero was printed.** The subject declares a private scalar with `= 7`, a composite
+slot and a construction, so all three figures are non-zero and the image is non-empty.
+
+**The two tests generate their own headers.** A first version had one generate and the other read,
+which passes in a single process and **silently becomes a no-op** under a runner that isolates tests.
+Caught before it landed, and recorded because the shape recurs.
+
+### What the example still does not exercise, said out loud
+
+`policy.kel` drives the shared segment end to end against the reference and drives neither the private
+region nor the composite region with content of its own. Its header figures are structurally correct
+and behaviourally untested. The structure is covered here; the behaviour is covered by
+`private_init_image.rs`.
+
+**One incidental repair**: `KEL_PRIVATE_BYTES` is 0 for that policy, so sizing the buffer from it
+produced `int64_t x[0]` — a GNU extension, not ISO C. One spare word keeps the declaration portable.
+
+## 2026-09-11 — [v0.3.0] A declared initializer this backend never applied, found by asking the third axis
+
+**The fifth defect of the day, and the FIRST one found deliberately.**
+
+```
+private data log { count: Word = 7 }
+fn main(t: Word, u: Word) -> Word { if t < 0 { log.count = 99; } log.count + u }
+
+  write skipped : reference 8, this backend 1
+  write taken   : reference 100, this backend 100
+```
+
+`private_init` carries the declared literal and the runtime applies it at load. **There is no native
+load step** — a host supplies the buffer — so nothing applied it, and every existing subject agreed
+because every one of them writes its slots before reading them.
+
+### How it was found, which is the point of recording it
+
+The four earlier defects shared a property: **data that outlives something**. Two censuses existed —
+how an address is FORMED, how a value is MOVED. **Neither asks what is in memory before the emitter
+reads it.** Writing that question down and asking it of all sixteen read sites put four on the
+host-provided boundary: the resume-state word, the composite initialisation words, the shared
+segment, and the private slot array — whose guarantee turned out to be a table this backend had never
+looked at.
+
+> **Four defects by accident, then one by asking.** The difference is that the question was written
+> as a census instead of being carried in someone's head.
+
+### Three of four host rows are satisfied by a zeroed buffer, which is why it hid
+
+A host that zeroes the persistent region is right about the resume-state word, right about every
+composite initialisation flag, and right about composite slots — and **wrong only about scalar
+initializers**. A plausible host is correct three times out of four. That coverage pattern is what
+lets a defect live.
+
+### A published image, not a load step
+
+`region::private_init_image` states what a host must install, exactly as `persistent_supplement_bytes`
+states how large the region must be — **the same weaker guarantee**, stated in the same voice: a host
+that ignores it is wrong in a way publishing cannot prevent.
+
+**Composite slots are deliberately left zero.** Their initializer is `Unit`, which is not a body, and
+the initialisation word added hours earlier reports "never written" precisely because those bytes are
+zero. An image that reached them would mark a slot as holding a body it does not, silently undoing the
+previous increment — so a test asserts the image stops at the slot array.
+
+### The harness change is not the fix, and the test says so
+
+Installing the image in the differential helper would make the suite green while a real host still
+got zeros. The image is published, and a test drives it **through the public surface** rather than
+through the harness's arrangement.
+
+## 2026-09-11 — [v0.3.0] A composite slot read before it was written answered 0 where the reference faults
+
+**The fourth defect of the day, and the first one found by asking a question the previous increment
+implied.** The persistent composite copy made a data slot hold bytes. Bytes have no `Unit`.
+
+```
+private data log { latest: F, count: Word }
+fn main(t: Word) -> Word { if t < 0 { log.latest = F { a: 11, b: 22 }; } log.latest.a }
+```
+
+| path | reference | this backend, before |
+|---|---|---|
+| the write does not happen | **faults**, `TypeError("cannot access field on Unit")` | **returned 0** |
+| the write happens | `Int(11)` | `11` |
+
+**The same shape as the unguarded array index**: a silently wrong value where the reference faults.
+
+### Where the responsibility sits, stated rather than assigned
+
+The reference **rejects an unconditional read-before-write** — the write-before-read contract is
+checked. **Its check is flow-insensitive**, so a write on one branch satisfies it and the runtime
+then faults at execution. Whether that is intended is the other line's ruling; it is recorded as a
+question, not as a defect report.
+
+What is not in question is that this backend must not answer where the reference faults.
+
+### Trapping, not refusing, and the reason is a program that already works
+
+Refusing needs definite assignment. `14_frame_log.kel` writes its slot inside `for i in 0..3` and
+reads after the loop; nothing available here proves that range non-empty, so a sound analysis refuses
+it — **undoing an increment completed hours earlier and refusing a program the reference accepts and
+runs correctly.**
+
+A per-slot initialisation word, set on write and tested on read, reproduces what the reference does:
+it faults at run time on the same input. Fixed size, fixed offset, no opcode. **The flag is outside
+the body** because a sentinel compared against the bytes would fault on a legitimate body that
+happened to equal it.
+
+### The harness's premise check caught a subject that did not test what it claimed
+
+The first version of the trap subject branched on `t > 0`. The trap harness drives seed 0, which is
+**4, not 0** — so the write happened, the virtual machine did not fault, and the harness refused the
+row: *"no longer faults on the VM side, so it is not a trap subject any more."*
+
+> **A test subject can fail to exercise the thing its name asserts**, and the only thing standing
+> between that and a green run was a premise check written by someone who expected the row to rot the
+> other way.
+
+### What is now pinned
+
+The unwritten path dies with `SIGTRAP`; the written path agrees; the corpus subject still runs across
+four cycles; and the highest persistent byte the backend can touch is asserted to be inside the figure
+a host is told to allocate — the invariant the corpus harness violated this morning, now checked
+rather than hoped for.
+
+### BOTH CENSUSES FIRED ON THEIR OWN AUTHOR, ONE INCREMENT AFTER BEING WRITTEN
+
+The initialisation words added one address site and one move site, and the gate refused until each
+was classified. **The value-movement census was written this morning and caught its author's next
+increment the same afternoon** — the shortest possible demonstration that it does what its header
+claims rather than what its author remembered.
+
+Both classifications are the same shape and both matter: the flag's address is a compile-time
+constant, and the flag's store **carries a constant, not an operand**, so no address can reach a
+destination that outlives the region. The ordering is recorded too — the mark is emitted AFTER the
+body copy, so a trap inside the copy cannot leave a slot claiming to hold a body it does not.
+
+## 2026-09-11 — [v0.3.0] Absorption 57, a prediction that contradicted its own risk, and the census for value movement
+
+### The absorption, and the clause that could not have been right
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | exactly two, both process channels | **exactly those two** |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| `src/` and `tests/` after the merge | byte-identical to `origin/v0.2.3` | **identical**, check non-vacuous at 12 files against the previous tree |
+| backend suite | 519 passed, 0 failed | **519 ran, 1 FAILED** — `corpus_fingerprint` |
+
+**The fourth clause contradicted the risk named in the same document.** The brief said, precisely,
+that the incoming set changes `wire.kel` and `verify_types.kel`, which are corpus subjects of this
+backend — and then predicted a clean run two lines later. `corpus_fingerprint` exists to fail when
+corpus content moves. **If the named risk was real, a green suite was impossible.**
+
+> A prediction that cannot be reconciled with the risk written beside it is not a prediction, it is
+> two documents. Nothing checks a brief against itself, and this one needed it.
+
+### The risk cleared by evidence, and one arithmetic left open
+
+**The chunk population moved +11, measured directly** by compiling both versions of each changed
+file: `wire.kel` 486 to 492, `verify_types.kel` 28 to 33. The file population is unchanged at 74.
+Every figure the guard named was re-run: refusal set 1, ISA census 63 of 66 over 74 modules, module
+coverage 98.6%, 1084 of 1085 chunks lowerable, 90800 of 90845 opcode instances.
+
+**The `1070 of 1074` figure elsewhere in the tree is a calibration dated 2026-08-29, not a
+measurement of the pre-absorption tree.** Adding the measured +11 does not reach 1084, and
+`14_frame_log.kel` becoming lowerable accounts for only two of its chunks. **The residual is left
+named and open rather than forced into an arithmetic that does not close.**
+
+### The census the last two increments earned
+
+Three defects, and the one with an unexamined class behind it was the data-slot store: **every place
+the emitter moves an operand as a word is a place a body operand would be moved as its address.**
+`pointer_offset_census.rs` is the deliberate instrument for ADDRESS arithmetic; there was none for
+VALUE movement, which is where that defect lived.
+
+`value_movement_census.rs` enumerates all 17 move sites — fifteen word stores and two body copies —
+and classifies them **by what the destination outlives**, which is the question, rather than by
+whether the move is word-sized, which is not:
+
+- **operand slot, local slot, spill slice, composite body** — none outlives the region, so an address
+  is the intended content;
+- **shared slot, private slot, persistent pool** — all outlive it, and each either refuses a body or
+  copies it.
+
+**Two escape routes are named rather than omitted**: a `return` and a `yield` are not stores, so they
+are outside the count, and a census that skipped them silently would claim more than it measures —
+the failure the pointer census recorded about its own first version. Its non-vacuity check is
+form-by-form: a matcher finding only the word stores would reproduce exactly the blind spot that made
+the defect invisible.
+
+The two rows that say REFUSED are driven, not asserted. A shared composite slot **compiles on the
+reference** and is refused here, so that row has a real subject rather than a hypothetical one.
+
+## 2026-09-11 — [v0.3.0] The persistent composite copy, and a refusal count that came home
+
+**The defect found this morning is closed by implementation rather than by refusal.** A composite
+written into a private data slot is copied into the persistent composite pool; a read hands back the
+pool address. The value survives `Op::Reset` in place, which is what a data slot is for.
+
+| subject | before | after |
+|---|---|---|
+| the discriminator (write once, rebuild the site twice, read back) | runtime `[0, 0]`, native `[2, 2]` | **agree**, and the test asserts agreement rather than a refusal |
+| `14_frame_log.kel` | refused | lowers and agrees, `[81, 84, 87, 90]` across four cycles |
+| corpus refusals | 2 | **1** |
+
+### The three facts it rests on, each read from its producer
+
+- **The pool is packed with one running total and no padding.** Read from `src/compiler.rs`, not from
+  a doc comment: `total = total.saturating_add(body)` per entry in ascending slot order. **So a
+  body's size is the gap to the next offset**, and the last entry's is the gap to
+  `persistent_composite_bytes`.
+- **The two private regions are DIFFERENT MEMORY IMAGES.** The runtime sizes its persistent region as
+  `private_count * size_of::<Value>()` plus the pool, and its `Value` is 32 bytes where a private slot
+  here is 8. This backend therefore places its pool after its OWN slot array, and the placement is
+  refused outright if it would reach the resume-state word rather than assumed to clear it.
+- **A derived length feeding a `memcpy` is the one place here where being slightly wrong is an
+  overrun rather than a wrong answer.** So the table must partition the pool — offsets strictly
+  ascending, the last entry inside the declared total — and the operand's own width is cross-checked
+  against the derived size. Two independent statements of one number, and a disagreement refuses.
+
+### What was deliberately not lowered
+
+**An indexed composite slot.** Every element carries its own pool entry, so `base + index * size`
+needs the stride proven uniform across the range first. The shape compiles on the reference, so the
+refusal has a real subject, and the test asserts the refusal NAMES the indexing rather than merely
+existing.
+
+### The refusal count returned to 1, and that is the finding about the count
+
+It went `1 -> 2` when a silent miscompilation became a loud refusal, and `2 -> 1` when the refusal
+became a correct lowering. **The digit is exactly where it started and the tree is not.** No aggregate
+distinguishes those three states; only the reason written beside the digit does.
+
+### The gate found what the piecewise runs could not: a harness sized by the wrong figure
+
+**The corpus differential half failed, in both float configurations, and it was the instrument's
+fault rather than the lowering's.** The harness allocated one word per private slot with a canary
+immediately after; the contract this backend publishes is `required_persistent_capacity_for` plus
+`persistent_supplement_bytes` — slot array, composite pool, resume-state word. **The pool begins
+exactly where the canary was sitting.**
+
+**Why it stayed invisible for as long as it did, measured rather than supposed.** Nothing had ever
+used the space between the slot array and the contract's end. A first hypothesis — that the
+resume-state word had been writing hundreds of kilobytes past the allocation on every corpus run,
+with `parse.kel` short by 519 KB — was **checked and is FALSE**: every corpus stream with private
+data lowers DEGENERATELY, so no dispatch and no state word exists in any of them. Twelve modules were
+short of the contract and none of them wrote past it.
+
+> **A canary immediately after a too-small buffer only catches writes that land JUST past the end.**
+> The pool beginning at the canary word is the only reason this surfaced as a clean assertion instead
+> of a write into unrelated memory. Its position was doing work the sizing should have done.
+
+A test now pins the non-vacuity: if the contract never exceeded the slot array, the repair would be
+cosmetic. It does, for twelve modules.
+
+### The population guard caught a replacement a count cannot see
+
+`private_slot_composite.rs` went from four tests to six — but two were REMOVED, because their claim
+was inverted by the fix. A test asserting that the composite slot is refused would have been kept
+green by deleting the lowering. The guard reports `+2`; the accounting beside it says
+`-2 removed, +4 added` and why.
+
+## 2026-09-11 — [v0.3.0] A local live across a suspension was wiped on the way back in
+
+**The increment was a measurement, and it found a defect the measurement was not looking for.**
+
+### What was being checked
+
+The `Op::Reset` arm emits no arena reset. The entire argument that this is safe lived in one
+sentence of a comment: *"every site has a fixed offset, so the next iteration overwrites exactly the
+bytes a reset would have reclaimed."* Nothing in the tree checked it.
+
+**The sentence over-claims.** An iteration that takes a branch skipping a construction site does not
+overwrite it. `reset_region_retention.rs` reads the retained bytes back out of the host's buffer and
+discriminates three states — a `0xCD` poison, iteration one's body `(12, 14)`, and iteration two's
+`(8, 10)` on a run where the constructor does fire. **The retention is real.** What makes it
+unobservable is provenance plus the fact that no region pointer outlives its iteration, and those are
+now tabulated with their mechanisms, including the two rows closed only indirectly.
+
+### The defect, which arrived through the control and not the subject
+
+The local-clearing check needed a second subject differing by exactly one local, so that a count
+which does not move with the population could not pass. **That control subject diverged.**
+
+```
+loop main(t: Word) -> Word { let keep = t + 100; let r = yield 1; yield r + keep }
+   runtime [1, 108]        native [1, 3]
+```
+
+The entry preamble zeroes every non-parameter local, so an unwritten slot reads as the runtime's
+`Unit` rather than as `undef`. **That is right for a function entered once, and a resumable stream is
+entered once per suspension.** The preamble was undoing, on every resume, exactly what the ephemeral
+frame exists to do.
+
+The initialisation now sits on the first-entry edge of the dispatch — the switch's default is the
+only edge that is not a resume. `Op::Reset` still branches to the loop top directly, which is correct
+on both counts: it has already cleared the locals itself, and it must not re-run an initialisation
+the runtime performs once.
+
+**The parameter store stays unconditional, and the asymmetry is the reference's.** The runtime's
+resume writes the incoming value into slot 0; a stream reading its parameter after a suspension sees
+the resume value on both sides. A fix that deferred the parameter store along with the rest would
+have passed every other stream test in the file.
+
+### Why nothing caught it before
+
+**No existing stream subject had a local live across a suspension.** Every one of them either writes
+its locals after the resume or reads only the parameter. The suite was green over a lowering that
+lost any local crossing a `yield`.
+
+### The guard is cast against the class, not the instance
+
+Counting zero-stores would have been shaped by the defect that prompted it — the recorded blindness
+of every instrument on this line. The class is **anything written unconditionally in the entry
+block**, because all of it re-executes on each resume. The guard asserts a resumable stream's entry
+block writes the parameter slots and nothing else, with a non-stream control proving it discriminates
+between the two entry disciplines rather than passing because no lowering ever writes at entry.
+
+### What this does not establish
+
+- The retention is shown to persist after the run, not to be unreachable during it. Unreachability
+  rests on provenance and on the five escape routes; two of those are closed only by the sequence
+  differentials agreeing, and the file says so rather than implying five direct checks.
+- Every subject is single-chunk. Interprocedural retention is untouched.
+
+### And then a second defect, found by verifying a citation I was about to file
+
+The escape-route table needed a row for persistent storage. The mechanism I wrote was *"a slot-homed
+composite is COPIED into persistent bytes, not aliased"*, cited to `slot_homed_composites.rs`.
+**That test establishes the POPULATION of slot-homed composites and says nothing about copy
+semantics.** Reading the citation before filing it is what turned a plausible row into a measurement.
+
+**A data slot access lowers to one word.** For a flat composite the operand is the address of a body
+in the ephemeral region, so the write stored a pointer where the runtime copies bytes into the
+persistent composite pool, and the read handed back a pointer into a region that later iterations
+overwrite. The slot survives `Reset`; the body does not. `14_frame_log.kel` opens by saying a slot
+holds *"a COPY of the composite's bytes ... not a reference to the ephemeral body"* — the script
+states the contract the backend was breaking.
+
+**It agreed with the runtime everywhere it was tested.** That module reads its slot in the same
+iteration that wrote it, so a pointer and a copy give the same answer, and it yielded `[81, 84, 87,
+90]` on both sides across four cycles. The shape that separates them writes the slot on one loop
+iteration and then rebuilds the SAME site twice more:
+
+```
+runtime [0, 0]        native [2, 2]
+```
+
+`2` is the last body built at that site.
+
+**Refused rather than fixed, and the cost is stated.** The correct lowering copies the body to the
+offset `private_composite_layout` names, but that pool's base is not pinned against the runtime in
+this ABI, and guessing it would put a wrong answer where a refusal belongs. `14_frame_log.kel` moves
+from lowering to refused, so the corpus carries one more refusal than it did this morning.
+
+**Two checks, because they see different things.** The operand's width catches a composite going in,
+including through a shared slot; the module's own `private_composite_layout` catches one coming out,
+where there is no operand yet to have a width. The residuals are written down: an unknown-width
+operand, an empty composite slot absent from the table by design, and shared composite slots, for
+which no corpus subject exists.
+
+### Both defects have the same shape, and it is not the shape of either fix
+
+Neither was a wrong calculation. **Each was a correct operation applied at a boundary it does not
+hold across**: zeroing locals is right on entry and wrong on re-entry; a word-sized store is right
+for a scalar slot and wrong for a composite one. Both agreed with the runtime on every subject that
+existed, and both needed a subject built to separate two mechanisms that coincide in the easy case.
+
+**Neither was found by the thing that was being checked.** The first arrived through a control
+subject; the second through verifying a citation. The increment that was planned — making the
+retention premise checkable — is the smallest part of what it produced.
+
+## 2026-09-11 — [v0.3.0] Absorption 56, and a risk cleared on evidence rather than by a green aggregate
+
+**84 commits, the largest backlog this line has carried.** All three predicted clauses hit exactly,
+and they were committed to the tree in `6e18b86a` BEFORE the merge ran.
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | one, `docs/process/TASKLOG.md` | **exactly that one** |
+| conflicts in `src/` or `tests/` | zero | **zero**, and both byte-identical to `origin/v0.2.3` after |
+| backend suite | 503 passed, 0 failed | **503** (494 + 9), both halves FROZEN |
+
+### The part that is not just a green suite
+
+**The named risk was closer to home than absorption 55's.** Only two of the 84 commits touch `src/`,
+and one is `d9eeba69 fix(target): refuse a width below the narrowest implemented one`. This backend
+is width-sensitive in ways the runtime is not — `check_word_width`, floats admitted only at 4 and 8
+bytes, composite fields sized from the module's declared widths — so a change to what the TARGET
+admits can move which modules reach the backend at all.
+
+**46 width-sensitive tests ran and passed**, named in the log: `declared_float_width`,
+`entry_abi_float`, `float_composite`, the mixed-width differentials, and the narrow-float refusals.
+
+> **A GREEN AGGREGATE WOULD HAVE CLEARED THE RISK ONLY BY COINCIDENCE OF COVERAGE.** Naming the tests
+> that exercised it is what makes the clearance checkable — the difference between "the suite passed"
+> and "the specific way this could have broken was exercised and did not".
+
+### A non-result, stated rather than assumed
+
+**Neither report to the `v0.2.3` line has been acted on.** No commit among the 84 mentions
+`confine.rs` or the multi-parameter stream. That is not a complaint — both reports are recent — but
+it means the `confine.rs` allowance in `lowering_robustness.rs` is still live and still asserting
+that the defect FIRES, which is how it was built: their fix will fail my test and delete the
+carve-out rather than let it outlive the defect.
+
+## 2026-09-08 — [v0.3.0] An unguarded array index, found by a census that was about something else
+
+**The backend returned `0xabababababababab` for `xs[5]` on a three-element array.** That
+constant is the filler byte of the caller's region buffer. The reference faults
+`IndexOutOfBounds(5, 3)`; native code read forty bytes past the body and returned what it
+found — **a silently wrong value and an out-of-bounds read at an attacker-influenced
+offset, at the same time.**
+
+### The cause is the most repeatable failure this line has
+
+The `Op::GetIndex` arm carried, in a comment, *"the bound is not checked here: the compiler
+emits `Op::BoundsCheck` before the index."* **The compiler does not**, for this shape. The
+bytecode is a bare `GetIndex`. An invariant was recorded as prose, the lowering was built on
+it, and nothing tested it **because an assumption is not an assertion**.
+
+> This tree already carries the same shape three times over: the handoff's mechanism claim
+> about `static_for_in_length`, the "narrow is eleven times slower" figure that was
+> contention, and the twelve `Op::Len` guards whose root cause was one defect repeated. **A
+> premise in a comment is the least-tested thing in a codebase**, because the reader who
+> would check it is the reader who believes it.
+
+### It was not found by looking for it
+
+The increment set out to write a CENSUS: where does the native side of the deferred B35
+partial-operation contract actually stand, for each of the six operations? The
+out-of-bounds subject came back with its trap block marked `No predecessors!`. **Reading is
+not measuring**, so the subject was executed, and the execution is what settled it.
+
+The census was worth writing for its own sake — it establishes that all five writable
+subjects trap today where the contract's V0.4.0 default is a defined value, and that
+trapping is the sound interim because it matches the reference. **The defect was a side
+effect of instrumenting honestly.**
+
+### The census corrected itself twice before it could be trusted
+
+Its first detector looked for a conditional branch straight to `%trap` and called three
+GUARDED subjects unguarded; they reach the trap through an unconditional branch from a
+conditionally-entered block. Its second called every module unguarded, because each
+function receives a trap block whether or not it uses one. It now counts REACHABLE trap
+blocks **and states its own limit**: it answers "can this module trap at all", not "is the
+trap on this path".
+
+Two subjects were also mis-recorded as REFERENCE REJECTED on my own syntax error — the
+builtin is `bool`, not `Bool`, and the discriminant conversion requires its arm block.
+**Recording those as reference limitations would have been fabricated coverage**, which is
+the failure the census overhaul of 2026-09-06 was written to stop.
+
+### The fix costs no coverage, and finding that out took a second measurement
+
+Guarding alone refused two corpus chunks in `10_multbyte.kel`, whose arrays are
+PARAMETERS: `TypeTag::Composite` says only "not a scalar", so their width was `Unknown` and
+no bound could be derived. **The size was in the module all along** — `ChunkSignature`
+carries `WireShape::Flat { size }`, which is the same body length the `Body` width means,
+so the two agree by definition rather than by a second computation that could drift.
+
+Corpus refusals: **1 before, 3 with the guard alone, 1 again with the signature seeding.**
+
+### A diagnostic defect found on the way, and reported rather than fixed here
+
+Writing `Bool` where the builtin is `bool` produces *"refinement predicate `in_range` must
+return Bool, returns Bool"*. The hard-coded half of that message names a spelling the
+language does not use, so the two halves collide and the message is unactionable. It is the
+reference line's to fix.
+
+## 2026-09-08 — [v0.3.0] Absorption 55, with a risk named beforehand that did not fire
+
+**Predicted before merging**, all three clauses recorded in the tree and committed as `f72eb6e0`
+before the merge ran:
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | exactly one, `docs/process/TASKLOG.md` | **exactly one, that file** |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| backend suite | 485 passed, 0 failed | **485 passed, 0 failed** (476 + 9), both halves FROZEN |
+
+**The population moved while the work was in flight**, from 28 commits to 34, and the prediction was
+re-derived rather than carried forward. A prediction that names a population has to move when the
+population moves — recorded here because absorption 47 caught this line stating a binary count that
+had been correct two increments earlier.
+
+**THE RISK WAS NAMED BEFORE THE MEASUREMENT AND THE MEASUREMENT CLEARED IT.** Only two of the 34
+commits touch `src/`, and one is `e67bdac0 fix(vm): size a flat opaque field by the layout, not by
+the word`. This backend derives composite field offsets from that same canonical layout, so the
+prediction said in advance that if anything moved it would move in the flat-composite and
+composite-width tests and not in the stream work. Nothing moved.
+
+> **That is a stronger claim than a bare green.** "The suite passed" and "the specific way this could
+> have broken was identified in advance and did not" are different statements, and only the second
+> is evidence that the absorption was understood rather than merely survived.
+
+**The conflict was resolved by keeping both sides.** Both were appended currency notes — the sibling
+line's flat-opaque-field repair and this line's `Op::Len` disposition — describing independent work.
+Choosing between them would have destroyed a record; the resolution orders them newest first and adds
+this session's note above them.
+
+**The ownership check is clean in both directions**: nothing under `src/` or `tests/` changed on this
+line since the merge base, and after the merge those trees are byte-identical to `origin/v0.2.3`.
+
+## 2026-09-08 — [v0.3.0] The ten fired ratchets were three different stories, and one was a defect
+
+**The handoff was wrong in a way that mattered, and it was my own handoff.** It recorded the
+ten red tests as ratchets asserting the old frontier and instructed that they be *"INVERTED,
+not repaired"*. Four of them were not ratchets. They were reporting a defect that general
+`Op::Stream` lowering had just introduced, and inverting them would have encoded it.
+
+**The mechanism, which is worth remembering beyond this instance.** `degenerate_stream_yield`
+returns `Option<Vec<usize>>`, and `None` had accumulated two incompatible meanings: *this shape
+is not degenerate* and *this shape is unsafe*. That conflation was harmless while `None` led to
+one place, a refusal. General `Stream` lowering then defined its own applicability as exactly
+`Stream && degenerate_yield.is_none()` — **so it inherited every soundness rejection as a
+feature request.** A callee that can itself suspend went from refused to `Refusals: []` with
+nothing else changing.
+
+**The general lesson is about the shape of the predicate, not about streams.** A predicate whose
+negative answer is consumed by more than one caller must say WHY it declined, or the second
+caller will read the first caller's safety check as a hint.
+
+**What the differential settled that reasoning would not have.** Three shapes genuinely widened,
+and each is now witnessed by a whole yielded sequence rather than by an argument. The strongest
+is a tail that writes the private data segment: the write survives `Op::Reset`, so a lowering
+that dropped it, duplicated it, or ran it before the suspension would diverge on the second
+iteration. That subject had been pinned as refused with the comment that it was *"the condition
+most likely to be relaxed by someone who reads `PopN(1)` as bookkeeping"*. It has now been
+relaxed deliberately, and this is the evidence that was owed.
+
+**Three tests were simulations whose premise came true.** They mutated real bytecode to remove
+`Op::Stream` and asked what the yield-escape refusal would take over *"on the day `Stream`
+lowers"*. The day arrived. Each now measures the shipping backend directly, and each carries an
+additional assertion that the retired shadowing refusal is ABSENT — without it, a future refusal
+moving back in front would let the new assertions pass for the old reason.
+
+**The frontier was re-derived rather than edited, and that turned up two things I did not
+expect.** Tail position is no longer the discriminator; it is a composite that escapes the
+iteration that built it, and establishing that needs three shapes rather than two, because a
+pair leaves both "composites are the problem" and "loops are the problem" standing. Adding the
+missing shapes to the matrix then showed a third refusal class: **a composite built from a
+resumed value is refused because the resumed value has no declared width.** That corrected a
+claim elsewhere in the same file, which said composite-yielding sequence semantics could not be
+witnessed until a non-tail yield lowered. A non-tail yield lowers now. The gap is still open,
+for a different reason, and the reason is tractable — the resume value's width is the chunk's
+declared parameter-0 type, which the same function already trusts for the local slot.
+
+**A prediction recorded before the fact and missed.** For absorption 55 I predicted four
+conflicting files from the shared documentation set. The merge computes ONE, `TASKLOG.md`; the
+other three auto-merge. The prediction was built from "both sides touched this file", which is
+a necessary and not a sufficient condition for a conflict, and three of the four were appends to
+different regions.
+
+**A guard caught what reading would not have.** The pre-push hook rejected the work because
+`comment_citations` found `REVERSE_PROMPT.md` naming a test that had been renamed. **Renaming a test
+silently invalidates every document that cites it**, and the sweep that failure prompted found four
+more, one of them in a decision document. The tree already had a convention for this — a superseded
+name is written WITHOUT backticks so it does not resolve as a citation — and applying it mechanically
+across a handoff turned out to be wrong in its own way: it rewrote historical passages so they
+claimed a currently-passing test was failing. Corrected by restoring the superseded names unlinked
+and annotating the outcome beneath them.
+
+**On the instruction that was wrong.** The previous handoff said to invert all ten. It was right
+three times out of four in the classes it could see, and the fourth was the one that mattered. The
+useful correction is not "the handoff was wrong" but that **a ratchet's own message describes the
+world it was written in, and cannot tell you whether the change that fired it was correct.** Sorting
+before editing costs one pass over ten test bodies and is what separated a defect from three
+widenings.
+
+## 2026-09-06 — [v0.3.0] Absorption 52, a feature declared rather than inherited, and a stale pending item
+
+**Predicted before merging**: no `src/` and no corpus root touched, so `native_codegen` moves by
+**zero** — 477 passed, 0 failed. **Three merge conflicts**, in the three files both lines write.
+
+**Measured: 477 passed, 0 failed, under BOTH default features and `narrow-float-32`**, the default run on a tree with zero uncommitted files. The pass prediction hit
+exactly. **The conflict prediction OVER-SHOT: one conflict, not three.** `REVERSE_PROMPT.md` and
+`DESIGN_JOURNAL.md` auto-merged because the two lines wrote non-adjacent regions — I predicted from
+*which files both lines touch* rather than from *where in them*, and the finer question is the one
+that decides. Both `TASKLOG.md` notes were kept; neither line's record was discarded.
+
+**This absorption was measured alone on a frozen tree**, which the previous increment failed to do.
+Eighteen commits, not the fourteen the handoff recorded — the peer line advanced while this one
+worked, so a count in a handoff is a timestamp, not a fact.
+
+### The float feature was used but never declared
+
+`native_codegen/Cargo.toml` asked for `compile` and `self-host`. `self-host` implies `compile` and
+`verify`, so those were genuinely declared. **`floats` was neither declared nor implied**, arriving
+only because default features were never disabled — while the manifest read as though the explicit
+list were complete.
+
+**Mutation-tested in two directions, and the second corrected my own brief.** Removing `floats` from
+the list with defaults still on fails only the declaration ratchet, the behavioural probe passing —
+which is exactly why the two are stated separately. Adding `default-features = false` **fails the
+BUILD**: `ScalarKind` has no `Float` variant. My brief had said the float tests would "fail loudly".
+It is louder than that, and the consequence is that the behavioural probe cannot catch the realistic
+case at all. **The declaration ratchet is the guard that does the work**, and saying so where the
+test lives is worth more than a guard that sounds stronger than it is.
+
+### A pending item outlived its work
+
+The handoff carried "a code edit, deliberately not made" — citations in `isa_lowering_census.rs`. They
+had already landed in `61e185c2`. **The deferral was right when written and the list was never
+cleared.** A pending item that outlives its work sends the next session at something already done:
+check it against the tree, the way this file's figures are re-derived rather than trusted.
+
+
+## 2026-09-06 — [v0.3.0] `Op::Len` has no producer that could be found, and twelve tests are disposed of rather than repaired
+
+**Predicted before the run**: 474 passed, 0 failed, both float configurations — 473 as of the last
+green, plus 4 in a new census binary, minus 3 retired from `probe_len_reachability`.
+
+**Measured: 474 passed, 0 failed, both configurations.** **THE PREDICTION WAS A PARTIAL HIT, NOT A
+CLEAN ONE, AND SAYING SO IS THE POINT.** The population hit **exactly**. The green did not: the first
+frozen measurement returned **two failures neither predicted nor caused by the increment's subject**,
+and both were resolved rather than absorbed into the count. A count that lands exactly can make a
+prediction look better than it was.
+
+**The measurement itself needed three attempts, and the first two were my errors.** One run was taken
+while I edited documents underneath it — **the absorption-40 hazard, repeated by this line rather than
+merely remembered** — and is discarded rather than quoted. Two more were killed at the harness's
+**ten-minute background ceiling**, which I had exceeded by passing a timeout well over the documented
+maximum; the suite is now measured in two chunks split at `corpus_differential`, which alone consumes
+most of that ceiling.
+
+### The two unpredicted failures, and neither was what it looked like
+
+**`corpus_fingerprint` fired twice**, correctly both times: amending the corpus witness changed a file
+whose digest is pinned. The second firing was my sequencing error — **the pin has to be the last edit,
+not an early one**, or a later corpus change silently invalidates it again.
+
+**`linkage_symbol_census` fired on DIFFERENT TESTS in two consecutive runs of a frozen tree.** A
+failure that moves between runs is a race, not a result. **It is the same defect that file already
+documents, one level up.** Its `scratch` helper disambiguates with a process-local counter, which
+genuinely separates tests under `cargo test` — where a binary's tests share one process — but not
+under `cargo nextest`, which runs each test in its own process, so every process starts the counter at
+zero and two tests sharing a tag receive the identical directory. Repaired with the process id.
+
+**I first suspected my own corpus widening.** It reads a different constant, which I checked rather
+than assumed. **A plausible self-attribution is still a guess.**
+
+### The instruction that mattered was a warning against the obvious action
+
+The previous handoff said the suite was red on purpose and that the twelve failures **must not be
+patched green**. Every one of them named, in its own failure message, what to do when it fired. That
+text was followed rather than short-circuited.
+
+### The question, and the answer
+
+**Is `Op::Len` reachable from any compilable source now? No producer was found.** Four legs, each
+with a must-fire control: a detector control on injected bytecode; a 14-shape construct battery, 10
+reaching codegen, none emitting; a sweep of all 69 compiling corpus modules across four roots, none carrying it; and a
+scan of the compiler finding 11 occurrences, all comments or absence assertions.
+
+**A grep was refused as the answer.** Three textual censuses on this line were falsified by their own
+controls, and a scan cannot tell a construction from a match arm from a sentence. It is admitted only
+as a supporting leg, with the same scanner shown finding real constructions in the wire-format
+decoder.
+
+**Not written as unreachable.** `Op::IsStruct` was declared producerless here once and four producers
+were found within the hour.
+
+### The error I made, and it was mine end to end
+
+The handoff and the reverse prompt both said *"`static_for_in_length` gained an `Expr::If` arm"*. **It
+did not, and it still has none.** The fold comes from that function's fallback to `infer_expr_type`,
+which consults the authoritative per-span type table.
+
+**`OP_LEN_ROOT_REPAIR.md` — a document this line had already absorbed — states it correctly**, under a
+heading admitting its own prediction had been wrong. I restated it incorrectly without reading it, and
+it propagated into three artefacts. **Reading the absorbed document is cheaper than every artefact
+that repeats it.**
+
+### The finding was larger than the form that was repaired
+
+**Both emission sites in `src/compiler.rs` are gone.** The question was never which construct reaches
+the opcode; it was whether any can. Answering the narrow question would have left that unsaid.
+
+### The design fault was mine, and the repair is structural
+
+**Twelve tests, one witness** — the coupling that rotted `Op::Call` and `Op::IsStruct` before it,
+rebuilt at larger scale. The witness text now has a single definition in `tests/common/mod.rs` and the
+verdict a single owner in `len_producer_census.rs`. A resolution to be careful would not have been a
+repair.
+
+**And one guard was decoupled rather than inverted.** `len_flat_array_hazard` leg 2 pins a RUNTIME
+property — the machine's refusal of the opcode on a flat body — and it died from a COMPILER change,
+which is the wrong dependency. It now injects the opcode as bytecode. Two attempts were needed and
+both failures were instructive: inserting at instruction zero underflowed the operand stack, and
+inserting into a loop chunk shifted the back edge past its header. Each was refused for a structural
+reason while the test claimed to measure a runtime one.
+
+### A prediction resolved, and its premise is what failed
+
+`probe_len_reachability` predicted a harness panic once every refusal in `refused_witness.kel` lowered
+while the module still could not take an arena. **No panic**: the module now lowers, takes 600 bytes,
+loads, and runs to `Int(4)`. The two properties could not move apart, because the property that
+emitted the opcode was the property that denied the bound — the structural claim the file argued from
+the start. **The argument held; the contingency planned around it never arose.**
+
+### A figure moved, and the reading that would be wrong
+
+Corpus refusals **2 → 1**. The backend did not learn to lower `Op::Len`; its input vanished. A refusal
+leaving the list because nothing feeds it is not backend coverage, and conflating the two overstates
+the backend. `65 of 66` stands for a new reason.
+
+
+## 2026-09-05 — [v0.3.0] The float axis gets the typed width refusal the word axis already had
+
+**Measured**: `native_codegen` **473 passed, 0 failed, 93 binaries** under default features and again
+under `narrow-float-32`, formatting clean, zero clippy warnings. Predicted 473 over 93 and hit exactly.
+
+### The same word/float asymmetry, in a second place
+
+`UnsupportedWordWidth(u8)` carried its width as data. **The float axis had no equivalent**, so seven
+float-width refusals sat inside `UnsupportedShape(String)` and the only way to recover the width was to
+parse English — the exact conflation `refusal_classes.rs` exists to prevent, one axis over.
+
+**This is the second independent appearance of the same asymmetry.** The first was the completeness
+sentinel: the float widths were enumerated, the word widths were not. Now the mirror image — the word
+width is typed, the float width was prose. **Neither axis is systematically ahead; attention simply
+went where it happened to go, twice, in opposite directions.**
+
+### What landed
+
+`UnsupportedFloatWidth { float_bytes, detail }`, with a constructor mirroring `unsupported_op`, seven
+sites migrated, and the classifier in `refusal_classes.rs` given a matching arm so these refusals are
+named rather than absorbed by its `_ => "other"`.
+
+**The residual bucket is now honest**: `UnsupportedShape` holds **two** genuinely miscellaneous sites
+instead of nine heterogeneous ones — a float return shape, and a native setting the B35 P7 flag.
+
+### A figure of mine was wrong and is corrected in place
+
+The earlier record said **8 of 9** sites refuse a float width. Reading each site: **7** carry
+`float_bytes`; line 1898 refuses a float RETURN SHAPE and names no width. It stays in
+`UnsupportedShape` on the merits.
+
+### The test failing was the useful part
+
+The payoff test first used `fn main() -> Word { 0 }` — **a program with no floats** — so imposing a
+narrow float width produced no refusal at all. **The anti-vacuity guard written into the test caught
+it**, refusing to pass on an empty measurement.
+
+Without that guard the test would have gone green while asserting nothing, which is the failure mode
+this line has spent the session chasing. **The cause was the test, not the change**, and it is recorded
+that way. The repaired test asserts the refusal reports the DECLARED width, so a constant or default in
+the field would fail rather than pass.
+
+## 2026-09-04 — [v0.3.0] The second module-level guard, and a reading that reversed on inspection
+
+**Measured**: `native_codegen` **472 passed, 0 failed, 93 binaries** under default features and again
+under `narrow-float-32`, zero clippy warnings. Predicted 472 over 93 and hit exactly.
+
+### Chosen by applying the previous finding to its class
+
+The backend has exactly **two** module-level guards. The word-width one was closed last increment, so
+the neighbouring one, `check_target_endianness`, is the subject — **not because it looked suspect, but
+because the class had two members and only one had been examined.**
+
+### The obvious reading was wrong, and checking the public surface is what showed it
+
+Its comment says the check is on the build host and is not sufficient for cross-compilation. The
+library has no `TargetTriple` and no `create_target_machine`, so the first conclusion was that the gap
+is **latent**.
+
+**Every public entry point is lowering-only.** They return an LLVM module and **the CALLER supplies
+the target machine.** Object emission happens only in tests, and this project already emits for a
+non-host triple in `linkage_symbol_census` — `thumbv8m`, little-endian, so harmless, but the pattern
+is in use.
+
+> **The insufficiency is LIVE FOR CALLERS, not latent.** An embedder can lower here and emit for a
+> big-endian target: the host check passes, and shared slots stored little-endian are byte-swapped by
+> an LLVM load. **The library cannot detect it, because it never sees the target.**
+
+**"No cross-compilation in the library" was true and did not mean what it appeared to mean**, because
+the capability lives with the caller. Reading an absence as safety is the error, and it took one
+command to avoid.
+
+### Two limits stated rather than papered over
+
+**The refusal branch cannot be tested here.** It is a `cfg!(target_endian)` on the build host, so it is
+unreachable on every machine this project builds on. That is a limit on the evidence.
+
+**This is a ratchet, not a repair.** It pins the precondition that makes the present arrangement
+defensible — that the public surface selects no target — so that adding target selection fails and
+**names the obligation** to move the check onto the `TargetMachine`. Following the `Op::Len` precedent,
+which is explicit that pinning a hazard is not discharging it.
+
+Proven by mutation: a public entry point taking a triple makes it fail with the obligation spelled
+out, rather than reporting a bare difference.
+
+## 2026-09-04 — [v0.3.0] A guard hardened on one axis, with its neighbour left open
+
+**Measured**: `native_codegen` **470 passed, 0 failed, 92 binaries** under default features and again
+under `narrow-float-32`, `cargo fmt` clean, zero clippy warnings. Predicted 470 over 92 before running
+and hit exactly.
+
+### The increment is the precondition of the one I rejected
+
+Narrow word-width lowering is the only substantial backend item blocked on nobody — the machine
+supports `narrow-word-8` and `narrow-word-16`, so the differential oracle exists.
+
+**Scoped and deliberately not started.** The plumbing is tractable: the word type binds in **five**
+places and threads through 88 integer-typed references. **The semantics are not** — narrowing changes
+overflow behaviour, comparison, shift masking, constant truncation and the entry signature. Beginning
+a change of that size across the core lowering and leaving it half-finished is worse than not
+beginning it.
+
+### The gap, and the asymmetry that is the real finding
+
+`check_word_width` is a hand-written `word_bits_log2 == 6`. What tested it: two constructed targets,
+a census using width 5 to ask a **different** question, and a harness precondition. **Nothing
+enumerated the widths and nothing asserted that 6 was the only accepted one.**
+
+**This line built exactly this sentinel for FLOATS earlier in the same session**, enumerating every
+`float_bits_log2` and asserting the accepted and refused sets account for all eight. **The word axis
+has the same shape, the same hand-written equality, and never got it.** A guard hardened on one axis
+while its neighbour stayed open is a shape worth naming: the hardening was applied where attention
+happened to be, not to the class.
+
+### The mutation converted a hypothetical into a demonstration
+
+The brief argued that widening the guard to admit 32-bit would leave the existing tests green, because
+the embedded targets are 8 and 16 and stay refused either way. **That was an argument until it was
+run.**
+
+| under a mutation admitting 32-bit | result |
+|---|---|
+| `no_float_sentinel`, the pre-existing width tests | **6 passed, still green** |
+| the new sentinel | **FAILED**, naming `accepted=[5, 6]` |
+
+So the silent-wrong-code path is real and now closed: a 32-bit module would have lowered with 64-bit
+semantics with no test objecting.
+
+### Three limits stated at the site
+
+It pins a **refusal**, not evidence that a narrow width would lower correctly. A refusal must be
+attributed to the **width** rather than accepted as any error, since an incidental failure satisfies a
+loose check and hides a missing guard. And the construction asserts the build's own width first,
+because the compiler stamps it and an imposed width equal to it would make the test a no-op.
+
+## 2026-09-04 — [v0.3.0] Absorption 50, and the guard's middle verdict earns its keep
+
+### Absorption 49 closed at five clauses, five hits
+
+CI on `1c83f9dc` completed **success**, discharging the fifth clause — the one that existed only
+because the other line reported that CI triggers on `v*`.
+
+### Absorption 50 is docs-only, and produced STALE-READ-ONLY for the first time in anger
+
+`v0.2.3` through `bb30cc5a`, 6 commits, **2 documentation files, no `src/` or `tests/`**.
+
+**The guard reported `STALE-READ-ONLY` rather than `STALE-COMPILED`.** Until now that middle verdict
+had only ever been produced by a synthetic reach case; this is the first real absorption to land in it.
+
+**Its payoff is behavioural, not decorative.** `STALE-COMPILED` justifies a two-hour workspace re-run.
+`STALE-READ-ONLY` says the exposure is confined to the tests that read `docs/` from disk, so the
+justified check is those tests and nothing else:
+
+| check | result |
+|---|---|
+| workspace docs-readers | 6, 2 and 2 passed |
+| the backend's own `comment_citations` | 8 passed |
+| compiled inputs changed | **zero** |
+
+**So the `469 / 0 / 91` figure is CARRIED, not re-measured**, and it is carried on a stated ground —
+no compiled input moved — rather than on the assumption that a docs change is harmless. That
+assumption would have been wrong in kind: `comment_citations` reads absorbed documentation, so a
+docs-only absorption **can** break this package, which is exactly why the narrow check is a check
+rather than a shrug.
+
+**A reflexive full re-run would have cost over two hours for the same information.** That is the
+instrument's first real saving, and it is the reason it was built as a classifier rather than a
+boolean.
+
+### The bounded channel had stopped being bounded
+
+`REVERSE_PROMPT.md` is specified as overwritten each increment. Mine had **accumulated** sections
+instead, oldest first, so the opening figure a reader met was **2744 / 118 from two days earlier**
+against a current 2760 / 120.
+
+**The drift pattern, in this line's own outgoing communication channel** — after finding it in a
+handoff banner, a blocker row, an ancestry anchor, a mutation census, a staleness metric and a package
+README. Rewritten as the bounded latest state it is supposed to be.
+
+## 2026-09-04 — [v0.3.0] Absorption 49, and a verification channel I had never read
+
+### Five clauses, and the fifth existed only because the other line told me something
+
+`v0.2.3` through `c0f5e5ad`, **40 commits, 16 files, 1880 insertions** — `Text<N>` across four
+increments, two release guards, and the `Op::Len` root-repair work.
+
+| clause | predicted | result |
+|---|---|---|
+| the tree still builds | yes | **hit** |
+| `native_codegen` unchanged | 469 / 0 / 91, both float configs | **hit exactly** |
+| workspace coverage | `STALE-COMPILED`, naming their changed source | **hit** |
+| the differential still agrees | yes | **hit**, both configs |
+| CI green on the push | yes | see below |
+
+**The fourth clause carried real risk this time.** Their `Text<N>` work touched `compiler.rs`,
+`typecheck.rs`, `layout_pass.rs` and `zero_value.rs` — the path this corpus compiles through — so
+agreement across both configurations is a substantive result rather than a formality.
+
+### CI has been running on this branch all session and this line never looked
+
+The other line reported, as a reach fact costing them three unverified pushes, that **CI triggers only
+on `main`, `v*` and pull requests**. This branch is `v0.3.0`. **It matches `v*`.**
+
+So every push made today was checked by CI, and **all five most recent runs are green** — a
+verification channel available the whole time and read for the first time only when someone else
+mentioned it. Green is green; the point is that **a red would have gone unnoticed.**
+
+**The belief that survives**: CI does not build `native_codegen`, which is detached, so the local run
+remains the only gate for the backend itself. That part was right. What was wrong was treating it as
+the only gate for *everything*.
+
+### A correction of theirs, checked rather than accepted
+
+They warned that treating `Reset` as a second instance of the `Op::Len` hazard would imply two hazards
+where there is one: `Reset`'s checks apply to stream blocks only, and the compiler emits it solely in
+stream-loop epilogues, so reaching that refusal takes a corrupted module.
+
+**Checked against this tree's own disposition table, which records `Reset` as ACCEPTED rather than
+refused.** It does not make that error. Verified rather than taken on report, which is the standing
+rule for a relayed claim.
+
+## 2026-09-03 — [v0.3.0] The package's front door understated it by more than half
+
+`native_codegen/README.md` opened with **"Status: early subset. 28 of the instruction set's 66 opcodes
+lower"** and named **the data segment and composites as the next increments**. The census measures
+**63 of 66**, and both of those increments were long finished.
+
+**This is worse than the census staleness closed earlier**, for a reason that is about placement
+rather than size. A stale figure inside a decision document is read by someone already deep in the
+subject. **A README is the front door**: it is what a reader uses to decide what to work on, and this
+one pointed at completed work while understating the backend by more than half.
+
+The file was last touched 2026-09-01 by a commit that did not refresh its status — **the banner-drift
+pattern**, which this line has now recorded in a handoff banner, a blocker row, an ancestry anchor, a
+mutation census, and a package README.
+
+### The structural fix is to stop keeping the list by hand
+
+The README carried a hand-maintained roster of 28 supported opcodes. **That roster is what drifted**,
+and updating it would only reset the clock on the same failure. It now carries the command that
+computes the list instead, plus the disposition table for the three opcodes outside it, so a reader
+cannot repeat the `63 of 66` misreading either.
+
+**A claim that has an instrument should cite the instrument, not a snapshot of its output.**
+
+### One claim was checked and kept
+
+The restriction to 64-bit word width is still accurate — `check_word_width` enforces it and the source
+calls narrower widths a later increment. **`narrow-float-32` is a FLOAT width feature and not a word
+width**, and conflating the two would have replaced a stale sentence with a false one.
+
+## 2026-09-03 — [v0.3.0] The coverage guard completed its first full cycle
+
+**Workspace: 2748 passed, 0 failed, 119 binaries**, `cargo test --workspace --no-fail-fast`, **default
+features only**, **measured on a frozen tree with no edits in flight** — unlike the run of 2026-09-02,
+which had a documentation commit land underneath it. The prediction of 2748 over 119 was recorded
+before the run and **hit exactly**, and the figures match the `v0.2.3` line's own gate, confirming that
+this branch's six extra corpus files are iterated inside existing tests rather than adding any.
+
+### The number is not the point; the cycle is
+
+The guard has now run end to end for the first time:
+
+| stage | verdict |
+|---|---|
+| after absorption 48 | **STALE-COMPILED**, naming `src/vm.rs`, `src/marshall.rs` and two test files |
+| the run it justified | green, on a frozen tree |
+| after re-stamping | **CURRENT** |
+
+**This is what keeps the instrument from becoming the thing it was built to avoid.** The choice of a
+script over a test was justified on the grounds that a test asserting coverage-is-current would be red
+from every absorption until someone spent hours clearing it, and **a guard red by default is
+suppressed rather than obeyed**. That argument only holds if the stamp is actually cleared. **A stamp
+never cleared makes the script permanently stale and equally ignorable**, so the re-stamp is not
+bookkeeping — it is the step that preserves the reason for the design.
+
+### The stamp now carries its subject, per the other line's rule
+
+It records the configuration, that the tree was frozen, and **that its subject is the tree at that
+commit rather than a standing property**. That is the fourth-species remedy applied where it belongs:
+a measured claim needs its value, its population, its question, and **its subject as of a date**.
+
+## 2026-09-03 — [v0.3.0] A twelve-hour sweep abandoned, and absorption 48 with every clause hit
+
+### The sweep was stopped, and that is the finding rather than the failure
+
+Round one of the mutation sweep ran **12h51m on a deliberately quiet machine** and was killed while
+still on **`CmpLe`, the 5th of 25 mutations**. Round one alone therefore projects to roughly **60
+hours**, and round one is **25 of 53 pre-registered mutations across six tables**.
+
+**So `NATIVE_MUTATION_CENSUS.md` is not merely stale, it is expensive to un-stale.** Its "no hole
+open" was measured 2026-08-16 against an emitter that has since moved 39 commits, and re-establishing
+it is not a single increment. **A claim that cannot be cheaply refreshed should not be leaned on as
+current**, and that is a stronger statement about the census than the staleness marker alone.
+
+The route that remains is a **targeted subset** — the tool takes named opcodes — **selected from the
+emitter diff rather than from expectation**, because its honesty rests on a pre-registered set.
+
+**Progress was only recoverable because the sweep mutates the emitter in place**: the working-tree
+diff named the opcode under test. That recovery was necessary only because the run was piped through
+`tail`, so its output stayed buffered until exit. **Launching it that way gave up progress visibility
+for nothing**, and without the in-place diff the continue-or-kill decision would have been blind.
+
+The emitter was restored byte-identical and re-checked with `cargo check`, since a killed run never
+reaches its own restore step.
+
+### Absorption 48, four clauses, four hits
+
+`v0.2.3` through `6af37f66`, 12 commits, **6 files and 283 insertions** — of which 207 are `src/` and
+`tests/`. **My brief said "total 207", conflating the source subset with the total**, which is the
+scope habit this line keeps catching, in my own prediction document.
+
+| clause | predicted | result |
+|---|---|---|
+| the tree still builds | yes | **hit** |
+| `native_codegen` unchanged | 469 / 0 / 91, both float configs | **hit exactly** |
+| workspace coverage | goes `STALE-COMPILED`, naming the changed source | **hit** |
+| the differential still agrees | yes | **hit**, both configs |
+
+**The third clause is the one worth noting.** Every previous absorption on this line named only
+backend figures, so workspace staleness was missed by construction. **This is the first absorption
+where that question was answered by RUNNING something**, and the guard named `src/vm.rs`,
+`src/marshall.rs` and the two test files rather than leaving it to judgement.
+
+The fourth mattered more than it looks: their `vm.rs` change alters the reference side, which is half
+the oracle. Agreement across both configurations is evidence the two implementations still track.
+
+**Absorbed and not claimed**: `tests/len_flat_array_hazard.rs` is theirs. This line reported the
+hazard; they verified it independently with a control, found the `vm.rs` comment false, and built the
+ratchet.
+
+## 2026-09-02 night — [v0.3.0] I relayed a peer's construction past a rule my own tree already held
+
+**Increment**: the `f16` narrowing construction, corrected, and the conflation behind it named.
+
+Last increment I recorded the `v0.2.3` line's description of the binary16 construction — the chain
+`f64 -> f32 -> binary16`, sound with zero margin — into this handoff **as settled**. I flagged the
+tightness and asked them whether the `f32` hop was load-bearing. It was not.
+
+**But the question I asked them was one my own tree had already answered.**
+`FLOAT_LADDER.md` says narrow from the wide value and never through an intermediate rung.
+`FLOAT_ARITH_WIDTH_BRIEF.md` warns against confusing the two conditions. **Both were in this tree
+while I wrote the chain into the handoff as the settled construction.** I did not check the relayed
+description against the files that govern it.
+
+**That is the relayed-ruling failure exactly**: a peer-relayed statement recorded as settled
+propagates the relay's error into a durable artifact. The peer had the same defect in the mirror image
+— their own brief forbade the chain while they described it to me in speech.
+
+### The conflation, which is the part worth keeping
+
+`2p+2` answers **two different questions**, and using one number for both is what let a zero-margin
+argument look acceptable.
+
+| question | what must carry `2p+2` | binary16 | `f32` |
+|---|---|---|---|
+| arithmetic equivalence, wide computation rounded per operation against native | the **computing** format | 24 against 53, margin **29** | 50 against 53, margin **3** |
+| conversion double rounding, chained narrowing against direct | the **intermediate** | 24 against exactly 24, margin **0** | does not arise |
+
+**The second question exists only if you chain**, and rounding `f64` straight to binary16 is a single
+correctly-rounded narrowing with no condition at all. So the `f32` hop introduced a constraint and
+bought nothing.
+
+**This line's own margin-3 figure answers the first question.** It has been recorded here since the
+`f32` rung and it is not a statement about chained conversion. Had the two stayed conflated, a future
+reader could have taken margin 3 as licence for a chain.
+
+### What was and was not wrong
+
+**Nothing in either tree.** `narrow_float` implements only the 32-bit rung, a single hop. The defect
+lived in a plan and in a description — the more dangerous place, because this line would have built
+against it and the differential would have reported the resulting disagreement as a backend defect.
+
+## 2026-09-02 night — [v0.3.0] I asked for the wrong unblock, and the answer was a wrong oracle
+
+**Increment**: the `f16` blocker, restated after the `v0.2.3` line corrected it.
+
+I asked that line for the **minimal** thing that would unblock the `f16` rung: load acceptance for
+binary16, so a module would at least run on the reference side and the differential could compare.
+
+**That request would have produced a wrong oracle rather than a weak one.** The refusal of widths 3
+and 4 was added deliberately in their arithmetic-width increment, because no software rounding exists
+for those widths. An accepted module would **compute in `f64` while declaring a narrow float**. Had
+they granted what I asked, the reference would have done that while this backend lowered to `half`,
+and the two sides would disagree on **every value that rounds** — with byte-identity as arbiter and
+every disagreement attributed to my lowering. **A correct backend measured against a wrong reference
+is worse than no measurement**, because it manufactures failures and points them at the wrong side.
+
+**The accurate blocker is reference f16 ARITHMETIC.** My handoff said "no oracle, the reference
+refuses widths 3 and 4 at load", which is true and invites exactly the request I made. Both channels
+now say arithmetic, and both carry the reason load acceptance alone is harmful, because the wrong
+framing is the kind a future session acts on.
+
+### The zero margin is worth keeping
+
+The construction is settled: compute in `f64`, round to binary16 after each operation. The chain
+`f64 -> f32 -> binary16` is sound because `2p+2` for binary16 is 24 and `f32` supplies **exactly** 24.
+**Met with no slack.** For the `f32` target the same condition holds at 53 against 50, a margin of
+three. Here it is tight, so the soundness argument cannot absorb any narrowing of the intermediate.
+
+### The Len report came back verified rather than accepted
+
+Four measurements on their side, including the control that makes the first one mean anything: the
+conditional-source program compiles and contains `Op::Len`, the plain-source control compiles and does
+not, `verify()` accepts, and `Vm::new` refuses with the bound message.
+
+**And the comment in `vm.rs` asserting the compiler "never emits `Op::Len` on an array" was false**,
+now retracted at the site with the measurement attached. That is the same shape this line has hit
+repeatedly today: an invariant asserted in prose, relied upon by a check, and untrue. Their refusal is
+accidental, held by a check that knows nothing about `Len`; this backend's refusal is structural and
+stays.
+
+## 2026-09-02 night — [v0.3.0] An absent verdict was not a negative verdict
+
+**Increment**: verdicts for the two opcodes that had none.
+
+**Measured**: 33 corpus modules emit `Reset`; the backend **accepts 32 and refuses 1**, and the
+lowering **never visits it in any of them**. `IsStruct` has **zero** corpus witnesses.
+
+### The censuses were right and the reading of them was wrong
+
+The ISA lowering census reports **63 of 66 lowered** over 74 corpus modules, with `Len` refused,
+`Reset` unproven and `IsStruct` without a witness. **Three opcodes outside the lowered set for three
+different reasons**, which is exactly what a single fraction destroys. A reader who sees 63 of 66
+concludes that three opcodes are unsupported, and for `Reset` that conclusion is false.
+
+`Reset` is handled by **shape recognition**. A degenerate stream is `Stream ; body ; Yield ; PopN(1)
+; Reset`, and in that shape `Stream` and `Reset` lower to nothing. Both censuses instrument the
+opcode walk, so an opcode consumed by a shape match registers as an absence. **The instrument was
+measuring the wrong site, and the absence was a property of the instrument.**
+
+### The result would have been worthless without its control
+
+The load-bearing claim is that the lowering never visits `Reset`. **If the visit instrument were
+simply broken and always returned false, that claim would pass while measuring nothing.** Asserting a
+negative with an instrument whose positive response is unproven is not evidence.
+
+So a control asserts the instrument reports true for `Add`, an opcode the backend demonstrably
+dispatches. Mutating the instrument to return false unconditionally makes **the control fail while
+the `Reset` test stays green** — which is the whole demonstration. The `Reset` test alone would have
+passed with a dead instrument.
+
+**This is the second time tonight the same defect appeared**, after the staleness guard's reach test
+stayed green under a mutation that mis-classified the source tree. Stated as a rule: **a negative
+result requires a demonstration that the instrument can produce a positive one.**
+
+### `IsStruct` is recorded as a reachability fact, not a support fact
+
+Zero corpus witnesses and no probe, so **no verdict is available and none is claimed**. The test is
+written to fail if a witness ever appears, because that would make a verdict available while the
+census commentary still said otherwise.
+
+### And then the fraction itself was the problem
+
+With `Reset` resolved, the census still printed **63 of 66** with three rows beneath it, and **the
+natural reading of that fraction is three opcodes needing implementation. None of the three does.**
+
+| opcode | disposition |
+|---|---|
+| `Reset` | accepted, by a route the census does not instrument |
+| `IsStruct` | no verdict available, and none claimed |
+| `Len` | **refusing is correct, and lowering it would be a defect** |
+
+`Len` is the dangerous row, because it looks the most like actionable work. The virtual machine
+returns `InvalidBytecode` for `Op::Len` on a flat array, and the reference compiler emits it from an
+ordinary program. **A backend that lowered it would compute a length where the reference traps**,
+manufacturing divergence in the one signal this line uses as its oracle. Refusing is what keeps the
+two sides comparable. The repair belongs to the `v0.2.3` line, which owns `src/vm.rs`.
+
+**So the count of opcodes with missing support is zero**, and the remedy is a disposition printed
+beside the fraction rather than a better fraction. Moving `Reset` into the lowered column would have
+made the number prettier and destroyed the fact that it is accepted by an uninstrumented route.
+
+A guard now asserts that the set of opcodes outside the lowered column equals the set carrying a
+disposition, so a new one cannot silently join a fraction someone will misread. Removing a
+disposition makes it fail by name.
+
+**Measured**: `native_codegen` **469 passed, 0 failed, 91 binaries**, under default features and again
+under `narrow-float-32`, `cargo fmt` clean and zero clippy warnings. The prediction of 469 over 91 was
+recorded before the run and hit exactly.
+
+## 2026-09-02 night — [v0.3.0] The workspace clause becomes executable, and my own reach test is caught measuring nothing
+
+**Increment**: the workspace staleness guard, its reach proof, and the correction of a scope error in
+my own handoff.
+
+**Figures measured this increment**: workspace **2744 passed, 0 failed, 118 binaries** under
+`cargo test --workspace --no-fail-fast`, **default features only**, with the caveat below.
+
+### The run was green and it was not clean, and both halves matter
+
+The suite started at 18:02. My own documentation-only commit landed at 18:11 while it ran. **This line
+recorded the absorption-40 hazard precisely so that would not happen, and it happened anyway**, which
+says the rule was remembered as prose and not enforced by anything.
+
+The mutation was documentation, so exposure is bounded to the handful of tests that read `docs/` from
+disk, and those passed. The result is green **with the caveat carried**, and the caveat now lives in
+the stamp file rather than only in a sentence someone has to notice.
+
+**The prediction was a partial hit**, and calling it a clean one would have been the easy write-up.
+Green held and the pass floor held; the binary population was understated by two, because absorption
+47 added two test binaries. A prediction that names a population must move when the population moves.
+
+### Why the remedy is a script and not a paragraph
+
+The gap is that every absorption prediction here ranges over `native_codegen` alone, so **none of them
+can express workspace staleness**. That is the absorption-46 build-clause defect in a second place, not
+a new species.
+
+The obvious remedy is a note in the handoff. **That remedy is built from the material that already
+failed.** This line's own documents record a banner stale for three days, a blocker row whose reason
+had expired, and an ancestry anchor written against a moving ref that went false unnoticed. The
+mechanism of the defect is *the written thing did not fire*. So the remedy runs.
+
+**And it is deliberately not a test.** A test asserting coverage is current would be red from the
+instant of every absorption until someone spent ninety minutes clearing it. A guard that is red by
+default is suppressed, not obeyed. That reasoning is recorded in the script itself, because the next
+reader's first instinct will be to make it a test.
+
+### The reach proof caught my own test passing for the wrong reason
+
+Mutating the guard to mis-classify `src/` as inert **left all five tests green**. Other compiled paths
+had moved in the same range, so the verdict `STALE-COMPILED` was still correct — the test asserted the
+verdict and never its contents. It now compares both counts against git's own answer and goes red
+under that mutation.
+
+**This is the third time on this line that a guard has been found agreeing with itself.** The pattern
+is stable enough to state as a rule: **asserting a classifier's verdict does not test its
+classification; only comparing against an independently computed answer does.**
+
+Two smaller misses on the way. A `sed` mutation failed with a bad-flag error and applied nothing,
+and the resulting green was very nearly read as evidence. And a grep for tests reading `docs/`
+returned fifteen files by matching doc comments, where about five actually open a path.
+
+### The guard immediately corrected a figure I had written
+
+My handoff gave the gap as **absorption 47, seven `src/` files**. True about absorption 47. The
+coverage gap spanned **twenty-four compiled files** since the last workspace run, because that run
+predated several absorptions. A true measurement about a narrower population, presented as though it
+described the whole. **SCOPE_DELETION, in a document I wrote, found by an instrument built to report
+its own range.**
+
+
+## 2026-09-01/02 — [v0.3.0] Twelve increments, two absorptions, and three claims of my own that were false
+
+**Increments**: the fused-multiply-add precondition, the host and bare-metal linkage censuses, the
+unwind-personality removal, the bound-transfer narrowing, the no-floats sentinel coverage, the
+`float_type` reachability fix, the generated host contract, the untested-combination run, the ladder
+correction, absorptions 44 and 45, and a roadmap caveat that had expired.
+
+**Figures carried, not re-derived**: `native_codegen` **459 passed, 0 failed, 88 binaries** under
+default features and again under `narrow-float-32`. Workspace **2720 passed, 0 failed, 116 binaries**
+under **default features only**. `origin/v0.2.3` absorbed through `c070803a`.
+
+### The f32 rung went green, and the reason it means anything is that I left it red
+
+`entry_abi_float.rs::the_parameter_is_operated_on_rather_than_only_passed_through` had been this
+line's only failure since the `f32` lowering landed. **Two cheap routes to green were available** —
+drive the oracle through the parameterised machine, or choose values where the widths agree — and both
+hide the defect, the second being the cheating the operator ruled out.
+
+**Had I taken either, the `v0.2.3` line would have repaired the runtime into a suite that could no
+longer tell, and both lines would have believed it.** The prediction was recorded as a NAMED TEST
+rather than a count, because "457 passed" reads identically before and after if some other test goes
+red in exchange.
+
+### Three claims of mine were false, and each was found by measuring rather than reviewing
+
+**"`f32` and `f16` buy native instructions rather than merely narrower storage."** Asserted in
+`NARROW_TARGET_LINKAGE.md` from the `f64` figure. **Measured: with the CPU that census used, `f32`
+costs six runtime symbols against `f64`'s six — no gain at all.** It holds only with the
+floating-point unit enabled, and then the residual two are `Word`-to-float conversions, so the
+remaining cost is a property of the **word** width. That is a better finding than the sentence it
+replaces.
+
+**"Declaring the natives makes omitting one a compile error."** Nearly shipped into a generated
+header that embedders read. **Measured all three cases with a C compiler: a missing definition still
+links-errors; a MISMATCHED one compiles clean without the declaration and fails with it.** The real
+guarantee is the better one, and it makes the boundary symmetric with the backend's own arity refusal.
+
+**A test verified under one configuration while its claim ranged over two.** The ladder test
+hard-coded `f64` and went red on the next absorption, because under `narrow-float-32` the runtime's
+maximum float width **is** `f32`, so its subject does not exist there. **Committed by the author of
+`SCOPE_DELETION.md`, in a test written while documenting that class.**
+
+### Two decisions were reversed, and both are recorded in both forms
+
+**"Change nothing in the whitelist"** about `float_type`'s default arm. Reversed by the `v0.2.3`
+line's reciprocal argument: **their storage sites refuse at the same junction**, so the convention I
+was contradicting locally is one this codebase already follows. Their design also showed the route —
+**move the refusal upstream rather than thread a `Result` through six call sites** — and unreachability
+is now established **by execution**, a panic in the arm giving 459/0/88 with zero panics.
+
+**The ladder claim above.** Corrected in place with the superseded text kept, because a decision that
+quietly becomes its opposite teaches nothing.
+
+### What was refused
+
+**No native worst-case-time model was started.** `NATIVE_WCET_ASYMMETRY.md` names what one would
+require and says explicitly that it is a workstream, not an increment. The bound-transfer claim was
+**narrowed rather than deleted** — the cost figure is true about the bytecode and only its subject was
+unstated.
+
+**No `f16` lowering was built**, and the handoff's reason for that was corrected: the arithmetic width
+landed in absorption 44, so the recorded blocker expired. **`f16` is still blocked because there is no
+oracle** — the reference refuses widths 3 and 4 at load, so a lowering could not be validated even
+though LLVM has the type. *"The blocker cleared"* is exactly the inference a struck-through row invites.
+
+### The cross-line pattern that produced the most
+
+Four times: one line reports a finding, the other checks its own side rather than assuming, and the
+check finds something neither was looking for. **Each finding was invisible to the line that owned the
+code and immediate to the line that did not.** The sharpest was a conflation this line recorded as
+harmless here, which on their side compiled, loaded, and **returned 3.75 while declaring a zero-bit
+float**.
+
+`SCOPE_DELETION.md` records the class both lines produced seven times: **a true measurement quoted with
+its scope deleted**. Its most uncomfortable entry is that **a falsifier sharing its claim's framing
+cannot falsify the framing** — three were written to catch one claim and all three passed.
+
+### The verification residual, stated rather than closed
+
+**The workspace was run on this branch under default features only.** Four configurations remain. The
+corpus-reading tests are not feature-gated and `src/selfhost/kel` is byte-identical to
+`origin/v0.2.3`, so **the marginal risk is low and it is not zero** — which is the honest form, rather
+than "verified" or "a gap".
+
+> **ADDENDUM, same session, later.** The residual above was **closed rather than left stated**: all
+> seven remaining configurations were run and all are green, with every figure matching the `v0.2.3`
+> gate's own per-step numbers. The paragraph stands as written because it was accurate when written —
+> it recorded a real gap and judged its risk correctly. **Its closure is a later fact, not a
+> correction of it.** See `../decisions/REMAINING_CONFIGURATIONS.md`.
+
+
+## 2026-08-31 — A C host runs a Keleusma policy, and building it found a ruling nobody had acted on
+
+**Increment**: the C-host example the operator queued, at
+`native_codegen/examples/motor_policy/`. A motor drive's thermal derate and overcurrent trip, chosen
+because it is exactly where a host wants field-updatable logic and cannot risk it. See
+`../decisions/C_HOST_EXAMPLE_BRIEF.md`.
+
+**THE EXAMPLE EARNED ITS KEEP BEFORE IT RAN.** The policy compiled and the backend refused it: *"Fixed
+slot; the host-visible fraction-bit scale is unspecified."* **That is the precise question the
+operator settled earlier the same day** — the host knows the interpretation of the bits, on the
+analogy of a C header laying out the contract for a separately compiled procedure. A stale refusal
+sitting in this line's own file, and **trying to use the language for a real job is what found it**
+where reading had not.
+
+**The contract is generated from the module rather than transcribed**, so the offsets cannot drift
+from the code they describe. That is the operator's own analogy taken literally, and it is the most
+useful part of the artefact.
+
+**TWO DEFECTS OF MINE, BOTH CAUGHT BY LOOKING RATHER THAN TRUSTING.**
+
+The generated header emitted **duplicate macro names** for array elements, which C rejects outright —
+the header would not have compiled. Found by reading the generated file rather than assuming the
+generator was right, which is the same discipline that keeps catching instrument errors here.
+
+**My first mutation proved nothing.** I perturbed the POLICY, which moves both sides of a
+differential identically. A differential is invariant to its subject by construction; the mutation
+that establishes reach perturbs the LOWERING. Obvious afterwards, and I ran it before noticing.
+
+**The guarantee is shown rather than asserted**: the build prints WCET and memory bounds from the
+verifier. `wcmu_stream_iteration` refuses a policy with no `Stream` block, correctly, and reporting
+that refusal as a limitation would have been a misread of the tool rather than a fact about the
+policy.
+
+**AND THE PIPELINE-STATUS TRAP FIRED A THIRD TIME.** The verification chain ended with a `grep` for
+failures, which correctly found none and exited 1, so a green suite reported as a failed task. Three
+times this session, every one in a command written to check work. The rule is not "remember it": a
+status you intend to read gets its own line, and a filter never goes last.
+
+**Scaffolding removed rather than left.** The probe written first to check the policy compiled read
+its source from a path in `/tmp`. A test whose subject lives outside the repository is the shape this
+line already has a lesson about, and the example's own test subsumes it.
+
+## 2026-08-31 — `f32` lowers, four defects found by the differential, and the blocker is not in this package
+
+**Increment**: lowering `f32`, per the operator's ruling that the floating-point type matches the
+runtime's float width, and their instruction that the narrow configuration stop being red with tests
+that pass meaningfully rather than being cheated into passing. See
+`../decisions/F32_LOWERING_BRIEF.md`.
+
+**Those two instructions together forbade the cheap repair.** Making the failing tests derive the
+width would have turned them green by asserting a REFUSAL, which is a green that means nothing. The
+configuration stops being red by the backend actually lowering `f32`.
+
+**The convention is the one thing here that could produce a plausible wrong number.** The operand
+stack carries a float as its bit pattern in an `i64`, and at four bytes a direct bitcast is illegal.
+**A 32-bit float occupies the LOW 32 BITS, ZERO-EXTENDED** — sign-extension would fill the upper word
+for any negative value and be observable at the next store or comparison.
+
+**FOUR DEFECTS, ALL MINE, ALL FOUND BY THE DIFFERENTIAL AND NONE BY REVIEW.**
+
+| defect | what it did |
+|---|---|
+| the composite packer knew 8 and 1 bytes | a four-byte float field was REFUSED — the safe direction, and why it surfaced |
+| the indexed shared-slot path mapped any non-8 width to ONE byte | a float array element loaded a single byte; native returned 11 where the reference returned 22 |
+| `GetIndex` had the same two-way branch | same shape, different arm |
+| float constants took the `f64` bit pattern unconditionally | the low 32 bits of a small double are ZERO, so `x * 2.0 + 1.0` silently lost its `+ 1.0` |
+
+**Every one was a plausible wrong number rather than a fault**, which is the argument for exercising a
+configuration rather than compiling it.
+
+**THE REMAINING RED IS NOT IN THIS PACKAGE.** Under `narrow-float-32` the module declares four bytes
+and the virtual machine computes in `f64`, because `pub type Vm<'a, 'arena> = GenericVm<..., f64>`
+carries no `#[cfg]` while `RUNTIME_FLOAT_BITS_LOG2` drops to 5. Reported by this line with the
+witness, mechanism supplied by the `v0.2.3` line and **verified here rather than relayed**, escalated
+by them because it changes a public type's meaning for every embedder in that configuration.
+
+**A green route existed and was refused.** `GenericVm` is public, so this package could drive the
+oracle at `f32` and go green today. Embedders get the bundled `Vm`, so that would pass while the
+shipping runtime still disagreed with this backend. **It would hide the defect.** One test stays red
+with its cause named.
+
+**AND THE PIPELINE-STATUS TRAP FIRED AGAIN, IN THE COMMAND WRITTEN TO VERIFY THE WORK.** My gate chain
+piped clippy into `tail` and read `tail`'s status, so it walked past two real lint failures — one of
+them introduced by my own rewrite. **Second time this session, both in verification commands.** The
+rule is not "remember it"; the rule is that a status you intend to read gets its own line.
+
+**And I left a duplicate suite running.** A replacement verification was launched without confirming
+the previous one had finished, so two full runs contended at load 21 and **both wrote the same two log
+files**. No wrong result was recorded, because the stale log was never read — but a partial log with
+credible contents and nothing behind it is the same shape as the stale gate display cleared earlier
+today. Same lesson, different artefact.
+
+## 2026-08-31 — The confinement verdict is consumed to refuse, and the plan for it was wrong twice over
+
+**Increment**: discharging the region planner's soundness obligation by analysis, per the operator's
+ruling. See `../decisions/CONFINEMENT_CONSUMPTION_BRIEF.md`.
+
+**THE PLAN WAS BUILT ON A MISREADING AND READING THE CONSUMER CAUGHT IT.** I intended to consume the
+verdict to *decline in-place reuse*. **There is no site-to-site reuse to decline**: every static site
+already gets its own offset, `region_nonreuse.rs` enforces it on ranges, and `region.rs` says in as
+many words that nothing in it consults liveness, escape, aliasing or confinement. The cross-iteration
+hazard is that one site has ONE offset, so a loop writes the same bytes every iteration.
+
+**That is the exact conflation this line's handoff records making once before**, when it wrongly told
+the proof line the obligation was discharged — static-site disjointness against cross-iteration
+reuse. I came within an increment of repeating it inside the increment meant to fix it.
+
+**The verdict has two uses and bundling them is the trap.** Refusing a site the analysis says escapes
+costs nothing. OVERLAPPING confined sites to share bytes closes the measured arena gap and **takes on
+an exposure that does not exist today**, which `region.rs` warns about in the same breath as the
+immunity. **Only the first is taken.** The refusal is placed AFTER the syntactic hazard check, so the
+verdict may only ADD a refusal, never remove one, and a verdict wrong in the unsafe direction leaves
+the lowering exactly where it was. **The ordering IS the safety argument**, so it is stated in the
+code rather than intended.
+
+**The acceptance criterion the operator set holds exactly**: 67 modules end to end, 1072 of 1074
+chunks, 89854 of 89940 instances, same two refusals with the same reasons.
+
+**AND IT ADDS NOTHING TODAY, WITH THE REASON MEASURED RATHER THAN ASSUMED.** The reference compiler
+refuses an early return inside a loop and refuses reassignment, so `yield` is the only route by which
+a loop-built composite escapes its iteration, and every such chunk is refused for `Stream` first.
+**That is the accidental protection the obligation names, now measured**, and it expires the day
+`Stream` lowers.
+
+**Reach proved by mutating real bytecode**, since no source program the language accepts will reach
+it. Replacing `Stream` and `Reset` with `PopN(0)`, which preserves op indices, leaves the site refused
+by the pre-existing syntactic check; disabling that check makes the confinement refusal fire on the
+same site as `Escapes its iteration (Yielded { ip: 25 })`. **So its unique contribution is the
+interprocedural case**, which is the residual the obligation names and which nothing reaches today.
+Stated rather than dressed up as coverage.
+
+**A `git add -A` cost a red push and the pin caught it.** A documentation commit swept in a 152-line
+test file, which went out behind a hook that does not cover this package; the baseline for that tree
+came back 427 passed, 1 failed. **The population was exactly as predicted and the tree was still
+red**, which is the whole argument for measuring before pushing. Staging explicitly from here.
+
+**And the skippable-tests scanner had its THIRD false positive, the first from another language.** It
+matched `for c in ch { return [c, c]; }` — **Keleusma source inside a Rust string literal**. Its
+earlier two were prose in comments and a `return` in a closure, and the recorded repair for the
+closure was to rewrite the source. **This one is different in kind**: rewriting a fixture to dodge an
+instrument, or adding the test to the pin, would record a false claim that the test can skip. The
+scanner strips string literals now, which fixes the class.
+
+## 2026-08-31 — The residue closes, and what is left is refusals and one open ruling
+
+**Increment**: the last reachable kind arms — a boolean tuple member and enum payload, a fixed-point
+enum payload, a float enum payload, and a boolean shared slot. All five existed, were reachable from
+ordinary source, and were exercised by nothing.
+
+**Asked before written.** A probe measured which of six candidate shapes lower; five do, and the
+sixth — a `Fixed` SHARED SLOT — is refused for the reason already on record, that the host-visible
+fraction-bit scale is unspecified. **That one is an open ruling and not a gap in evidence**, so it
+stays refused.
+
+**FINAL STATE: sixteen of forty combinations resolve to a named test, and the other sixteen are
+uniform** — `Unit`, `Text` and `Opaque` across all five families, plus that one shared-slot `Fixed`.
+**Every combination this backend ACCEPTS is now driven by something.**
+
+**The mutation separates two mechanisms that look alike.** Widening the computed boolean to eight
+bytes fails four composite tests and **not** the shared-slot boolean, because a slot's width comes
+from the layout table rather than from an operand. Worth knowing before assuming one guard covers
+both.
+
+**MY OWN LISTING WAS WRONG TWICE, AND THE TOTALS ARE WHAT CAUGHT IT.** A `grep -A 1` took the line
+AFTER each marker rather than before, reporting combinations that were in fact covered; then a
+character class with no space in it silently dropped the entire shared-slot family. Neither produced
+an error — both produced a plausible list. **The arithmetic failing to reconcile is what exposed
+them**, which is the same discipline as checking a binary count against an expectation rather than
+reading the pass count alone.
+
+## 2026-08-31 — Three producers dropped a width, and the third one only a failing test could find
+
+**Increment**: the composite operand width gap. Four shapes — a `bool` field, a `bool` element, a
+`Fixed` tuple member and a `Fixed` array element — compiled and were then refused by `NewComposite`
+for *an operand of unknown packed width*. See `../decisions/OPERAND_WIDTH_GAP_BRIEF.md`.
+
+**THE REFUSAL NAMED AN OPERAND POSITION, NOT AN OPCODE**, so the probe asked what produced each
+operand rather than reasoning backwards from the packer: `[1, 2]` uses `Const`, which carries a
+width; `[true, false]` uses `PushImmediate`, which did not; the fixed case uses `WordToFixed`, which
+did not. **The gap was in producers, not in composite construction** — which is why every integer
+composite in the corpus worked and nothing noticed.
+
+**THE THIRD PRODUCER SURFACED ONLY WHEN THE TESTS RAN.** A COMPUTED boolean, `a > 0`, still had no
+width after the first two were fixed, so `[true, false]` lowered while `[a > 0, a > 5]` did not.
+**The integer half of the comparison arm dropped the width while its float twin, six lines away, had
+always set it**, with no reason recorded for the asymmetry — the sort that survives because each half
+reads correctly on its own. Found by a test failing, not by reading the code, which is the third time
+this session that writing the test was what found the defect.
+
+**`Unit` stays widthless and that is a decision, not an omission.** Its flat width is ZERO and the
+pushed value is a placeholder sound only because nothing consumes it. It sits in the same match arm
+as the values that were widened, which is exactly why the brief named "widening every width-losing
+producer at once because they look alike" as the likeliest wrong turn.
+
+**The neighbour test earned its design.** Widening the boolean immediate to eight bytes fails
+`a_bool_struct_field_does_not_disturb_its_neighbour` and **only** that test — a one-byte value
+written eight wide overwrites what follows, and every test that reads only the boolean back passes
+happily through it.
+
+**Censuses UNMOVED, measured rather than predicted**: 1072 of 1074 chunks, 89854 of 89940 instances.
+The kind-arm accounting goes from eight resolved to eleven, twenty-one still unexercised and not
+implied closed.
+
+**And an expired warning was corrected in passing**: the comparison arm still said the NaN path was
+unexercised because division was not lowered. It is, and the NaN path was wrong on two predicates
+when first tested. Kept as history rather than deleted.
+
+## 2026-08-31 — The residue split three ways, and only two of it was what the number implied
+
+**Increment**: witnessing the unexercised kind arms that ordinary source can reach. See
+`../decisions/REACHABLE_ARMS_BRIEF.md`.
+
+**THE SPLIT IS THE FINDING.** The census left twenty-six combinations unexercised and the number
+invited reading them as one backlog. Measured, they are three different things:
+
+| group | what it is |
+|---|---|
+| `Byte` tuple member, `Byte` enum payload | **accepted and undriven** — the dangerous class; witnessed |
+| `bool` field, `bool` element, `Fixed` tuple member, `Fixed` array element | compile, then **REFUSED by `NewComposite` for an operand of unknown packed width** |
+| `Unit`, `Text`, `Opaque` across all families | refused kinds; a contrived witness would be worse than the gap |
+
+**The second group's cause is not what this census was about at all.** Those shapes never reach a
+read arm: they are stopped on the CONSTRUCTION side by operand width tracking. Counting them as
+unexercised read arms would have pointed the next increment at the wrong file.
+
+**TWO OF MY SIX PROBE SOURCES WERE MY OWN SYNTAX ERRORS.** The first run reported "REFERENCE COMPILER
+REFUSES THIS SOURCE" for four shapes; `Bool` is spelled `bool`, and `1.5 as Fixed<16>` is not the
+surface form. **Trusting that run would have recorded four language limitations that do not exist.**
+*Check the instrument* applies to the source strings a probe is built from, not only to its counting.
+
+**Evidence, and the mutations that make it non-vacuous.** Both witnesses use 200, where
+sign-extension reads −56 and anything below 128 proves nothing. The enum case earns its place
+separately because its offset is measured PAST the discriminant word, so an error there is an offset
+error rather than an extension error. Sign-extending the struct field read fails the tuple, enum and
+pre-existing struct witnesses; sign-extending the array element read fails the array witness. **The
+two extension sites are distinct and each now has a witness that dies with it** — which the earlier
+mutation had not established, since it left the array case passing.
+
+**Twenty-four combinations stay unexercised and nothing here claims otherwise.**
+
+## 2026-08-31 — Hunting the accepted-but-unverified class on purpose, after finding one by accident
+
+**Increment**: a census of the KIND-DISCRIMINATED lowering arms, at a granularity finer than an
+opcode. See `../decisions/UNEXERCISED_ARMS_BRIEF.md`.
+
+**Why this class.** Nested float composite bodies were accepted and unverified, and I found that by
+luck one increment after recording them as "still absent". A refusal is loud; an accepted path that
+no test executes ships a plausible wrong number. **The opcode-level accounting could not have caught
+it** — `GetField` was counted as a covered opcode while its `Float` arm had no witness at all.
+
+**The measurement, over 69 modules and 1074 chunks.** Five families carry a scalar kind, over eight
+kinds: forty combinations, of which **the corpus reaches eight**. `Int` everywhere, `Fixed` in two
+read families, `Byte` in shared slots. **`GetField` and `GetIndex` are both counted as covered
+opcodes while six of their eight kind arms have no corpus witness.**
+
+**THE FINDING: the corpus never produces a `Byte` or `Bool` composite field or element read at all**,
+in any of the four read families — and the lowering has a `Byte | Bool` arm that zero-extends, whose
+hazard the tree already records in its neighbour: *changing the narrow load from zero-extension to
+sign-extension left every other test passing.* `GetField × Byte` turned out covered after all;
+**`GetIndex × Byte` was covered by nothing.** Closed with one witness using 200, because
+sign-extension reads that as −56 while anything under 128 agrees under both.
+
+**MY ATTRIBUTION TABLE WAS WRONG ON ITS FIRST DRAFT, AND THAT IS THE HONEST HALF.** It listed
+`GetField × Byte` as unexercised. **Corpus silence is not coverage**, and the second population has
+to be READ rather than assumed — the exact distinction the census exists to keep, applied to the
+census itself and failed at the first attempt.
+
+**A `cfg` that was evaluated against the wrong crate.** The first draft guarded the `Float` arm with
+`#[cfg(feature = "floats")]`, which in a test of THIS package is evaluated against this package's
+features, not `keleusma`'s. The arm silently vanished and the match stopped being exhaustive. The
+type-driven enumeration is what caught it — as a COMPILE error, which is the whole reason the
+enumeration is a `match` rather than a list.
+
+**AND THE CITATION GUARD CAUGHT ME A SECOND TIME IN ONE SESSION.** This file's header named
+`every_scalar_kind_is_accounted_for` as the thing enforcing the type-driven enumeration. **No such
+test exists** — the enforcement is an exhaustive `match` in `kind_name`. A dead name in a comment is a
+citation that cannot fail, so it reads as coverage while being none, whether or not it was meant as
+one. Both catches this session were prose I wrote about my own work, which is the place the guard is
+least redundant and where I am apparently least reliable.
+
+**Deliberately not done**: closing the other twenty-six. Most are kinds this backend refuses
+outright, where a contrived witness would be worse than an honest gap, and the brief named a
+coverage-closing spree as the likeliest wrong turn.
+
+## 2026-08-31 — The coverage residual is two chunks, and the report named the wrong work
+
+**Increment**: a MEASUREMENT rather than a feature. Backend coverage has read **1072 of 1074 chunks
+and 89854 of 89940 opcode instances** for several increments, quoted repeatedly, and **nobody had
+read what the residual IS.** See `../decisions/COVERAGE_RESIDUAL_BRIEF.md`.
+
+**The two figures are ONE finding.** The residual is two chunks —
+`13_telemetry_stream.kel::main` at 45 opcodes, refused for `Stream`, and
+`refused_witness.kel::len_witness` at 41 opcodes, refused for `Len` — over a population of 69 modules
+and 1074 chunks. **86 is 45 + 41, exactly.** An opcode instance counts as blocking when it merely
+SITS IN a refused chunk, so the instance figure is the refused chunks' combined size and carries no
+information the chunk count does not.
+
+**AND THE REPORT WAS READABLE AS A WORK QUEUE THAT NAMED THE WRONG WORK.** Three tables were headed
+as causes, the last of them *"TOP BLOCKING OPCODES BY INSTANCE COUNT"*, with `GetLocal` at 18,
+`Const` at 17 and `SetLocal` at 16 at its head. **All three already lower.** They top the table
+because they are the commonest opcodes in any chunk, and these two chunks are ordinary apart from one
+opcode each. Renamed rather than deleted — the composition is worth seeing once it cannot be mistaken
+for a diagnosis. **Same class as the four instrument errors already recorded: a signal answering a
+narrower question than its label claims.**
+
+**THE RECOMMENDATION FOLLOWS FROM THE NUMBERS AND IT IS TO STOP.** Coverage is saturated under the
+current design. `Stream` is refused deliberately and the refusal is **load-bearing**: the region
+planner's cross-iteration slot reuse is unsound for a composite escaping by `yield`, and the only
+thing keeping that quiet is that every chunk carrying the shape opens with `Stream`. Lowering it to
+gain 0.09% of instances would retire an accidental safety whose replacement needs the planner to
+consume a confinement verdict — the operator's decision, with a stated cost. `Len` was re-checked
+against `for .. limit` and holds. **Removing a target that looked available and was not is a better
+outcome than a coverage gain.**
+
+**MY OWN GUARD'S FIRST DRAFT WAS VACUOUS, AND A STYLE LINT CAUGHT IT.** The reconciliation was written
+with both sides computed as `c.ops.len()`, so the assertion was `x == x`. Clippy's `iter_count` fired
+on the expression I had used to disguise that from myself. Rewritten so the two sides come from
+different traversals, which makes it fire if the report's rule ever changes to count only the CAUSING
+opcode — the change after which the labels would need revisiting again. **A passing check is evidence
+about the checker before it is evidence about the tree**, and the rule applied to me.
+
+**What this increment deliberately did NOT do**: close the residual. The brief said the measurement
+is the deliverable and that turning it into an implementation halfway through was the likeliest wrong
+turn. Both remaining refusals are deliberate, so there was nothing to close.
+
+## 2026-08-31 — A float inside a composite, and the first increment in six where the plan matched the work
+
+**Increment**: floats inside composite bodies — struct fields, tuple members and array elements.
+**It needed no ruling**, and that is a claim rather than a convenience: a body field is INTERNAL, so
+the compiler packs it, the same program reads it back, nothing outside observes the layout, and
+agreement with the reference is a fact to be measured rather than an interface to be chosen. That is
+the ground the tree already records for lowering `Fixed` in a body while refusing it in a shared
+slot. See `../decisions/FLOAT_IN_COMPOSITE_BRIEF.md`.
+
+**THE PROBE WAS WRITTEN BEFORE THE BRIEF, DELIBERATELY.** The previous increment mis-sized itself by
+reading the component it was changing, for the fifth time on this line. So this one asked the
+boundary first: `probe_float_composite.rs` reported that all four shapes are refused at
+**`Op::NewComposite`** by the float whitelist, with a control that lowers. The implementation then
+touched exactly what the probe named — the whitelist and the two flat read arms — and nothing else.
+**First increment in six where the plan and the work agreed.**
+
+**The reference already lays a float field out at eight bytes**, measured rather than assumed:
+`struct { x: Float, n: Word }` compiles at `byte_size: 16`, a pair of slots. So there was no packing
+decision, only a width to stop calling unknown. Construction needed no arithmetic at all — the pack
+places each operand at the operand's OWN width, and a float already carries `Width::Scalar(8)`.
+
+**The existing exactness check is what makes admitting construction whole rather than positionally
+safe.** The arm requires the operand widths to account for the baked `byte_size` exactly, so a float
+of an unexpected width refuses rather than mispacking. The width guard added is a second line, not
+the only one.
+
+**THE PREDICTION WAS WRONG IN THE DIRECTION THAT MATTERED, AND MEASURING IS WHAT CAUGHT IT.** The
+instinct was that the censuses would MOVE, since `NewComposite`, `GetField` and `GetIndex` are corpus
+opcodes. Measured over the 69 compiling modules: **256 composite construction sites and ZERO float
+field or element reads.** The censuses stay put, and a movement would now be a regression rather than
+a gain. **The 256 is also an unplanned third confirmation** of a figure the tree carries from two
+other methods, over the same population.
+
+**A harness was promoted rather than copied.** `composite_return_aliasing.rs` held the only
+two-argument module driver supplying the trailing region pointer. Copying it is how two tests come to
+answer one question differently without either saying so; it now lives once in
+`common::vm_and_native_two_arg`, with the original file delegating.
+
+**The tag was again the half that would have been forgotten**, and the test that would not have
+caught it is the one that only RETURNS the field. `a_float_read_out_of_a_struct_is_usable_in_float_arithmetic`
+uses the value in float arithmetic instead, which is the difference between a layout that is correct
+and a value that is usable. Deleting the tag fails four of five tests; halving the array stride fails
+one. Both mutations were confirmed applied by printing the changed line before running.
+
+**AND THE PIPELINE-STATUS TRAP FIRED AGAIN, FOR THE FIFTH RECORDED TIME.** The verification run
+ended with `| grep -c "FAILED"` appended; it printed `0` and EXITED 1, so a green suite reported
+failure. The handoff already names this exact shape and already says *do not append a filter to a
+command whose status you intend to read* — and the rule was broken by the command written to
+summarise the run that proves the rule matters. **A rule recorded is not a rule applied**, and the
+only durable form of it is the invocation itself: read the status on its own line, put every filter
+on another.
+
+**Verified**: `native_codegen` **403 passed, 0 failed, 79 binaries**, cargo's own exit status 0 —
+396 plus five differentials plus two probe tests, and two new binaries. Censuses re-derived and
+**unmoved as measured**: `isa_lowering` 63 of 66 with `Len` the one named refusal; 1072 of 1074
+chunks and 89854 of 89940 opcode instances. `fmt --check`, `clippy --tests -D warnings` and
+`cargo doc -D warnings` clean.
+
+**THE FIRST RESIDUAL I NAMED WAS WRONG, AND MEASURING IT WITHIN THE HOUR IS WHAT CAUGHT IT.** I
+recorded "a float in a NESTED composite body" as still absent. Nested bodies were never a separate
+implementation: the outer read yields a body and the LEAF read goes through the very flat arms this
+increment added, so nesting lowered the moment the flat case did. **What was missing was evidence,
+not code** — and an accepted-but-unverified path is the more dangerous of the two shapes, because a
+refusal is loud while a wrong float is a plausible number. Three nested cases now agree with the
+reference, and the tag mutation fails them too, so the coverage is not vacuous.
+
+**The general form, which is the part worth keeping**: when writing a residual, ask whether the thing
+is REFUSED or merely UNTESTED. Those are different risks and the second is the worse one, so calling
+an untested path "absent" understates it.
+
+**Still absent**: a composite carrying a float reaching a data slot; `f32`, refused loudly at every
+route; and a native declaring a float return, the one float route of four still closed and closed
+because no ruling settles it.
+
+## 2026-08-30 — The float shared slot, and a guard I had not read refused three of four tests
+
+**Increment**: the `Float` shared data slot, kind tag 5. This is the settled half of the operator's
+Option A ruling: `ABI_RULINGS.md` records that a real floating-point representation **also settles
+this slot**, as IEEE-754 bytes at the stated offset. Nothing ambiguous was decided. See
+`../decisions/FLOAT_SHARED_SLOT_BRIEF.md`.
+
+**Why it looked small, and why that reading was right about the mechanism**: there is no
+representation change at this boundary. The reference decodes the slot with `read_scalar_le`, whose
+float arm at eight bytes is `f64::from_le_bytes`, and the operand stack already carries a float as
+its bit pattern in an `i64`. So the load is the same eight-byte load a `Word` slot gets. The only
+float-specific work on the read is the **TAG** — push it untagged and the application binary
+interface is correct while every float operation downstream refuses the operand, which is the same
+detail the entry ABI's parameter locals needed and which neither plan named.
+
+**THE SIZING WAS STILL WRONG, IN THE EXACT SHAPE THIS FILE HAS RECORDED FIVE TIMES.** I read
+`resolve_shared_scalar`, concluded the work was that function plus a tag, and wrote a brief saying
+so. Three of the four new tests then failed on a guard I had never opened: a **whitelist** ahead of
+the opcode dispatch refuses any opcode that consumes a `Float`-tagged operand unless it is named
+float-aware, and `SetData` and `SetDataIndexed` are not named. The resolver decides how a slot is
+addressed; the whitelist decides whether the opcode may run at all. **I reasoned from the component I
+was changing about what gates the operation, and the requirement lived at neither — it lived where
+the operand is admitted.** The rule this line already carries would have found it: read what
+CONSUMES the value before sizing work to produce it.
+
+**And the brief's write-side design was wrong, which running it is what showed.** It specified a kind
+check in both directions, by analogy with `Op::Call`. **The analogy is false.** `Op::Call` refuses a
+kind-versus-declaration disagreement because the bitcast to a floating-point parameter type is a
+representation change and the wrong one yields a plausible number. Nothing converts at a slot store:
+the operand already IS the bit pattern and the same eight bytes are written whatever the tag says. A
+guard there prevents no wrong byte and refuses valid programs. It was removed before it shipped.
+
+**What replaced it is POSITIONAL, like `Op::Call`'s admission and for the same reason.** A data store
+is float-aware only when the target is a float slot — a blanket entry would also admit a float
+stored into a `Word` or `Byte` slot, where the reference writes different bytes with a different
+meaning.
+
+**A private slot is admitted too, and the two grounds are deliberately kept apart.** A shared slot's
+layout is host-visible and its admission rests on the reference writing the same bytes. A private
+slot's layout is this backend's own, unobservable from outside a running program, and the store is a
+full-width bit copy at `PRIVATE_SLOT_BYTES` that truncates and interprets nothing. **The residual is
+named**: a private slot's read is not kind-tracked, so a float stored there returns tagged `Int` and
+every float operation on it refuses. Storing one is useful only to move it, which is what
+`s.x = h.f` does — and that program is now pinned agreeing with the reference rather than asserted.
+
+**The evidence is the buffer, not acceptance.** `shared_data.rs` compares the host buffer byte for
+byte after both runs, which pins the exact bit pattern — so the inputs are the ones a value
+comparison would not discriminate: both infinities, a negative zero, and a NaN, all produced by
+dividing RUNTIME arguments so nothing is constant-folded before it reaches the target's
+instructions. The neighbour test writes the float LAST and returns the neighbour, because writing it
+first would let the later store repair the damage and pass on a broken lowering.
+
+**Two mutations, each confirmed APPLIED by printing the changed line before running** — the
+three-failure-point rule the sibling line paid for. Shifting the float slot's offset by one byte
+fails three tests; deleting the `Float` tag on the read fails two. Neither guard is believed.
+
+**A process failure of my own, stated rather than buried.** The absorption-40 measurement and my
+first edits overlapped, and the suite has tests that read source text from disk, so the run reported
+**390 passed, 1 failed, 77 binaries** with the failure naming my own renamed test in its diff. The
+population is exactly the predicted 391 over 77 binaries and the single failure is fully attributed —
+but "measure absorptions ALONE" exists precisely so an attribution does not have to be argued, and
+this one has to be. The clean signal is the post-increment run.
+
+**Still absent, so the surface is not read as finished**: floats inside composites; `f32`, where any
+non-eight-byte width is refused loudly rather than lowered; a native declaring a float return, the
+one float route of four still closed, and closed because no ruling settles it.
+
+## 2026-08-30 — The entry ABI lands at the four boundary points, and four tests rotate their subjects
+
+**Increment**: the float entry ABI, implementing the operator's Option A ruling as recorded in
+`ABI_RULINGS.md`. The scoped plan from last increment held: parameter declarations, the prologue,
+`Op::Return` and `Op::Call` landed together in `lower_module`, and `lower_chunk` keeps refusing a
+float signature because a chunk carries no return type. See `../decisions/ENTRY_ABI_BRIEF.md`,
+including its outcome section.
+
+**The session break landed mid-edit, and the resume found the brief's own warning fulfilled**: a
+stray closing brace from the guard rewrite — the exact brace-splicing failure the brief names as a
+three-time offender — left the crate uncompilable. One deleted brace, then every check ran.
+
+**Two details the plan did not name, both required.** A float parameter's local must be TAGGED
+`Float` after the prologue bitcast, or the ABI is correct and the body unusable — every operation on
+the parameter would refuse. And `Op::Call` is float-aware only positionally: each argument converts
+to the callee's DECLARED parameter type, and a kind-versus-declaration disagreement refuses in
+either direction rather than reinterpreting.
+
+**The evidence is a call through the real convention, not acceptance.** A wrong calling convention
+produces a module that lowers, verifies and links — on aarch64 a `double` arrives in `v0` while an
+`i64` is read from `x0`, so the wrong declaration reads an unrelated register and returns a
+plausible number. `entry_abi_float.rs` JITs the module, calls the symbol as
+`unsafe extern "C" fn(f64) -> f64` with runtime arguments, and bit-compares against the virtual
+machine: NaN, signed zero, infinities, a cross-call round trip, and a mixed float-parameter
+integer-return signature, that last because parameters and return come from different places and
+conflating them is the error that deferred this increment.
+
+**Four tests rotated their subjects, each by its own standing instruction.** The census pin's
+failure message directed its rewrite when the backend gained a float representation; the
+module-level-refusal visibility pin moved to the word-width guard, made must-fire by overwriting
+`word_bits_log2` after compilation; the subset-boundary subject in `differential.rs` moved to
+`Op::Len`, the one opcode still refused by name, with its witness pinned compilable by
+`len_flat_array_hazard.rs`; and the float whitelist subject moved to route 3, the uncalled native
+float return. The width refusal itself became must-fire the same way — `float_bits_log2`
+overwritten to 5 — where before it was an unreachable claim in this build.
+
+**Verification**: `native_codegen` **391 passed, 0 failed, 0 ignored, 77 binaries**, cargo's own
+exit status 0 — exactly the predicted 385 + 6 and 76 + 1. `fmt --check`, `clippy --tests
+-D warnings`, `cargo doc -D warnings`, and the citation guard all clean. Censuses unmoved, as the
+rulings document predicted: no corpus module carries a float in a signature, so the entry ABI has
+no corpus witness and the hand-built subjects are the entire population.
+
+**Still absent, stated so the surface is not read as finished**: float shared slots (ruled settled
+by Option A, not yet built), `f32` (the ruling's coherent reading wants the entry type to match the
+runtime float width; today any non-8-byte width is refused loudly rather than lowered), and floats
+inside composites.
+
+## 2026-08-30 — The scalar float surface closes, and two semantics that would have been wrong if assumed
+
+**Increment**: `Neg` and `Mod`, completing scalar float arithmetic.
+
+**`Mod` is the truncated remainder**, carrying the sign of the dividend — Rust's `%` on `f64`, hence
+`frem`. A floored remainder would give `+1.0` where the reference gives `-1.0` for `-7.0 % 2.0`, and
+**a probe using only positive operands cannot tell the two apart**. So the differential uses negative
+dividends, with a must-fire control requiring the positive and negative results to have opposite signs.
+Checking rather than assuming cost one lookup.
+
+**`Neg` needed its own branch, and the reason is the recurring one.** The existing arm dispatches on
+WIDTH, and a float is eight bytes exactly like a `Fixed` — so without the kind check it would have
+negated the **bit pattern as an integer**, flipping a mantissa bit instead of the sign. That is the
+same collapse the kind channel was built for, showing up in one more arm.
+
+**The entry ABI was scoped and deliberately not started.** `lower_chunk` receives `chunk.param_types`,
+but **the chunk carries no return type** — it lives in module-level `ChunkSignature`, which a
+single-chunk lowering never sees. So parameters, return, prologue bitcasts, `Op::Return` and `Op::Call`
+must land together across both entry points. Recording that constraint means the next attempt starts
+from it rather than discovering it halfway.
+
+**Three brace-placement fumbles in the mechanical edits**, all caught by the compiler within a minute
+each. Worth noting only because the pattern is consistent: my brace-matching script inserts the closing
+brace past the arm when rustfmt has reflowed between edits. The compiler is a sufficient guard here, so
+this costs minutes rather than correctness — but it is the third increment where the same script has
+misplaced a brace, and the honest fix is to stop using brace-matching for arm surgery.
+
+
+## 2026-08-30 — The test I said I could not write caught the defect I wrote blind
+
+**Increment**: float division, and the correction it forced.
+
+**Two of my own recorded claims were wrong.** First, I had declined division because it "flows through
+`Op::CheckedDiv`'s three-value push". The compiler emits plain `Op::Div`, whose reference arm is a bare
+`x / y` with no zero check — matching `fdiv` exactly, a bitcast pair around one instruction. I had read
+the virtual machine's arm rather than what the compiler emits, and **compiling one line of source would
+have settled it in seconds**.
+
+**Second, and the one that matters.** Last increment I implemented the NaN comparison rule by reading
+`compare_op`, and applied NaN-as-Equal to `Eq`, `Le` and `Ge`. **The reference has two comparison paths
+with different NaN semantics**: `CmpEq`/`CmpNe` go through `PartialEq`, which is ordinary IEEE, while
+the four orderings go through `compare_op`. So `Eq` was wrong — `NaN == x` was true natively and false
+on the reference — and `Ne` needed the unordered predicate.
+
+**That defect was written blind, and I said so at the time.** The path could not be tested because
+nothing could produce a NaN. Division changed that, and the first NaN test failed immediately.
+
+Two habits made the catch possible: **declaring the path unexercised** rather than letting a green
+differential imply coverage, and **writing the test the moment the feature that unblocks it landed**.
+`NaN == x` is not a value anyone inspects; without both, the divergence ships silently.
+
+**Verified now**: division over eight probes; division by zero producing `+inf`, `-inf` and NaN, each
+observable through the saturating cast fixed last increment, with a non-vacuity check that the three
+give three different answers; and all six predicates against a NaN.
+
+**A process note.** The workspace half of the gate was still grinding through the peer line's
+self-hosted compile tests after a very long time under contention, and it duplicates what the pre-push
+hook runs. I stopped it and let the hook be the binding verification rather than paying twice — and
+recorded that it had reached 1853 passed, 0 failed across 60 binaries when stopped, rather than
+implying a figure I did not see.
+
+
+## 2026-08-30 — Scoping division found a poison conversion I shipped last increment
+
+**Increment**: I set out to implement float division. Scoping it required answering "what does the
+reference do with `inf` and `NaN`?" — and that question exposed a defect in code I had shipped one
+increment earlier.
+
+**`FloatToInt` used LLVM's plain `fptosi`, which is POISON for NaN and out-of-range values.** The
+reference uses Rust's `as`, which saturates: NaN → 0, out of range → `i64::MIN`/`MAX`.
+
+**They agree on this machine, and that is the finding rather than the reassurance.** aarch64's `fcvtzs`
+saturates. On x86-64, `cvttsd2si` returns the integer-indefinite value for every out-of-range input, so
+`+inf` would give `MIN` where the reference gives `MAX`. LLVM is entitled to either, because the value
+is poison. **It was reachable already** — a runtime out-of-range multiply produces one, and float
+multiplication landed last increment. I checked with a runtime value rather than a constant, because a
+constant is folded and never reaches the target's instruction.
+
+Fixed with `llvm.fptosi.sat`, defined on every target and what Rust itself lowers `as` to. **The pinned
+test passes both before and after on this machine**, which I state in the test: what it guards is the
+agreement surviving when the accident does not.
+
+**Third time in this backend that implementing a feature removed an accidental protection**, and the
+second where the protection was never recognised as accidental until the neighbouring feature was
+scoped. Worth naming: *a lowering that is correct only because its bad inputs are unreachable is a
+lowering waiting for the next feature.*
+
+**Division was not implemented, and now has a stated reason rather than an implicit one.**
+`Op::CheckedDiv` pushes three values and `push_triple` **traps when the flag is non-zero**; for floats
+flags 1, 2 and 4 mean `+inf`, `-inf` and NaN, which are legitimate results because float division is
+total on the reference. Routing floats through the existing triple would convert valid values into
+faults. Knowing that is worth more than a rushed attempt, and it is recorded so the next attempt starts
+from it.
+
+
+## 2026-08-30 — Reading the reference first turned a three-of-six silent bug into three lines
+
+**Increment**: float comparisons. The finding that mattered came before any code: the reference
+compares floats with `partial_cmp(...).unwrap_or(Equal)`, so **a NaN is equal to everything** rather
+than unordered. That is neither IEEE-754 nor LLVM's default. The obvious `fcmp oeq` would have made
+`NaN == x` true on the reference and false natively — silent, not a fault.
+
+**Matching it is three lines, and only because the semantics were read first.** `olt`, `ogt` and `one`
+are already false for NaN, which is what NaN-as-Equal implies, so only `Eq`, `Le` and `Ge` need
+forcing. Written the natural way, **three of six predicates would have been wrong**, and a differential
+over ordinary values would have passed anyway because none of those values is NaN.
+
+**Verified**: six predicates, seven probes each, operands whose fractional part decides the answer so a
+comparison performed on the integer bit pattern would disagree; plus a must-fire control that the
+probes discriminate.
+
+**Not verified, and stated as a limit rather than a footnote**: the NaN adjustment. No source construct
+produces a NaN — the route is division, and `Op::CheckedDiv` pushes three values, which is a larger
+slice than it appears. **I wrote it to match anyway.** Relying on NaN being unreachable is exactly the
+accidental protection this backend lost two increments ago, when implementing float arithmetic removed
+a block that had been supplied by the absence of an implementation. Its correctness rests on reading
+the reference rather than on a test, which is the weaker of the two footings and is recorded as such.
+
+**Division was deliberately not attempted.** Investigating it produced the useful part of this
+increment's scoping: float division is TOTAL on the reference — no zero trap, signed infinity or NaN —
+which matches `fdiv`, but it flows through `Op::CheckedDiv` with a three-value push convention. Knowing
+that is worth more than a rushed attempt at it.
+
+**Censuses unmoved, as predicted**, since no corpus module compares floats. A movement would have meant
+something unexpected rather than a gain.
+
+
+## 2026-08-30 — Slice two: one route opened, and every census moved from a single cause
+
+**Increment**: the module float guard closes four routes, and after slice one **only the constant route
+had a lowering behind it**. So only it was opened. Its own message said it was closed because *"the
+integer arithmetic lowering would silently miscompile it"* — which stopped being the lowering.
+
+**The verification is the point.** `float_witness.kel` now runs in the **corpus differential** against
+the virtual machine and agrees. That is materially stronger than slice one's hand-built chunk: it runs
+the whole module the way every other corpus subject runs.
+
+**Six figures moved, all from one cause** — opcodes lowered 61→63, UNPROVEN 3→1, modules 66→67, chunks
+1070→1072, instances 89841→89854, differential agreeing 61→62. Listing them together matters: a reader
+seeing six independent-looking gains should know they are one module entering every census that walks
+the corpus.
+
+**Five pins went red and every one was right to.** The scope pin's own message had anticipated spending
+its premise. The guard-route pin needed **renaming**, because a test called `..._refuses_...` that
+asserts the opposite is the stale label this line keeps finding. And two assertions were **inverted to
+assert zero**, because **the corpus now contains no module-level refusal at all** — the float guard was
+the only one, and `Len` and `Stream` are chunk-level. Deleting those would have discarded the check on
+the thing that makes a coverage figure overstate; asserting the zero keeps it announcing itself.
+
+**`differential`'s unsupported-opcode subject retired as its sixth predecessor.** That file already
+records five that retired as they entered the subset. Taking the successor — a float in a signature,
+still closed — is the established pattern rather than a hunt.
+
+**What I did not do**: open the other three routes. Each has nothing built behind it, and admitting a
+module through one would mean compiling it wrong rather than refusing it. The entry ABI, the piece the
+operator's ruling actually names, remains unbuilt and **has no corpus witness at all**.
+
+
+## 2026-08-30 — Float slice one: the kind channel, and a hazard I created and then closed
+
+**Increment**: the operator's Option A ruling unblocked real capability work. Before writing any of it,
+one measurement decided its shape: **`width_of_declared_shape` discards the scalar kind**, collapsing
+`WireShape::Scalar { kind }` to a size. A `Float` and a `Word` are both eight bytes, so **no float
+arithmetic could be lowered until an operand's kind survived** — `Op::Add` is emitted for `Byte`,
+`Fixed` *and* `Float`. Starting from the phrase "entry ABI" would have built the wrong piece and met
+this mid-flight.
+
+**Built**: an `OperandKind` channel beside the width channel, tracked per stack entry and per local,
+seeded by the *producing* opcode. The stack stays homogeneous `i64` and a float rides it as its bit
+pattern; the alternative, a stack of value enums, touches 46 pop sites for nothing the optimiser does
+not already give. Then a float constant, both conversions, and float `Add`/`Sub`/`Mul`.
+
+**Verified by differential, not by acceptance.** The witness's exact shape agrees with the reference
+over ten probes including negatives, with a must-fire control that the program computes something.
+
+**Two errors of mine, both caught by my own guards inside the increment.** The kind was lost across the
+local round trip — `local_kinds` declared and never wired — and the mixed-pair refusal caught it rather
+than a bitcast quietly reinterpreting. Then I **read the kind after popping**; the diagnostic showed
+`depth=0` with `local_kinds=[Unknown, Float, Float]`, proving the save was right and the read was
+wrong. The rule is written at `SetLocal` — *"Read the width BEFORE popping"* — and the arm I wrote
+broke it.
+
+**Then the increment created a hazard, which is the part worth remembering.** Implementing float
+operations **removed an accidental protection**: a module whose float arises from `as Float`, with no
+float constant or signature, was previously refused only because no float operation existed.
+`float_guard_routes.rs` names that exactly — *"a property of what is unimplemented, not a guard"* — and
+it stopped being true the moment I wrote the operations. The module-level guard does not cover such a
+module. **`Op::Div` was the sharp case**: float dispatch went to `Add`/`Sub`/`Mul` only, so a division
+would have been an integer division of a double's bit pattern.
+
+**A blacklist would have to name every arm that must refuse, and missing one is silent, so the fix is a
+whitelist**: an opcode consuming a float that was not written for one refuses. **My first formulation
+was wrong and a control caught it** — it checked the top two stack entries rather than the operands the
+opcode POPS, refusing `Op::Const` for a float sitting below it. The count now comes from
+`op_depth_effect`, the documented API, rather than a per-opcode guess.
+
+**A pin of mine went red three times, correctly each time.** It asserted `IntToFloat` was refused by
+name; its own failure message said what to do if that changed, and the witness existed. My first
+correction then asserted the module guard still refused the subject — **measured, it does not**,
+because that subject has a float only as a local. The corpus witness is a *different* subject carrying
+a float constant, which is why the census still lists the conversions as UNPROVEN while this subject
+lowers. The test was renamed, because `..._is_refused_...` asserting the opposite is the stale label
+this line keeps finding.
+
+**Censuses unmoved, and that is the correct result**: the guard still refuses the corpus witness, so
+nothing float-carrying reaches `lower_module`. Relaxing it is the next decision, not this one.
+
+
+## 2026-08-29 — Rulings arrived, and measuring them changed what the first piece of work is
+
+**Increment**: the operator ruled on the ABI questions — **the first substantive input in roughly
+twelve increments**, and it arrived because a page I wrote turned out to omit one of the items.
+
+**Two are settled**: the float ABI is Option A, a real floating-point ABI; the string ABI is Option B,
+make the two embeddings agree. **Three remain open**, and one of those because a supposition inside the
+ruling was incorrect.
+
+**Measuring the float ruling before building to it changed what the first piece of work is.** The
+ruling names the **entry ABI**. The corpus's only float-carrying module is blocked by a float
+**CONSTANT**, and **no corpus module has a float in a signature at all** — so the entry-ABI change has
+**zero corpus witnesses** and, built alone, could not be verified against the corpus. Option A as
+recorded covers both, so the ruling is not wrong; but a reader planning from the phrase "entry ABI"
+builds the wrong piece first. **That is exactly the failure I have made three times recently by acting
+on a plausible guess about where work sits**, and the measurement cost one short test.
+
+**One assumption is mine and is labelled as mine.** `Float` is `f32` or `f64` under `narrow-float-32`,
+so "double" is incoherent in a build with no `f64`. The reading proceeded on is that the FP type
+matches the runtime's float width. The `Unit` disposition — permanent refusal, since a zero-byte slot
+conveys nothing — is likewise mine, not the operator's, who asked what `Unit` is rather than ruling on
+it.
+
+**A supposition in the ruling is preserved rather than silently corrected.** The operator wrote that
+`Float` and `Text` were "nominally addressed". Float, yes. **`Text`, no** — the string ruling settles
+the static-literal ABI, while the `Text` slot kind is a two-word handle, a different construct.
+Recording only the corrected state would lose the fact that a reasonable reader drew that conclusion,
+which is the confusion the record exists to prevent next time.
+
+**The `Opaque` ruling turned out to describe what already exists.** The stated intent — the host
+allocates and owns it, Keleusma carries it — is exactly what the `Arc<dyn HostOpaque>` handle achieves.
+Taken literally as a raw pointer it would not fit under `narrow-word-8` or `narrow-word-16`, where a
+word is one or two bytes and a host pointer is eight.
+
+**`Fixed` describes the in-module design that already holds**, and the open question was never
+in-module: the compiler cannot bake anything into a separately compiled host. Three readings are
+recorded and none is picked, because one of them contradicts the ruling's own "without needing to
+store". **Nothing was implemented on it.**
+
+
+## 2026-08-29 — I built a decisions list out of a coverage measurement, and it inherited the blind spot
+
+**Increment**: the operator asked whether the ABI issues were resolved. Checking rather than answering
+from memory found that **`OPERATOR_DECISIONS_OPEN.md` — the page I wrote so they could act without
+reassembling context — does not mention the `Fixed` shared-slot ABI at all**, an open item with its own
+decision document, on which the operator had already ruled it should be settled alongside the float ABI.
+
+**The mechanism is the finding, not the omission.** The page said *"There is no fourth thing to fix."*
+That sentence came from the module-lowering census — 4 unlowerable chunks in 3 refused modules — and
+was then written as exhaustive over **decisions**. **A coverage census can only surface a decision that
+blocks a corpus module.** Verified: no corpus source declares a `Fixed`, `Float` or `Text` shared slot,
+so those refusals block nothing, appear in no figure, and were invisible to a list built from figures.
+
+**That is this session's recurring defect in a new place** — a measurement answering a narrower question
+than the claim built on it — and this time the claim was the operator-facing summary rather than a
+test. It is the sixth instance, and the page now says so about itself.
+
+**I also had the disposition backwards.** Answering the question, I said I would hold the amendment
+pending the operator's interop answer. That is inverted: the page exists to *prompt* the answer, so
+withholding the item guarantees the answer never comes. The item is now listed with its options and
+with the condition that decides it, rather than waiting on that condition.
+
+**A code action had been sitting unclaimed.** `FIXED_SHARED_SLOT_ABI.md` records an ACTION for
+*whichever line owns the message* — the refusal should name the missing host-visible scale rather than
+imply the representation is undecided. `alloc_format_kind` is in this line's file, so the action was
+mine. Discharged: the wording changed, the refusal did not.
+
+**Three stale present-tense quotations followed from that change** — in the test that challenged the old
+wording, in the decision document that quoted it as current, and in a sibling brief. All corrected with
+the history left visible, because the test's whole premise (*"what it challenges is the reason given"*)
+had just been acted on and would otherwise read as still-open.
+
+**My own assertion was too broad and told me so.** It checked that the old phrase was absent from the
+whole file, and fired — because my new comment quotes the old wording deliberately. The check was
+wrong, not the edit; but it surfaced the three stale references, so a too-broad assertion was more
+useful here than a precise one would have been.
+
+
+## 2026-08-29 — The depth sweep was paying for the census's axis, and both guards are back
+
+**Increment**: the deep sweep was opt-in at 710s, so regression in the *depth* of mutation sensitivity
+was unprotected. Looking at why it cost what it did: the two sweeps had been split by role but not by
+cost. The census is breadth — every module, one site, **every variant**. The deep sweep is depth — up
+to eight sites — **and was also sweeping every variant.** Variants are the census's axis; the depth
+sweep was paying for it twice.
+
+**The experiment could have refuted the idea, which is why it came before the decision.** Killability
+requires a variant on which the reference behaves differently, so one variant might have made fewer
+mutants killable and shrunk the findings. **The table came back identical to the recorded baseline** —
+every row, and the same YES set of `piano_roll_3`, `piano_roll_4`, `verify_depth`, `verify_types`. The
+variant sweep was redundant *for this instrument*, and remains necessary for the census.
+
+**Cost, measured with load recorded**: 712s for both sweeps at all variants, 401s for the deep sweep
+alone at one variant, and **400s for the whole binary with both running** — that last on a machine at
+load 8.2, so conservative, and comfortably under the 600s threshold fixed last increment. The two run
+in parallel threads, so the binary's wall-clock is the larger rather than the sum.
+
+**So both sweeps are back in the gate: 372 passed, 0 ignored.** Breadth and depth are protected again.
+Site depth was not reduced, the widened family was not narrowed, and the census keeps its variants —
+the saving came from removing a duplicated axis rather than from trading coverage, which is what the
+three earlier reductions did.
+
+**Two of my own recurring defects showed up again and were caught by the checks I now write.** The
+header fix silently matched nothing on the first attempt; the second asserted both that the stale
+fragment was gone and that the new text was present, and it was that assertion which revealed the first
+had failed. And the un-ignore was done by **matching attribute lines rather than grepping text**,
+because last increment's assertion counted the words `` `#[ignore]` `` inside a doc comment.
+
+**The pattern is finally working in my favour**: the discipline I adopted after those failures is now
+what surfaces them within the same increment rather than two increments later.
+
+
+## 2026-08-29 — I removed a guard on a number I had myself disclaimed, and measured my way back
+
+**Increment**: the previous one marked both mutation sweeps `#[ignore]`, taking their assertions —
+including the detection floor — out of the gate. **The justification was cost, and the cost was never
+cleanly measured.** The sequence is the problem: the sweeps were slow, I applied three optimisations
+and never measured their combined effect, obtained one figure of 4132s, **disclaimed it in writing as
+contaminated by a load average near 13** — and then used slowness as the reason to disable the guards
+anyway. Step four does not follow from a number rejected at step three.
+
+**So I fixed a threshold before measuring: under 600s for the two sweeps together.**
+
+| | time | load |
+|---|---|---|
+| both together | **712s** | ~5–6 |
+| census alone | **206s** | ~5–6 |
+| deep sweep alone | **710s** | ~5–6 |
+
+**The pair failed my own threshold and I did not re-litigate it** by pointing at the load average,
+which is exactly what pre-registering it was for. But measuring the two separately is a different
+question rather than a second attempt at the same one, and it settled the matter: **the deep sweep is
+essentially the entire cost.** The census is restored to the gate; the deep sweep stays opt-in.
+
+**Two intermediate readings of mine were opposite, and only measurement settled it.** First I judged
+the deep sweep to dominate — right. Then, watching the gate, I concluded the census did and acted on
+it — wrong, because libtest prints its over-sixty-seconds notice for *every* long test running in
+parallel, so both looked stalled. That wrong premise cost three coverage reductions. I kept one of
+them, the census's three sites to one, because it is cheap and the breadth gain came from the wider
+family rather than from extra sites.
+
+**The whole native gate is now 496s at load 6**, against the 4132s I recorded and disclaimed. The
+disclaimer was right and the gate was never the problem.
+
+**My own assertion failed in the way this repository already documents.** The script restoring the
+census asserted "exactly one `#[ignore]`" and counted two — the second being the text `` `#[ignore]` ``
+**inside a doc comment**. That is the defect recorded when a scanner counted 33 skippable tests where
+the truth was 10. The file had been correct the whole time; the check was wrong. Rewritten to match
+attribute lines only.
+
+**What remains unprotected**: a regression in the *depth* of mutation sensitivity. The breadth
+property — every killable mutant found at one site per module is detected — is asserted every run
+again, which was the piece worth getting back.
+
+
+## 2026-08-29 — A restriction whose reason had expired, and a trade I had to take against myself
+
+**Increment**: six increments had gone into instruments, so the first task was checking I was still on
+the macro goal. **That check produced a real finding**: the 4 unlowerable chunks sit in exactly the 3
+refused modules, so **all remaining capability work on this line is behind a decision only the operator
+can take.**
+
+**One piece of genuine work was available.** The mutation family was arithmetic-only, and the recorded
+reason was explicit: a comparison swap can change a loop's trip count and hang the suite. **Two filters
+built since then handle exactly that** — admissibility, forced by a SIGBUS; faulting, forced by a
+SIGTRAP. A carried claim whose basis had expired, against this line's own rule: *"Re-derive, do not
+carry."*
+
+**Widening it is a real gain**: detected **39 to 48**, undetected still **0**, subjects with no
+applicable site at all **10 to 3**. Comparison swaps reach opcodes arithmetic never touched.
+`verify_datalayout` went from 9 applicable sites to 41 and now has a killable mutant that IS caught.
+
+**Then the cost arrived and I handled it badly before handling it well.** The sweeps became far more
+expensive, because comparison mutants are admissible AND non-faulting, so they run fully across every
+variant and the seeded stages carry many variants each. I responded by guessing where the cost was —
+cut the deep sweep's cap, then hoisted the reference runs, then cut the census to one site — and **each
+guess was wrong about which test was slow.** I should have measured the split first; I have a recorded
+rule about exactly that and did not follow it.
+
+**The disposition I ended on is honest but is a loss, and I am recording it as one.** Both sweeps are
+now `#[ignore]`, run explicitly. **Their assertions, including the detection floor, no longer protect
+anything day to day**, and their last green result is a dated measurement rather than a standing
+guarantee. I kept the widening rather than reverting it because 39→48 and 10→3 is more correctness than
+a fast gate is worth, and this matches how `tools/mutation_sweep.py` already drives the opcode-level
+mutation work externally.
+
+**A number I will not report as mine**: the native gate took 4132s in this run, but the machine was
+carrying a load average near 13 from overlapping work, some of it my own killed runs. **That figure is
+contaminated and is not evidence about the change.**
+
+**The second deliverable is a page I have owed for about ten increments.** `OPERATOR_DECISIONS_OPEN.md`
+is one page: the three open decisions, what each costs, what I do by default if nothing is said, and an
+explicit note that `Len` is *not* a decision so it is not mistaken for one. It re-argues nothing, and
+it carries the caution that five instrument defects in a row, all understating the subjects, should
+colour how my figures are read.
+
+
+## 2026-08-29 — One corpus walk, because a habit is not a check
+
+**Increment**: after four consecutive corrections to my own instruments, the most useful thing was not
+another measurement but a structural fix to the class of error behind them.
+
+**Five defects on this line have had one shape**: a measurement enumerated a **narrower population than
+the thing it described**, and reported the difference as a property of the subjects. A non-recursive
+walk saw 35 modules where its consumers saw 74. A fingerprint covered three roots where consumers read
+four. A probe keyed modules by file name and merged two files called `prelude.kel`. A directory listed
+explicitly *and* reached by recursion was counted twice. The detection census drove subjects unseeded.
+
+**The argument for the fix was already written down, by a file I wrote for the neighbouring hole.**
+`corpus_fingerprint.rs` guards the corpus CONTENT, and its header says: *"It has never bitten here,
+because every absorption asks 'corpus inputs touched?' by hand … A habit is not a check."* That
+sentence is exactly as true of the population, and the population is where I keep failing. I had the
+reasoning and had not applied it to the adjacent case.
+
+**The fix is the same move that worked on the mutation probe**: one canonical `corpus_sources()` in
+`tests/common/mod.rs`, so a migrated sweep **cannot** read a different set. Agreement by construction
+rather than by comparison.
+
+**Every migration was licensed by a comparison, not by inspection.** Before switching each sweep, a
+test asserts the shared enumeration returns exactly what that sweep's private walk returned — and those
+tests stay as standing checks. Migrating on the assumption that two walks agree would have been the
+very defect being closed, committed while closing it. All four figures this line reports each increment
+now rest on the canonical walk.
+
+**`isa_lowering_census` keeps its `CORPUS_DIRS` constant because it PRINTS it.** A printed root list
+that no longer describes what was read is a quieter version of the same defect, so the retained
+constant is compared against the canonical walk rather than trusted.
+
+**Twenty-five files still carry their own walk**, and the record says so. The class is eliminated for
+callers of the shared function, not repository-wide. I also deliberately did **not** add a grep lint
+asserting the absence of private walks: this line already shipped a scanner that counted 33 where the
+truth was 10 by matching a word inside a comment, and a second one is not the answer.
+
+
+## 2026-08-29 — The undetected column was made of equivalent mutants, and I should have known
+
+**Increment**: the open question was `codegen` and `parse`, where 16 sampled sites of 845 and 1015
+settled nothing. The obvious move was to raise the cap. The right move was to notice a defect in the
+method.
+
+**The census compared `VM(original)` against `NATIVE(mutant)` and never asked whether the mutation
+changed anything at all.** If `VM(mutant) == VM(original)` the mutated site is not executed under these
+seeds, so the mutant is **semantically inert** and a *correct* backend must produce that same answer.
+**No differential could ever detect it.** Standard mutation testing calls that an equivalent mutant and
+excludes it; I had been counting them as subjects failing to notice a wrong backend.
+
+**The fix was nearly free, which is the embarrassing part.** The probe already ran `VM(mutant)` for the
+fault filter and threw the result away. Killability is that discarded value compared against
+`VM(original)`. No extra execution.
+
+**All eleven undetected subjects were inert. The column is now empty: 39 detected, 0 undetected.**
+
+**Two published claims are withdrawn**, and the second matters more than the first. "Eight of the ten
+self-hosted stages do not notice a mutated backend" — their mutants were inert. And "`verify_datalayout`
+and `rogue_gear`, swept exhaustively, point at the observable" — **they point at the seeds.** That one
+was stated confidently, with exhaustion offered as the reason to trust it, and **exhaustion over inert
+sites establishes nothing.** Sweeping every site of a module the seeds barely exercise yields a null
+result meaning only that. `verify_datalayout` had nine of nine sites mutated and not one killable, which
+is consistent with the harness's own independently-reached `KNOWN_VACUOUS` record for it.
+
+**What is now asserted is stronger than what was there before**: every killable mutant is detected, so
+one going uncaught would be loud. What is *not* established is that the differential is sound — sites
+are capped, one family is used, and **3198 applicable sites were never exercised**.
+
+**The large inert counts are a seed-coverage measurement that fell out of a differential-strength
+measurement**, and reporting them as the latter is exactly the error I just made.
+
+**Four corrections in a row, all in one direction.** Unseeded driver, too-few sites, two disagreeing
+copies of the selection, and now equivalent mutants. Every one found the subjects better than I
+reported, and every one took the form of a measurement that could only understate. That is systematic,
+not incidental, and worth naming as a bias in how I build instruments rather than as four unlucky bugs.
+
+
+## 2026-08-29 — The same query existed twice, twice, and the two copies disagreed
+
+**Increment**: last increment left twelve subjects showing no difference under **three** mutation
+sites, eight of them self-hosted stages. Three sites is a thin basis, and two explanations fit equally
+well: **the site** (the sampled ops are not on a path the seeds execute) or **the subject** (the
+compared observable does not reflect the computation). Only the second is a weakness in the
+differential, and they are distinguishable by sweeping far more sites in exactly the subjects that
+showed nothing.
+
+**Six of eleven are detected at sixteen sites.** For `piano_roll_3`, `piano_roll_4`, `reconstruct`,
+`verify_depth`, `verify_structural` and `verify_types` it was the site. **Only three of the ten
+self-hosted stages remain undetected**, down from eight — the third correction in a row, and all three
+went the same way: the subjects are better than I reported.
+
+**Two subjects now exclude the sampling explanation by exhaustion.** `verify_datalayout` had nine
+applicable sites and all nine were mutated, producing five real comparisons and no difference;
+`rogue_gear` has exactly one site. For those the evidence points at the observable. **For `codegen` and
+`parse` it points nowhere**: 16 of 845 and 16 of 1015 sites distinguishes nothing, and saying so is the
+difference between a finding and an impression. 3198 sites beyond the cap went unexercised and the test
+prints that, because a cap that is not printed reads as exhaustive.
+
+**The instrument defect was the interesting part, and it was the same shape twice.** The deep sweep
+re-derived its membership by re-running a shallow probe **of its own**, and the two implementations
+handled a faulting mutant differently — one continued to the next mutant, the other abandoned the
+subject. They disagreed on `verify_typed.kel`. I extracted a shared probe. Then the *selection*
+disagreed too: one copy picked the middle site as `len / 2`, the other `(total - 1) / 2`, which differ
+for some lengths — and `verify_typed` moved again, this time from undetected to detected, taking the
+headline from 38/12 to **39/11**.
+
+**A disagreement between two copies of "the same query" is invisible unless something compares them**,
+and nothing did. Both are now single functions, so they agree by construction rather than by
+coincidence. That is the fix I should have reached for the first time rather than the second.
+
+**Clippy also caught me collapsing a distinction to silence a lint.** The shared probe folded
+"inadmissible mutant" and "faulting mutant" into one unusable case, leaving two counters unwritten.
+Those support different conclusions — a program the runtime refuses versus one both sides correctly
+trap on — so the probe now returns the distinction rather than the counters being deleted.
+
+**Six subjects produced ZERO comparisons**, so their `no` means nothing ran. `wire.kel` is the striking
+one: 929 applicable sites and not one usable mutant.
+
+
+## 2026-08-29 — I corrected a figure I published one increment ago, twice, in the same direction
+
+**Increment**: last increment reported **32 detected, 16 undetected** for "which differential subjects
+would notice a wrong backend". Every self-hosted stage was in the undetected list. That should have
+looked wrong to me at the time, and on inspection it was: **my census drove every subject at seed 0
+with no stage seed**, while the main sweep seeds ten stages. A stage reading an unseeded shared segment
+sees zeros and computes nothing.
+
+**A measurement that drives a subject more weakly than the harness it describes reports a weaker result
+and attributes it to the subject.** This is the **fifth** narrower-population error on this line, and
+the first where I published the wrong number before catching it.
+
+Driving it the sweep's way: **33 detected, 15 undetected.**
+
+**Then I strengthened it in the direction that could refute my own finding.** The census mutated only
+the FIRST applicable site per module. Sampling three — first, middle, last — gives **38 and 12**. That
+choice was made *after* seeing the undetected list, which is worth stating plainly: more sites can only
+move subjects OUT of the undetected column, never into it, so this makes the finding harder to sustain
+rather than easier.
+
+**I also nearly published a false qualification.** I was about to write that the remaining stages are
+"not seeded by this harness, their coverage is elsewhere". Checking `STAGE_SEEDED` first: it carries
+**ten** stages, including `lexer`, `parse`, `reconstruct`, `verify_typed`, `verify_structural` and
+`verify_types` — all of which were in my undetected list. They are seeded, run on real input, and still
+agree under mutation. **The true statement is stronger than the excuse I almost made.**
+
+**Eight of the ten self-hosted stages do not notice any of three arithmetic mutations.** These are the
+modules the V0.3.0 self-hosting goal depends on most. Scoped honestly: one pre-registered family, three
+sites, and **within `corpus_differential` only** — `stage_differential.rs` seeds both sides, and whether
+it detects these mutants is a separate question I have not asked. "Undetected here" is not "uncovered",
+and I have not claimed it is.
+
+**The figure now carries a floor**, on the principle established one increment earlier: a number that
+goes into the handoff without a floor can collapse in silence. A ratio, because the measured population
+moves with the corpus and with the two filters.
+
+**Clippy caught what `cargo test` did not**: my rewrite left `mutant_declined` never pushed to, having
+folded "the native side declined" into "the mutant faults". Those support different conclusions, so I
+separated them rather than deleting the counter to silence the lint.
+
+
+## 2026-08-29 — The sweep died with SIGBUS, and the crash was a bigger finding than the census
+
+**Increment**: `probe_agreement_depth` had sized a blind spot and deliberately declined to classify it
+— 15 single-call modules inside the differential's count whose agreement is trivial on all three of its
+axes, never shown to be evidence. Having just put a floor under that count, the next question was
+whether it measures what its name says: **if the backend were wrong, which subjects would notice?**
+
+The method is the one this line has used all session: run the reference on the original module and the
+native side on a **mutated clone**, which is a simulated backend defect.
+
+**The sweep died with SIGBUS, and that was worth more than the census.** The subject was
+`04_for_in.kel`, mutated by a single `CheckedAdd` → `CheckedSub` — well-formed bytecode, same arity,
+same types. Checking it properly:
+
+| check | result |
+|---|---|
+| `verify()` | accepts |
+| `auto_arena_capacity_for`, `module_wcmu`, `Vm::new` | **all reject** — no statically extractable iteration bound |
+| this backend's `module_refusals` | **accepts** |
+
+**`lower_module` documented no admissibility precondition and checked none.** Verified is not enough:
+`Vm::new` additionally requires a resource bound, and that bound is the guarantee the project sells. An
+ahead-of-time path that runs what the bound analysis refuses is a hole in the value proposition rather
+than merely a crash.
+
+**Blast radius measured before deciding: 66 modules lower, 0 unbounded.** So this is a precondition gap
+and not a live defect, which is why documenting plus pinning was enough and enforcement was left as a
+named option with its cost — coupling a pure lowering function to the resource analysis on every call.
+
+**Two corrections I had to make to my own reasoning.** First, the pre-registered mutation family listed
+only `Add`/`Sub`/`Mul` and found a site in 4 modules of 65, because Keleusma is total and the corpus
+emits `CheckedAdd`. **My own non-vacuity assertion caught that**, and the family was amended before any
+subject had been classified, so it cannot have been tuned to results. Second, I expected the trap risk
+and still under-estimated it: after the admissibility filter removed the SIGBUS, an admissible mutant
+produced SIGTRAP.
+
+**Both filters are correctness points, not conveniences.** An inadmissible mutant is not a wrong
+backend — it is a program the runtime would refuse. A mutant that faults is not one either — checked
+arithmetic is supposed to trap and both sides do. What survives is the population the measurement is
+actually about: mutants that run and merely compute something different.
+
+**The census then worked: 32 detected, 16 undetected, 10 with no mutation site**, with the unmeasured
+classes reported separately because calling an unmeasured module undetecting would manufacture a
+finding. The 16 include every self-hosted stage, consistent with the existing note that the stages read
+input the harness supplies as zeros. **Nothing was deleted or exempted on this evidence** — undetected
+against one family is not "detects nothing".
+
+
+## 2026-08-29 — The four figures I report every increment had nothing under them
+
+**Increment**: I went looking for the next product frontier and did not find one worth taking. The
+lowering frontier is closed at the corpus level — what remains is operator-held (floats), structurally
+inadmissible (`Len`), or the soundness obligation (`Stream`). The mutation sweep is calibrated and
+pre-registered. `miscompilation_reach.rs` already answers the load-time-hole question, and independently
+agrees with the leg-3 result I measured last increment.
+
+**So I audited the instruments instead, and that is where the defect was.** Four figures go into the
+handoff, `REVERSE_PROMPT.md` and `TASKLOG.md` every increment. A large regression in any of them turned
+**no test red**.
+
+The existing assertions are real, and every one of them checks something other than what the figure
+measures. `isa_lowering_census` asserts partition totality, non-vacuity, and extraction completeness —
+all of which hold just as well at 30 of 66 as at 61 of 66. `spike_corpus_coverage` asserts
+`compiled > 10 && total_ops > 1000`, which catches "the corpus paths are wrong", a different failure
+from "the backend got worse". Both are worth catching; only one was caught.
+
+**The fourth was the one that mattered.** `module_refusals` reports per **chunk**, but the corpus
+differential exempts per **module** — so one newly-refusing chunk removes a whole file from the
+correctness comparison **without any refusal being wrong**. A lowering regression reaches the
+differential indirectly and therefore quietly. Its floor stood at `>= 20` against an actual 61,
+tolerating the loss of two thirds of the comparison. The `KNOWN_VACUOUS` check immediately above it
+exists to stop exactly this one module at a time, and says the vacuous set "was 40-strong-looking
+coverage for months precisely because nothing checked it". The two guards want the same thing; only
+one was tight.
+
+**Floors, not pins, and ratios where the denominator moves.** `corpus_differential.rs` had already
+recorded the design constraint: a check that breaks on ordinary progress "teaches the next reader to
+delete the check". Lowering more must stay free. Chunk and instance counts move with the corpus, so
+those take ratio floors; the opcode and module counts have stable denominators and take absolute ones.
+
+**Each floor was proven to fire** — raised above the measured value, observed failing, restored. Four
+new guards whose reach I had not established would have been the very defect they exist to prevent,
+and this line has recorded that lesson enough times to owe the check.
+
+**What I deliberately did not do.** The `spike_*` and `probe_*` files print far more than they assert,
+and that is their genre — they are meant to report. Flooring them on the strength of a print/assert
+ratio would have been manufacturing a finding from a statistic. The criterion is not the ratio; it is
+whether the figure leaves this repository in a handoff.
+
+**This is the third instrument defect this session**, after the census reading English word order and
+the sweep reading 35 modules where its consumers read 74. The first two were instruments that could
+report the wrong thing. This one is instruments that report faithfully with nothing checking the report
+against yesterday's.
+
+
+## 2026-08-29 — A conservative rejection, not the verifier, is what holds a runtime trap shut
+
+**Increment**: I went looking for the last named opcode refusal, `Len`, expecting a coverage
+opportunity. The corpus had already settled that question and said so at length: `Op::Len` fires only
+when the for-in source has no statically known length, and that same property is what makes the loop's
+trip count unextractable. **The property that makes the opcode reachable is the property that makes
+the loop unbounded** — one fact, not two limitations that might be lifted separately. Lowering it
+would gain nothing, because the module still cannot be admitted.
+
+**What was there instead was better.** `src/vm.rs` returns `InvalidBytecode` for `Op::Len` on a flat
+array, justified by *"it never emits `Op::Len` on an array"*. The reference compiler emits exactly
+that, from `for x in if c { a } else { b }`. The error's classification rests on a premise the shipping
+compiler contradicts.
+
+**I was wrong about the shape of the hazard, and measuring is what caught it.** I hypothesised a second
+instance of the load-time hole class that `Op::IsStruct` had produced — verify-clean, loadable,
+trapping at runtime — reasoning that a host sizing its own arena could bypass `auto_arena_capacity_for`.
+Executing it showed **`Vm::new` runs the bound check itself** and refuses at every arena size. Had I
+written the report from the reasoning, I would have spent the owning line's attention on a false alarm.
+
+**The real finding is forward-looking, and sharper for being narrower.** `verify()` *accepts* the
+module; the guard actually holding the trap shut is the resource-bound check. The project's own
+taxonomy puts that refusal in the **second category** — provable in principle, analysis not
+implemented — and I confirmed it survives even when both arms have the same length, so the trip count
+is two on every path and provable by inspection. That is the category defined as liftable. **So an
+unambiguous improvement to the bound extractor, made by someone with no reason to look at `Op::Len`,
+converts a rejected program into one that loads and traps. The improvement is silently gated on an
+unrelated repair, and nothing said so.**
+
+Four legs, each pinned with its own control, in `native_codegen/tests/len_flat_array_hazard.rs`. Leg 4
+fails on the day the bound extractor learns to see through an `if`, which is the day it matters.
+
+**Reported, not repaired.** Both plausible fixes — a load-time rejection of `Op::Len` on a statically
+flat operand, or a corrected error class — are in files this line may read and must not edit. Three
+dispositions are laid out with no recommendation.
+
+**`new_unchecked` earns a note.** It is the documented trust-skip, and it is the only way to ask what
+the runtime arm does. Using it to answer *that* question is legitimate; letting it stand as evidence
+that the program is admissible would not be, and leg 3 establishes the opposite. The test says so in
+those terms.
+
+**No absorption this increment**: the line was already at zero unabsorbed, which is worth recording as
+a fact rather than reported as an absorption performed.
+
+
+## 2026-08-28 — A census was reading English, and the column was clean by accident
+
+**Increment**: `LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently
+supported subset"* and constructed at **31 sites** carrying four unrelated conditions — an opcode with
+no lowering, a type the backend lacks, an input whose own integrity failed, and a defect in this
+crate. The only thing separating them was the English in the message.
+
+That mattered because `isa_lowering_census` built its NAMED REFUSED column by **taking the leading
+alphanumeric run of the sentence** and keeping it when it matched an opcode name. So the class of a
+refusal was decided by word order. `chunk 0 has a Float in its signature` was excluded only because
+`chunk` is not an opcode; `Const({idx}) out of range` was not excluded, because `Const` is.
+
+**The demonstration came before the fix, and it had to.** Injecting an out-of-range constant index
+produced, from the census's own query, `Named: {"Const"}, lowered: {}` — the `Const` opcode credited
+with having no lowering, landing in the *published* column, for a module whose only fault was a
+malformed operand. The backend lowers `Const` in nearly every corpus module.
+
+**Every figure this line has published was nonetheless correct.** The corpus never fires a
+misattributing site. The column was clean because of what the corpus happens to contain, not because
+the query could not go wrong — which is exactly why reading the source could not settle it and firing
+the site could. That is the `a-clean-guard-proves-its-reach-first` lesson arriving in a place I did
+not expect it: the guard under suspicion was *my own instrument*, not the product.
+
+**The fix leans on the type system to do the enumeration.** Four variants, with the opcode carried as
+data. Changing the variant's *shape* rather than its contents made the compiler list every consumer;
+there was exactly one. The census's silent `isa.contains(head)` filter became a loud assertion, so a
+mis-typed refusal can no longer be dropped without trace — the old form's failure mode was silence.
+
+`Internal` is kept distinct from `UnsupportedOp` because a consumer who cannot tell *"your program
+uses a feature I lack"* from *"I am broken"* is invited to rewrite a program that was never at fault.
+
+**Three of my own guards fired during the work**, which is the return on writing them: the sweep read
+35 modules where the censuses read 74 (the **fourth** narrower-population defect on this line — the
+walk was not recursive), and the float premise check caught that `WireShape` renders as
+`Scalar { kind: 5 }`, so a text search for "Float" would have passed by never looking.
+
+**Not established**: `Internal` was never fired. Its sites are reached only when this crate's own
+invariants break. The test asserts only what can be — that the class exists, is distinct, and renders
+as a defect — and records the search rather than concluding unreachability.
+
+**Absorption 31** (`e3e7bf02`) conflicted in `REVERSE_PROMPT.md`, which both lines write. Resolved by
+**keeping both messages**, the peer's marked explicitly as a merge resolution rather than a relay:
+nothing in it was reviewed or endorsed here, and its figures describe that line's tree.
+
+
+## 2026-08-28 — The obligation's blast radius is one module, and that module is already refused
+
+**Increment**: measure which corpus modules the yield-escape refusal *takes over* on the day `Stream`
+lowers, then consolidate the obligation into one document.
+
+**Prediction, pinned before the measurement**: exactly one module, `13_telemetry_stream.kel`, and
+because it is refused today for `Stream`, **coverage does not fall**. Both halves held.
+
+The measurement had to avoid a trap. To see what happens "when `Stream` lands" I could have weakened
+the backend to accept `Stream` — which would have made the test pass by making the product wrong, and
+would have measured a backend nobody will ever ship. Instead the test **mutates compiled bytecode**,
+stripping `Op::Stream` from a clone, and asks the placement what it says about the residue. The
+backend is untouched.
+
+What this buys: the refusal is not merely present and fireable (both already shown), it is now
+**costed**. The number a reviewer needs — how much coverage the sound refusal costs — is zero today
+and one already-refused module later. That is the difference between a guard someone might delete as
+speculative and one whose price is on the record.
+
+**Consolidated** into `docs/decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md`: the defect, the four guards
+and their strength, the three things explicitly *not* covered, and a four-option cost table with **no
+recommendation** — the epoch-on-overwrite option is the one that would convert a silent wrong value
+into a `Stale` error, and it lives in files this line may read and must not edit, so the disposition
+is not this line's to make. Every figure in it was re-derived for the document except where marked.
+
+**The standing tension, stated plainly**: discharging this requires the planner to consume a
+confinement verdict, and consuming no verdict is exactly why a wrong verdict cannot miscompile today.
+Both cannot be had for free.
+
+**Absorption 30** (`18cdb5d8`, expression nodes from the pipeline): predicted 2488/92 and 356/72 from
+the diff shape alone — two new tests in an existing file, no stage source and no example script
+touched, so the corpus figures should not move. Both landed exactly; censuses unmoved.
+
+
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
 Append-only record of the AI agent's increment-by-increment design reasoning: what
@@ -9241,6 +14299,816 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] Three counts, all correct, and a guard that caught its author
+
+**`bound_transfer.rs` PREPENDS THE RTOS PRELUDE BEFORE COMPILING.** That one line explains a
+three-way disagreement that had sat in the tree unnoticed: it prints **74 modules examined** and **71
+compared**, where every other census reports **69**.
+
+| figure | what it counts |
+|---|---|
+| **74** | every corpus file — all of which compile once the RTOS scripts get their prelude |
+| **71** | of those, the ones with an entry point |
+| **69** | modules that compile **standalone** |
+
+**All three are correct and none says which population it means.** That was the prediction written
+before measuring, and it is the third instance of this shape after 239-against-256 and 91-against-67.
+**The consequence is concrete**: `bound_transfer` measures a strictly larger corpus than every other
+census here, so its figures and theirs are not comparable without saying so.
+
+### The probe written to reconcile them had two defects of its own
+
+**It keyed by file name**, and **two files are named `prelude.kel`** — one under the RTOS scripts, one
+under the compiler — so it reported 73 files where the fingerprint pins 74. A key that silently merges
+distinct items is the same shape as every population defect this line has found.
+
+**And a substitution silently did nothing**, because `cargo fmt` had split the line it matched and
+**the assertion was omitted**. That is the **second occurrence of that exact slip this session, after
+the lesson was written down**. When the assertion was finally added, it fired on a wrong expectation —
+two filters where one remained — which is the assertion doing its job twice over.
+
+**Recording a lesson is not applying it.** The rule now has two data points and both are mine.
+
+### The pin caught its own author within one increment
+
+`skippable_tests.rs`, added last increment to pin the tests that can pass without testing, **flagged
+this increment's new test**. Its body used `else { return false; }` **inside a closure**, and the
+scanner cannot tell a closure's value from a test's early exit.
+
+**It fired correctly on its own terms and was wrong about the cause.** The repair was to rewrite the
+closure, **not** to add the test to the pin: recording a test as skippable when it cannot skip would
+corrupt the figure the pin exists to keep honest. **A guard's false positive is repaired at the
+subject or documented as a class — never by widening the pin to swallow it.**
+
+## 2026-08-28 — [v0.3.0] A pass count is worth the fraction of it that ran
+
+**THE NAME AUDIT ASKED WHETHER A TEST PROVES ITS CLAIM. THIS ASKS WHETHER IT RAN.** A test that
+returns early when a toolchain is absent reports as **passed** and joins the total quoted as evidence.
+
+**10 of 325 can return before asserting anything. None are skipping here** — and the zero was
+verified rather than assumed. `retcon_m2` finishing in 0.39s looked implausible for build-link-run,
+and **that suspicion was wrong**: the output carries real subprocess results. **Timing suggested;
+reading settled it.**
+
+### The scanner written to measure this was wrong first
+
+It asked whether a line contained `"return"` and reported **33**, where an earlier one-off had
+reported 10. The difference was **entirely comments** — *"// while still returning the right low
+word."* matched.
+
+**Two instruments disagreeing is the only reason it surfaced.** Either alone looked reasonable, and
+33 would have been published as a finding about a third of the suite. Corrected to require a
+statement-position `return` outside comments, both now read 10.
+
+**That is the fourth time this session a cross-check between two methods caught something neither
+would have caught alone**, and the second time the defective instrument was the newer one.
+
+### What is pinned, and what is deliberately not
+
+The **population** is pinned, so an eleventh skippable test announces itself. **Whether a skip occurs
+is not asserted**: these need a C compiler and a linker, and a machine without one should not see a
+failure. **The defect is invisibility, not the skip** — and each of the ten prints a loud banner when
+it does skip, which is the mitigating half.
+
+**The finding is bounded and is stated as such.** Ten tests, none currently vacuous, all announcing
+themselves. That is a latent risk worth a pin, not a compromised suite.
+
+## 2026-08-28 — [v0.3.0] The audit closes at zero, and stopping is the result
+
+**THE THIRD CLASS WAS TOO BIG TO READ, SO THE METHOD SCALED INSTEAD OF THE EFFORT.** Names carrying a
+quantifier somewhere other than the front number **36 of 325**. A universal claim resting on a body
+that never iterates is the shape most likely to overclaim, and that is mechanically detectable: **29
+iterate, 7 do not.** The seven were read.
+
+**All seven are sound.** The strongest candidate,
+`m2_a_buffer_large_enough_never_reaches_the_arena_at_run_time`, genuinely builds, links and **runs** a
+binary — "at run time" is demonstrated, not assumed. The others assert over a fully enumerated
+population, or carry a quantifier scoped **inside** a single subject: *"a module with no float
+anywhere"* describes one program rather than quantifying over many, which is why the pattern matched
+it and the reading cleared it.
+
+### The result is the decision
+
+| class | members | read | overclaimed |
+|---|---|---|---|
+| leading quantifier | 11 | 11 | 2 |
+| capability claim | 11 | 11 | 1 |
+| mid-name quantifier | 36 | 7 | **0** |
+
+**Hit rates 2, 1, 0.** Three classes with a declining yield is evidence the habit is bounded.
+**Auditing names stops here** — and the brief written before this pass said exactly that: *"if this
+class yields nothing, that is itself the signal to stop... continuing past that is momentum rather
+than judgement."* **Writing the stopping condition down beforehand is what makes stopping a decision
+rather than fatigue.**
+
+### Two limits, stated because a clean result invites overreading
+
+The triage is a **filter with known false positives** — four of the seven were flagged only because
+their quantifier scopes inside the subject — so **its 29 were not read**, and the coverage claim says
+so. And names with no syntactic marker remain unbounded: **the canary defect was caught by reading,
+not by any pattern**, so no rule-based rate can close the question.
+
+### One thing noticed and not fixed
+
+The `m2` test **skips silently when no C compiler is present**, passing without testing anything. It
+prints the skip loudly, which is the mitigating half, and it is a vacuity concern rather than a
+name-versus-body one — recorded here so it is not lost, not repaired because it is outside what this
+pass was about.
+
+## 2026-08-28 — [v0.3.0] Auditing the blind spot the previous audit named
+
+**THE PREVIOUS AUDIT RECORDED WHAT IT COULD NOT SEE**, which is the only reason this increment had a
+target: it selected names opening with a quantifier, so *"the region canary can fire"* — the defect
+fixed the same day — would have escaped it.
+
+**The capability class, audited: 11 of 325 names, 1 overclaimed.** Cumulatively **3 of 22** across
+both classes.
+
+### The one, and why its helper let it pass
+
+a_tail_that_can_trap_is_still_refused (the superseded name, given without backticks because it no longer resolves) asserts that
+`loop main(a: Word) -> Word { yield a; a * a }` is refused. **It is — for a reason unrelated to
+trapping.** `assert_refused` checks only that lowering **errs, not why**, and the backend refuses that
+shape with *"does not yet support opcode `Stream`"* because **the yield is not in tail position**.
+Measured independently in `stream_frontier.rs`: a yield followed by code is refused whatever follows
+it.
+
+**The doc comment's reasoning was right and the name was not.** A trap observable really would be
+taken by the virtual machine after suspension where native code, having returned, would not. **But no
+test can isolate that while every non-tail yield is refused** — a shape that lowers except for the
+trap does not exist. **This is the second time in two increments that a strong claim turned out
+unreachable rather than unproven**, the other being the float conversion behind its guard.
+
+### A limitation named rather than fixed
+
+`assert_refused` has **six call sites** and cannot distinguish refusal reasons. Its shared message
+says "outside the degenerate class", which **is** the true reason for all six, so it is sound for its
+purpose. But it would pass a shape refused for something unrelated, which is exactly what happened to
+the name above.
+
+**A helper that cannot say why makes every caller's name unfalsifiable in that dimension.** Recorded
+rather than repaired, because all six current callers are correct and changing them would be a repair
+in search of a defect.
+
+### What the cumulative rate does and does not mean
+
+**3 of 22 covers two recognisable shapes.** Thirty-six mid-name quantifiers are unaudited, and names
+with no syntactic marker are unbounded — the canary was caught by reading, not by a pattern. **The
+number is a floor on a habit, not a measurement of a suite.**
+
+## 2026-08-28 — [v0.3.0] Two of eleven: the habit measured instead of met again
+
+**THE SAME DEFECT HAD APPEARED THREE INCREMENTS RUNNING** — a test named for a canary firing whose
+body never fired it, a guard whose watched population was narrower than its subject at three
+granularities, and a property named *"yields a composite"* that tested co-occurrence. Three
+occurrences is enough to stop discovering it by accident.
+
+**The set was defined by rule before being audited**, so it could not be the tests that came to mind:
+`#[test]` functions whose name opens with a universal or negative quantifier. **11 of 325.**
+
+**Result: 2 overclaimed, 9 sound.** The nine iterate their full population or a complete operator set,
+several carrying explicit non-vacuity guards.
+
+### Both repairs chose a direction
+
+**Weakening a name is the cheap repair and it silently reduces what the suite proves**, so each was
+decided on its own terms.
+
+- *"every coroutine intrinsic is declarable"* iterates nine; LLVM defines more. Renamed to **the
+  intrinsics this backend would need** — the narrower claim is also the one worth having, since what
+  matters is reachability of what a suspension lowering needs, not exhaustiveness of a list.
+- *"each float conversion is refused by name"* runs one program that emits both, and only
+  `IntToFloat` is named because lowering stops at the first refusal. **The body was not strengthened,
+  and the reason is the finding**: a program emitting `FloatToInt` alone would need a float arriving
+  without a signature or a constant, and both routes are guarded. **The strong claim is unreachable
+  while the float guard stands** — so the honest name records a fact about the guard, not a gap in
+  the test.
+
+### The rate is a lower bound, and saying so matters
+
+The rule catches leading quantifiers. **The canary defect fixed earlier this session would not have
+been caught by it** — that name began with "the". So 2 of 11 measures one recognisable shape of the
+habit, not the habit.
+
+**A rate with a stated blind spot is still worth far more than "I keep finding these"**, which was the
+standing of this claim an hour ago.
+
+## 2026-08-28 — [v0.3.0] The instrument built to replace a belief had a proxy that overclaimed
+
+**THE PREVIOUS ENTRY BUILT A DISTRIBUTION TO REPLACE AN ATTENTION-DRIVEN CLAIM WITH COUNTING.**
+Reading the module it named as the outlier shows the instrument was wrong about it.
+
+`14_frame_log.kel`'s entry is `loop main(tick: Word) -> Word`. **It yields a `Word`.** The property
+counted as *"yields a composite"* was implemented as *a chunk containing both a `Yield` and a
+`NewComposite`* — co-occurrence, not the claim in its name.
+
+**Corrected**, by reading the chunk's declared return shape, since for a `loop` chunk that IS what it
+yields:
+
+| | published | corrected |
+|---|---|---|
+| "yields a composite" | 5 of 69 | **4 of 69** |
+| `14_frame_log.kel` | 4 properties | **3** |
+| outlier | **unique** | **two modules tie** |
+
+**So "a genuine outlier holding more unusual properties than any other module" is false.**
+`13_telemetry_stream.kel` holds three as well.
+
+### A second name was wrong, and only the name
+
+*"Constructs inside a loop"* is now *"constructs in a break scope"*. `Op::Loop` is a break-scope
+marker the compiler also emits for `match`, so the name asserted more than the body checked. **The
+body was right; the label was not** — which is the milder half of the same defect.
+
+### The reusable statement
+
+**An instrument is not exempt from the scrutiny applied to the claims it measures.** This one existed
+specifically to stop a belief resting on how often modules appeared in notes, and it shipped with a
+property whose name asserted more than its body checked — the same shape as a test named for a canary
+that never fires, and as a guard whose population is narrower than its subject.
+
+**What survives is the part that did not depend on the broken property**: 42 of 69 modules hold none,
+*returns a composite* is held by 17 of 69 and so marks nothing, and pairing `12_sensor_window` with
+`14_frame_log` was selection by attention. Those conclusions were re-derived, not carried.
+
+### An edit that silently did nothing
+
+One of the two substitutions in this increment **did not apply**, because `cargo fmt` had realigned
+the text it matched on and **the assertion was omitted on that one while its sibling had one**. It
+surfaced only because the printed property name was unchanged.
+
+**A no-op edit and a successful one are indistinguishable afterwards.** Assert on every substitution.
+
+## 2026-08-28 — [v0.3.0] The clustering claim was half right, and the half that was wrong was mine
+
+**AN OBSERVATION BECAME A PREMISE IN TWO DOCUMENTS BEFORE ANYONE COUNTED.** The previous entry ended
+with *"three independent questions converged on one instruction, which suggests the corpus's awkward
+cases cluster"* — a hypothesis stated as a finding, and one that changes behaviour, since it would
+justify searching a handful of modules first.
+
+**Measured over 69 modules and six properties the backend cares about for independent reasons:**
+
+| modules holding | count |
+|---|---|
+| **0 properties** | **42 of 69** |
+| 1 | 19 |
+| 2 | 6 |
+| 3 | 1 |
+| **4** | **1** |
+
+### What survives
+
+**`14_frame_log.kel` is a genuine outlier**, holding four of six — more than any other module. That
+is not an artefact of attention: it is measured over every module, and nothing about the properties
+was chosen with it in mind.
+
+### What does not
+
+**`12_sensor_window.kel` holds two, tied with five other modules.** Pairing it with `14_frame_log` was
+**selection by attention** — the two appeared together in this line's notes because they were
+investigated together, not because they are alike. The corrected statement names one outlier, not a
+pair.
+
+**And one property is not a marker at all.** *Returns a composite* is held by **17 of 69**, the most
+common of the six. Had it been weighted as awkwardness, it would have pointed work at a seventh of the
+corpus while feeling selective.
+
+### The shape of the error, which is the reusable part
+
+**"These keep showing up in my notes" is evidence about the notes.** A module examined three times
+appears three times, and frequency of appearance is generated by past attention as much as by
+structure. **The only way to tell them apart is to count over everything, including what was never
+looked at** — and 42 modules holding nothing is a fact no amount of re-reading the notes would have
+produced.
+
+## 2026-08-28 — [v0.3.0] The half I left unverified was not merely stale; it was false
+
+**THE PREDICTION WAS WRITTEN DOWN AND IT WAS WRONG.** The expectation recorded before measuring was
+that no corpus composite is slot-homed. **One is**: `14_frame_log.kel::main` constructs at op 24 and
+stores into a private data slot at op 25.
+
+**Two independent methods agree**, which is the shape established last increment — different methods
+over the same population. A producer walk over the instruction stream, driven by `op_depth_effect`
+rather than the peak model, and the module's own `private_composite_layout` and
+`persistent_composite_bytes`. **They name the same module.** A must-fire control that really does bake
+a composite into a private slot proves neither method is simply blind.
+
+### The model survives, and the reason is specific rather than lucky
+
+`region.rs` places every construction at a fixed offset from the CHUNK's region, on the premise that
+composites are temporaries. **The planner does place op 24.** So the construction is a temporary whose
+value is *subsequently copied* into the slot — no body lives only in a slot, and a chunk-relative
+placement remains right for all 256 sites.
+
+**"Constructed as a temporary" and "copied into persistent storage afterwards" are compatible.** The
+old sentence conflated them, which is why it read as a claim about storage when it was really about
+construction. **A false sentence and a sound model, in the same paragraph.**
+
+### Why finishing the half mattered
+
+The previous increment corrected the denominator and deliberately left the numerator, on the grounds
+that correcting one does not license the other. **That was right, and leaving it would have been
+worse than leaving the whole sentence stale**: a claim with one freshly verified half reads as
+verified throughout. The half left behind turned out to be the false one.
+
+### A site examined from three directions in one session
+
+Op 24 of `14_frame_log.kel::main` is the same site whose width refusal was lifted earlier today by
+certifying a multiply-written local, and the same module that anchors the composite-refusal record.
+**Three independent questions converged on one instruction**, which is worth noticing: the corpus's
+awkward cases cluster.
+
+## 2026-08-28 — [v0.3.0] What makes a cross-check valid, learned by getting one wrong first
+
+**THE TREE CARRIED TWO NUMBERS FOR ONE QUANTITY.** Composite construction sites were **239** in
+`region.rs` and **256 in 35 chunks** in the handoff. A count over 35 chunks cannot exceed a
+corpus-wide count, so either the populations differed and neither said so, or one was wrong.
+
+**239 has no producer.** The spike its comment cited no longer reports that figure — it reports
+chunks returning and taking composites. It was carried, and it sat beside a different number long
+enough that neither looked suspicious. **Current, with the population attached: 256 sites across 35
+chunks of the four-root corpus's 69 compiling modules.**
+
+### The distinction the last two increments were circling
+
+**A cross-check is different METHODS over the SAME population.**
+
+The corroboration claimed two increments ago was the opposite — *the same method over different
+populations* — and that is not evidence at all. The one built here is the right shape: the planner's
+placements and a raw scan of the instruction stream are independent walks, and they agree at 256 over
+one named set.
+
+**The equality earns its place beyond bookkeeping.** Every `Flat` construction must receive exactly
+one placement, and **neither failure is visible to a differential**: a region that is too large is
+invisible, and a site never placed is refused rather than mispacked. So this is the only place the
+relation is checked at all.
+
+### What was not done, and why that is the honest half
+
+The stale sentence also claimed **"0 of them slot-homed"**. That half is **not re-derived and not
+restated as fact** — it needs its own walk, and asserting it on the strength of the sentence it came
+from would be the same error one level down. **Correcting a denominator does not license the
+numerator.**
+
+### An incidental third confirmation
+
+**69 modules** over four roots confirms last increment's arithmetic — 67 from the three-root loaders
+plus the two preludes — by a route that did not exist when that claim was made.
+
+## 2026-08-28 — [v0.3.0] The same defect a third time, and a corroboration that was not one
+
+**THE GUARD BUILT LAST INCREMENT WATCHED A NARROWER POPULATION THAN THE FIGURES IT PROTECTS.** It
+covered three roots; the censuses producing the published numbers read **four**, adding
+`examples/rtos/scripts` and `compiler/kel` — **seven files read and unguarded**.
+
+**That is one defect at three granularities in three consecutive increments:**
+
+1. The `v0.2.3` line pinned a value whose input was a **directory scan**.
+2. This line scanned **three named directories where the loaders recurse** — 57 files against 67,
+   missing the `piano_roll` family.
+3. This guard, **built from that lesson**, covered **three roots where its consumers read four**.
+
+**Each time the watched population was narrower than the one that mattered, and each time the narrow
+scan returned a well-formed answer.** That is what makes the class invisible: nothing errors, a
+plausible number arrives, and the number is about the wrong set. **Derive the scope from what the
+consumers read, not from a list that looks right.**
+
+### A corroboration claim that did not survive being checked
+
+The previous entry recorded that the fix "produced a cross-check that did not exist — two independent
+censuses now report the same chunk total, 1074". **The two censuses read different root sets.** Two
+measurements over different populations agreeing is not corroboration until the difference is shown
+to contribute nothing.
+
+**The first explanation offered for it was also wrong**, and the test asserting it failed, which is
+the only reason the second one is right rather than merely plausible:
+
+- **Claimed**: the extra files are not standalone programs, so they do not compile.
+- **Measured**: two of the seven *do* compile, both named `prelude.kel`.
+- **Actual**: they compile to **zero chunks**. A prelude declares; it has no bodies to emit.
+
+So a four-root census sees **two more modules and the same chunk count**. The agreement is real and
+**weaker than claimed**, and the module counts genuinely differ: **67 against 69**.
+
+**Quote the population with the number.** A bare "67 modules" was never wrong so much as
+underspecified, and underspecified is how two figures come to be compared that were never measuring
+the same thing.
+
+### What the guard is now
+
+Seventy-four files across four roots, pinned by path and content digest, **covering what the loaders
+READ rather than what compiles** — a change that made a skipped file usable would move every figure,
+which is exactly the change most worth catching.
+
+## 2026-08-28 — [v0.3.0] Building a guard for one thing found the population was wrong
+
+**THE INTENDED WORK WAS SMALL**: turn the "corpus inputs touched?" habit into a check, because
+thirty-six test files here read directories owned by the `v0.2.3` line and **a habit is not a check**.
+The incidental finding is the larger one.
+
+### 91 was never the number
+
+Three test files written this session listed `examples/scripts/rogue` explicitly **and** recursed from
+`examples/scripts`, so **every file in `rogue` was visited twice**:
+
+$$
+67 \text{ unique files},\ 24 \text{ of them in } \texttt{rogue},\ \text{counted as } 67 + 24 = 91.
+$$
+
+**Corrected: "91 modules" → 67, "1117 chunks examined" → 1074.**
+
+**The published coverage figures were never affected.** `spike_corpus_coverage`,
+`isa_lowering_census` and `bound_transfer` do not list `rogue` explicitly, so recursion reached it
+once — and that was **re-derived to confirm rather than reasoned about**. 61 of 66, 1070 of 1074 and
+89841 of 89940 all stand.
+
+**The findings were unaffected too.** The three refusals and the one chunk carrying the escaping shape
+all lie outside `rogue`. **What was wrong was the population they were measured against**, which is
+the one thing a denominator is for.
+
+### The fix produced a cross-check that had not existed
+
+Two independent censuses now report the same chunk total, **1074**. Before the fix they said 1074 and
+1117, **and nobody had put the two numbers beside each other.** The `v0.2.3` line's op-tag defect was
+found the same way — by asking two instruments the same question — and here the question was never
+asked because the two figures lived in different files and were quoted in different sentences.
+
+### The guard nearly shipped under-covering
+
+The first fingerprint scan read only the three named directories and found **57** files where the
+loaders walk **67**: it missed the ten `piano_roll` modules, because the loaders recurse and it did
+not. **Caught before anything was pinned**, by comparing the scan against what the loaders actually
+walk rather than against what the directory list looked like it meant.
+
+**A guard that watches a smaller population than the thing it protects is the same defect as the pin
+it was built to prevent**, one level up.
+
+### What the guard is
+
+`corpus_fingerprint.rs` pins 67 files by path and content digest and fails with the added, removed and
+modified names plus a ready-to-paste manifest, naming the figures to re-derive. FNV-1a, because
+`DefaultHasher` is explicitly not stable across toolchains and **a tripwire that cries wolf is worse
+than none**. Its comparator is exercised on all three answers by perturbing a manifest directly, so
+the demonstration never requires editing a file another line owns.
+
+## 2026-08-28 — [v0.3.0] The widest-input rule names an exposure this line was already managing
+
+**THE RULE, DERIVED BY THE `v0.2.3` LINE FROM THEIR OWN DEFECT**: *before pinning a value, ask what
+the widest input to it is and whether that input is pinned too.* An invariant protects a **region**;
+it was never going to protect an expectation whose widest input lay outside one.
+
+**APPLIED HERE IT NAMES A REAL EXPOSURE.** Many pinned figures on this line take their input from a
+directory scan of `src/selfhost/kel/` and `examples/scripts/`, and **those directories are shared
+with `v0.2.3`**. Their commits are therefore an input to this line's pinned numbers — the same
+cross-branch shape that broke their test, pointing the other way.
+
+**It has never bitten, and the reason is the absorption discipline rather than luck.** Every
+absorption here asks *"corpus inputs touched?"* before predicting anything, and **that question IS the
+widest-input question**. It is why every corpus-derived prediction has held across twenty-six
+absorptions: when the answer is "none touched", the pins are known safe **before** the merge rather
+than found safe after it.
+
+**What the rule adds is the reason.** The check was already being run; it was being run as a habit
+rather than as an argument, and a habit does not tell you when it stops applying. Now it does: the day
+a stage source or example script moves, every corpus-derived figure in the handoff is a prediction
+again.
+
+### Absorption 26: three predictions, all agreeing
+
+The other line forecast the delta before merging. **This line measured the incoming diff
+independently rather than adopting it** — no source change, no corpus input, one new test in an
+existing file, gated on a default feature — and formed the same figures. Outcome: **workspace
+2480/0/89, exit 0**, as both said.
+
+**Agreement is worth recording precisely because a divergence would have been a finding about one of
+us.** A forecast supplied by the party who wrote the change is evidence about intent; only the
+measurement is evidence about what arrived.
+
+## 2026-08-28 — [v0.3.0] The red cleared, and what closed it was a run rather than a merge
+
+**PR #314 LANDED AND THE BLOCKAGE ENDED, BUT NOT BECAUSE THE FIX EXISTED.** Absorption 25 brought it
+in; the workspace suite was then **run** and reported **2479 passed, 0 failed, 89 binaries, exit 0**
+with zero `FAILED` lines. **That run is what closed it.**
+
+The distinction is not pedantry. The `v0.2.3` line said outright that it would not claim to have
+cleared a suite it had not seen, and the same applies here with more force: a suite not re-run after
+absorbing seven commits is a suite whose state is unknown, whatever changed upstream.
+
+**The prediction's arithmetic was written before the merge and held.** The count moved for two
+reasons — three new tests, and one test that had been failing now passing — so the prediction was
+stated as `2475 + 1 + 3 = 2479` rather than as a single number. Both halves landed.
+
+### Nine commits waited four iterations rather than go through `--no-verify`
+
+That was the trade, and it cost nothing but patience. The gate was correct that the suite was red;
+bypassing it would have published a branch its own gate rejected, and established that a red
+attributed to someone else is a red worth skipping. **The work was never at risk — it was committed
+throughout — and the only thing withheld was publication.**
+
+### What the defect was, kept because the shape recurs
+
+A test pinned an exact answer while its **input was a directory scan**. **A directory scan is not a
+corpus; it is whatever the branch happens to contain.** This line's six witness scripts narrowed the
+residue, so the pin was correct on one branch and wrong on the other.
+
+**This line's `src/`+`tests/` byte-identical invariant could never have caught it**, because the input
+lived outside the region the expectation was pinned in. That framing is the other line's, and it is
+the part worth carrying: an invariant protects a region, and an expectation is only as stable as the
+widest input it depends on.
+
+## 2026-08-28 — [v0.3.0] There is no yield boundary: a tail yield is lowered as a return
+
+**LAST INCREMENT NAMED A GAP THAT DOES NOT EXIST AS DESCRIBED.** It recorded that *"`yield a
+composite, tail` lowers and nothing executes it"* and called the untested code *"a composite crossing
+the yield boundary"*. **There is no yield boundary in that lowering**, and the probe written to
+examine it failed on its own `expect` message, which had anticipated exactly this: *"if it does not,
+the lowering suspends some other way and this probe is aimed wrongly"*.
+
+**Measured**: the lowered module contains only `kel_chunk_0` and `llvm.trap`. **No host yield hook is
+declared.** The entry **returns a pointer into the caller-provided region** — classified rather than
+assumed, by checking the returned address against the base and length of the buffer the host itself
+passed. A single yield in tail position, with nothing after it, is lowered as a **return**.
+
+### The witness, on bodies rather than handles
+
+The first comparison attempt read the reference's `Debug` text for the field values. That text shows
+the **arena handle**, not the body, so the check failed — for the right reason. Resolving the handle
+through the arena gives the bytes:
+
+```
+reference body: [6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+native body   : [6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+```
+
+**Comparing an address to an address would have proved nothing about marshalling.** The gap is closed
+on the property that matters, and the marshalling exercised is the composite-RETURN ABI, which
+`composite_return_aliasing.rs` already covers — so the "untested arm" was smaller than claimed.
+
+### The semantic difference worth carrying
+
+**The reference SUSPENDS where the native side RETURNS**, and they agree on the value. That is what
+the degenerate-yield path means, and it is a fact to know before reasoning about suspension: the two
+sides differ in control flow while agreeing on what the host observes, which is sound for a stream
+the host drives tick by tick.
+
+### What is genuinely still uncovered, narrowed
+
+**Sequence semantics for a composite-yielding stream** — the order and count of its yields. That
+cannot be covered until such a stream lowers at all, which needs a yield that is not in tail position,
+which is refused. So it is blocked rather than merely unwritten, and the test that used to overclaim
+now says exactly this.
+
+## 2026-08-28 — [v0.3.0] A peer's rule, applied to my own work, found a test that proved nothing
+
+**THE RULE, FROM THE `v0.2.3` LINE**: a guard can be unfalsifiable **by its own precondition** — their
+subset assertion was made automatic by the existence check four lines above it. Their framing of when
+the discipline lapses is the part worth keeping: **a bonus net bolted onto a repair**, because the
+repair already feels finished and the incentive to stop looking is strongest there.
+
+**APPLIED HERE, IT FOUND ONE IMMEDIATELY, WRITTEN THIS SESSION.** A test named for the region canary
+being able to fire, whose doc said *"the region buffer is deliberately under-provisioned to a single
+word and the canary placed where the lowering will reach past it"*. **The body did none of that.** It
+asserted that the subject demanded more than one word of region, and ended. Its assertion message even
+referred to "the under-provisioning below" — code that was never written.
+
+**Worse than no test, because it reads as evidence.** A passing test called "the canary can fire" is
+exactly what a reader consults to decide whether the canary can fire.
+
+### The fix, and why it is not the obvious one
+
+Actually under-provisioning and calling would induce a real out-of-bounds write inside JIT-compiled
+code — undefined behaviour in the test process rather than a test. What can be shown safely is that
+**the detection fires**: the canary check is now a function the call path uses, and a test corrupts
+each of the three buffers in turn and asserts it names the right one, **with a negative case** so it
+cannot be satisfied by a function that always reports something.
+
+The claim is narrower than the old name promised and it is true, which is the trade.
+
+### Then a second guard caught the first
+
+Renaming the test broke `comment_citations.rs`, which refuses a comment citing an identifier that
+resolves to nothing — *"a citation to a test that was never written CANNOT FAIL, so it reads as
+coverage while being none"*. **The historical name in the new doc comment was such a citation.** It is
+now given without backticks, deliberately, with the reason stated in place.
+
+**Two guards, one written by each line, catching a defect and then its repair.** That is what the
+instruments are for, and neither would have fired on prose alone.
+
+## 2026-08-28 — [v0.3.0] The stream frontier is tail position, not composites
+
+**BOTH OF THIS LINE'S EARLIER DESCRIPTIONS OF STREAM SUPPORT WERE WRONG, AND SO WAS THE GUESS THAT
+REPLACED THEM.** `Stream` was called unsupported outright; then, when a minimal `loop main` was found
+to lower, the natural next guess was that **composites** are what `13_telemetry_stream.kel` cannot get
+past, since composites are what it yields. **Measured, that is false.**
+
+| shape | result |
+|---|---|
+| yield in tail position | **LOWERS** |
+| **yield a composite, tail** | **LOWERS** |
+| yield calling a function | **LOWERS** |
+| yield then more code | REFUSED — `Stream` |
+| two yields in sequence | REFUSED — `Stream` |
+| yield inside an `if` | REFUSED — `Stream` |
+| yield inside a `for` | REFUSED — `Stream` |
+| yield a composite inside a `for` | REFUSED — `Stream` |
+
+**The discriminator is TAIL POSITION.** A composite yielded in tail position lowers; a `Word` yielded
+with code after it does not. That one pair separates the two candidate explanations, and it is the
+pair the matrix exists to contain. It also rules out "exactly one yield": *yield then more code* has
+exactly one and is refused.
+
+**Zero of the eight shapes were rejected by the reference**, so every row is a statement about the
+backend rather than about the language.
+
+### What it means for the open soundness item
+
+The yield-escape refusal guards a loop-body composite handed to the host. **The shape that would
+trigger it — a composite yielded inside a `for` — is still refused for `Stream`.** So the refusal
+remains **shadowed**: a precaution, not yet load-bearing. That is now asserted by a test that fails
+the day it stops being true, rather than being an inference from an unrelated corpus figure.
+
+### A shape that lowers with nothing executing it
+
+**`yield a composite, tail` lowers, and nothing in the tree runs it.** The suspension differential's
+subjects all yield `Word` — measured, zero composite-yielding subjects — so a composite crossing the
+yield boundary is marshalled by code no test has executed.
+
+This is **not** the cross-iteration hazard: a tail-yielded composite is built once and no later
+iteration overwrites it. It is plain untested lowering, the same class this line has been closing
+elsewhere, and it is **named rather than fixed** because a witness needs a suspension harness that
+drives composite yields and the existing one does not.
+
+### The method that keeps working
+
+Vary more than one property, and include the pair that separates the explanations. A matrix of
+composite-versus-`Word` alone would have shown composites failing and concluded the wrong thing; the
+tail-position axis is what made the answer attributable. **Guessing was free here only because the
+guess was written down before the measurement.**
+
+### And the workspace suite went red, for a reason neither line can call a defect
+
+Absorption 24 brought in `op_tag_tables.rs`, whose pinned set of unexercised op tags **is
+branch-dependent**. On `v0.3.0` the residue is `{checkedneg}` where the pin says four — *fewer*, which
+the assertion's own message calls a coverage gain. The cause is this line's own
+`opcode_witness.kel`: its `byte_mix` does **Byte** arithmetic, which lowers to the unchecked
+Add/Sub/Mul, and its `-prod` is `Neg` rather than `CheckedNeg`.
+
+**This line will not fix it.** `src/` and `tests/` are kept byte-identical to `v0.2.3`, and the
+ownership check run at every absorption asserts that; editing their test would destroy the property
+those checks rest on. Reported to `keleusma-02` with the cause, and recorded here as a known red with
+its owner named — **not as a green suite, and not as a backend defect.**
+
+## 2026-08-28 — [v0.3.0] "Unproven" meant unproven from the corpus, and two of the four are simply refused
+
+**AN ARM THAT HAS NEVER RUN IS WHERE A MISCOMPILE HIDES**, so the four opcodes the census records as
+lowered-but-unexercised were asked, one at a time, what actually stands between them and a witness.
+Three of the four answers contradicted the plan I wrote before measuring.
+
+| opcode | status, measured |
+|---|---|
+| `IntToFloat` | **REFUSED by name.** `(x as Float) as Word` compiles and the backend says *"does not yet support opcode IntToFloat"* |
+| `FloatToInt` | **Unreached, behind that refusal.** The same program emits both; lowering stops at the first |
+| `Reset` | **REACHABLE, and its module LOWERS.** A minimal `loop main` is refused nothing |
+| `IsStruct` | No producer found by this search either, and the reference's arm accepts only a **Boxed** body |
+
+### The plan was wrong about `Reset`, and measuring is what caught it
+
+The brief guessed `Reset` was gated behind the `Stream` refusal and therefore unreachable. **A
+minimal `loop main(t: Word) -> Word { yield t }` emits `Stream` and `Reset` and the backend refuses
+nothing.** `Stream` is lowered for that shape; the refusal seen on `13_telemetry_stream.kel` is about
+that module, not about the opcode. Two increments ago this line described `Stream` as unsupported
+outright — true of one module, not of the opcode.
+
+### The census was not wrong, and saying so matters
+
+Its own line reads *"unproven FROM THE CORPUS, which is the only population this..."*. **"Never
+visited" is a claim about the shipped corpus, not about the test suite.** The suspension differential
+already drives **15** `loop main` subjects through both the native lowering and the reference,
+comparing whole yielded sequences — and every such program emits `Reset`. So `Reset` has had an
+execution witness all along, in a population the census does not survey.
+
+**That linkage is checked, not cited.** A test reads the sibling harness for its subjects and
+separately confirms such a program emits `Reset`. Citing a neighbouring file without checking it is
+how a claim outlives the file it describes.
+
+### `IsStruct` is blocked structurally, and the search is recorded rather than the conclusion
+
+The reference's arm matches a **Boxed** struct body and treats a flat one as a mis-compilation, and
+**after B28 the corpus contains zero non-`Flat` composites**. So even a witness built by injecting the
+opcode into real bytecode would compare the backend against a reference fault rather than a value.
+
+The `v0.2.3` line recorded its own bounded producer search in `src/compiler.rs`, together with the
+standard it adopted after a producerless claim there was falsified within the hour: **record the
+search, not the conclusion.** Two further shapes were tried here and both are refused by the type
+checker. **That is a fact about this search, not a proof of unreachability**, and it is written that
+way.
+
+### Nothing was widened to make a test possible
+
+The float guard blocks the conversion witness. That IS the finding, and relaxing it to reach an
+unexercised arm would be widening a compiler on the strength of wanting a test.
+
+## 2026-08-28 — [v0.3.0] The coverage figure I published last increment was two chunks high
+
+**THE SURVIVORS ARE NAMED, AND NAMING THEM EXPOSED A DEFECT IN THE INSTRUMENT THAT COUNTS THEM.**
+The coverage census reported the remaining frontier as one "B (sub-coroutines)" and one "other".
+**"Other" is not a cause.** Asked directly, the backend names all three refusals:
+
+| where | reason |
+|---|---|
+| `13_telemetry_stream.kel::main` | `Stream` unsupported |
+| `float_witness.kel::<module>` | a float constant reaches the module without appearing in any signature |
+| `refused_witness.kel::len_witness` | `Len` unsupported |
+
+**Three refusals, where the coverage figure implied two.** That discrepancy was the finding.
+
+### A module-level refusal marked no chunk at all
+
+`module_refusals` reports a per-chunk refusal against the CHUNK NAME and a whole-module refusal
+against a symbol that is no chunk's name. `spike_corpus_coverage` marked a chunk unlowerable by
+matching that symbol against the chunk name — so **a module the backend cannot lower at all
+contributed every one of its chunks to the LOWERABLE count.**
+
+Measured: `float_witness.kel` has two chunks, both counted as lowerable while the module produces no
+code whatsoever.
+
+$$
+\textbf{1072 of 1074 was two chunks high. The honest figure is 1070 of 1074.}
+$$
+
+### What survives of last increment's claim, stated precisely
+
+**The delta was right; the level was wrong.** The float refusal is unrelated to the width
+certification, so the two-chunk overstatement applies equally to the before and after figures. The
+certification genuinely lifted exactly two chunks — **1068 → 1070**, not 1070 → 1072. The execution
+evidence is untouched: the corpus differential still moved 59 → 61 modules executed and agreeing,
+and that figure never depended on this census.
+
+**I published the overstated level in a commit message and in four documents.** Corrected forward,
+with the superseded figures quoted rather than deleted.
+
+### Why this class keeps appearing
+
+The census asks one instrument (`module_refusals`) a question and interprets the answer with an
+assumption it never checked — that every refusal names a chunk. **The assumption was invisible
+because the answer was well-formed.** The same shape as a `Const` index read as a value, or the peak
+model read as pop counts: the data arrives, it parses, and it means something else.
+
+**The cross-check that found it was asking two instruments the same question and comparing.** The
+refusal sweep says three; the coverage census implied two. Neither alone was suspicious.
+
+## 2026-08-28 — [v0.3.0] I made the mistake this repository had already recorded
+
+**`Op::stack_growth` AND `Op::stack_shrink` ARE NOT POP AND PUSH COUNTS**, and their own documentation
+says so: *"Not a pop count... For true pop and push counts use `op_depth_effect`."* They are the
+operand-stack PEAK model — a transient reach and a net. Under it `CheckedAdd` reports growth 1 and
+shrink 0, when it in fact pops two and pushes three.
+
+**The previous increment built a shadow stack on them and published a conclusion from it.** The same
+file's doc comment records that `text_size` made this exact mistake and "desynchronised its shadow
+stack on every pop-and-push instruction". **It was written down, and I did it anyway.**
+
+**The wrong walk gave a wrong answer where it mattered**: it attributed the loop increment's stored
+value to a `GetLocal` rather than to the arithmetic that produced it — which is precisely the
+classification the certification below depends on. Had it gone unnoticed, the certification would
+have been justified for the wrong reason or abandoned as impossible.
+
+**The earlier published conclusion was re-derived, not assumed to survive.** With `op_depth_effect`
+the answer is unchanged: operand 1 at each refused site is produced by a `GetLocal` of a
+multiply-written local. **The method was wrong; that particular conclusion was not.** Both facts are
+recorded, because "it came out the same" is only knowable by checking.
+
+### The fixpoint that was not needed
+
+The recorded plan said lifting the refusal required a fixpoint over local widths, since the
+increment's width appears to depend on the local being analysed. **`push_triple` pushes the
+arithmetic result at a LITERAL `Width::Scalar(8)`, independent of its operands.** So the induction
+variable's two writes — a `Const` and an arithmetic result — depend on nothing, the circularity does
+not exist, and a single pre-pass suffices. **Reading the arm removed a whole increment of planned
+work.**
+
+### The narrowing, and why the old rule was right
+
+A local's width was trusted only when written at most once, because a linear walk cannot see a back
+edge. **That is sound, and "cannot see a back edge" only matters when the writes DISAGREE.** If every
+write stores the same width, that is the width whichever write reached the read. Certification
+requires every write's producer to fix its width by the instruction alone, and **one unclassifiable
+write sinks the local** rather than being ignored as though the rest agreed. A multi-push instruction
+is distinguished by which push is taken: a triple's flag is not its arithmetic result.
+
+**Measured: 1070 → 1072 of 1074 chunks (99.6% → 99.8%), opcode instances 89741 → 89854 (99.9%).**
+
+**And coverage is not the evidence.** The corpus differential now reports **61 executed and agreeing,
+up from 59, with exempt down from 14 to 12** — the two newly-admitted modules run against the
+reference and agree. A wrong width would have raised coverage just the same and mispacked silently.
+
+### A negative test that asserted something false
+
+The obvious refusing subject — a loop variable bound from an array element — **does not exercise the
+certification at all**. The compiler writes that binding once, so the old rule already trusted it. The
+test asserting it would be refused was asserting a falsehood, and it failed. It is now a test of what
+is actually true, and the refusing path is unit-tested directly, since no source program this line can
+write reaches it.
 
 ## 2026-08-28 — The third type-channel extraction, and the data was already on the wire
 
@@ -9329,6 +15197,116 @@ binaries, each segment with its own exit status.**
 a struct, making the corpus alphabetical, and re-admitting trait and impl. The first three fire the
 agreement test; the fourth fires only the second test, and that asymmetry is the finding rather
 than an inconvenience.
+## 2026-08-28 — [v0.3.0] The reverted change came back, with the harness that could judge it
+
+**LAST INCREMENT REVERTED A SOUND CHANGE BECAUSE NOTHING COULD EXECUTE IT. THIS ONE BUILT THE THING
+THAT CAN.** Seeding an `Op::Call` result's packed width from `Module::signatures` — the exact
+analogue of what the native path already does with `native_return_shapes` — was correct, changed no
+corpus chunk, and had no possible test: `lower_chunk` refuses `Op::Call` outright, so no inline
+program could contain a call, and the whole-module differentials are file-driven.
+
+`module_source_differential.rs` joins two halves that already existed: `lower_module` with the entry
+ABI on one side, `Vm::call` on the other. A multi-function program written as a string now runs both
+ways and is compared.
+
+### The ABI assertion earned its place immediately
+
+The harness was written asserting the four-pointer entry signature, copied from the file-driven
+differential. **It fired on the first run**: a pure-`Word` two-function program emits a
+**one-parameter** entry. The trailing pointers — shared buffer, private slots, composite region — are
+**all-or-nothing**, appended only when the module declares data or builds a composite.
+
+**Calling that one-parameter function through a four-pointer signature is undefined behaviour that
+presents as a SIGSEGV inside JIT-compiled code, with no stack and no indication of which side is
+wrong.** The assertion turned that into a sentence. It is now a derived check — the arity must be the
+chunk's own parameter count, or that plus three — rather than a constant.
+
+### The evidence that matters is the failing case, not the passing one
+
+The case the harness was built for:
+
+```keleusma
+struct P { a: Word, b: Word }
+fn f(x: Word) -> Word { x * 3 }
+fn main(v: Word) -> Word { let p = P { a: f(v), b: v }; p.a + p.b }
+```
+
+**Run before re-landing the seeding, it is refused** — "operand 1 of 2 ... unknown packed width",
+which is `f(v)`. With the seeding it lowers and agrees with the reference across four inputs.
+**A test that passes is weak evidence; a test that fails without the change is the point**, and that
+order was deliberate.
+
+### Guards that can fire, because two failure modes are invisible to a value comparison
+
+**A uniform offset error inside a region is value-invariant** — reads and writes shift together, so
+the round trip returns the right answer. Canary words past every caller-provided buffer are the only
+thing that sees it. And a test asserts the comparison itself can report a disagreement, by running
+the native side on one input and the reference on another: without it, every agreement above would be
+consistent with a harness that compares nothing.
+
+### What this does NOT do, said plainly
+
+**It does not lift the two composite refusals.** Coverage stays at 1070 of 1074. Those are blocked by
+the multi-write local rule, which needs a fixpoint over local widths. The neighbouring `Call` was not
+their cause — and, correcting the previous entry's framing, it was not innocent everywhere either:
+the gap it pointed at was real, it simply lay somewhere else.
+
+## 2026-08-28 — [v0.3.0] Adjacency is not provenance: the Call was innocent
+
+**THE INSTRUCTION IMMEDIATELY BEFORE BOTH REFUSED COMPOSITE SITES WAS A `Call`, AND IT WAS NOT THE
+CAUSE.** `12_sensor_window.kel::main` op 23 and `14_frame_log.kel::main` op 24 are refused for an
+unknown operand width. The op before each is a `Call` whose callee declares `ret = Scalar`, and the
+backend seeds NATIVE result widths from `native_return_shapes` while never consulting
+`Module::signatures` for chunk calls — a real, unexplained asymmetry sitting one instruction from the
+crime scene.
+
+**Seeding it was implemented, and the refusal did not move.** Coverage stayed at 1070 of 1074. The
+adjacent instruction was not the producer of the offending operand.
+
+### What the operand actually is, derived rather than guessed
+
+The refusal was first made to name WHICH operand is unknown: **the first of three**. Then the
+operand stack was simulated from the instruction set's own published `stack_growth`/`stack_shrink`,
+which identifies the producer exactly:
+
+| module | operand 1 produced at | by | writes to that local |
+|---|---|---|---|
+| `12_sensor_window.kel` | op 15 | `GetLocal(1)` | **2** |
+| `14_frame_log.kel` | op 15 | `GetLocal(2)` | **2** |
+
+Both are the `for` loop's induction variable. **A local's width is trusted only when the chunk writes
+it at most once**, and an induction variable is written twice — initialisation and increment. The
+rule is deliberate and sound: a linear scan cannot see a back edge, so trusting it would read the
+local at the width of whichever write appears earlier in the text and mispack every iteration after
+the first.
+
+**THE FIRST WALK WAS A HEURISTIC AND IT PRODUCED A CONFIDENT WRONG ANSWER.** "Take the nearest
+preceding `GetLocal`" picked the loop CONDITION's read and reported a write count for the wrong
+local, which would have made this entry claim the cause is a singly-written local. **The published
+stack-effect tables were right there.** Prefer a published table to a plausible walk — the walk fails
+silently and looks like an answer.
+
+### A sound change, reverted on purpose
+
+The call-result seeding is correct and closes a genuine asymmetry. It was reverted anyway:
+
+- **It changed no corpus chunk**, so nothing executes it.
+- **Nothing CAN execute it.** The only source-string differential lowers a single chunk and therefore
+  refuses `Op::Call` outright; the whole-module differentials are file-driven through per-file sizing
+  helpers.
+- **A behaviour-widening change to a compiler with no execution-backed check is how a silent mispack
+  ships.**
+
+The reasoning is recorded at the instruction arm itself rather than only in a document, so the next
+reader meets it where the decision is made. **The prerequisite is a source-string whole-module
+differential harness**, and that is now the named next capability rather than a vague wish.
+
+### What would actually lift it
+
+A fixpoint over local widths. The increment's width depends on the very local being analysed, so one
+pass cannot settle it; a monotone analysis can, since each local moves at most from undefined to a
+concrete width to unknown. **Not attempted** — it is a real analysis with real mispack risk and
+deserves its own increment with its own differential evidence.
 
 ## 2026-08-28 — The op-tag tables agree, and now something checks that they do
 
@@ -9405,6 +15383,121 @@ refuses on divergence, so a table defect would surface as a loud error rather th
 Exposure is to direct callers of the `self_host_compile*` entry points. And a renumbering applied
 consistently across the emitter and both decoders is **harmless** — the op word is internal to the
 pipeline and is not a wire format — so the guards are written to pass on one, deliberately.
+## 2026-08-27 — [v0.3.0] I said the gate did not cover us; it did, and nobody ran it
+
+**A CLAIM ABOUT INFRASTRUCTURE WAS PUBLISHED WITHOUT READING THE INFRASTRUCTURE.** The previous
+increment reported, in a commit message and three documents, that *"neither `scripts/release-gate.sh`
+nor CI covers this subproject"*. **False.** That script runs `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings`, `cargo test` and `RUSTDOCFLAGS="-D warnings" cargo doc` over
+`native_codegen/`, in a step whose own label reads *"gated nowhere else"*. It is conditional on an
+LLVM 22.1 install and announces itself as skipped otherwise — **and that install is present on this
+machine**. Four lines of `grep` would have settled it.
+
+**The true cause is worse than the one it replaces.** The coverage existed and was bypassed: the
+everyday loop substituted `cargo test` for the gate. So the finding is not a missing check but an
+unrun one, which is the failure mode this repository has already shipped once, when V0.2.1 went out
+with a red Doc job.
+
+**Running the missing step immediately paid.** `cargo doc -D warnings` failed on a public item
+linking to a private one — a defect **invisible to both `cargo test` and `cargo clippy`**, which is
+exactly why that step exists. It predated this session's work.
+
+### The interprocedural residual: measured, and empty
+
+The yield-escape refusal reads one chunk. A composite built in a loop, returned, and yielded by the
+caller is the same defect and was named as open without ever being measured. **An unmeasured residual
+is indistinguishable from an unbounded one.**
+
+Followed the call graph to a fixpoint, with a round bound of `chunks.len()` so **termination is
+structural rather than dependent on the graph being acyclic** — mutual recursion is expressible, and
+a test builds a cyclic graph by hand to prove the walk returns.
+
+Crude result over 14 loop-constructing chunks: **0 by call, 2 by return**. Both return candidates
+were then **ruled out by a scalar boundary**: a `loop` chunk's declared return type IS what it
+yields, and `piano_roll_0`/`piano_roll_1` yield `Word`. Confirmed independently by reading the
+source, whose `main` yields the literal `0`. **Refined residual: zero.**
+
+**THE REFINEMENT IS ITSELF GUARDED.** A test asserts the crude count strictly exceeds the refined
+one, because a refinement that ruled nothing out would leave the zero resting entirely on the crude
+test while looking like precision. **`Top` counts as "can carry a composite"** — an absent signature
+entry must not read as a safety claim.
+
+**Deliberately NOT refused, and the reason is stated rather than implied.** The refusal would stack
+three over-approximations with no data flow traced at any of them, rejecting sound programs on the
+strength of "a callee can yield", and there is no instance to justify that. The class also cannot
+occur today: everything that could yield a composite is behind the `Stream` refusal. **Both
+tripwires now point at the same moment — `Stream` landing.**
+
+## 2026-08-27 — [v0.3.0] The reason the composite-reuse defect stayed quiet was not the recorded one
+
+**THE PREMISE WAS FALSE AND HAD BEEN RESTATED IN TWO DOCUMENTS.** Both this line's handoff and the
+obligation section said the cross-iteration slot-reuse defect was latent because **no corpus module
+has the escaping shape**. `examples/scripts/13_telemetry_stream.kel` has it, was written to have it,
+and says so in its own header: *"the value LEAVES the iteration through `yield`, so the host may
+still be holding it when the next iteration builds its successor."* Chunk 0, built at op 24, yielded
+at op 25.
+
+**Found by measuring rather than by reading.** A predicate written to over-approximate the shape was
+run over the corpus expecting zero, and returned one. The expectation was the recorded claim; the
+measurement contradicted it. **Had the census asserted nothing and merely printed, the contradiction
+would have been a line of output nobody read.**
+
+### The real reason, asked of the backend instead of assumed
+
+```
+main: native lowering does not yet support opcode Stream
+```
+
+Every chunk that can carry the shape is a `loop` chunk, and a `loop` chunk opens with `Op::Stream`,
+which this backend refuses. **The safety is accidental: it rests on an unimplemented opcode, not on
+escape reasoning, and it expires the day `Stream` lowers.** That is a materially worse position than
+the one recorded, because the recorded one would have been repaired by a corpus change while this one
+is repaired by a *feature landing on the roadmap*.
+
+### The disposition, and why it does not reopen the design tension
+
+`LowerError::YieldEscapingLoopComposite`, returned at the placement itself rather than in a
+preflight, so the next reader of that arm meets the constraint where the decision is made.
+
+**The recorded objection to a confinement verdict reaching the planner is that a wrong verdict would
+miscompile. It does not reach this gate.** The predicate over-approximates in one direction and its
+result is used to REFUSE, never to place. A verdict wrong in the permissive direction rejects a sound
+program loudly; placement still consumes nothing. **The immunity and the guard act at different
+points, so both are available** — which is a narrower answer than the tension implied, and worth
+recording as such rather than as a resolution of it.
+
+**Cost, measured over 91 modules and 1117 chunks: 1 chunk carries the shape, 1 was already refused,
+0 newly refused.** The gate is free today.
+
+### A guard that cannot fire, caught before it was believed
+
+The refusal is **shadowed**: `Stream` is refused first, so it cannot fire through `lower_module` on
+unmutated input. Rather than leave that in a comment, two tests were written. One asserts the
+shadowing and is a **tripwire that fails the day `Stream` lands**, forcing whoever lands it to
+confirm this refusal fires in its place. The other **removes the `Stream` op from compiled bytecode**
+and observes `lower_module` return the yield-escape refusal — because a guard whose only evidence is
+a non-empty predicate result says nothing about whether the lowering consults it.
+
+**NOT A DISCHARGE.** Slot reuse is unchanged, and the interprocedural case — built in a loop,
+returned, yielded by the caller — is still invisible to a single-chunk predicate. The obligation is
+narrowed and guarded, not closed, and the handoff says so.
+
+### `native_codegen` was never clippy-clean and nothing checked it
+
+Running `clippy -D warnings` over the subproject for the first time found four warnings, all from
+this line's own earlier work. One was substantive: `under_with` in `verifier_heap_mechanism.rs` was
+counted and never reported, so a census printed one half of a symmetric comparison. **Fixed by
+printing it, not by deleting the variable** — the count was the intent and the missing line was the
+defect.
+
+**⚠ AND THE CAUSE GIVEN HERE WAS WRONG, CORRECTED SAME DAY.** The superseded sentence read: *"The
+local gate script does not run clippy over `native_codegen`, which is why four warnings accumulated
+unseen."* `scripts/release-gate.sh` **does** run fmt, clippy `-D warnings`, tests and
+`cargo doc -D warnings` over it, in a step labelled *"gated nowhere else"*, conditional on an LLVM
+install that is present here. **The gate was simply never run**; `cargo test` was substituted for it.
+Running the missing step immediately found a real `cargo doc -D warnings` failure — a public item
+linking to a private one — that neither test nor clippy can see. **A claim about infrastructure was
+published without reading the infrastructure, four lines of `grep` away.**
 
 ## 2026-08-27 — Two of five type-channel extractions are moved
 
@@ -9443,6 +15536,831 @@ it has already handled.**
 classifier — new work, not a re-projection of data the driver already holds — so it stays in
 Rust and the test says so rather than implying the extraction is fully moved.
 
+**[v0.3.0] THE TOPOLOGY RULING LANDED, AND THE NEXT ABSORPTION IMMEDIATELY TURNED A GREEN TEST INTO
+AN HONEST RED (2026-08-26).**
+
+The operator ruled the topology question that had blocked this line for three sessions: **`proofs` ->
+`v0.2.X` -> `v0.3.X`, converging into one branch later.** The word is *sync*; no mechanism is
+mandated. Of the three readings this line recorded, **the third was right** — the relayed "rebase"
+concerned a different edge. **No topology change, so the ownership anchor survives intact**, which
+was the whole reason not to guess. PR #280 merged absorptions 6-11 into `v0.3.0`; divergence 0.
+
+Then `v0.2.3` had already moved again, and absorption 12 (#279) went in.
+
+### The red, and why it is the good kind
+
+`native_codegen` went **276/0/52 -> 275/1/52**. `the_single_head_reconstruct_seed_drives_the_stage`
+asserted `nodes > 0` and got **`-905`** — which decodes, via their own stated encoding
+`rc_fail_base() - code`, to **`rc_range_arity`**: *a record range did not reduce to exactly one node.*
+
+**THE DECISIVE MEASUREMENT WAS TAKEN IN A THROWAWAY WORKTREE AT `origin/v0.3.0`**, because the
+question "is this their regression or my test?" cannot be answered from their commit message:
+
+> before: `nodes reconstructed 4`   after: `-905`
+
+**The 4 was wrong.** Their own comment says the mechanism: `reconstruct_range` read `stack[0]`
+unconditionally, so a range leaving zero nodes **returned a stale index**. My probe asserted
+`nodes > 0`, received a stale stack index that happened to be positive, and **passed for weeks on
+garbage.**
+
+**A PASSING ASSERTION OVER AN UNVALIDATED VALUE IS NOT EVIDENCE.** The assertion was `> 0` when the
+property was *"is a real node count"*, and nothing in the test could tell those apart. That is the
+same shape as this line's other instrument failures: **the check was cheaper than the property it
+stood for, and the gap was invisible while the cheap check passed.**
+
+### Why it is a finding about the stage rather than about my seed
+
+The probe hand-builds nothing. It uses `parse_functions`, `reconstruct_category`, and
+`seed_reconstruct_shared` — **all reference-driver API** — over a **shipped corpus file**. Their
+driver's output, refused by their stage.
+
+### The widening, and the line I had to be careful not to cross
+
+A single-subject probe cannot distinguish "one corpus file is unreconstructible" from "the stage has
+stopped working". Different owners, same output. So the probe now drives **every** qualifying
+subject:
+
+```text
+  DROVE   11_signed.kel                3 node(s)
+  REFUSED 08_method_dispatch.kel       rc_range_arity
+  REFUSED external_native_witness.kel  rc_range_arity
+  1 of 3 qualifying subjects drive the stage
+```
+
+Not stage-wide. **Two of three real shipped single-head functions cannot be reconstructed**, and it
+took #279 naming the cause to make that visible.
+
+**WIDENING A SUBJECT SET TO RECOVER A GREEN IS SUBJECT-SHOPPING.** The only thing separating this
+from that is that **every refusal is printed with its named cause** — so the test reports the gap it
+no longer fails on. If a refusal ever leaves that output without leaving the tree, the test has
+become a liar, and that is written in the test rather than only here.
+
+### The hand-off is pinned as an EQUALITY, deliberately
+
+`refused.len() == 2`, not `<= 2`. When they repair `reconstruct_range`, the set shrinks and **the
+assertion fires and names them.** This line previously attached a cross-tree guard to an observable
+that the other line's repair would *remove*, making it unfireable; that mistake is recorded above and
+is not being repeated.
+
+### The census discipline, third time
+
+Predicted before measuring: +8 non-generic functions in `reconstruct.kel` (24 -> 32), so
+`bound_transfer` 1047 -> **1055**. Measured: **32** and **1055**. Every other census held. **The 1:1
+mapping has now held three times and is still a property of the population, not of the instrument.**
+
+---
+
+**[v0.3.0] THE HIGH-RISK ABSORPTION LANDED CLEAN, AND THE PROVENANCE AUDIT WAS FOUND TO HAVE
+FABRICATED A NUMBER WHILE FIXING FABRICATED NUMBERS (2026-08-26).**
+
+Absorption 11 at `1627e65b`, five commits, #278's bare-`for` support. This was the absorption the
+handoff had flagged at absorption 10 as the highest-risk of the exchange, because it is **the first
+`v0.2.3` change to touch this line's Order-1 stage sources**, `parse.kel` and `reconstruct.kel`. The
+standing instruction was *re-derive every census, carry nothing across it.*
+
+**IT LANDED CLEAN, AND THE ADVANCE PREDICTION WAS RIGHT.** One journal conflict, append/append,
+resolved by keeping both. Both suites held exactly — workspace 2430/0/83, `native_codegen` 276/0/52,
+both signals agreeing. Of the five censuses, four re-derived identically and `bound_transfer` moved
+**1045 -> 1047**, which is what I recorded as the prediction *before* running it: `parse.kel` loses
+`pe_bare_for` and gains two functions, `reconstruct.kel` gains one, net +2.
+
+**THE 1:1 MAPPING HAS NOW HELD TWICE AND IS STILL NOT A RULE.** Absorption 9's +1-function/+1-
+comparison was written up here as "a coincidence that reads as a rule." Absorption 11 did it again.
+Two confirmations make the reading more tempting and no more true: the count is per chunk AFTER
+MONOMORPHISATION, so 1:1 survives exactly as long as every added function is non-generic and singly
+specialised. **The stage sources happen to be non-generic. That is a property of the population, not
+of the instrument**, and the first generic addition ends it.
+
+**THE FLAGGED EXPOSURE DID NOT FIRE, AND KNOWING WHY MATTERS.** `fold_record` changes the emit site
+every statement flows through, so the opcode censuses were named in advance as where to look first.
+Both re-derived identically. Their claim that the encoding of existing kinds was unchanged holds
+against this line's instruments, which is a genuine cross-line confirmation rather than a repetition
+of their report.
+
+**A CENSUS THAT CANNOT MOVE IS MEASURING THE HARNESS.** The Order-1 gate's 1680 result comparisons
+did not budge even though two of its twelve stage sources changed — correct, because the figure is
+fixed by the driver's tick count, not by the subject's size. Recorded in the handoff so nobody reads
+that stability as insensitivity. **A figure that holds across a change to its own subject deserves an
+explanation, not congratulation.**
+
+### The finding that is actually about method
+
+The handoff carried "**32 commits ahead of `v0.3.0`**" in its top blocking box, as the *cost of
+holding* argument put to the operator. **No measure reproduces it.** Nine were tried at the exact
+commit that introduced it: all (61), first-parent (28), no-merges (40), merges-only (21), and five
+path-filtered (14/44/6/14/9). **None is 32.**
+
+**IT WAS INTRODUCED BY `c0aca9a9`, whose commit message is "the handoff's Validity section was stale
+where its figures were not"** — the provenance audit itself. That commit examined every stamp in the
+file, corrected five, wrote a rule about updating stamps on unmoved figures, and **inserted a fresh
+unmeasured number while doing it.**
+
+**THE MECHANISM GENERALISES AND IT IS NOT "BE MORE CAREFUL."** *A repair pass is itself a change, and
+it enters the tree unmeasured unless the check that motivated it is re-run over its own output.* An
+audit does not cover its own product. This is the second instance on this line of a measurement
+invalidated by the act of recording it — the first was an audit whose population included its own
+record — and the two are the same shape. The remedy adopted: **state the command beside any count
+offered as evidence.** The blocking box now names three commands and their three answers, so the next
+reader can refute it in one paste rather than trusting it.
+
+The error's direction is worth stating plainly: 32 **understated** the divergence, which is now 67
+all / 29 first-parent. It weakened the argument it was offered to support. **That is luck, not
+process** — an unmeasured number is equally free to inflate.
+
+### And a defect that cost a full census cycle
+
+All five census commands were run against the main workspace and all five exited 101. The handoff's
+state-table block reads `cd native_codegen && cargo test ...`, then "AND THE MAIN WORKSPACE, which CI
+does gate: ...", then lists the five censuses **with no directory re-established.** A reader carries
+forward the most recent directive, which by then said main workspace.
+
+**The failure was loud** — *no test target named `bound_transfer`* — so it could not have produced a
+wrong figure, only no figure. That is the good failure mode. But ten census commands in that file
+lacked their working directory; **all ten now carry their own `cd`.** A command in a resume document
+is executed by someone with no context, and an ambient working directory is context.
+
+---
+
+**[v0.3.0] THE CROSS-TREE HAND-OFF FIRED, AND THE SAME ABSORPTION TURNED THE TREE RED FOR A REASON
+NEITHER LINE COULD SEE FROM ITS OWN TREE (2026-08-25).**
+
+Absorption 8 at `a5905b1a`, eleven commits, one append/append journal conflict resolved by keeping
+both. Two results, and they point in opposite directions.
+
+**THE HAND-OFF WORKED.** `the_other_lines_dangling_citation_is_still_dangling` failed, alone among
+nine, on exactly the absorption that carried their repair, naming its three edits. I made all three
+and deleted the guard — sixty-five lines. Neither line designed a cross-tree hand-off and this was
+the first.
+
+**The reusable part is the inversion, and my first attempt had it backwards.** Attaching it to their
+name *starting to resolve* could never fire, because their repair REMOVES the name. **To hand
+something across a tree boundary, assert the current state PERSISTS and let its ending be the
+message.** The granularity is absorption rather than their merge, which is honest rather than a
+limitation: my universe is my worktree, and the alternative is polling their branch.
+
+**AND THE SAME ABSORPTION IS RED IN THE MAIN WORKSPACE.** Their new `confinement_analysis.rs` pins
+corpus verdict counts at `(33, 17, 12, 4)`; the merged tree measures `(38, 21, 12, 5)`.
+
+**Proven rather than inferred**: six files moved aside, both pins green, 8 passed; moved back, red.
+The cause is exactly this line's six witness scripts, because **`examples/scripts/` is grown by this
+line and asserted over on theirs** — their own TASKLOG says so. Delta +5 sites, +4 confined, +1
+cannot-establish, **escapes unmoved**: six new scripts and not one new escape.
+
+**THE PART WORTH KEEPING IS THAT NEITHER LINE COULD SEE IT.** Their gate is green because they lack
+my files; mine is red because it has both. **It is the day's defect class one level out** — a
+coverage audit satisfied by its own package's prose, a citation universe vouching for prose with
+prose, and now a pin whose population a *different line* grows. The first two were visible to
+whoever looked hard enough at one tree. This one is invisible from either.
+
+Reported, not fixed; `tests/` is theirs. The one durable thing I own is a warning in
+`examples/scripts/README.md`, at the point of contact, telling whoever writes the next such test not
+to pin a count over a directory the other line grows.
+
+**I AM HOLDING THE BRANCH RATHER THAN CALLING IT GREEN**, and the reason is worth stating: the
+native suite is entirely unaffected, so running only that — the suite I own, the one I have run
+thirteen times today — would have produced a clean report on a red tree.
+
+**AND THE `v0.2.3` LINE FOUND A DEFECT IN MY DOCUMENTED PROCEDURE, NOT A REFINEMENT TO IT.** Plain
+`cargo test` stops after the first failing binary, so on a red tree the binary count is a **lower
+bound on coverage, not a measure of it**, and the failure list is whatever ran before the stop.
+Measured on this exact tree: fail-fast gave **1337 passed / 2 failed / 10 binaries**; with
+`--no-fail-fast`, **2426 passed / 2 failed / 83 binaries.**
+
+**Twelve per cent of the binaries, and both runs report "2 failed".** The truncated run is not
+obviously truncated — plausible pass count, identical failure count — and **only the binary count
+betrays it.** The blast radius really was two, but I could not have known that from the run I made.
+
+**The property that makes it nasty: on a green tree the flag changes nothing.** So the defect is
+invisible in every run except the one where it matters, and exercising the procedure never surfaces
+it. Same shape as an excuse whose retirement condition cannot occur and a guard whose observable
+cannot change — **correct on every input except the interesting one.** Both check-block commands now
+carry the flag with the reason beside them.
+
+**THEY ALSO DISCLOSED SOMETHING WORSE THAN AN UNCHECKED INSTRUMENT, AND I DECLINED TO ABSOLVE IT.**
+Their own `TASKLOG.md` already recorded this exact hazard — same directory, same failure, in their
+words *"grown by `v0.3.0` and asserted over here. My size pin at eleven broke"* — and they pinned a
+second count over it without reading it. Not a gap in verification but **a gap between what the line
+knows and what its next author reads.**
+
+What I added instead of reassurance: **my README warning and their test doc are the same move made
+from two sides, and neither of us reached for the process file.** That is evidence about where
+warnings must live — **a hazard note belongs at the site where the hazard is instantiated, not in the
+file that records that it happened.** Their TASKLOG line was true, findable, correctly written, and
+it did not work.
+
+**AND THE THIRD `tee` EXIT-0 FAILURE WAS THE WORST OF THE THREE.** `1337 passed, 2 failed, 10
+binaries` **and exit 0**, because cargo stops after a failing binary and `tee` reports its own
+status. Ten binaries of fifty-something. **The first two cost a number; this one would have cost a
+false green on a red tree**, and only summing the per-binary lines caught it.
+
+**ONE PREDICTION, CAUTIOUS AND WRONG IN THE SAFE DIRECTION.** Before merging I predicted
+`src/selfhost/kel/` unchanged would hold the Order-1 figures and that `src/compiler.rs` changing made
+`bound_transfer` the one to watch. Measured after: **1044 / 71 / 74 / 35 / 11 and 411 / 40 / 4 / 0 /
+1, every figure unmoved.** Recorded because a prediction that did not pan out is evidence about my
+model, and I have been recording only the ones that did.
+
+---
+
+---
+
+**[v0.3.0] I WROTE "DERIVE NUMBERS; DO NOT COPY THEM FORWARD" INTO THE HANDOFF THIS MORNING AND
+SHIPPED SIX STALE FIGURES INTO A NEW FILE THIS EVENING (2026-08-24).**
+
+`keleusma-02` found that their threshold table had gone stale **inside the commit that staled it** —
+measured before they widened their universe, published as the justification for the threshold choice
+in the pull request doing the widening. Every figure moved **except the one a test checks**. They
+said my diagnosis is why they looked: *prose in a data table inherits documentation's standard of
+scrutiny rather than the register's, and every other field in that table is checked by something.*
+
+**So I ran the same check here, and it is worse on my side because I have three such blocks.**
+
+| figure | published hours earlier | re-derived |
+|---|---|---|
+| threshold table, 4 / 3 / 2 words | 79·3 / 183·10 / 407·16 | **92·5 / 209·12 / 450·19** |
+| permissiveness | 203 / 172 / 10 | **208 / 173 / 16** |
+| string-continuation class, load-bearing | **0 of 205** | **3 of 208** |
+
+**Every one had moved.** In a package where every other assertion is a test, in a file I wrote today,
+having written the derive-don't-copy rule into the handoff this morning and then spent the afternoon
+correcting nine drifted figures under it.
+
+**AND THE THIRD ROW IS NOT DRIFT — IT IS A RETRACTED CONCLUSION.** "0 of 205" was the justification
+for declining to build a guard. It is now 3, and the three are `sum_n`, `make_point` and
+`returns_word` — **the example names I wrote into the paragraph describing the class**. Citing them
+made them citations resolving only through the path being described. **Documenting the hazard created
+three instances of it**, which is the third self-inflicted instance in this one file today, after
+`peak_livexsize` and the multi-line assert message.
+
+The decision not to guard still stands, but the reasoning had to be replaced rather than repaired:
+not *"the class is empty"* but *"the instances are benign and self-inflicted, and a second model
+would fire on prose."* **A conclusion resting on a number that moves is a conclusion with an expiry
+date**, and I did not notice I had written one.
+
+All three blocks are now dated snapshots saying **re-derive rather than trust**, with an enforced?
+column, and the single enforced figure named — the vacuity **floor**, which is a floor and not a pin
+precisely because the total moves with every comment anyone writes. Pinning it would fire constantly
+and get muted, which is the argument I turned on myself an hour earlier about the string class and
+which applies here too.
+
+**AND RE-MEASURING TURNED OUT NOT TO BE THE FIX AT ALL.** The corrected figures — 92 / 209 / 450 —
+were stale **the moment they were committed**: re-derived immediately afterwards as 93 / 210 / 454.
+Not drift over days. **Invalid on publication, because publishing was the mutation.** The scanner
+counts citations in this package and its own file is in this package, so writing the number down
+changes the number, and no amount of re-measuring converges.
+
+**`keleusma-02` asked for a name and it deserves one.** Their first two rows were drift: numbers
+that went stale with time, mechanically fixable. **This is a measurement whose record lives inside
+its own population, invalidated by the act of recording it.** The test is one question — *does
+writing this down change what it counts?* — and it is answerable before publishing rather than
+after.
+
+**They are also right that I undersold it by listing it beside drift.** "0 of 205" was not a figure
+in a table, it was the **premise of a decision** — the decision not to build a guard, which I sent
+them and which they endorsed. For a period this afternoon that decision rested on a premise already
+false, and neither line knew. The decision surviving on replaced reasoning is luck, not vindication.
+
+**THE FIX IS A DESIGN CHANGE, NOT A RE-MEASUREMENT.** The unresolved counts held at 5 / 12 / 19
+across every re-derivation, and the load-bearing figure held at 3. **Totals are self-inclusive and
+unstable; findings are not**, because added prose contributes citations that RESOLVE rather than
+dangle. So the totals are published as `~90 / ~210 / ~450` and the unresolved counts stay exact.
+**Precision kept exactly where it means something and dropped where the file cannot hold it.**
+
+**AND THE SHARPEST INSTANCE OF THE WHOLE DAY, which they spotted**: `the_scan_is_not_vacuous`'s
+failure message quoted 407, already stale. **The guard against the class printed an instance of the
+class in the text it shows when it fires.** A reader hitting that failure would have been handed a
+stale figure by the mechanism telling them a figure was wrong.
+
+**AND APPLYING THE TEST TO THE WHOLE REGISTER FOUND A LIVE GUARD DEFECT, WHICH IS THE FIRST TIME
+TODAY THAT A PROCESS OBSERVATION PAID OUT IN A REAL BUG.** They generalised self-inclusion past
+scanners — *any figure counting things in a population that includes its own record* — so I audited
+every figure in my check block instead of assuming. Most count the corpus or the other line's `src/`
+with the record in `docs/`: clean.
+
+**One was not clean, and it was not a figure. It was a guard.** `corpus_differential`'s exemption
+audit verifies "another harness covers this module" by searching **every sibling `.rs` in
+`native_codegen/tests/`** for the module name — a population joined by every new test file in the
+package, whatever it is about.
+
+**`comment_citations.rs` documents its prefix rule using the `rogue_ai` family as the worked
+example**, so it names `rogue_ai_boss` and `rogue_ai_hunter`: two modules exempted on the ground that
+another harness covers them. **Their exemption was being satisfied by a paragraph about citation
+scanning.** I wrote that paragraph this evening while fixing a different instance of this same class.
+
+Measured cost: with the covering harness deleted, the pre-fix check would have named only
+`rogue_ai_tracker.kel`. **Two of three exemptions had silently lost their guard.** And the coverage
+claim stayed true the whole time — `rogue_ai_differential.rs` really does drive them — so nothing
+would have looked wrong from any angle.
+
+Repaired at the intent rather than by excluding my file: **comment lines are excluded from the
+sibling scan, because a harness DRIVES a module by naming it in code; naming it in prose proves
+nothing.** The check still passes, confirming the coverage was genuine and only the verification was
+weak. Must-fire proven by removing the covering harness — all three now named.
+
+**THE PART I WANT TO REMEMBER IS NOT THE FIX.** A guard that reads sibling sources treats this
+package's own documentation as evidence, so **every test file added here is a potential false witness
+for every other test's claim.** Nothing about writing a citation scanner suggests it could weaken a
+corpus-coverage audit, and I would never have looked without their generalisation. Process
+observations have felt like bookkeeping all day; this one found a bug.
+
+**THE RECIPROCAL CAME BACK AND THEY HAD THE SAME COUPLING ONE LAYER IN.** Their definition universe
+read comment lines, so a comment saying `fn foo` defined `foo` — **their guard could vouch for prose
+with prose**, a citation in one comment resolving against a mention in another. Mine skips comments
+and does not have it, which I had asserted in a doc paragraph and have now made a test, because the
+property is one line of code away from being lost and **nothing else would notice**: every citation
+would keep resolving, more of them than before. Must-fire proven; disabling the skip fires that test
+and the excuse guard both, since with comments in the universe every excused name resolves.
+
+**THE ESCAPE ROUTE THEY FOUND IS THE CHEAPEST CHECK EITHER OF US PRODUCED TODAY.** Their sizing
+script reported six citation-shaped names; they picked one to build a test around and **it did not
+grep. None of the six existed.** Reading the list would have taught them nothing — the names look
+exactly like test names. **They caught it by trying to USE an output rather than re-reading it.**
+
+The general form: **when an instrument's output is a name, a path, or a line number, go touch what it
+points at.** It works precisely where inspection fails, because a plausible name is
+indistinguishable from a real one by looking.
+
+**I APPLIED IT TO A CLAIM I PUBLISHED TODAY AND I HAD THE SAME EXPOSURE.** The permissiveness
+paragraph says *"sampling those ten, they are genuine — LLVM API methods and local bindings."* That
+was written from script output plus pattern-recognition; **not one of the ten had been touched.** I
+grepped all ten: all ten exist. **The claim survives, but it was true and unverified when published,
+and the difference between me and them there is outcome, not method.** That is the fifth time today a
+conclusion of mine rested on something I had not checked, and the first where checking vindicated it.
+
+**THE CLASS ON MY SURFACE: 142 COMMENT LINES ACROSS 35 FILES CARRY A "MEASURED" CLAIM, AND I HAVE
+AUDITED NONE.** They disclosed ~180 on theirs and declined the sweep; I decline it too, on their
+argument, which is better than the one I would have reached for. **A blanket date-and-mark pass over
+sites nobody re-read produces dated claims of unknown accuracy, which is worse than undated ones,
+because a date asserts that someone checked.** Marking is only meaningful where the marking was
+earned. Recorded, not fixed — and recorded precisely so nobody reads the instance repair as covering
+the class.
+
+**THE THING WORTH KEEPING IS NARROWER THAN "RE-MEASURE."** Both of us wrote correct numbers into
+prose in files where every other claim is enforced, hours apart, while explicitly working on the
+discipline of not doing that. **The register format is what disarmed the scrutiny** — a table of
+measurements reads as a record, and a record reads as already-checked. Their table and my three
+blocks had the same property my own diagnosis named for a reason string: it is the only field that
+is only read.
+
+---
+
+---
+
+**[v0.3.0] THE ARENA BOUND GAP IS ALSO AN IMMUNITY, AND MY CITATION OF THEIR MEASUREMENT WAS TOO
+STRONG (2026-08-24).**
+
+Three corrections out of one exchange with `keleusma-02`, two of them to me.
+
+**I CITED THEIR MEASUREMENT FOR MORE THAN IT SHOWS, AND THEY CAUGHT IT.** I wrote that their
+17/12/4 to 23/10/0 *"measured exactly this imprecision"* in my census. It did not. It establishes
+that *"a call in the body means an escape"* is **loose in a corpus both lines share**; it does not
+establish that any particular one of my four subjects is misfiled. Their scan is flat over
+`examples/scripts`; mine is over composite sites inside iterating loops across four directories.
+**Different populations, and the weaker claim is the true one.** Tightened in the census and the
+handoff, with the distinction spelled out so the careless version is not re-derived.
+
+That is the second time today I have had to weaken a claim about someone else's evidence, and both
+times the direction was the same: borrowing a number and inheriting a conclusion that number does
+not carry. **A measurement is scoped to its population, and citing it across populations is the same
+class as reading a stale figure beside a fresh one.**
+
+**THE PLANNER RESULT IS THE ONE WORTH KEEPING, AND IT INVERTS HOW THE GAP SHOULD BE DESCRIBED.**
+Checking whether my backend consumes escape verdicts, I found `plan_chunk_region` consumes none at
+all — no liveness, no aliasing, no confinement; the words do not appear in `region.rs`. It gives
+every static site its own offset, which is exactly the arena bound gap: `sites x size` against a
+verified `peak_live x size`, 11 of 71 modules over, unbounded in static site count.
+
+**That gap has been recorded as a cost since it was measured. It is also the reason a wrong
+confinement verdict cannot miscompile anything on this line.** A planner that reuses a slot has to be
+RIGHT that the previous occupant is dead. This one never reuses, so it never needs a verdict — not a
+correct one, not a conservative one, not any. **The conservatism that costs the bytes is what buys
+the immunity.**
+
+Their point, and the reason it went into `region.rs` rather than a decision document: **whoever
+closes the gap is buying both halves.** From that commit onward a confinement verdict wrong in the
+unsafe direction is a miscompile rather than a wasted byte, and the person writing the overlap
+optimisation is the person who needs to read that. So the doc comment on `plan_chunk_region` now
+carries the gap, the immunity, and the two facts about the verdicts it would consume — that
+`Confined` is sound while `Escapes` is only an upper bound, and that neither line can yet say
+"confined to the caller's iteration" about a region a helper built.
+
+**AND MY `Op::Return` PARAGRAPH FOUND SOMETHING ON THEIR SIDE.** I had verified that my census is not
+missing that route because `has_call` proxies it. They checked the same route against their real
+analysis and found their per-chunk scoping reports the CALLEE's site as escaping while the caller
+carries no site at all — sound, and permanently pessimistic. **So the two instruments are
+complementary rather than redundant, and neither can currently say what a planner actually wants**
+about a callee-built region. Recorded as a stated limitation on both sides rather than discovered
+later, which is the whole reason to write down what a check does not cover.
+
+**AND THE GUARD MANUFACTURED A FINDING OUT OF THE SENTENCE I WROTE ABOUT ALL THIS.** The moment
+`region.rs` gained the paragraph above, `comment_citations.rs` went red on
+**`peak_livexsize`** — the prose formula `peak_live x size`, welded into a fake identifier by the
+rule that recovers a citation wrapped across a line break. **That rule collapsed ALL whitespace**,
+and a formula separated by spaces is indistinguishable from a name split at a newline once you have
+thrown the difference away.
+
+**This is the failure mode the file's own header names as the reason its threshold was set
+carefully: a guard that manufactures findings gets switched off.** It manufactured one on the run
+that introduced the sentence.
+
+Fixed at the cause: `comment_blocks` now joins lines with `\n` rather than a space, and recovery
+rejoins **only across the newline**. The obvious alternative — reject any span containing
+whitespace — would have passed the formula case while silently losing every wrapped citation, which
+is a gap rather than noise and therefore worse. **Both directions are pinned in one test**, because
+fixing noise by creating a blind spot is the trade that looks like a fix.
+
+**THE INSTRUMENT DISCIPLINE PAID A THIRD TIME IN ONE DAY.** That run reported `27 passed, 1 failed,
+5 binaries` and **exited 0**, because `tee` returns its own status and the suite aborts after a
+failing binary. Summing the per-binary lines is what caught it; the exit code said success and the
+tail said nothing. Same lesson as the `| tail -40` truncation this morning, one layer along: **the
+signal that looks authoritative is the one that has already been transformed.**
+
+**Then the very next run inverted it.** It reported FAILED, exit 1, on a suite that was 275 passed /
+0 failed / 52 binaries. The exit code belonged to a trailing `grep -c FAILED` I had appended **as a
+safety check**: no match, grep exits 1, and a compound command reports its last command's status.
+**A check appended to a pipeline replaces the status it was meant to confirm.** Three instances in
+one day of the same thing — the authoritative-looking signal had been transformed — and the third
+was caused by guarding against the second.
+
+**AND THEN THEY RETRACTED TWO OF THE THREE FINDINGS THEY HAD HANDED ME.** `must_contain` and
+`head_name` are function parameters written inline in a single-line signature, which their
+declaration-based universe does not see; their instrument manufactured two of the three. They flagged
+it unprompted, on a number touching nothing shipped, in the direction that had flattered their own
+threshold choice. **That is harder than catching an error that breaks a test.**
+
+I had not committed the three, only quoted them back, so there was nothing to repair — but the check
+was worth running for a better reason. **My universe cannot have their blind spot**: it is built from
+every identifier token in every non-comment line, so an inline parameter is in it by construction.
+All four names through it reproduce their corrected result exactly — the two they retracted resolve,
+the one they kept does not, and the control it should have named does. **A differently-built
+instrument agreeing is corroboration; a second copy of the same method agreeing is not.**
+
+**MY OPPOSITE WEAKNESS, MEASURED RATHER THAN WAVED AT.** Token-based means permissive: a citation
+resolves if the name appears anywhere outside a comment, so this guard catches names that name
+NOTHING and cannot catch a name that names something ELSE — theirs, being stricter, would. Of 203
+distinct citations, 172 resolve via a declaration, parameter or file stem and 10 only through the
+loose path; all ten sampled are genuine, LLVM methods through `inkwell` and local bindings. Costs
+nothing today, which is a measurement and not a guarantee, and it is written into the file that way.
+**Neither instrument subsumes the other**, which is the second time today two of our tools have
+turned out complementary rather than one being the better version.
+
+**THE CROSS-TREE GUARD I ANNOUNCED DOES NOT WORK, AND THEY FOUND IT BY ASKING WHETHER IT FIRES.**
+I told them `no_excused_name_has_started_resolving` would retire the excuse when their repair landed.
+It cannot. That guard fires when a name STARTS RESOLVING, and their repair **replaces the citation**
+rather than defining the name, so the old name vanishes and never resolves anywhere. Verified against
+their branch rather than reasoned about.
+
+**So the excuse would have sat there permanently, justified by a sentence promising an announcement
+that could not arrive.** An excuse that cannot be retired is an excuse that cannot fail — **the
+defect this entire file exists to catch, written into the reason string of one of its own excuses.**
+It surfaced only because they asked a question I had assumed the answer to.
+
+The observable that *does* change is their citation ceasing to exist in the parent `tests/`, which
+reaches this worktree by **absorption**. That is now
+`the_other_lines_dangling_citation_is_still_dangling`, whose failure message is the hand-off itself.
+Must-fire proven by simulating their repair in the absorbed copy: exactly that test goes red, the
+other seven stay green. **The mechanism they were interested in does work — it was attached to the
+wrong observable, and the wrong one was the one that sounded right.**
+
+**AND WRITING THAT TEST CAUSED A DEFECT IN ITSELF.** The first version put the name in a multi-line
+assert message. My stripper is per-line and **stateless**, which is exactly what makes it immune to
+their swallow bug — and a stateless stripper reads a **continuation line as CODE**. The name entered
+the universe as an identifier and the guard fired, reporting a resolution when nothing had changed
+but my own prose. **The per-line design trades their failure for a milder opposite one**: they can
+silently swallow a definition, I can silently admit a string's contents as definitions.
+Statelessness is still the better side of that trade — a silent swallow against a loud false alarm —
+so it stands, documented, with the collision avoided at the call site.
+
+**THEN THEY GENERALISED IT AND I MEASURED THE CLASS RATHER THAN LEAVING THE INSTANCE PATCHED.**
+Their framing — *"prose written inside a guard can enter that guard's own universe"* — is a
+self-reference hazard **neither of us listed while checking whether the excuse table vouches for
+itself**, which is the same blind spot one level along. Measured: 1323 names enter my universe only
+through string continuation lines, 33 citation-shaped, mostly Keleusma functions written inside Rust
+test sources. **Nothing is load-bearing on it — 0 of 205 citations resolve only that way and no
+excused name resolves at all.** A measurement, not a guarantee.
+
+**AND I DECLINED TO GUARD IT, WHICH IS THE PART I WANT ON THE RECORD.** The obvious guard needs a
+parallel, cruder string model beside the real one. **Two models of the same thing drift, and the
+cruder one raises the false alarms** — precisely the argument I made to them against lowering their
+threshold onto a 104-entry excuse list. Applying it to my own tree when the finding is mine and the
+class is inert is the harder half of having made the argument. The case that actually bit is already
+covered. **Guarding an inert class with a second model buys a hypothetical and pays in noise.**
+
+**THEIR HONESTY ABOUT LUCK IS WORTH COPYING.** They proved by mutation that their guard has the half
+mine lacked — it fires on "no longer cited" as well as "now resolves" — and then said plainly that
+the vanishing half **came along for free with a differently-motivated requirement**, not from
+foresight, and that a plausible-sounding explanation was available afterwards. My own stripper's
+immunity to their swallow bug was the same: two structural properties I did not design in. **A
+correct outcome with an available post-hoc rationale is the hardest thing to distinguish from
+design**, and both of us landed one today.
+
+**AND THE CORROLLARY THEY DREW FROM DISTRUSTING YOUR NEWEST INSTRUMENT IS SHARPER THAN MINE**: the
+moment of maximum risk is when a new instrument produces its **first interesting finding**, because
+that is when forwarding is most tempting and verifying least. Both of their forwarded errors today
+were first outputs of freshly written instruments. So was my `peak_livexsize`.
+
+**ONE OF THESE GUARDS BECAME LOAD-BEARING ACROSS THE BOUNDARY BETWEEN THE TWO TREES.** Quoting
+their dangling name in my documentation turned my own guard red, because it dangles here too.
+Excused with the reason that its failing to resolve IS the corroboration, plus a note to drop the
+excuse when they land the repair — and `no_excused_name_has_started_resolving` will announce that
+moment **without either line having to remember to send a message.** Every other guard I have built
+today watches one tree. This one watches theirs.
+
+**THEIR NAME FOR THE PATTERN IS BETTER THAN MINE.** I had called the threshold defect "a rule
+inferred from N examples is not the N examples", and counted three instances between us in a day.
+They pointed out the shared tell: in all three the rule was **cheaper to apply than the enumeration,
+and the enumeration was available** — their compiler had printed the exact list and they wrote a
+regex; I had the measured composition and wrote a rationale. **"A cheap substitute for available
+ground truth"** names the cause rather than the symptom, and it is the version worth carrying.
+
+---
+
+---
+
+**[v0.3.0] AN `Escapes` VERDICT IS A BOUND, AND I HAD WRITTEN ONE DOWN AS A COUNT THAT MORNING
+(2026-08-24).**
+
+`keleusma-02` finished the confinement analysis and reported the half they did not aim at. Callee
+summaries closed all four cannot-establish sites, as designed. **They also moved the escape count
+from 12 to 10, and those two verdicts were wrong rather than merely unestablished** — with no
+summary a call's return is assumed to alias every argument, so a composite passed to a callee and
+then returned was reported as escaping through a route that does not exist.
+
+**Their framing is the part worth keeping: a conservative default hides false positives exactly as
+well as it hides gaps, and there is no third value to record it in.** `Escapes` and `Confined` are
+both confident answers. Nothing in the corpus said one was wrong, and it surfaced only because the
+fix for an unrelated class happened to remove the imprecision producing it. That is a different
+failure from the ones we have been trading — a `cannot-establish` announces itself; a false
+`Escapes` does not.
+
+**CHECKED AGAINST MY TREE RATHER THAN REASONED ABOUT, IN BOTH PLACES IT COULD BITE.**
+
+The backend is clean, and for a reason worth stating: `plan_chunk_region` consumes **no escape
+reasoning at all**. It walks `Op::NewComposite` and gives every static site its own monotonically
+increasing offset; `region.rs` does not mention escape, confinement, or aliasing anywhere. **The very
+conservatism that produces the arena bound gap is what removes the exposure** — a planner that never
+reuses never needs a verdict to be right. That is the first time the gap has looked like anything
+other than a cost.
+
+**The census was NOT clean, and the defect was in prose I wrote this morning.** I reported
+`d_setlocal = 4`, `d_call = 3` and concluded "**one** site is blocked by `SetLocal` alone". `d_call`
+is syntactic — it counts bodies CONTAINING a call, not composites that reach one — so the honest
+statement is **at least one**, and the two figures are bounds pointing in opposite directions:
+`sites - d_call` is a LOWER bound on what B1r alone admits, `d_call` an UPPER bound on what needs a
+summary. Their measurement makes the gap between them known to be non-zero in practice rather than
+in principle. Corrected in the census, the report it prints, the assertion's rationale, and the
+handoff.
+
+**The `> 0` assertion I chose this morning turns out to have a second and better justification than
+the one I gave it.** I wrote it as `sites > d_call` rather than `== 1` so a future call-free subject
+would not read as a regression. The stronger reason is that equality would assert a syntactic
+over-approximation as if it were a reachability result — exactly the reading their false escapes
+disprove. **The right shape for the wrong reason is still worth noticing**, because the reasoning is
+what gets reused and the reasoning was weaker than the code.
+
+**ONE THING VERIFIED THAT I EXPECTED TO BE A DEFECT.** The escape set has five routes and my census
+matches four opcodes, with no arm for `Op::Return` — which looked like an unsound omission, the bad
+direction. It is not: that route is *"a callee invoked from the loop body returning a composite it
+built"*, and a `return` in the loop itself exits the loop rather than carrying a handle into the next
+iteration. `has_call` is already its proxy. Confirmed against the proof document's route table
+instead of inferred from the opcode list, which is the same discipline that made their termination
+argument by inspection better than an appeal to acyclicity.
+
+---
+
+---
+
+**[v0.3.0] A CITATION TO A TEST THAT DOES NOT EXIST CANNOT FAIL, AND THE FLOAT GUARD HAD BEEN
+CLOSING THREE ROUTES OF FOUR (2026-08-24).**
+
+The `v0.2.3` line repaired the stale `Op::IsStruct` comment I reported and found something under it:
+the comment cited `op_is_struct_still_has_producers_and_two_still_trap`, **a test that was never
+written**. They scoped it by class, scanned `src/` and `tests/`, found 24 unresolved citations, and
+told me.
+
+**Their scanner does not reach my surface.** `native_codegen` is a detached workspace their suite
+never builds and CI never touches. So I ran the same class check here, and the first finding is
+worse than theirs.
+
+**`src/lib.rs` claimed "the list is a claim and `the_float_guard_closes_every_route_it_names` tests
+each one" about the four routes a `Float` can take into a module. That test was never written, and
+route 3 — the native return shape — had no test at all.**
+
+**Proved rather than argued**: I disabled the route-3 guard and ran the file. **Only** the
+newly-written test failed; the other six passed. So the guard could have been deleted outright and
+nothing would have gone red. That is exactly the shape the file's own module header warns about —
+*"a guard that closes three of four while reading as total"* — committed by the file that warns
+about it. The route was implemented; only its test was missing, which is the version of this that is
+invisible to every signal except a citation check.
+
+The new test uses a **declared-but-uncalled** native, and that is the discriminating choice rather
+than the simple one. Measured: `native_return_shapes` is `[Scalar { kind: 5 }]` while the only chunk
+signature is `ret: Scalar { kind: 3 }`, so no float reaches a signature or a constant and the
+refusal can only be route 3. A native that were *called* would put a float local in play and route 2
+might reach it first. It ships with a `Word`-returning control, because without one it would pass
+just as happily if the backend refused every module declaring any native at all.
+
+**SIX MORE, AND THREE OF THEM ARE INSTRUMENTS THAT WERE NEVER BUILT.** `slot_entry` is cited four
+times across two files as the function closing route 4 and does not exist; the real one is
+`resolve_shared_scalar`, so route 4's entire safety argument named something no reader could find.
+And `spike_opcode_stack_audit.rs` opens by declaring *"Three instruments, because each is blind to
+something"* — **one was built.** `verify_typed` and `Arena::bottom_peak` appear in that file only in
+prose. **The missing instrument is the one the header itself calls indispensable**, the third, *"the
+only one of the three that is not another model."* The file's ground truth is the instrument that
+does not exist. Header corrected to a built/not-built table rather than deleted; the plan is still
+the right plan and `audit_1` did its job.
+
+**MY THRESHOLD WAS A GUESS, AND THE GUESS WAS THE BLIND SPOT.** The first scan required four
+underscore-separated words, with a confident-sounding rationale about precision. Measured: four
+words gives 79 citations and 3 unresolved; three words 183 and 10; two words 407 and 16. **The
+four-word cut found `disagrees_with_typed_verifier` and missed both its siblings in the same list** —
+reporting one third of a three-part finding — **and missed `slot_entry` entirely.** A threshold that
+hides two thirds of a finding it half-reports is not precision; it is a blind spot with a rationale.
+Lowered to two words, where the extra entries are overwhelmingly mangled symbol names that excuse
+cleanly as a class.
+
+**THE GUARD CAUGHT ITSELF TWICE, AND THE FIRST IS THE BEST THING HERE.** Its universe of resolvable
+names was built from all non-comment lines — **including the excuse table's own string literals.** So
+every excused name "resolved", to the excuse list itself. **The registry would have vouched for every
+name it suppressed**, and it would have looked green forever. Fixed by stripping string literals
+before tokenizing: a name inside a string is not a definition. Second, it flagged a directory and a
+corpus family as dangling; both are things a comment may legitimately name, so directories joined the
+universe and resolution now accepts a prefix at an underscore boundary — bounded, since `slot_entry`
+still dangles and so does the deliberate truncation left in the prose to demonstrate it.
+
+Three guards, because the excuse list is the dangerous part: no excuse outlives its citation; **an
+excuse that has become false is a lie that passes**, so an excused name that starts resolving fails;
+and a vacuity floor **set from a measurement** — the first draft guessed 100 against an actual 79 and
+would have failed the suite on its first run. Must-fire proven with a deliberate dangling citation in
+`src/region.rs`, tree restored.
+
+**THEN I SUGGESTED THE STRING-STRIPPING FIX TO THE OTHER LINE AND IT BIT THEM WITHIN THE HOUR.** They
+applied a whole-file regex strip and an unbalanced quote inside a comment paired with the next quote
+elsewhere in the file, **deleting the real code between them**; their run reported two `pub fn`s as
+undefined. They caught it because those two names were ones they happened to know — *"luck rather
+than method"*, and they flagged it back rather than quietly redoing it.
+
+**Checked here rather than reasoned about, which is the only reason I can say it.** This scanner is
+structurally immune for two reasons I had not thought about when I wrote it: comment lines are
+skipped **before** stripping, so a lone quote in prose never opens a span; and the stripper is
+per-line with state reset each call, so an unbalanced quote in code cannot reach past its own line.
+Measured across the tree: every `pub fn` this package declares survives, and so do the two names
+their script lost. **Both properties are now tests rather than accidents** — making the stripper
+stateful across lines fails five of the six tests in the file.
+
+**It does drop something real, and the limitation demonstrated itself.** Keleusma sources written
+inside Rust string literals are invisible to the universe; `zz_touch` is one, and it was reported as
+dangling **on the very run that added the sentence describing the limitation.** Excused as the worked
+example. The right repair if another is ever cited is to cite the Rust test that holds it — widening
+the universe is what reintroduces the self-vouching hole.
+
+**AND THEIR THRESHOLD ANSWER CAME BACK OPPOSITE TO MINE, CORRECTLY.** They measured: two words
+897/104, three 453/48, four 175/21, and are **keeping four**, because their hidden 83 are dominated
+by standard-library items, `.kel` file stems and target names — three genuine, not eighty. Mine at
+two words cost fourteen excuses, almost all mangled symbols. **The same argument justified opposite
+thresholds on two trees, which is the right outcome**: the point was never that four is wrong, it is
+that the difference between a threshold and a blind spot is whether the number was measured. Theirs
+now carries the table and the sentence saying plainly that it is silent about shorter citations.
+
+---
+
+**[v0.3.0] TWO OPERATOR QUESTIONS ANSWERED, AND BOTH TURNED OUT TO BE ABOUT A STALE REASON RATHER
+THAN AN OPEN DECISION (2026-08-24).**
+
+Absorption 7 of `v0.2.3` at `dadbce7e`, then the two operator-requested investigations that had been
+carried as "authorized, started on neither line" for several sessions.
+
+**`Op::IsStruct` — not a removal candidate, and the interesting part is a comment.** The operator's
+test was three conjoined conditions: no documented intent, no obvious intent, no producers. **Two
+fail plainly.** It is specified in two normative documents, and its peek-not-pop semantics were
+deliberately repaired in a V0.2.x spec-conformance audit — an opcode argued over and then pinned is
+the opposite of an undocumented one. Its intent is readable from the fact that **six sites in `src/`
+handle the two in a single match arm** — `Op::IsEnum(_, _, _) | Op::IsStruct(_)` — across the stack
+model, both verifier passes, and the self-hosted driver.
+
+The third condition is where the work was. **The emission site at `src/compiler.rs:11399` exists and
+no construct known to this tree reaches it.** Three separate repairs closed the three routes: the
+un-annotated parameter is folded, the generic-parameter case now rewrites the pattern with the type,
+and the annotated-different case is refused by the type checker. `tests/opcode_reachability.rs`
+today holds **five assertions about the opcode and every one is a negative**, over fifteen source
+shapes in two loops plus three singleton controls plus three shapes refused before lowering.
+
+**I DRAFTED THAT AS "UNREACHABLE FROM SOURCE" AND THIS LINE'S OWN TEST FILE TALKED ME OUT OF IT.**
+`native_codegen/tests/miscompilation_reach.rs` had already recorded this finding, and it explicitly
+refuses the stronger claim: *"A reader who can construct a survivor should treat this as incomplete
+rather than as a boundary."* The reason it gives is specific — **this line falsified the `v0.2.3`
+line's first producerless claim within the hour**, with a generic struct that compiled, verified,
+took a bound, loaded, and died with `InvalidBytecode`. Having done that once, this line has no
+standing to make the stronger claim itself. The write-up now says *no producer found by a bounded
+search* throughout. **The lesson is narrower than "be careful": the restraint was already written
+down in my own surface, and I would have contradicted it by not looking.**
+
+It also supplied the better argument. The load-bearing half is **not** the probe enumeration but the
+emission condition: `ty` is supplied at exactly two roots, function parameters and match arms, and
+both now run the nominal check first, rejecting precisely the mismatch that would satisfy the
+condition. A probe that fails to *compile* is weaker evidence than one that compiles and does not
+reach the site, and the two are counted separately.
+
+**And `src/compiler.rs:11385` still says the opposite.** It states the opcode "still has producers.
+Four are pinned in `tests/opcode_reachability.rs`, TWO OF WHICH STILL REACH THE LOAD-TIME HOLE."
+Written at `2ada8791`; the repair that closed both named routes is `6d217f0a`, and
+`git merge-base --is-ancestor` confirms the repair came after. **The comment was true when written
+and has been stale since.** That matters more than staleness usually does, because it names a live
+breach of the load-time guarantee — a module `verify()` accepts that then traps `InvalidBytecode` —
+and an auditor reading it concludes the guarantee is broken when the tests beside it prove it is not.
+
+Recorded as **"specified, retained, no source-level producer as of 2026-08-24"**, never as
+"unreachable": the guard, both verifier arms, and the VM path all remain live, and this line's input
+domain is bytecode rather than source. `Vm::new_unchecked` exists precisely so trusted bytecode can
+skip verification. **"No producer in the reference compiler" is not "absent from the input domain",**
+and that distinction is this line's whole founding premise.
+
+**`Fixed` in a shared slot — the representation was never the open question.** The backend refuses
+the slot with *"fixed-point representation is unsettled"*. **That message is wrong about which thing
+is unsettled.** `ScalarKind::Fixed` is a signed Q-format integer of the runtime's word width;
+`size_in_bytes` returns `word_bytes`, pinned by the other line's own unit tests at both 64 and 32
+bits. A backend lowering it as a word-width signed integer would agree byte for byte.
+
+What is absent is the **scale**. `Fixed<N>` is an integer scaled by `2^N`, and `N` is carried by the
+opcodes — `WordToFixed(frac_bits)` and its family — **and by nothing in the layout descriptor**.
+`value_layout.rs` says so in as many words. **Erasing it is sound inside a module and not across a
+host boundary**: every internal producer and consumer is type-checked against the same `N`, but a
+host handed the shared buffer gets `word_bytes` of raw integer and nothing to consult.
+
+**The measurement that makes this an ABI finding rather than a struct observation**: two modules
+differing only in `N` compile to **byte-identical shared-slot layouts**. `Fixed<16>` and `Fixed<8>`
+differ by a factor of 256 and are indistinguishable to the host. A missing field is an observation
+about a struct; two programs with different meanings and identical host-visible layouts is an
+observation about the interface. Pinned in `native_codegen/tests/fixed_shared_scale.rs`, with a
+vacuity control, **because the useful assertion here is a negative and a negative decays silently**.
+If a scale ever becomes recoverable that file fails, which is how a decision landing on the other
+line reaches this one without anyone remembering to send a message.
+
+The surface **admits** the declaration today — `shared data cal { scale: Fixed<16> }` compiles — so
+the case is live. Options priced in `docs/decisions/FIXED_SHARED_SLOT_ABI.md`. Preference **B over
+A over C**, stated as a preference: B refuses `Fixed` in host-visible position and is the only option
+whose guarantee is structural rather than documentary; A reuses the unused `len` field at no wire
+cost but leaves a host that ignores the new semantics reading a plausible wrong number, and carries a
+silent-misread hazard for artifacts already compiled; C picks a canonical Q format and is the worst
+failure mode of the three.
+
+**A FOURTH INSTRUMENT ERROR, AND IT LOOKED LIKE A CLEAN PASS.** Both verification runs were started
+as `cargo test … 2>&1 | tail -40`. Exit code 0, every visible line `ok`, the tail ending in
+`test result: ok` — **indistinguishable from a complete run at the point of reading.** But the
+per-binary `test result:` lines that get summed were discarded upstream of the file, so **the totals
+were unrecoverable**. Caught only by summing and getting `26 passed, 7 binaries` against an expected
+262 and 50.
+
+Same class as the ownership diff chained ahead of `git commit`: **an instrument reporting success
+while measuring something other than what was intended.** Both were found by checking a number
+against an expectation, not by anything failing. The rule is now in the handoff: capture with `tee`
+and sum afterwards, never pipe a counting run through `tail`.
+
+**AND THE STALE FIGURES WERE NINE, NOT ONE.** Having found three in one sentence I re-derived every
+instrument rather than the one that moved, and that was the right call: `bound_transfer`'s
+67/70/31 to **71/74/35**, the corpus differential's 58/11/21/10 to **59/14/22/11**, the
+`(module, seed)` pairs 588 to **607**, the four-directory corpus count 70 to **74**, and the main
+workspace suite 2397 to **2400**.
+
+**Every one sat beside a figure that HAD been updated**, which is the mechanism: a report gets
+re-derived one line at a time, the moved line takes a fresh date, and its neighbours inherit that
+freshness without being measured. Proximity reads as co-measurement. What did NOT move is now also a
+measurement rather than an assumption — 1680 Order-1 comparisons, seven seeded stages, 0
+disagreeing, 11 exceeding, 442 stepped-over ops in 141 chunks, 65 of 66 witnessed, and the 60/2/3/1
+lowering partition were each verified unchanged.
+
+**THE FIRST OF THE EIGHT, WHICH IS ACTUALLY THREE IN ONE SENTENCE.** The `bound_transfer` check
+block read *"1043 chunk comparisons ... 11 modules of 67 compared ... over 70 modules examined with
+31 carrying a non-zero demand."* Re-derived: **1044 / 71 / 74 / 35.** The 67, 70 and 31 are
+PRE-ABSORPTION-6 numbers, left untouched while the comparison count beside them was updated to 1043.
+
+**The lesson is not "update the numbers."** It is that **a figure updated in isolation makes its
+neighbours look current when they are not** — a reader sees a freshly-dated 1043 and trusts the 67
+sitting beside it, because proximity reads as co-measurement. The rule now in the handoff: when one
+figure in a report moves, re-derive the WHOLE report, which the instrument prints in one run anyway.
+The 11 EXCEEDING genuinely did not move, and that it did not is now a measurement rather than an
+assumption inherited from a sentence where everything else had drifted.
+
+**AND ABSORPTION 7 RETIRED A DESIGN CONCLUSION THIS LINE HAD DRAWN.** `15_pixel_blend.kel` is the
+call-free confined subject asked for last session. The census moved `410/39/3` to **`411/40/4`**,
+survivors still zero — but the breakdown is the point: `d_setlocal = 4`, `d_call = 3`, so **one site
+is blocked by `SetLocal` alone.**
+
+The census existed to produce the conclusion *"a confinement analysis needs BOTH boundary-dead
+`SetLocal` and a callee summary on day one, or it returns nothing."* **That was true only because
+all three prior subjects tripped both, confounding the two requirements.** With one call-free
+subject the confound is gone and the conclusion is false: B1r alone would admit something, so **the
+callee summary is a second increment rather than a precondition.** Soundness is unchanged; only the
+sequencing is. The comment is rewritten in place and marked SUPERSEDED rather than deleted, and the
+census now prints the isolation figure and asserts `sites > d_call` — **stated as `> 0` and not
+`== 1`, because the property worth pinning is that the requirements are SEPARATED**, and an exact
+count would turn every future call-free subject into a failure.
+
+**Both findings are the same shape and it is worth naming.** Neither question was open. In each case
+a decision had already been made and a stale explanation was still sitting where the next reader
+would find it. **The expensive part of both investigations was establishing that the thing everyone
+believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
+the comment above them, once by a size function nobody had connected to the refusal message.
+---
 ## 2026-08-27 — The handoff was never scanned, and it had carried a false claim
 
 **THE CITATION GUARD COVERED `src/` AND `tests/` AND NOT THE MOST-READ DOCUMENT IN THE

@@ -1,0 +1,66 @@
+COMPLETION CONDITION — the no-floats sentinel path (V0.3.X, native_codegen)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. A NO-FLOATS MODULE REACHES THE BACKEND, AND WHAT HAPPENS IS RECORDED.
+   The tree contains a test that builds a module whose declared float width is
+   the no-floats sentinel and puts it through the lowering. The record states
+   the outcome: lowered, or refused with the reason given.
+
+2. THE OUTCOME IS MEASURED BEFORE ANY CODE IS CHANGED IN RESPONSE.
+   The record shows what the unmodified backend did with such a module. A
+   measurement taken only after a change does not satisfy this, because it
+   describes the change rather than the defect.
+
+3. WHETHER THE ZERO WIDTH REACHES THE TYPE FUNCTION IS ESTABLISHED BY AN
+   INSTRUMENT, NOT BY READING CALL SITES.
+   The record states whether a float type is constructed for a zero width, and
+   the basis is something that would fail if the answer were different.
+   "Unreachable by inspection" does not satisfy this.
+
+4. IF THE BACKEND IS CHANGED, IT FAILS AS A FAULT AND NOT AS AN ABORT.
+   Any newly rejected case returns an error through the existing error type. A
+   panic or process abort on a malformed or unsupported width does not satisfy
+   this.
+
+5. THE WHITELIST STILL ADMITS ONLY THE WIDTHS IT LOWERS.
+   Whatever changes, the set of float widths the backend claims to lower is
+   unchanged, and the record says so.
+
+6. A WORD-WIDTH OUTCOME IS REPORTED SEPARATELY IF IT OCCURS.
+   If a no-floats module fails for reasons of word width rather than float
+   width, that is stated as a distinct finding with its own evidence, not folded
+   into the float question.
+
+7. THE PREDICTION IS RESOLVED AGAINST EACH NAMED FALSIFIER.
+   The record states, for each falsifier, whether it fired. If any fired, that
+   is stated plainly and the prediction is not restated to match the result.
+
+8. THE COVERAGE CLAIM IS STATED AS MEASURED.
+   The record says whether any test in this package previously exercised a
+   no-floats target, supported by a search rather than by recollection.
+
+9. NEW OR CHANGED TESTS SURVIVE ORDINARY PARALLELISM.
+   Any test added or modified is observed passing under the harness's default
+   threading, not only in isolation.
+
+10. NOTHING IS CLAIMED THAT WAS NOT RUN.
+    Every count and pass/fail claim corresponds to a command whose output
+    appears in the transcript. Carried figures are marked as carried.
+
+11. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+    The native_codegen suite passes, or each failure is named with its cause and
+    with a statement of whether the cause belongs to this package.
+
+12. A DECISION IS RECORDED EVEN IF NOTHING CHANGES.
+    If the conclusion is that the current behaviour is correct, that conclusion
+    is recorded with its evidence. Investigating and leaving no record does not
+    satisfy this.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the twelve properties above,
+or whether any other goal in the same session advanced.

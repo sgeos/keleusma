@@ -1,0 +1,82 @@
+COMPLETION CONDITION — the planner/verifier liveness axis
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Something in the tree compares, for every module carrying a construction
+   site, the syntactic path-maximum against the liveness figure implied by the
+   verifier, and reports where the two agree and where they differ.
+
+2. The two directions of disagreement are reported separately: the walk
+   exceeding the verifier, and the walk falling below it. The second is
+   identified as a defect in the walk rather than an interesting divergence, or
+   shown not to occur.
+
+3. Modules with no construction site are excluded, and the exclusion is stated.
+   No figure is derived by dividing by a zero site count.
+
+4. Where the two differ, the report gives enough context to tell whether the
+   difference is explained by loop placement, and says whether it is a defect or
+   a modelling difference.
+
+5. A verdict is recorded on whether a planner could reproduce the verifier's
+   figure, distinguishing what holds on the modules already examined from what
+   holds across the whole corpus. Agreement is described as evidence about this
+   corpus rather than as a general property.
+
+6. The earlier claim that the two axes agreed was tested on a population where
+   every site was a bare conditional. The report states whether that agreement
+   survives on the population where it was not tested.
+
+7. The instrument is demonstrated to discriminate rather than trusted because
+   its output looked plausible, and it was not adjusted to improve agreement
+   with the thing it is compared against.
+
+8. Nothing in the code-generation path changed. The region planner still assigns
+   per static site.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+12. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+13. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Agreement. A divergence, with where and why it occurs, is a result — and one
+  that would weaken an earlier finding, which is a reason to report it rather
+  than to avoid it.
+- Adopting the remedy or establishing its remaining conditions.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Tuning the walk until it agrees with the verifier, rather than reporting the
+  disagreement.
+- Presenting corpus-wide agreement as proof that a planner can reproduce the
+  verifier in general.
+- Collapsing the two directions of disagreement into one count.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A green reached by excluding modules whose divergence is inconvenient, unless
+  the exclusion and its cause are reported.
+- A suite result read from a pipeline's exit status rather than the command's.

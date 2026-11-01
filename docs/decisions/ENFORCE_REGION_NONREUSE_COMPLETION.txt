@@ -1,0 +1,68 @@
+COMPLETION CONDITION — enforcing the region planner's non-reuse
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Something in the tree fails if the region planner assigns two construction
+   sites within one chunk to storage that overlaps. The check is on whether the
+   byte ranges overlap, not merely on whether the starting offsets differ.
+
+2. That check is demonstrated to detect an overlapping layout, rather than only
+   observed to pass on the corpus. Its ability to fail is shown, not asserted.
+
+3. The check states its own scope: it covers reuse within a chunk and does not
+   cover collisions between chunks. The already-recorded cross-chunk aliasing
+   defect is not presented as covered, closed, or affected by it.
+
+4. The places that previously asserted non-reuse only in prose either point at
+   the enforcement or are left intact alongside it. None is deleted or weakened
+   so that the property is now claimed in fewer places than before.
+
+5. Nothing in the region planner's behaviour changed. Sites are still assigned
+   as they were, and no reuse was introduced by the increment meant to guard
+   against it.
+
+6. The check asserts a property rather than a count, so ordinary corpus growth
+   does not make it fail.
+
+7. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+8. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   The two are not run concurrently with each other, because the workspace
+   carries a wall-clock guard that concurrent load makes fail.
+
+9. Every census and gate figure quoted as current was re-derived against the
+   present tree after the last change capable of moving it.
+
+10. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+11. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Fixing the cross-chunk aliasing defect, or changing how offsets are planned.
+- Adopting or rejecting a reusing planner. This increment makes the current
+  property checkable so that any such change fails loudly rather than silently.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A check that passes on the corpus but was never shown capable of failing.
+- Asserting distinct starting offsets in place of disjoint ranges.
+- Implying the cross-chunk aliasing defect is covered or closed.
+- Introducing any reuse into the planner while adding a guard against reuse.
+- Pinning a site count or other figure that corpus growth would move.
+- A suite result read from a pipeline's exit status rather than the command's.

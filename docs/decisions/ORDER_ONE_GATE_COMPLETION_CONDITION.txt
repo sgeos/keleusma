@@ -1,0 +1,46 @@
+COMPLETION CONDITION — Order-1 gate assessment
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. A run of the existing differential harness reports, separately from the whole
+   corpus, how the self-hosted compiler's own stage modules fare: how many were
+   found, how many lower, how many execute and agree, how many are exempt, and
+   how many agree only vacuously.
+
+2. The set of stage modules is derived from where those sources live, not from a
+   hand-written list of names, so a stage added or removed changes the figure
+   rather than being missed.
+
+3. The report distinguishes exempt, vacuous, and disagreeing as three separate
+   states. None is presented in a way that reads as another.
+
+4. For the stages that agree, the report says what carries the agreement, so a
+   reader can tell substantive agreement from agreement on a run that produced
+   nothing.
+
+5. The report does not assert that the roadmap milestone is met. It states what
+   was measured. Any qualification that applies — a stage blocked by design from
+   running, or a stage whose agreement is about the position of a fault rather
+   than its identity — is stated where the figure is read, not only elsewhere.
+
+6. No second corpus walker is introduced. The figures come from the machinery
+   that already drives these modules.
+
+7. The report fails rather than passes if it finds no stage modules, so a run
+   over an empty set cannot look like a result.
+
+8. The resume document for this line records the outcome with every figure taken
+   from a run, and its stated test count matches the suite.
+
+9. The files recorded as read-only for this line are unmodified: the virtual
+   machine, the bytecode verifier, the bytecode definitions, the self-hosted
+   compiler sources, and the continuous-integration workflows.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

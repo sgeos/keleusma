@@ -1,0 +1,44 @@
+COMPLETION CONDITION — composite entry parameters
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. Corpus modules exempt solely because their entry point takes a composite
+   parameter are either driven and compared against the virtual machine, or the
+   tree records why they still cannot be, with the obstacle named.
+
+2. If they are driven, the count of executed-and-agreeing modules rises and the
+   exempt count falls correspondingly. Both figures come from a run.
+
+3. Both sides receive byte-identical composite bodies. The tree states how that
+   is ensured rather than assuming it.
+
+4. The tree states whether the supplied body VARIES across argument vectors. If
+   it does not, that is reported plainly as comparison-once rather than described
+   in terms that imply many vectors.
+
+5. The tree states that these modules were already covered by another harness,
+   so the gain is not presented as coverage appearing from nothing.
+
+6. Any module newly driven must AGREE. A disagreement is reported and
+   investigated, not masked or re-exempted.
+
+7. The exemption remains in force for any composite entry shape the harness
+   cannot construct. Nothing is admitted by guessing a layout.
+
+8. The change is shown to be load-bearing by a recorded mutation: the transcript
+   states what was changed, that it failed or produced a different result, and
+   that the revert was verified rather than assumed.
+
+9. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+10. The files recorded as owned by the other line are unmodified.
+
+11. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+12. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

@@ -1,0 +1,41 @@
+COMPLETION CONDITION — the shared argument marshalling
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Either the capability that three separate gaps depend on — passing non-scalar
+   arguments and registering host natives for a driven module — exists in a place
+   more than one harness can use, or the tree records why it cannot be separated
+   from the instrument that currently holds it.
+
+2. If it was moved, there is exactly one implementation of it, and the harness
+   that previously held it uses the moved version rather than a copy.
+
+3. The tuned instrument's own tests pass unchanged, and nothing about what its
+   stubs log or return has been altered.
+
+4. No claim in the tree describes a gap as blocked on missing machinery when that
+   machinery now exists, and no claim describes it as available when it does not.
+
+5. Any new consumer of the moved capability is added in a way that lets a failure
+   be attributed to it rather than to the move.
+
+6. Any harness newly allocating host buffers for a native call derives its private
+   region size from the published contract and is declared wherever the tree
+   enumerates such harnesses.
+
+7. src/ and tests/ at the repository root are unchanged by this session except for
+   changes the other line itself made.
+
+8. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+9. The handoff state table agrees with the tree, figures that cannot be
+   re-derived name the commit they were measured at, and the guards that check it
+   pass.
+
+10. The working tree is clean, and the branch on the remote matches the local
+    branch, established by querying the remote.

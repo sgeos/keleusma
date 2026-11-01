@@ -1,0 +1,73 @@
+COMPLETION CONDITION — the unre-derivable-count triage
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Every comment in this line's own sources that states a count of modules,
+   chunks, opcodes, sites, tests, stages or subjects, and that carried no way to
+   re-derive it, is now one of: re-derived and correct; corrected with the new
+   value; annotated with where the figure comes from; or marked as definitional
+   rather than measured. None is left in the state that motivated the triage.
+
+2. For any figure that moved, the record distinguishes "the number changed" from
+   "the claim is now false". A corrected denominator whose surrounding argument
+   still holds is described as such rather than as a discovered defect.
+
+3. Where a corrected figure sits beside others in the same passage, those
+   neighbours were re-derived too, rather than left to look current by proximity.
+
+4. The population the triage covered is stated, along with how it was selected,
+   so a reader can tell what was examined and what was deliberately not.
+
+5. Any instrument used to select or check that population is demonstrated to
+   discriminate — it is shown to reject something as well as accept something —
+   rather than trusted because its output looked plausible.
+
+6. No guard is added that pins a count which ordinary corpus growth would move,
+   unless that guard's purpose is to announce the growth and it says so.
+
+7. Code that guards a call by catching a panic and silencing the panic hook is
+   either replaced by the fallible form of that call, or the reason it must stay
+   is recorded at the site.
+
+8. No file under src/selfhost/, and none of src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, or .github/workflows/, differs from the
+   v0.2.3 commit the branch has absorbed.
+
+9. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   The two are not run concurrently with each other, because the workspace
+   carries a wall-clock guard that concurrent load makes fail.
+
+10. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+11. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+NOT REQUIRED
+
+- Examining every comment carrying any number. The wider set is diluted with
+  definitional constants and with figures already sourced to a named function;
+  covering the narrower measured-count population is the goal, and what was
+  excluded being stated is what makes that honest.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Repairing anything needing a file this line does not own.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A count reported as verified on the strength of a filter that was never shown
+  to reject anything.
+- An audit whose reported population includes text the audit itself produced.
+- A figure corrected in isolation while stale neighbours are left beside it.
+- A green reached by narrowing a population or relaxing an assertion, unless
+  what was excluded is still reported with its cause.
+- A suite result read from a pipeline's exit status rather than the command's.

@@ -1,0 +1,37 @@
+COMPLETION CONDITION — the handoff's state figures
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test reads the state table in the resume section of this line's handoff
+   document and compares each figure it can derive against the tree. A figure that
+   disagrees fails the test, and the message names the row and states what the
+   tree says.
+
+2. The check is anchored to that one section. Figures appearing elsewhere in the
+   document, including the historical sections kept deliberately, are not treated
+   as claims about the current tree.
+
+3. If the parse finds fewer rows than expected, the test fails as a broken probe
+   rather than passing on an empty match.
+
+4. Every figure in that table is either checked against the tree, or carries the
+   commit at which it was measured. No figure in that table is both underivable
+   and unattributed.
+
+5. Any figure appearing in the document's opening banner agrees with the
+   corresponding figure in the state table, or the banner no longer states it.
+
+6. The figures in that table agree with the tree at the time the work is finished.
+
+7. The tree does not claim that drift in prose generally is now detected. The
+   scope actually achieved is stated, and the limitation that other prose remains
+   unchecked is still recorded.
+
+8. The recorded test population figures agree with the tree, and the backend gate
+   passes in both float configurations.
+
+9. Files under src/ and tests/ at the repository root are unmodified.

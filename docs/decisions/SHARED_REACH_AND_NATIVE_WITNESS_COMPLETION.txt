@@ -1,0 +1,48 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE SHARED-SEGMENT CANARY
+- Either a resumable stream that writes a shared data slot is driven on BOTH
+  implementations and their yielded sequences are compared, OR a document in the
+  tree records, citing the measurement that showed it, why such a stream cannot
+  be driven.
+- If such a stream is driven, the tree records that the shared-buffer overrun
+  check was demonstrated to FIRE when the buffer is undersized — reach shown, not
+  asserted.
+- No file still describes the shared canary as having unproven reach if that
+  reach has since been proven, and none claims proven reach without the
+  demonstration above.
+
+2. THE TWO NATIVE-CALL OPCODES
+- Either each of the two native-call opcodes has a witness program that emits it,
+  executes on both implementations, and agrees on the result, OR the tree records
+  why one or both cannot have such a witness, with the obstruction named
+  concretely.
+- Any recorded count of driven opcode witnesses agrees with what the tree
+  actually drives.
+- A witness registers its native on both sides; nothing compares a program only
+  against itself.
+
+3. HONEST INSTRUMENTS
+- Any guard whose pinned figure changed has the change explained in the tree, not
+  merely the constant edited.
+- No test added here passes while exercising nothing: each either asserts
+  agreement between the two implementations or demonstrably fails when its
+  subject is perturbed.
+
+4. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any test that does not pass is recorded as a finding rather than deleted,
+  skipped, or weakened.
+
+5. RECORDS
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- Claims made stale by this work are corrected where they stand.
+
+6. TREE STATE
+- The working tree is clean and the branch's commits are on origin.

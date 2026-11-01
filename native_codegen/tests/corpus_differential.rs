@@ -1,0 +1,5038 @@
+//! **Every module that lowers, executed against the virtual machine.**
+//!
+//! Fourteen modules had hand-written differentials. The other forty-one rested
+//! on `module_refusals(...).is_empty()` — `lower_module` returning `Ok`, which is
+//! a fact about the COMPILER and not about the program. That claim stood in for
+//! verification once already and was wrong to.
+//!
+//! # How this is generic where the others are specific
+//!
+//! Nothing here is written per module. Each module's natives and their arities
+//! are read **from the bytecode** (`native_names`, and `n & 0x7F` at each call
+//! site), each entry's parameter and return shapes from `Module::signatures`,
+//! and the three buffer sizes from the data layout and `plan_chunk_region`.
+//!
+//! Native stubs are bound by `ExecutionEngine::add_global_mapping` against the
+//! declaration looked up **from the lowered module**, so the harness never has to
+//! reproduce `native_symbol`'s mangling. An earlier attempt bound by a
+//! hand-written name, got the mangling wrong, and segfaulted; looking the
+//! declaration up cannot be wrong in that way.
+//!
+//! # A stub is wider than its declaration, deliberately
+//!
+//! Every stub takes five `i64`s. A declaration of lower arity is mapped to one
+//! anyway, and the surplus registers hold whatever the caller left there. The
+//! stub reads only the `argc` the bytecode records, so the garbage is never
+//! observed. This is what lets ONE stub table serve 42 natives, and it is sound
+//! here only because **no native in the corpus is called at two different
+//! arities** — measured in `probe_corpus_shapes.rs`, and asserted below.
+//!
+//! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
+//!
+//! `cargo nextest` has reported `LEAK` fifteen times, always alongside a PASS:
+//!
+//! | when | test | binary |
+//! |---|---|---|
+//! | 2026-09-12 | `the_sentinel_band_still_matches_the_stage_sources` | this one |
+//! | 2026-09-12 | `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules` | this one |
+//! | 2026-09-13 | `region::width_tests::a_float_tag_has_no_width_because_it_has_no_representation` | the LIBRARY |
+//! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` | this one |
+//! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` **(repeat)** | this one |
+//! | 2026-09-17 | `trap_child_runs_one_module_natively` | this one |
+//! | 2026-09-17 | `two_yields_in_one_iteration_agree` | `general_stream_sequence` |
+//! | 2026-09-17 | `region::width_tests::a_composite_body_length_is_not_on_its_tag` | the LIBRARY |
+//! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(repeat of the FIRST)** | this one |
+//! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(third time)** | this one |
+//! | 2026-09-17 | `the_no_faulting_module_emits_op_trap_fact_has_expired` | this one |
+//! | 2026-09-17 | `the_shared_corpus_enumeration_matches_this_harness` | this one |
+//! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(fourth time)** | this one |
+//! | 2026-09-17 | `a_clean_chunk_still_counts_inside_a_module_that_has_a_refusing_chunk` | `isa_lowering_census` |
+//! | 2026-09-28 | `the_sentinel_band_still_matches_the_stage_sources` **(fifth time)** | this one |
+//!
+//! **Commit `6603c399` said this note existed. It did not.** The edit meant to
+//! write it raised inside a heredoc whose output was never read, the command chain
+//! continued, and the commit message recorded a note that was never in the tree —
+//! **this session's own failure mode, committed into the record that catalogues
+//! it.** Written properly now.
+//!
+//! **And the hypothesis that message carried is refuted.** It read *"two different
+//! tests in the same binary points at the binary, not at either test"*, naming
+//! this binary's LLVM JIT engines as a plausible source. The third occurrence is a
+//! LIBRARY UNIT TEST asserting that a tag has no width: it builds nothing and
+//! holds no operating-system resource. **The binary is not the common factor.**
+//!
+//! **The fifth REPEATS the fourth, and that is the first repeat**, which sharpens
+//! the picture rather than confirming the old guess. That test's whole purpose is
+//! to make a process die with `SIGTRAP`, so a surviving handle is unsurprising
+//! there. The other three were one-offs on unrelated tests holding no
+//! operating-system resource at all.
+//!
+//! **THE SIXTH SHARPENS IT AGAIN, AND THIS TIME INTO A FAMILY.**
+//! `trap_child_runs_one_module_natively` had never leaked before, but it is not a
+//! new one-off: it **spawns a child process that dies by signal**, which is the
+//! same mechanism as the fourth and fifth. So the repeatable half is not one test
+//! — it is the **trap-child mechanism**, and it now has two members.
+//!
+//! The honest shape is therefore **a trap-child family that leaks somewhat
+//! repeatably with an obvious mechanism, plus sporadic one-offs elsewhere** — not
+//! the single whole-binary cause first guessed, not one specific test, and not a
+//! shapeless scatter. Still untraced; the table exists so each occurrence refines
+//! the statement instead of being met fresh.
+//!
+//! > ⚠ **THE PARAGRAPH BELOW SAID "FOUR LEAKS, FOUR TESTS" ABOVE A TABLE OF
+//! > FIVE ROWS.** A stale count inside the note that exists to keep the count
+//! > honest, and it survived the edit that added the fifth row. Corrected
+//! > 2026-09-17, and the head count above is now derived from the table when this
+//! > note is touched rather than carried.
+//!
+//! **THE SEVENTH ARRIVED HOURS AFTER THE SIXTH AND IS NOT IN THE FAMILY.**
+//! `two_yields_in_one_iteration_agree` spawns no child, traps nothing, and lives
+//! in a THIRD binary. So the trap-child family is a real sub-pattern but **not
+//! the whole story**: the sporadic one-offs continue, and they now span three
+//! binaries rather than two. The shape stated above survives this occurrence
+//! unchanged, which is the first time a new data point has confirmed it rather
+//! than revised it.
+//!
+//! **THE EIGHTH IS A SECOND OCCURRENCE IN `region::width_tests`.** The third was
+//! `a_float_tag_has_no_width_because_it_has_no_representation`; the eighth is
+//! `a_composite_body_length_is_not_on_its_tag`, in the same library module. Two
+//! trivial unit tests that build nothing and hold no operating-system resource,
+//! in one module, is a **second mini-cluster** beside the trap-child one — and it
+//! is the cluster that most resists the "holds a resource" explanation, since
+//! these tests hold none.
+//!
+//! **So the picture is two clusters and a residue**, neither cluster sharing a
+//! mechanism with the other. That is further from a single cause than the first
+//! guess, not closer.
+//!
+//! **THE NINTH REPEATS THE FIRST, FIVE DAYS LATER.** That entry was the one
+//! described as *"re-run five times cleanly"* — it did not reproduce on demand,
+//! and then recurred on its own. **So "one-off" was a statement about how often
+//! it had been seen, not about the test**, and the residue is not a set of tests
+//! that leak once each. Both halves of that sentence can be true at the same
+//! time: not reproducible on demand, and recurring.
+//!
+//! > **STOP RECORDING THESE ONE AT A TIME.** Four rows were added on 2026-09-17,
+//! > and each edit to this header forces a re-run of the two phases that read
+//! > source text — roughly 250 seconds per observation, for a table whose value
+//! > is cumulative rather than per-row. **Batch further occurrences into one
+//! > edit.** The instrument is worth keeping; the per-row cost is not.
+//!
+//! **BATCHED, AS THE NOTE ABOVE ASKS.** These two were observed hours apart and
+//! recorded in one edit rather than two, saving a re-run of the phases that read
+//! source text. The instruction worked on its author, which is the only evidence
+//! that matters for a process note.
+//!
+//! The sentinel-band test has now leaked THREE times and still does not reproduce
+//! on demand. **A third occurrence retires "one-off" for it entirely** — it
+//! belongs with the trap-child family as a recurring leaker, leaving the residue
+//! smaller than the table's shape has claimed since the sixth.
+//!
+//! **BATCHED AGAIN — three observations, one edit.** The note asking for this has
+//! now been obeyed twice by its author, which is the only evidence a process note
+//! ever gets.
+//!
+//! **The sentinel-band test reaches FOUR occurrences** and still does not
+//! reproduce on demand. **And a FOURTH binary joins** — `isa_lowering_census` —
+//! so the residue is spreading across binaries rather than concentrating. That
+//! weakens any explanation resting on a particular harness, and the two clusters
+//! plus a widening residue is further from a single cause than every guess so far.
+//!
+//! Fifteen leaks, ten tests, four binaries, six of them trivial or unrelated, none
+//! reproducing on demand — the first was re-run five times cleanly. The runner or
+//! the machine under load is what remains, and **that is not traced either**.
+//! The fifteenth occurred during the initial default handoff-repair gate on
+//! `e6698c5c`. Three isolated repetitions, the narrow gate and both final gates
+//! did not reproduce it. This adds a fifth sentinel-band occurrence, without
+//! establishing a cause or reviving the refuted whole-binary hypothesis above.
+//! Recorded rather than chased: a `LEAK` warns about teardown, not a failed
+//! assertion, and no observed behaviour depends on it.
+use inkwell::OptimizationLevel;
+use inkwell::context::Context;
+use keleusma::bytecode::{BlockType, Module, Op, SlotVisibility, Value, WireShape};
+use keleusma::vm::{
+    Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
+};
+use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+use keleusma_native::{LowerOptions, lower_module};
+use std::cell::RefCell;
+
+mod common;
+
+/// Ticks to drive a `Stream` entry. Enough to leave any init branch.
+const TICKS: i64 = 60;
+/// Stub slots. Must be at least the corpus's distinct-native count (42).
+const STUBS: usize = 48;
+
+/// One stub's identity: name, argument count, and the RECORDED composite return
+/// shape (`CompositeKind` tag and body size) if it returns one.
+type NativeEntry = (String, usize, Option<(u8, u32)>);
+
+thread_local! {
+    /// Index -> (name, argc, composite return shape) for the module under test.
+    static TABLE: RefCell<Vec<NativeEntry>> = const { RefCell::new(Vec::new()) };
+    /// Per-native scratch for a COMPOSITE return on the native side. The stub
+    /// hands back an ADDRESS, so the bytes must outlive the call; one fixed
+    /// buffer per stub index is enough because a native is called at one arity
+    /// and one shape (both asserted elsewhere).
+    static COMPOSITE_RET: RefCell<Vec<[u8; COMPOSITE_RET_CAP]>> = const { RefCell::new(Vec::new()) };
+    static LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set when a native received a NON-INTEGER argument on the VM side.
+    ///
+    /// Such an argument is a reference — a string, most often — and it reaches
+    /// the native as an arena handle on one side and a pointer on the other.
+    /// Neither renders as the same integer, so the module is exempted rather
+    /// than reported as a disagreement it is not.
+    static SAW_REF_ARG: RefCell<bool> = const { RefCell::new(false) };
+    /// `(native index, argument position)` pairs the VIRTUAL MACHINE observed as
+    /// non-scalar on this run.
+    ///
+    /// **`run_vm` runs before `run_native` for every seed** -- verified in the
+    /// source, not assumed -- so the native stub can mask exactly the positions
+    /// the virtual machine already substituted a zero for. Without this the two
+    /// logs differ in one field (an arena handle against a pointer) and the
+    /// WHOLE MODULE was discarded over it, leaving the call sequence, every
+    /// scalar argument, the return value and the shared segment uncompared.
+    ///
+    /// **This is a RUNTIME mask, not a contract.** It rests on what the virtual
+    /// machine saw on a particular run rather than on anything the module
+    /// declares -- `Module` carries `native_names` and `native_return_shapes`
+    /// and no parameter types at all.
+    static REF_POSITIONS: RefCell<std::collections::BTreeSet<(usize, usize)>> =
+        const { RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+fn take_log() -> Vec<String> {
+    LOG.with(|l| core::mem::take(&mut *l.borrow_mut()))
+}
+
+/// **ONE exemption remains that a contract could not close, and it is not
+/// `led.kel` any more.**
+///
+/// Both used to fault because the stub honoured no contract. The bytecode was
+/// checked rather than assumed (`what_return_contract_does_the_bytecode_record`),
+/// and the two differed:
+///
+/// | native | recorded return shape | derivable? |
+/// |---|---|---|
+/// | `host::rng_range` | `Scalar { kind: 3 }` | the TYPE, yes. the RANGE, **no** |
+/// | `host::gpio_set` | `Flat { kind: 3, size: 16 }` | the SHAPE, yes — **now honoured** |
+///
+/// **`led.kel` IS CLOSED.** `gpio_set` records a sixteen-byte enum body, so the
+/// stub returns a real body ADDRESS on both sides: an arena-resident
+/// `Value::Enum(EnumBody::Flat(_))` built through `register_native_with_ctx_closure`
+/// on the virtual-machine side, and a matching buffer behind the native stub.
+/// The bytes come from ONE builder, so there is no second encoding to drift.
+///
+/// **`rogue_dungen` cannot be closed at all**, and that is unchanged.
+/// `use host::rng_range(Word, Word) -> Word` records types and nothing else;
+/// `[lo, hi)` exists only in the host's head. Inferring a range from the argument
+/// positions would work here and is exactly the guess that must not be made.
+///
+/// A stub that makes a module pass by accident is worse than an exemption. The
+/// discriminant chosen is 0 — the FIRST DECLARED VARIANT, a value the module can
+/// genuinely match — not an arbitrary integer that would make it fault.
+///
+/// The value a native returns, on BOTH sides.
+///
+/// Deterministic, and asymmetric in the argument positions so a swapped or
+/// dropped argument changes it. A random source would make the two runs
+/// incomparable, which is the point of stubbing at all.
+/// Largest composite return the stub table serves. Asserted against, so a
+/// larger one fails loudly rather than truncating.
+const COMPOSITE_RET_CAP: usize = 64;
+
+/// **The bytes of a stubbed COMPOSITE return, identical on both sides.**
+///
+/// One function, called by the virtual-machine closure and by the native stub,
+/// so there is no second encoding to drift — the same rule the shared-segment
+/// seeding follows.
+///
+/// **The discriminant is 0 and the payload is zero.** For an enum body the
+/// layout is `[discriminant: word_bytes][payload]`, and 0 is the FIRST DECLARED
+/// VARIANT — a value the module can genuinely match, which is the whole point.
+/// `Status::Ok = 0` in the rtos prelude, so `led.kel` takes its `Status::Ok`
+/// arm rather than falling through to a trap.
+///
+/// **This is deterministic invention, and it is no more invention than
+/// `stub_value` already is for a `Word`.** What it must never be is a value the
+/// module cannot match: that would make the module fault and the harness would
+/// be measuring the stub rather than the lowering.
+fn composite_stub_bytes(size: u32, word_bytes: usize, out: &mut [u8]) {
+    let n = size as usize;
+    out[..n].fill(0);
+    // Discriminant 0, written at the module's word width. Explicit rather than
+    // relying on the fill, because a future non-zero choice must have one place
+    // to change.
+    let disc: u64 = 0;
+    let w = word_bytes.min(8).min(n);
+    out[..w].copy_from_slice(&disc.to_le_bytes()[..w]);
+}
+
+fn stub_value(idx: usize, args: &[i64]) -> i64 {
+    let mut acc = (idx as i64 + 1) * 7;
+    for (i, a) in args.iter().enumerate() {
+        acc = acc
+            .wrapping_mul(31)
+            .wrapping_add(a.wrapping_mul(i as i64 + 1));
+    }
+    acc % 1024
+}
+
+fn record(idx: usize, all: [i64; 5]) -> i64 {
+    let (name, argc, shape) = TABLE.with(|t| {
+        t.borrow()
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
+    });
+    let args = &all[..argc.min(5)];
+    // **MASK THE POSITIONS THE VIRTUAL MACHINE SAW AS NON-SCALAR.**
+    //
+    // A reference argument is an arena HANDLE to the virtual machine and a
+    // POINTER here, so the two never render as the same integer. The virtual
+    // machine already substitutes zero for it; without the same substitution
+    // here the logs differ in one field and the WHOLE MODULE was discarded --
+    // ten of the corpus's exemptions were exactly this, the largest single
+    // class, and the call sequence, every scalar argument, the return value and
+    // the shared segment went uncompared over it.
+    //
+    // **Nothing is dereferenced.** The pointer is replaced, not read. Decoding
+    // it would need the string application binary interface, which is ruled
+    // PROVISIONAL, and a wrong assumption here is a SEGFAULT rather than a
+    // failed assertion since the native side runs in-process through the JIT.
+    //
+    // **Only the observed positions are masked.** Masking a scalar would hide a
+    // real disagreement, so the key is the exact `(native, position)` pair.
+    let parts: Vec<String> = args
+        .iter()
+        .enumerate()
+        .map(|(pos, a)| {
+            if REF_POSITIONS.with(|r| r.borrow().contains(&(idx, pos))) {
+                "0".to_string()
+            } else {
+                a.to_string()
+            }
+        })
+        .collect();
+    LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
+
+    // **A COMPOSITE return is an ADDRESS natively.** Returning `stub_value`'s
+    // integer here is what made `led.kel` segfault: the module dereferenced it
+    // as a body pointer. The bytes come from the shared builder, so they match
+    // what the virtual-machine side hands its own caller.
+    if let Some((_kind, size)) = shape {
+        return COMPOSITE_RET.with(|c| {
+            let mut bufs = c.borrow_mut();
+            if bufs.len() <= idx {
+                bufs.resize(idx + 1, [0u8; COMPOSITE_RET_CAP]);
+            }
+            let buf = &mut bufs[idx];
+            composite_stub_bytes(size, 8, buf);
+            buf.as_ptr() as i64
+        });
+    }
+    stub_value(idx, args)
+}
+
+/// One external native's virtual-machine side, by table index.
+///
+/// **`register_external_native` takes a BARE `fn`, not a closure**, so it cannot
+/// capture the index the way `register_native_closure` does. The native side
+/// already solves exactly this with the `kel_stub_NN` family recovering identity
+/// from a thread-local table; this mirrors that rather than inventing a second
+/// mechanism, and reuses the same table.
+fn vm_external_record(idx: usize, args: &[Value]) -> Result<Value, keleusma::vm::VmError> {
+    let (name, argc, _) = TABLE.with(|t| {
+        t.borrow()
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
+    });
+    let vals: Vec<i64> = args
+        .iter()
+        .take(argc)
+        .enumerate()
+        .map(|(pos, v)| match v {
+            Value::Int(x) => *x,
+            Value::Byte(b) => i64::from(*b),
+            Value::Bool(b) => i64::from(*b),
+            _ => {
+                SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                REF_POSITIONS.with(|r| {
+                    r.borrow_mut().insert((idx, pos));
+                });
+                0
+            }
+        })
+        .collect();
+    let parts: Vec<String> = vals.iter().map(|a| a.to_string()).collect();
+    LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
+    Ok(Value::Int(stub_value(idx, &vals)))
+}
+
+macro_rules! external_stubs {
+    ($($n:literal => $sym:ident),* $(,)?) => {
+        $(
+            fn $sym(args: &[Value]) -> Result<Value, keleusma::vm::VmError> {
+                vm_external_record($n, args)
+            }
+        )*
+        /// The bare `fn` for table index `i`, or `None` past the family's end.
+        ///
+        /// **A FIXED FAMILY WITH AN EXPLICIT END.** Returning `None` past it makes
+        /// the module fall back to a verified registration, which the virtual
+        /// machine then refuses at call-site dispatch with a message naming the
+        /// mismatch. Silently binding the wrong function would be worse.
+        fn external_stub_for(i: usize) -> Option<fn(&[Value]) -> Result<Value, keleusma::vm::VmError>> {
+            match i { $($n => Some($sym),)* _ => None }
+        }
+    };
+}
+
+external_stubs!(
+    0 => vm_ext_00, 1 => vm_ext_01, 2 => vm_ext_02, 3 => vm_ext_03,
+    4 => vm_ext_04, 5 => vm_ext_05, 6 => vm_ext_06, 7 => vm_ext_07,
+);
+
+macro_rules! stubs {
+    ($($n:literal => $sym:ident),* $(,)?) => {
+        $(
+            #[unsafe(no_mangle)]
+            pub extern "C" fn $sym(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+                record($n, [a, b, c, d, e])
+            }
+        )*
+        fn stub_addrs() -> Vec<usize> {
+            vec![$($sym as *const () as usize),*]
+        }
+    };
+}
+
+stubs!(
+    0 => kel_stub_00, 1 => kel_stub_01, 2 => kel_stub_02, 3 => kel_stub_03,
+    4 => kel_stub_04, 5 => kel_stub_05, 6 => kel_stub_06, 7 => kel_stub_07,
+    8 => kel_stub_08, 9 => kel_stub_09, 10 => kel_stub_10, 11 => kel_stub_11,
+    12 => kel_stub_12, 13 => kel_stub_13, 14 => kel_stub_14, 15 => kel_stub_15,
+    16 => kel_stub_16, 17 => kel_stub_17, 18 => kel_stub_18, 19 => kel_stub_19,
+    20 => kel_stub_20, 21 => kel_stub_21, 22 => kel_stub_22, 23 => kel_stub_23,
+    24 => kel_stub_24, 25 => kel_stub_25, 26 => kel_stub_26, 27 => kel_stub_27,
+    28 => kel_stub_28, 29 => kel_stub_29, 30 => kel_stub_30, 31 => kel_stub_31,
+    32 => kel_stub_32, 33 => kel_stub_33, 34 => kel_stub_34, 35 => kel_stub_35,
+    36 => kel_stub_36, 37 => kel_stub_37, 38 => kel_stub_38, 39 => kel_stub_39,
+    40 => kel_stub_40, 41 => kel_stub_41, 42 => kel_stub_42, 43 => kel_stub_43,
+    44 => kel_stub_44, 45 => kel_stub_45, 46 => kel_stub_46, 47 => kel_stub_47,
+);
+
+fn sources() -> Vec<std::path::PathBuf> {
+    // **Delegates to the one canonical walk.** Proven equal to the previous
+    // private copy by `the_shared_corpus_enumeration_matches_this_harness`
+    // before this line was written, which is what licensed the switch.
+    common::corpus_sources()
+}
+
+/// The source to compile for `p`, with the rtos prelude prepended where the
+/// rtos host prepends it.
+///
+/// **Five exemptions were harness artefacts.** `event_listener`, `faulty`,
+/// `heartbeat`, `led` and `sensor` were recorded as "rejected by the REFERENCE
+/// compiler", which reads as a statement about the scripts. It was a statement
+/// about this harness: it compiled each `.kel` standalone, while the rtos host
+/// does
+///
+/// ```ignore
+/// let combined = format!("{}\n{}", PRELUDE, src);   // examples/rtos/src/setup.rs:429
+/// ```
+///
+/// so every script referencing a prelude declaration failed to compile.
+///
+/// **This is NOT the thing Part B of this increment refused to do.** Declining
+/// to reproduce the self-hosted stages' input formats was right because a seed a
+/// stage silently rejects looks exactly like coverage. This composition is four
+/// lines, it is the shipping host's own, it is quoted from `setup.rs`, and the
+/// scripts document it themselves. A wrong composition fails loudly at compile
+/// time rather than producing a plausible run.
+fn source_for(p: &std::path::Path) -> Option<String> {
+    let src = std::fs::read_to_string(p).ok()?;
+    let is_rtos = p.components().any(|c| c.as_os_str() == "rtos");
+    let is_prelude = p.file_name().is_some_and(|n| n == "prelude.kel");
+    if is_rtos && !is_prelude {
+        let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").ok()?;
+        return Some(format!("{prelude}\n{src}"));
+    }
+    Some(src)
+}
+
+/// `(native index, argc)` for every native the module actually calls.
+///
+/// Asserts the single-arity property this whole design rests on.
+/// Name, argument count, and the RECORDED composite return shape if any.
+///
+/// The shape comes from `native_return_shapes`, so a native that returns a
+/// composite is stubbed as one on both sides rather than as an integer the
+/// native side would dereference as a body address.
+fn native_table(m: &Module) -> Vec<NativeEntry> {
+    let mut argc: Vec<Option<usize>> = vec![None; m.native_names.len()];
+    for c in &m.chunks {
+        for op in &c.ops {
+            if let Op::CallVerifiedNative(i, n) | Op::CallExternalNative(i, n) = op {
+                let a = usize::from(n & 0x7F);
+                let slot = &mut argc[usize::from(*i)];
+                if let Some(prev) = slot {
+                    assert_eq!(
+                        *prev,
+                        a,
+                        "native `{}` is called at two arities ({prev} and {a}); one stub \
+                         cannot serve both and the whole stub table design fails here",
+                        m.native_names[usize::from(*i)]
+                    );
+                } else {
+                    *slot = Some(a);
+                }
+            }
+        }
+    }
+    m.native_names
+        .iter()
+        .enumerate()
+        .zip(argc)
+        .map(|((i, n), a)| {
+            let shape = match m.native_return_shapes.get(i) {
+                Some(WireShape::Flat { kind, size }) => Some((*kind, *size)),
+                _ => None,
+            };
+            (n.clone(), a.unwrap_or(0), shape)
+        })
+        .collect()
+}
+
+fn arena_for(m: &Module) -> keleusma_arena::Arena {
+    // The host margin is the harness's job. `auto_arena_capacity_for` sizes the
+    // nominal stack and a long run exhausts it; the runtime says so explicitly.
+    const HOST_MARGIN: usize = 4 << 20;
+    let need = required_persistent_capacity_for(m);
+    let cap = auto_arena_capacity_for(m, &[]).expect("arena capacity") + need + HOST_MARGIN;
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena.resize_persistent(need).expect("persistent fits");
+    arena
+}
+
+/// Scalar arguments for an entry of `n` parameters. Asymmetric per position.
+/// The argument vectors each module is driven with, in order.
+///
+/// **Seed 0 is the original vector and every other seed is new.** Driving one
+/// vector of pairwise-DISTINCT ascending arguments is what left a hole: `SLT`
+/// and `SLE` differ only when the operands are EQUAL, and nothing in seed 0 ever
+/// makes two comparands equal. Measured: with `Op::CmpLt` lowered as `SLE` --
+/// 126 sites across 25 modules -- the whole differential passed. Inverting it to
+/// `SGT` outright was caught by only 2 of those 25.
+///
+/// Seed 1 makes every argument equal, which is what drives a comparison to its
+/// boundary. Seed 2 is all zeros, the identity case. Seed 3 descends, so an
+/// ordering assumption that holds under seed 0 fails here.
+///
+/// **Seeds 4 and up sweep a small constant, and that is about COMMAND
+/// SELECTORS rather than about arithmetic.** The four shapes above reach four
+/// distinct values of a first parameter, which is ample for a module that
+/// computes and useless for one that DISPATCHES. `wire.kel` branches twenty-odd
+/// ways on its first argument, so four shapes reached four of its commands and
+/// left the rest of the module unexecuted while the harness reported it as
+/// running.
+///
+/// **Every step below is a measured mutation-sweep result, not a rationale.**
+/// Round two named four real holes, all owned by `wire.kel`, and the recorded
+/// repair was to drive that module with real input. Seeding the shared segment
+/// was necessary and NOT sufficient:
+///
+/// | | `BitAnd` 54 | `Shr` 20 | `BitOr` 9 | `Shl` 48 | `CmpNe` 26 |
+/// |---|---|---|---|---|---|
+/// | round two | -- | -- | -- | -- | -- |
+/// | seeded segment, 4 seeds | **YES** | **YES** | -- | -- | -- |
+/// | 24 seeds | YES | YES | **YES** | **YES** | **YES** |
+///
+/// Seeding alone reached only the EMIT direction, which extracts bytes with a
+/// mask and a right shift. `BitOr` and `Shl` live in the PARSE direction, which
+/// reassembles a multi-byte integer, and no argument SHAPE reaches it -- only a
+/// selector VALUE does. **`Shl` is why the constant runs to 19 rather than to a
+/// single digit**: an intermediate setting reaching selectors 0..7 left it
+/// undetected.
+///
+/// The intermediate row is deliberately not tabulated. It was measured before
+/// `mutation_sweep.py` calibrated its timeout, and an under-sized timeout can
+/// manufacture a detection but never suppress one -- so its negative results
+/// stand and its positive ones are not evidence. Only the two rows above were
+/// taken under the corrected instrument.
+///
+/// **Generic rather than tuned to `wire.kel`.** The values are not chosen by
+/// reading its dispatch table -- picking `cmd == 9` because that is where the
+/// undetected sites are would make this a demonstration rather than a
+/// measurement, the same error the pre-registered mutation set exists to avoid.
+/// Consecutive small integers reach a dense selector in any module that has one.
+///
+/// **Cost.** 35s at 4 seeds, 58s at 24 when first recorded. Re-measured
+/// 2026-08-20 on a different host: **30s at 24, 53s at 64**. Wall-clock figures
+/// are host-dependent and the older pair is not thereby wrong. Sublinear because
+/// a `Stream` entry and a zero-parameter entry both keep a single seed, so the
+/// sweep only widens the modules it can widen.
+///
+/// **The claim that this is "paid on every run including CI" was FALSE and is
+/// removed.** Continuous integration does not build `native_codegen` at all —
+/// the package has a detached `[workspace]` on purpose. The cost is paid
+/// locally and by `tools/mutation_sweep.py`, which is a real cost and a smaller
+/// one than "every CI run".
+///
+/// # IS 24 ITSELF A HOLE? MEASURED 2026-08-20: NO EVIDENCE THAT IT IS
+///
+/// 4 was a hole — that is why this constant exists. Nobody had asked the same
+/// question of 24. Raised to **64** and re-run: **482 (module, seed) pairs
+/// became 1242, and NOT ONE new disagreement appeared.** 19 of the 45 comparable
+/// modules widen; the other 26 keep a single vector by construction.
+///
+/// **The widening is arithmetic, not an impression**: 19 x 64 + 26 = 1242 and
+/// 19 x 24 + 26 = 482, both measured rather than derived. So the negative result
+/// is over **760 additional comparisons**, not over a probe that quietly did
+/// nothing.
+///
+/// **What this does NOT establish.** It is not a proof that 24 suffices in
+/// general. `args_for_seed` gives every parameter the SAME value for seeds
+/// past 3, so widening explores a diagonal and not the product space; a defect
+/// needing two parameters to differ would be invisible at any count. Left at 24
+/// because 64 bought nothing measurable and the cost is real.
+const SEEDS: usize = 24;
+
+/// **THE SEED COUNT WAS WIDENED AND MEASURED. THE SEED RANGE WAS NOT.**
+///
+/// Until 2026-09-08 every seed produced a SMALL NON-NEGATIVE value: seeds 4
+/// through 23 were simply the constants 0 to 19. So a differential that ran
+/// hundreds of comparisons per module had never driven a negative number, and
+/// never driven a boundary.
+///
+/// **That is the same shape as "a sweep is only as wide as its mutation set",
+/// arriving on a different instrument.** The count was audited because it is a
+/// number in the source; the range was not, because it is a consequence of an
+/// expression.
+///
+/// The redundant small constants are replaced with the values arithmetic
+/// actually breaks at. `i64::MIN` is the one that matters most: its negation and
+/// `i64::MIN / -1` are unrepresentable, and the hand-written differential in
+/// `differential.rs` already pins that pair precisely because it is where a bare
+/// `sdiv` has undefined behaviour on exactly the input the reference answers.
+/// **The corpus differential could not have caught the same defect in a corpus
+/// module.**
+///
+/// A handful of small constants is kept: they exercise loop trip counts and
+/// array indices that a boundary value would send straight to a refusal or a
+/// trap, so replacing all of them would trade one blind spot for another.
+///
+/// **THE REACH IS BOUNDED AND MEASURED, NOT ASSUMED.** A module whose entry
+/// takes no parameters, or whose entry is a stream, sees ONE argument vector
+/// whatever this table says. `seed_range_reach.rs` measures the population that
+/// can see a second seed at all: **26 of 69 corpus modules.** So "the
+/// differential drives negatives and boundaries" is a claim about those 26 and
+/// must not be quoted about the corpus.
+///
+/// **The boundaries found nothing.** The differential stayed green. That is a
+/// negative result over a surface that previously had no coverage at all, and
+/// it is worth exactly that much.
+fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
+    (0..n)
+        .map(|i| match seed {
+            0 => (i as i64 + 1) * 3 + 1,
+            1 => 5,
+            2 => 0,
+            3 => (n as i64 - i as i64) * 3 + 1,
+            // --- boundaries, added 2026-09-08 ---
+            4 => -1,
+            5 => i64::MIN,
+            6 => i64::MAX,
+            7 => i64::MIN + 1,
+            8 => -((i as i64 + 1) * 3 + 1),
+            // Mixed signs and mixed magnitudes, so a defect needing two
+            // parameters to DIFFER is at least reachable — the diagonal note
+            // below still applies to every other seed.
+            9 => {
+                if i % 2 == 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            }
+            10 => {
+                if i % 2 == 0 {
+                    -1
+                } else {
+                    1
+                }
+            }
+            11 => i64::MAX - i as i64,
+            k => (k - 12) as i64,
+        })
+        .collect()
+}
+
+/// Is every parameter of this entry a scalar the harness can synthesise?
+///
+/// A composite parameter is an address into caller-owned storage, which the
+/// three hand-written differentials build per module. Reported as an exemption
+/// rather than guessed at.
+fn params_are_scalar(m: &Module, entry: usize) -> bool {
+    match m.signatures.get(entry) {
+        Some(sig) => sig
+            .params
+            .iter()
+            .all(|p| matches!(p, WireShape::Scalar { .. })),
+        // No signature table entry: fall back to the chunk's own arity being 0,
+        // which cannot carry a composite.
+        None => m.chunks[entry].param_count == 0,
+    }
+}
+
+/// Byte offset of the shared slot named `suffix`, or of its element zero.
+///
+/// An array slot expands to one slot per element (`wire.bytes[0]`), so a plain
+/// match on `bytes` finds nothing. `shared_layout` is parallel to the SHARED
+/// prefix of `slots`, so the index is counted among shared slots.
+fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
+    let dl = m.data_layout.as_ref()?;
+    let scalar = format!(".{suffix}");
+    let element0 = format!(".{suffix}[0]");
+    let mut shared_ix = 0usize;
+    for sl in &dl.slots {
+        if sl.visibility != SlotVisibility::Shared {
+            continue;
+        }
+        if sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
+            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
+        }
+        shared_ix += 1;
+    }
+    None
+}
+
+/// A payload for any module declaring the documented `len` + `bytes`
+/// convention, written identically into both sides' buffers.
+///
+/// **This is a convention, not a special case.** `wire.kel` and `lexer.kel` each
+/// document the same host contract in their own headers: `len` at slot 0,
+/// `bytes[i]` at slot `1 + i`. Keying on that is why one rule serves both.
+///
+/// It exists because `wire.kel` owned every undetected opcode in the mutation
+/// sweep -- 131 sites of `BitAnd`, `BitOr`, `Shl` and `Shr` -- and finished after
+/// 0 ticks. `cmd == 0` is a bitwise CRC-32 over `bytes[0..len]`, which is exactly
+/// where those sites are, and seed 2 already drives `cmd == 0`. The only thing
+/// missing was something to checksum.
+const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x80\xfe\xff";
+
+/// **A REAL INPUT for a self-hosted verifier stage, built by the driver's own
+/// accessor rather than reproduced here.**
+///
+/// `src/selfhost/mod.rs` now exposes per-item seed accessors (`fa649ec3`), which
+/// this line requested precisely so the harness would not carry a second
+/// encoding of the stage input formats. Using them means the bytes are the ones
+/// a real driver hands the module; a constructor of our own would be free to
+/// drift, which is the defect class this whole arc has been about.
+///
+/// **`verify_datalayout` deliberately gets nothing.** It has no accessor by joint
+/// agreement: its verdict accumulates across three differently-encoded phases in
+/// the retained buffer, so a single seeded buffer cannot produce a verdict at
+/// all. It stays in `KNOWN_VACUOUS`, and that is correct rather than a gap.
+///
+/// The subject chunk is a real compiled chunk, because verifying a chunk is what
+/// these stages do. Returns the WHOLE segment, sized from the stage's own layout,
+/// so both sides can be given identical bytes.
+/// Stages the seeding switch has an arm for. Named so the applied/not-applied line is
+/// printed for exactly those, rather than for every module in the corpus.
+const STAGE_SEEDED: &[&str] = &[
+    // **Seeded by CHAINING, 2026-08-26.** Not more of the same: this stage is a
+    // real stream (`loop main(resume) { yield emit_next(resume) }`, one emission
+    // per tick) and it consumes an AST rather than flat op tables. Measured, that
+    // AST is exactly what `reconstruct.kel` publishes -- ten slots at identical
+    // widths -- so it is bridged from reconstruct's output rather than hand-built.
+    "codegen.kel",
+    // **Seeded WITHOUT an accessor, 2026-08-26**, same route as `verify_yield.kel`
+    // below. Twelve parallel tables and eight input scalars.
+    "analyze.kel",
+    // **Seeded WITHOUT an accessor, 2026-08-26.** `src/selfhost/mod.rs` exposes
+    // five seed accessors and none of them covers this stage; it is the other
+    // line's file and read-only here, so this stage stayed unseeded for as long
+    // as the accessor route was assumed to be the only one. It needs four PARALLEL
+    // tables against one `op_count`, which is why the one-array `seed_named_slots`
+    // did not reach it and `seed_verify_yield_subject` exists.
+    "verify_yield.kel",
+    "verify_depth.kel",
+    "verify_typed.kel",
+    "verify_structural.kel",
+    // Listed so the harness PRINTS why it is blocked rather than omitting it.
+    "reconstruct.kel",
+    // **Seeded WITHOUT an accessor**, via `seed_named_slots` against the module's
+    // own layout. `src/selfhost/mod.rs` exposes five accessors and is the OTHER
+    // LINE'S FILE, read-only here -- so the generic slot route is what made these
+    // two reachable at all.
+    //
+    // **BOTH ARE ALREADY COMPARED** by `stage_differential.rs`, each at ONE
+    // hardcoded source. What this adds is SUBJECTS and the gate's own
+    // accounting, NOT coverage from nothing.
+    "lexer.kel",
+    "parse.kel",
+    // Synthetic input -- a table of (left tag, right tag) -- so no marshalled
+    // module structure and no accessor is needed. See `TYPE_PAIR_SUBJECTS`.
+    "verify_types.kel",
+];
+
+/// Resolve a SHARED slot's byte offset by name, from the module's own layout.
+///
+/// **This is the route that needs no accessor**, and it is why two more stages
+/// could be seeded without touching `src/selfhost/mod.rs` — which is the other
+/// line's file and read-only here. `stage_differential.rs` proved the technique;
+/// this is the same resolution against the same layout.
+fn shared_slot_offset(m: &Module, suffix: &str) -> Option<u32> {
+    let dl = m.data_layout.as_ref()?;
+    let scalar = format!(".{suffix}");
+    let element0 = format!(".{suffix}[0]");
+    let mut shared_ix = 0usize;
+    for sl in &dl.slots {
+        if sl.visibility != SlotVisibility::Shared {
+            continue;
+        }
+        if sl.name == suffix || sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
+            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
+        }
+        shared_ix += 1;
+    }
+    None
+}
+
+/// Write `body.len()` into the length slot and `body` into the array slot.
+///
+/// **Raw bytes, which is exactly why ONE function seeds both sides**: the virtual
+/// machine and the JIT receive the same buffer contents, so the comparison is of
+/// two lowerings rather than of two encodings.
+///
+/// Returns `Err` rather than panicking on a subject that does not fit, because a
+/// subject too large must be REPORTED and skipped, never silently truncated —
+/// a truncated program lexes differently and the comparison would then be of
+/// something other than what it claims.
+fn seed_named_slots(
+    m: &Module,
+    buf: &mut [u8],
+    len_slot: &str,
+    array_slot: &str,
+    body: &[i64],
+    word: usize,
+) -> Result<(), String> {
+    let len_off = shared_slot_offset(m, len_slot).ok_or("no len slot")? as usize;
+    let arr_off = shared_slot_offset(m, array_slot).ok_or("no array slot")? as usize;
+    if len_off + 8 > buf.len() || arr_off + body.len() * word > buf.len() {
+        return Err(format!(
+            "subject of {} elements does not fit the {}-byte shared segment",
+            body.len(),
+            buf.len()
+        ));
+    }
+    buf[len_off..len_off + 8].copy_from_slice(&(body.len() as u64).to_le_bytes());
+    for (i, v) in body.iter().enumerate() {
+        let at = arr_off + i * word;
+        match word {
+            1 => buf[at] = *v as u8,
+            8 => buf[at..at + 8].copy_from_slice(&v.to_le_bytes()),
+            other => return Err(format!("unsupported slot width {other}")),
+        }
+    }
+    Ok(())
+}
+
+/// Write one WORD-wide scalar into a shared slot, resolved BY NAME.
+///
+/// **By name, never by a computed index.** `verify_types.kel` records that
+/// inserting fields mid-block broke four tests, because the shared block is
+/// addressed by SLOT and everything after the insertion point silently shifted.
+fn write_scalar_slot(m: &Module, buf: &mut [u8], slot: &str, v: i64) -> Result<(), String> {
+    let off = shared_slot_offset(m, slot).ok_or_else(|| format!("no `{slot}` slot"))? as usize;
+    if off + 8 > buf.len() {
+        return Err(format!(
+            "`{slot}` does not fit the {}-byte segment",
+            buf.len()
+        ));
+    }
+    buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    Ok(())
+}
+
+/// Write an array slot's elements, resolved BY NAME. No length slot is written.
+fn write_array_slot(m: &Module, buf: &mut [u8], slot: &str, body: &[i64]) -> Result<(), String> {
+    let off = shared_slot_offset(m, slot).ok_or_else(|| format!("no `{slot}` slot"))? as usize;
+    if off + body.len() * 8 > buf.len() {
+        return Err(format!(
+            "`{slot}` body does not fit the {}-byte segment",
+            buf.len()
+        ));
+    }
+    for (i, v) in body.iter().enumerate() {
+        buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    Ok(())
+}
+
+/// Operand-pair subjects for `verify_types.kel`, as `(label, lhs, rhs)`.
+///
+/// **EVERY SUBJECT MUST CONTAIN A DISAGREEING PAIR.** The verdict is written as
+/// reject and the buffer already holds accept, so a clean table changes nothing
+/// this harness can compare -- the measured reason the whole `verify_*` family
+/// sat vacuous before defects were injected. The accepting direction belongs in
+/// a control, not in the driven set.
+///
+/// **AND THEY ARE SMALL FOR A PUBLISHED REASON, not an arbitrary one.** The
+/// stage's own `ty_max_steps()` is 1801 -- one step per row across every table
+/// at its cap, one per phase boundary, one to report -- while this harness
+/// drives 60 ticks. With only phase 0 populated the other seven phases advance
+/// in a single step each, so a fold over `k` rows finishes in about `k + 9`.
+/// A row count near the cap would never reach its verdict here.
+///
+/// `ty_unknown()` is 0 and untouched rows are therefore "unknown", which never
+/// rejects -- so trailing zeros are inert rather than accidental agreement.
+const TYPE_PAIR_SUBJECTS: &[(&str, &[i64], &[i64])] = &[
+    ("one-disagreement", &[1, 2, 3, 4], &[1, 2, 3, 5]),
+    ("first-row-disagrees", &[7, 2, 2], &[8, 2, 2]),
+    ("several-disagree", &[1, 2, 3, 4, 5], &[9, 2, 8, 4, 6]),
+];
+
+/// Seed `verify_types.kel` with an operand-pair table, then PROVE the subject
+/// reaches and moves its verdict.
+///
+/// **Reaching is checked, not assumed.** A run that stops before the verdict
+/// compares a prefix while reporting as seeded -- the same failure shape as the
+/// truncated token stream this harness already hit once. The stage yields
+/// `tyc_pending()` (63) while folding and its verdict when finished.
+fn type_pairs_seed(m: &Module, lhs: &[i64], rhs: &[i64]) -> Result<Vec<u8>, String> {
+    if lhs.len() != rhs.len() {
+        return Err("subject rows are ragged".into());
+    }
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    write_scalar_slot(m, &mut buf, "n", lhs.len() as i64)?;
+    write_array_slot(m, &mut buf, "lhs", lhs)?;
+    write_array_slot(m, &mut buf, "rhs", rhs)?;
+
+    // Drive the stage and require a verdict of REJECT within the budget.
+    let arena = arena_for(m);
+    let mut vm = Vm::new(m.clone(), &arena).map_err(|e| format!("verify_types vm: {e:?}"))?;
+    let mut shared = buf.clone();
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .map_err(|e| format!("verify_types first call: {e:?}"))?;
+    let mut verdict: Option<i64> = None;
+    for t in 1..TICKS {
+        if let Some(v) = stream_scalar(&st)
+            && v != 63
+        {
+            verdict = Some(v);
+            break;
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(t))
+            .map_err(|e| format!("verify_types resume: {e:?}"))?;
+        if matches!(st, VmState::Reset) {
+            st = vm
+                .resume_with_shared(&mut shared, Value::Int(t))
+                .map_err(|e| format!("verify_types resume after reset: {e:?}"))?;
+        }
+    }
+    match verdict {
+        // `ty_reject()` is `0 - 1`.
+        Some(-1) => Ok(buf),
+        Some(other) => Err(format!(
+            "subject reached a verdict of {other}, not REJECT -- it would run \
+             without moving the segment and inflate a count"
+        )),
+        None => Err(format!(
+            "subject did not reach a verdict within {TICKS} ticks, so it would \
+             compare a PREFIX of a fold while reporting as seeded"
+        )),
+    }
+}
+
+/// Source subjects for `lexer.kel` and, through it, `parse.kel`.
+///
+/// **Held small on purpose.** The lexer's byte array and the parser's packed
+/// token array both live in the shared segment, and a subject that does not fit
+/// is reported rather than truncated. These are complete programs, not excerpts.
+const SOURCE_SUBJECTS: &[(&str, &str)] = &[
+    (
+        "add-with-branch",
+        "// a comment, which the scanner must skip\n\
+         fn add(a: Word, b: Word) -> Word {\n  \
+         let c = a + b;\n  \
+         if c >= 10 { c } else { c * 2 }\n\
+         }\n",
+    ),
+    (
+        "struct-and-field",
+        "struct P { a: Word, b: Word }\n\
+         fn g(p: P) -> Word { p.a + p.b }\n\
+         fn main() -> Word { g(P { a: 1, b: 2 }) }\n",
+    ),
+    (
+        "loop-and-compare",
+        "fn f(n: Word) -> Word {\n  \
+         let xs = [1, 2, 3];\n  \
+         for x in xs { let _d = x; }\n  \
+         if n < 0 { 0 } else { n }\n\
+         }\n",
+    ),
+];
+
+/// The subjects the three `verify_*` stages are driven against.
+///
+/// **`02_struct_field.kel` was the ONLY subject until 2026-08-21**, so each
+/// seeded stage saw one chunk of one program while agreeing at sixty ticks. A
+/// stage mis-handling a construct absent from that file agreed at all sixty and
+/// the gate reported it as agreeing. **That is the same shape as the hole seed 0
+/// left for `Op::CmpLt`**, where `SLE` stood in for `SLT` across 126 sites and
+/// the whole differential passed because no vector made two comparands equal.
+///
+/// Kept first so its behaviour is unchanged and any movement is attributable.
+const STAGE_SUBJECTS: &[&str] = &[
+    "02_struct_field.kel",
+    "01_arithmetic.kel",
+    "03_enum_match.kel",
+    "04_for_in.kel",
+    "05_pipeline.kel",
+];
+
+/// Every seeded stage paired with every subject it can be driven against.
+///
+/// **`reconstruct.kel` DOES NOT WIDEN, and the obstacle is real rather than
+/// effort.** Its seed is not "a chunk with a defect" — it is a parsed multiheaded
+/// function group, and it asserts its subject declares exactly four heads. A
+/// different subject does not merely change the input; it fails the shape check,
+/// which is the assertion doing its job. Widening it needs more corpus files
+/// containing a multiheaded group, and the corpus has one.
+/// Single-head subjects for `reconstruct.kel`, chosen for a spread of node
+/// counts and of source constructs.
+///
+/// **CHOSEN BY STATED PROPERTY, NOT BY TRYING CANDIDATES UNTIL ONE PASSED**: each
+/// is a head that a survey across every head of every corpus file found
+/// `reconstruct.kel` accepts, and they are spread across arithmetic, enum match,
+/// pipeline and fixed-point sources rather than clustered. The fixed-point head
+/// replaced a signed-integer one in absorption 82, when that file stopped parsing.
+///
+/// **A REFUSAL IS A DECLINE, NOT A SUBJECT.** `seed_reconstruct_single` returns
+/// `Err` on a negative yield, so a refused subject appears in the gate's
+/// `declined` column with its tag rather than being counted as coverage. Two of
+/// three qualifying single-head FILES are refused with `rc_range_arity`; that is
+/// a fact about single-head files, not a general acceptance rate, and it is why
+/// these are named by head index rather than by file alone.
+const RECONSTRUCT_SINGLE_HEADS: &[(&str, &str, usize)] = &[
+    // Replaced `("signed", "11_signed.kel", 0)` in absorption 82, when upstream's
+    // parser began refusing signed declarations by name. Same node count, 3.
+    ("fixed-helper", "fixed_arithmetic.kel", 0),
+    ("enum-match", "03_enum_match.kel", 0),
+    ("arithmetic-main", "01_arithmetic.kel", 1),
+    ("pipeline-main", "05_pipeline.kel", 3),
+];
+
+/// Seed `reconstruct.kel` from one parsed head, via the single-head entry point.
+///
+/// **`ParsedFn::body_records()` is what unblocked this.** A note in this file
+/// said the single-head form "stays blocked ... cannot be built without the field
+/// accessors"; that was true when written and stopped being true. The stage is
+/// DRIVEN here, not merely seeded: a non-positive yield is returned as an error
+/// so the gate reports it as a decline.
+fn seed_reconstruct_single(m: &Module, file: &str, head: usize) -> Result<Vec<u8>, String> {
+    let path = sources()
+        .into_iter()
+        .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == file)
+        .ok_or(format!("{file} is not in the corpus"))?;
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
+    let parsed = keleusma::selfhost::try_parse_functions(&src)
+        .map_err(|e| format!("{file} does not parse: {e:?}"))?;
+    let h = parsed.functions.get(head).ok_or(format!(
+        "{file} has {} heads; no head {head}",
+        parsed.functions.len()
+    ))?;
+    if h.body_records().is_empty() {
+        return Err(format!("{file} head {head} has an empty body"));
+    }
+
+    let arena = arena_for(m);
+    let vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage vm: {e:?}"))?;
+    let seed = keleusma::selfhost::seed_reconstruct_shared(
+        &vm,
+        h.body_records(),
+        h.reconstruct_category(),
+        h.param_count(),
+    );
+    drop(vm);
+
+    // **DRIVE IT, then decide whether it is a subject.** "APPLIED, N bytes" says
+    // the bytes were written, not that the stage consumed them.
+    let arena2 = arena_for(m);
+    let mut vm2 = Vm::new(m.clone(), &arena2).map_err(|e| format!("stage vm: {e:?}"))?;
+    let mut shared = seed.clone();
+    match vm2.call_with_shared(&mut shared, &[Value::Int(0)]) {
+        Ok(VmState::Yielded(Value::Int(n))) if n > 0 => Ok(seed),
+        Ok(VmState::Yielded(Value::Int(n))) => Err(format!(
+            "reconstruct refused {file} head {head}: {n} (a value at or below -901 is              `rc_fail_base() - code`)"
+        )),
+        other => Err(format!("{file} head {head}: no node count: {other:?}")),
+    }
+}
+
+/// `(label, file, head index)` triples whose reconstructed AST drives
+/// `codegen.kel`, chosen for a spread of node counts: 3, 13, 15 and 21.
+///
+/// **THE HEAD INDEX IS WHAT MADE THIS WIDENABLE.** A first attempt drew only from
+/// files parsing to exactly ONE head and found a single usable subject, which the
+/// harness's own widening guard rejected — correctly. Surveyed across EVERY head
+/// of every corpus file, `reconstruct.kel` accepts many.
+///
+/// **So the recorded "two of three single-head subjects are refused" is a fact
+/// about SINGLE-HEAD FILES, not about the stage.** That framing is accurate where
+/// it appears in `probe_stage_vacuity` and would be wrong if read as a general
+/// acceptance rate. The `rc_range_arity` refusals are per head.
+const CODEGEN_SUBJECTS: &[(&str, &str, usize)] = &[
+    // Replaced `("11_signed", "11_signed.kel", 0)` in absorption 82; see
+    // `RECONSTRUCT_SINGLE_HEADS`. Same node count, 3.
+    ("fixed-helper", "fixed_arithmetic.kel", 0),
+    ("enum_match", "03_enum_match.kel", 0),
+    ("arithmetic-main", "01_arithmetic.kel", 1),
+    ("multiheaded-main", "06_multiheaded.kel", 3),
+];
+
+/// The ten AST tables and two scalars `reconstruct.kel` publishes and
+/// `codegen.kel` consumes, with the name on each side and the width.
+const AST_BRIDGE: &[(&str, &str, usize)] = &[
+    ("root", "root", 1),
+    ("kinds", "kinds", 1024),
+    ("args", "args", 1024),
+    ("lhs", "lhs", 1024),
+    ("rhs", "rhs", 1024),
+    ("call_args", "call_args", 256),
+    ("for_parts", "for_parts", 256),
+    ("match_parts", "match_parts", 256),
+    ("limit_parts", "limit_parts", 256),
+    ("head_parts", "head_parts", 256),
+    ("out_param_count", "param_count", 1),
+    ("out_category", "category", 1),
+];
+
+/// Seed `codegen.kel` by running `reconstruct.kel` and bridging its AST across.
+fn seed_codegen_subject(m: &Module, file: &str, head: usize) -> Result<Vec<u8>, String> {
+    let path = sources()
+        .into_iter()
+        .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == file)
+        .ok_or(format!("{file} is not in the corpus"))?;
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
+    // The fallible entry point, so a parser refusal is a reported decline rather
+    // than a panic that takes the whole gate down. Absorption 82 met that panic.
+    let fns = keleusma::selfhost::try_parse_functions(&src)
+        .map_err(|e| format!("{file} does not parse: {e:?}"))?
+        .functions;
+    let h = fns.get(head).ok_or(format!(
+        "{file} parses to {} heads; no head {head}",
+        fns.len()
+    ))?;
+    if h.body_records().is_empty() {
+        return Err(format!("{file} head {head} has an empty body"));
+    }
+
+    let rec = keleusma::selfhost::reconstruct_kel_module();
+    let rec_arena = arena_for(&rec);
+    let rec_vm = Vm::new(rec.clone(), &rec_arena).map_err(|e| format!("reconstruct vm: {e:?}"))?;
+    let rec_seed = keleusma::selfhost::seed_reconstruct_shared(
+        &rec_vm,
+        h.body_records(),
+        h.reconstruct_category(),
+        h.param_count(),
+    );
+    drop(rec_vm);
+
+    let arena2 = arena_for(&rec);
+    let mut vm2 = Vm::new(rec.clone(), &arena2).map_err(|e| format!("reconstruct vm: {e:?}"))?;
+    let mut rec_shared = rec_seed.clone();
+    let nodes = match vm2.call_with_shared(&mut rec_shared, &[Value::Int(0)]) {
+        Ok(VmState::Yielded(Value::Int(n))) => n,
+        other => return Err(format!("reconstruct did not yield a node count: {other:?}")),
+    };
+    if nodes <= 0 {
+        // A refusal tag is `rc_fail_base() - code`, band `<= -901`.
+        return Err(format!("reconstruct refused {file}: {nodes}"));
+    }
+
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    for (from, to, words) in AST_BRIDGE {
+        let s = shared_slot_offset(&rec, from).ok_or(format!("no reconstruct `{from}`"))? as usize;
+        let d = shared_slot_offset(m, to).ok_or(format!("no codegen `{to}`"))? as usize;
+        let n = words * 8;
+        if s + n > rec_shared.len() || d + n > buf.len() {
+            return Err(format!("slot `{from}` out of range"));
+        }
+        buf[d..d + n].copy_from_slice(&rec_shared[s..s + n]);
+    }
+    if !buf.iter().any(|&b| b != 0) {
+        return Err("the bridged AST is entirely zero".into());
+    }
+    Ok(buf)
+}
+
+/// Straight-line op-cost profiles for `analyze.kel`. Index 0 is the Stream op and
+/// the last is the Reset op; the body between them is the walked region.
+///
+/// **EVERY SUBJECT HAS A NON-ZERO COST.** `out_wcet` is the only output that moves
+/// here: an all-zero segment already publishes `out_valid = 1`, because an empty
+/// region is trivially bounded — so `out_valid` is a verdict the buffer ALREADY
+/// HOLDS and asserting it would prove nothing. Measured, not assumed; the
+/// zero-cost control lives in `stage_differential.rs`.
+const ANALYZE_SUBJECTS: &[(&str, &[i64])] = &[
+    ("primes", &[2, 3, 5, 7, 11, 13]),
+    ("flat", &[1, 1, 1, 1]),
+    ("heavy-body", &[1, 100, 200, 1]),
+    ("minimal", &[1, 1, 1]),
+];
+
+/// Seed `analyze.kel`: eight input scalars and twelve parallel tables.
+///
+/// `out_wcet` is `cost[stream_pos] + cost[reset_pos] + region_cost`, and
+/// `out_stack_bytes` is `(local_count + region peak) * value_slot_bytes`.
+///
+/// **THE 16384 STEP CAP IS NOT A TICK REQUIREMENT** — the loop sits inside
+/// `run()` and `main` is `loop main(resume) { yield run() }`, so the whole walk
+/// completes within a single tick. Checked directly against this file rather than
+/// carried by analogy from `verify_yield.kel`, because reading a cap without
+/// establishing its level is how the previous estimate went wrong.
+fn seed_analyze_subject(m: &Module, costs: &[i64]) -> Result<Vec<u8>, String> {
+    let n = costs.len();
+    if n < 3 {
+        return Err("need a Stream op, a body op, and a Reset op".into());
+    }
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    let zeros = vec![0i64; n];
+    for (slot, v) in [
+        ("op_count", n as i64),
+        ("stream_pos", 0),
+        ("reset_pos", n as i64 - 1),
+        ("region_start", 1),
+        ("region_end", n as i64 - 1),
+        ("local_count", 2),
+        ("value_slot_bytes", 8),
+        ("arena_capacity", 4096),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` slot"))? as usize;
+        if off + 8 > buf.len() {
+            return Err(format!("`{slot}` does not fit the shared segment"));
+        }
+        buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    for (slot, body) in [
+        ("cost", costs),
+        ("class", &zeros[..]),
+        ("arg", &zeros[..]),
+        ("growth", &zeros[..]),
+        ("shrink", &zeros[..]),
+        ("heap", &zeros[..]),
+        ("opk", &zeros[..]),
+        ("slot", &zeros[..]),
+        ("cval", &zeros[..]),
+        ("cint", &zeros[..]),
+        ("callee_slots", &zeros[..]),
+        ("callee_heap", &zeros[..]),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` table"))? as usize;
+        if off + body.len() * 8 > buf.len() {
+            return Err(format!("table `{slot}` does not fit the shared segment"));
+        }
+        for (i, v) in body.iter().enumerate() {
+            buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    Ok(buf)
+}
+
+/// Op regions for `verify_yield.kel`, each a straight-line run of plain ops with
+/// `mark` = 1 marking a Yield.
+///
+/// **EVERY SUBJECT CARRIES A YIELD.** A region without one leaves `out_hy` at the
+/// 0 the buffer already holds, and a verdict the buffer already contains is
+/// exactly how the three `verify_*` stages were once credited as seeded while
+/// their observable never moved. The accepting direction is a CONTROL and lives
+/// in `stage_differential.rs`, not in the driven set.
+const VERIFY_YIELD_SUBJECTS: &[(&str, &[i64])] = &[
+    ("yield-mid", &[0, 1, 0]),
+    ("yield-first", &[1, 0, 0]),
+    ("yield-only", &[1]),
+    ("yield-twice", &[1, 0, 1, 0]),
+];
+
+/// Seed `verify_yield.kel`: `op_count`, the region bounds, and four parallel
+/// tables.
+///
+/// The `class` encoding is `analyze.kel`'s, stated in that file's header (`0`
+/// plain … `8` Trap); `verify_yield.kel` documents its own as "as in
+/// `analyze_class`", `mark` as 1 for a Yield, `cay` as the fixpoint variable.
+/// **Read out of their sources rather than inferred from the other stages.**
+///
+/// **THE 8192 STEP CAP IS NOT A TICK REQUIREMENT.** It bounds a loop INSIDE
+/// `run()`, so the whole fixpoint completes within a single tick and this stage
+/// is reachable at this harness's 60 ticks. That correction matters: the
+/// requirements note first read the cap as a per-tick budget and recommended the
+/// 400-tick harness on that basis.
+fn seed_verify_yield_subject(m: &Module, marks: &[i64]) -> Result<Vec<u8>, String> {
+    let n = marks.len();
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    let zeros = vec![0i64; n];
+    for (slot, v) in [
+        ("op_count", n as i64),
+        ("region_start", 0),
+        ("region_end", n as i64),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` slot"))? as usize;
+        if off + 8 > buf.len() {
+            return Err(format!("`{slot}` does not fit the shared segment"));
+        }
+        buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    for (slot, body) in [
+        ("class", &zeros[..]),
+        ("arg", &zeros[..]),
+        ("mark", marks),
+        ("cay", &zeros[..]),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` table"))? as usize;
+        if off + body.len() * 8 > buf.len() {
+            return Err(format!("table `{slot}` does not fit the shared segment"));
+        }
+        for (i, v) in body.iter().enumerate() {
+            buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    Ok(buf)
+}
+
+fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, String>)> {
+    if !STAGE_SEEDED.contains(&name) {
+        return vec![("-", Err("no arm for this stage".into()))];
+    }
+    if name == "reconstruct.kel" {
+        // **BOTH ENTRY POINTS, not one at the expense of the other.** The
+        // multi-head subject is the ONLY exercise of
+        // `seed_reconstruct_multihead_shared` and its "exactly four heads"
+        // assertion is deliberate -- the handoff says do not delete it. The
+        // single-head subjects reach `seed_reconstruct_shared`, which this file
+        // recorded as blocked until 2026-08-26.
+        let mut out = vec![(
+            "06_multiheaded.kel",
+            stage_seed_for(m, name, "06_multiheaded.kel"),
+        )];
+        out.extend(
+            RECONSTRUCT_SINGLE_HEADS
+                .iter()
+                .map(|(label, file, head)| (*label, seed_reconstruct_single(m, file, *head))),
+        );
+        return out;
+    }
+    if name == "codegen.kel" {
+        return CODEGEN_SUBJECTS
+            .iter()
+            .map(|(label, file, head)| (*label, seed_codegen_subject(m, file, *head)))
+            .collect();
+    }
+    if name == "analyze.kel" {
+        return ANALYZE_SUBJECTS
+            .iter()
+            .map(|(label, costs)| (*label, seed_analyze_subject(m, costs)))
+            .collect();
+    }
+    if name == "verify_yield.kel" {
+        return VERIFY_YIELD_SUBJECTS
+            .iter()
+            .map(|(label, marks)| (*label, seed_verify_yield_subject(m, marks)))
+            .collect();
+    }
+    if name == "verify_types.kel" {
+        return TYPE_PAIR_SUBJECTS
+            .iter()
+            .map(|(label, l, r)| (*label, type_pairs_seed(m, l, r)))
+            .collect();
+    }
+    if name == "lexer.kel" || name == "parse.kel" {
+        return SOURCE_SUBJECTS
+            .iter()
+            .map(|(label, src)| (*label, source_stage_seed(m, name, src)))
+            .collect();
+    }
+    STAGE_SUBJECTS
+        .iter()
+        .map(|s| (*s, stage_seed_for(m, name, s)))
+        .collect()
+}
+
+/// Seed `lexer.kel` from source bytes, or `parse.kel` from the LEXER'S OWN
+/// TOKEN OUTPUT for the same source.
+///
+/// **The parser's subject is DERIVED, not written here**, which is what keeps
+/// this a comparison of the stage rather than of a hand-rolled encoding. A
+/// source that lexes to too few tokens drives the parser on nearly nothing, so
+/// the token count carries a floor per subject rather than once overall.
+fn source_stage_seed(m: &Module, name: &str, src: &str) -> Result<Vec<u8>, String> {
+    let want = shared_data_bytes_for(m);
+    let mut buf = vec![0u8; want];
+    if name == "lexer.kel" {
+        let bytes: Vec<i64> = src.bytes().map(i64::from).collect();
+        seed_named_slots(m, &mut buf, "len", "bytes", &bytes, 1)?;
+        return Ok(buf);
+    }
+
+    // `parse.kel`: run the lexer on this source and hand its tokens over.
+    let lex_src = std::fs::read_to_string("../src/selfhost/kel/lexer.kel")
+        .map_err(|e| format!("read lexer.kel: {e}"))?;
+    let lex = tokenize(&lex_src)
+        .ok()
+        .and_then(|t| parse(&t).ok())
+        .and_then(|a| compile(&a).ok())
+        .ok_or("lexer.kel does not build")?;
+    let mut lex_buf = vec![0u8; shared_data_bytes_for(&lex)];
+    let bytes: Vec<i64> = src.bytes().map(i64::from).collect();
+    seed_named_slots(&lex, &mut lex_buf, "len", "bytes", &bytes, 1)?;
+
+    let toks = lexer_tokens(&lex, &lex_buf)?;
+    // **A FLOOR, not a non-empty check.** `stage_differential` uses more than
+    // fifteen tokens for the same reason: a short subject would raise a subject
+    // count while quietly weakening the parser comparison.
+    if toks.len() <= 15 {
+        return Err(format!(
+            "source lexed to only {} tokens; the parser would be driven on              nearly nothing and this subject would inflate a count",
+            toks.len()
+        ));
+    }
+    seed_named_slots(m, &mut buf, "len", "packed", &toks, 8)?;
+    Ok(buf)
+}
+
+/// Ticks for the LEXER DERIVATION run, which is not the differential's budget.
+///
+/// **`TICKS` is 60 here and 400 in `stage_differential`, and inheriting 60 for
+/// this run was a real defect caught by its own floor.** The lexer emits roughly
+/// one token every few ticks, so 60 ticks lexed `add-with-branch` to SIX tokens
+/// and the floor rejected the subject — which read as a property of the SOURCE
+/// and was a property of a CONSTANT.
+///
+/// **The two subjects that DID pass were worse**, because they passed: they
+/// cleared the floor of fifteen on a TRUNCATED token stream, so the parser was
+/// being driven on a prefix of a program while the report showed a seeded
+/// subject. A floor catches a stream that is too short; it cannot catch one that
+/// is long enough to look fine and still incomplete.
+///
+/// This run is a DERIVATION, not a comparison, so it is free to run as long as
+/// the source needs. Reaching the lexer's end marker is now REQUIRED.
+const LEX_DERIVE_TICKS: i64 = 4000;
+
+/// Drive the lexer stream and collect its emitted token words.
+///
+/// **Requires the end marker.** A derivation that stops early yields a prefix,
+/// and a prefix presented as a program is exactly the failure above.
+fn lexer_tokens(lex: &Module, seeded: &[u8]) -> Result<Vec<i64>, String> {
+    let arena = arena_for(lex);
+    let mut vm = Vm::new(lex.clone(), &arena).map_err(|e| format!("lexer vm: {e:?}"))?;
+    let mut shared = seeded.to_vec();
+    let mut out: Vec<i64> = Vec::new();
+    let mut ended = false;
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .map_err(|e| format!("lexer first call: {e:?}"))?;
+    for t in 1..LEX_DERIVE_TICKS {
+        if let Some(v) = stream_scalar(&st) {
+            let tok = v & 0xFF;
+            // 63 is the skip marker, 62 the end marker -- the same reading
+            // `stage_differential` uses, kept identical on purpose.
+            if tok == 62 {
+                ended = true;
+                break;
+            }
+            if tok != 63 {
+                out.push(v);
+            }
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(t))
+            .map_err(|e| format!("lexer resume: {e:?}"))?;
+        if matches!(st, VmState::Reset) {
+            st = vm
+                .resume_with_shared(&mut shared, Value::Int(t))
+                .map_err(|e| format!("lexer resume after reset: {e:?}"))?;
+        }
+    }
+    if !ended {
+        return Err(format!(
+            "the lexer did not reach its end marker in {LEX_DERIVE_TICKS} ticks \
+             ({} tokens so far), so this subject would drive the parser on a \
+             PREFIX of a program while reporting as seeded",
+            out.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// **SENTINEL CLASS: compared, never interpreted.** A differential runs the SAME
+/// source twice -- reference-compiled and backend-compiled -- and compares the
+/// two result streams. A stage failure sentinel appears identically on both
+/// sides, so it cannot manufacture a false agreement; the value's MEANING is
+/// never consulted. Classified 2026-08-26 in the sentinel audit; see
+/// `is_stage_sentinel` in `corpus_differential.rs`.
+fn stream_scalar(st: &VmState) -> Option<i64> {
+    match st {
+        VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => Some(*v),
+        _ => None,
+    }
+}
+
+fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>, String> {
+    if !STAGE_SEEDED.contains(&name) {
+        return Err("no arm for this stage".into());
+    }
+    // **A chunk from the SHIPPED CORPUS, not a synthetic one.** Verifying a real
+    // chunk is what these stages do, and a hand-written subject only proves the
+    // stage handles what the harness author thought to write. The first attempt
+    // used an invented source that did not even parse, and the accessor
+    // declining is how that surfaced -- which is why this reports WHY it
+    // declined rather than returning `None`.
+    let subject = sources()
+        .into_iter()
+        .filter(|p| p.file_name().unwrap_or_default().to_string_lossy() == subject_file)
+        .find_map(|p| {
+            let src = std::fs::read_to_string(&p).ok()?;
+            compile(&parse(&tokenize(&src).ok()?).ok()?).ok()
+        })
+        .ok_or_else(|| {
+            format!("subject {subject_file} is not in the corpus or does not compile")
+        })?;
+    let cix = (0..subject.chunks.len())
+        .max_by_key(|&i| subject.chunks[i].ops.len())
+        .ok_or("subject has no chunk")?;
+
+    // **THE SUBJECT CHUNK CARRIES A DEFECT, and that is what makes these three
+    // stages observable at all.** Each writes its verdict to an `out_reject` slot
+    // as 1 for reject and 0 for accept, and the seeded buffer already holds 0. On
+    // a WELL-FORMED chunk the verdict is accept, so the stage runs, decides, and
+    // changes nothing this harness can compare -- which is precisely why all three
+    // sat in `KNOWN_VACUOUS`. Injecting the defect each stage checks for moves the
+    // verdict to 1 and the segment with it.
+    //
+    // **Each stage gets ITS OWN defect.** One mutation for all three was tried and
+    // `verify_structural.kel` accepted the operand-stack underflow, correctly: it
+    // latches block-nesting malformation, not depth. Reusing one mutation would
+    // have read as "that stage cannot be made to reject", which is false.
+    //
+    // **The ACCEPT direction is asserted in `probe_stage_vacuity`**, not here. A
+    // rejecting seed alone would be satisfied by a stage that rejects everything.
+    let mut subject = subject;
+    match name {
+        "verify_depth.kel" | "verify_typed.kel" => subject.chunks[cix].ops.insert(0, Op::PopN(4)),
+        "verify_structural.kel" => subject.chunks[cix].ops.insert(0, Op::If(1)),
+        _ => {}
+    }
+    let subject = subject;
+    let chunk = &subject.chunks[cix];
+
+    let arena = arena_for(m);
+    let vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage VM refuses to load: {e:?}"))?;
+    let seed = match name {
+        "verify_depth.kel" => keleusma::selfhost::seed_verify_depth_shared(&vm, chunk),
+        "verify_typed.kel" => {
+            // Word and float widths come from the SUBJECT module, not this stage:
+            // the stage is verifying that module's chunk, so the widths it must
+            // reason about are the subject's.
+            let wb = (1usize << subject.word_bits_log2) / 8;
+            let fb = (1usize << subject.float_bits_log2) / 8;
+            // **ARRIVED WITH ABSORPTION 46**, which sizes `Opaque` by the address
+            // width. Derived from the subject module exactly as `wb` and `fb` are,
+            // and as the runtime's own callers derive it.
+            let ab = (1usize << subject.addr_bits_log2) / 8;
+            let sig = subject.signatures.get(cix);
+            keleusma::selfhost::seed_verify_typed_shared(&vm, &subject, chunk, sig, wb, fb, ab)
+        }
+        "verify_structural.kel" => {
+            // The always-yielding set is the subject module's, computed by the
+            // driver's own fixpoint rather than re-derived here.
+            let always = keleusma::selfhost::self_hosted_always_yielding(&subject);
+            keleusma::selfhost::seed_verify_structural_shared(&vm, &subject, chunk, &always)
+        }
+        // **`reconstruct.kel` IS drivable from here. The earlier claim that its
+        // producer is private is RETRACTED** -- `parse_functions` is `pub`, and it
+        // returns the parsed heads directly, so the record stream handed to the
+        // stage is the driver's own rather than a second encoding written here.
+        //
+        // What is genuinely unreachable is `ParsedFn`'s FIELDS. Two scalars
+        // therefore cannot be read off the parsed values: which heads form the
+        // multiheaded group, and how many value parameters they declare. Neither
+        // is part of the stage's input record format -- they are properties of the
+        // SUBJECT -- and both are derived or asserted below rather than assumed,
+        // because a subject that quietly stops containing the construct it is
+        // named for is this harness's own recorded failure mode.
+        //
+        // **THE SINGLE-HEAD FORM IS NO LONGER BLOCKED. This note said it was, and
+        // that was true when written and stopped being true without anyone
+        // noticing.** It reads: "wants `records: &[(i64, i64)]`, which cannot be
+        // built without the field accessors". `ParsedFn::body_records()` returns
+        // exactly those records and is public, which
+        // `codegen_agrees_with_the_vm_on_reconstructs_own_output` in
+        // `stage_differential.rs` now relies on end to end.
+        //
+        // **The multi-head subject below is KEPT** -- it exercises a path the
+        // single-head form does not, so this is a correction to the REASON, not a
+        // reason to change the subject.
+        "reconstruct.kel" => {
+            // The guarded subject, since `parse.kel` refuses the literal heads
+            // of `06_multiheaded.kel`. See `common::MULTIHEAD_SUBJECT`.
+            let src = common::MULTIHEAD_SUBJECT.to_string();
+            let fns = keleusma::selfhost::try_parse_functions(&src)
+                .map_err(|e| format!("the multi-headed subject is outside parse.kel: {e}"))?
+                .functions;
+            // The subject declares its three `classify` heads FIRST and then
+            // `main`, so the group is the leading run. Asserted, not trusted: if
+            // the file gains a function the seed would silently describe a
+            // different program, and a rejected seed looks exactly like coverage.
+            if fns.len() != 4 {
+                return Err(format!(
+                    "subject shape changed: expected 4 parsed heads in \
+                     the multi-headed subject, got {}",
+                    fns.len()
+                ));
+            }
+            let heads: Vec<&keleusma::selfhost::ParsedFn> = fns[..3].iter().collect();
+            // The parameter count is DERIVED from the compiled subject's signature
+            // for the multiheaded chunk, never written as a literal, so the two
+            // cannot drift apart.
+            let subj = compile(
+                &parse(&tokenize(&src).map_err(|e| format!("subject lex: {e:?}"))?)
+                    .map_err(|e| format!("subject parse: {e:?}"))?,
+            )
+            .map_err(|e| format!("subject compile: {e:?}"))?;
+            let idx = subj
+                .chunks
+                .iter()
+                .position(|c| c.name == "classify")
+                .ok_or("subject has no `classify` chunk")?;
+            let pc = subj
+                .signatures
+                .get(idx)
+                .map(|s| s.params.len())
+                .ok_or("subject carries no signature for `classify`")?;
+            if pc == 0 {
+                return Err("`classify` reports zero parameters".into());
+            }
+            keleusma::selfhost::seed_reconstruct_multihead_shared(&vm, &heads, pc)
+        }
+        other => return Err(format!("no arm for {other}")),
+    };
+    // The stage's own layout sizes it; the harness must not assume they agree.
+    let want = shared_data_bytes_for(m);
+    if seed.len() != want {
+        return Err(format!(
+            "size mismatch: accessor {} vs harness {want}",
+            seed.len()
+        ));
+    }
+    Ok(seed)
+}
+
+fn seed_len_bytes(m: &Module, buf: &mut [u8]) -> bool {
+    let (Some(len_off), Some(bytes_off)) = (shared_offset(m, "len"), shared_offset(m, "bytes"))
+    else {
+        return false;
+    };
+    let (len_off, bytes_off) = (len_off as usize, bytes_off as usize);
+    if len_off + 8 > buf.len() || bytes_off + PAYLOAD.len() > buf.len() {
+        return false;
+    }
+    buf[len_off..len_off + 8].copy_from_slice(&(PAYLOAD.len() as u64).to_le_bytes());
+    buf[bytes_off..bytes_off + PAYLOAD.len()].copy_from_slice(PAYLOAD);
+    true
+}
+
+struct Run {
+    results: Vec<i64>,
+    log: Vec<String>,
+    shared: Vec<u8>,
+    /// Whether the run CHANGED the shared segment from the bytes it was given.
+    ///
+    /// Not the same question as whether the segment is non-zero. A seeded module
+    /// starts non-zero, so a zero test answers "was it seeded", never "did it do
+    /// anything" — and every seeded stage would leave the vacuous set the moment
+    /// it was seeded, whether or not it ran. This is the honest form of that
+    /// question and it is what `is_vacuous` reads.
+    wrote_shared: bool,
+    /// The composite return body as FLAT BYTES, one entry per result, empty
+    /// for a scalar-returning entry or when the bytes could not be captured.
+    ///
+    /// **Both sides are reduced to the SAME representation before any claim.**
+    /// Comparing a native pointer against a decoded value would manufacture a
+    /// difference; that error has already been made once on this line.
+    ret_bytes: Vec<Vec<u8>>,
+}
+
+fn run_vm(
+    m: &Module,
+    table: &[NativeEntry],
+    seed: usize,
+    preseed: Option<&[u8]>,
+) -> Result<Run, (String, ExemptClass)> {
+    let _ = take_log();
+    SAW_REF_ARG.with(|f| *f.borrow_mut() = false);
+    // Cleared per run so a position observed for one module cannot mask a
+    // scalar in the next.
+    REF_POSITIONS.with(|r| r.borrow_mut().clear());
+    let arena = arena_for(m);
+    // Fallible: a module may refuse to LOAD for reasons unrelated to lowering —
+    // a signature requirement, for one. That is an exemption with a stated
+    // reason, not a harness crash.
+    let mut vm = match Vm::new(m.clone(), &arena) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err((
+                format!("the VM refuses to load it: {e:?}"),
+                ExemptClass::RefusedAtLoad,
+            ));
+        }
+    };
+    // **WHICH NATIVES DOES THE BYTECODE CALL EXTERNALLY?** Derived from the
+    // module's own ops, so this is a CONTRACT rather than a runtime inference --
+    // unlike the reference-argument mask, which rests on what the virtual
+    // machine happened to observe.
+    //
+    // A module declaring `use external host::f` emits `Op::CallExternalNative`,
+    // and the virtual machine REFUSES a verified registration against it at
+    // call-site dispatch. This harness registered everything as verified, so
+    // `external_native_witness.kel` could not be driven at all -- and
+    // `CallExternalNative` was the last opcode counted as LOWERED with nothing
+    // ever having executed it.
+    // **THE TABLE MUST BE POPULATED ON THIS SIDE TOO, and forgetting it produced
+    // a real disagreement rather than a crash.**
+    //
+    // The closure registrations CAPTURE their name and arity. A bare `fn` cannot,
+    // so `vm_external_record` recovers them from `TABLE` -- which until now was
+    // set only in `run_native`. The virtual machine therefore read an arity of
+    // ZERO, logged the call with no arguments, and returned `stub_value(0, [])`
+    // = 7 against the native side's `stub_value(0, [4])` = 221.
+    //
+    // It surfaced as a DISAGREEMENT, which is the differential doing its job on
+    // a defect in the harness rather than in the lowering.
+    TABLE.with(|t| *t.borrow_mut() = table.to_vec());
+
+    let external_indices: std::collections::BTreeSet<usize> = m
+        .chunks
+        .iter()
+        .flat_map(|c| c.ops.iter())
+        .filter_map(|o| match o {
+            Op::CallExternalNative(i, _) => Some(usize::from(*i)),
+            _ => None,
+        })
+        .collect();
+
+    for (idx, (name, argc, shape)) in table.iter().enumerate() {
+        if name.is_empty() {
+            continue;
+        }
+        let (n, ac) = (name.clone(), *argc);
+
+        // An externally-called native must be registered externally, or the
+        // machine refuses the call. The attestation is the invocation-count
+        // bound; this harness drives bounded programs and states one.
+        if external_indices.contains(&idx)
+            && let Some(f) = external_stub_for(idx)
+        {
+            vm.register_external_native(&n, f, 64);
+            continue;
+        }
+        // Reached when the native is NOT externally called, and also when it is
+        // but the index is past the stub family's end. The second case falls
+        // through to the verified registration, which the machine refuses BY
+        // NAME -- visible rather than silently bound to the wrong function.
+        // (These were two nested conditions until the collapse; the comment now
+        // has to cover both arrivals, because it sits on the shared path.)
+
+        // **A native whose RECORDED return shape is a composite is stubbed as
+        // one.** `register_native_closure` cannot: it has no arena, so it can
+        // only return a scalar, and the native side would then dereference that
+        // scalar as a body address. `register_native_with_ctx_closure` supplies
+        // the arena, which is what makes a faithful body possible at all.
+        if let Some((kind, size)) = *shape {
+            assert!(
+                size as usize <= COMPOSITE_RET_CAP,
+                "native `{n}` returns a {size}-byte composite; the stub table caps at \
+                 {COMPOSITE_RET_CAP}. Raise the cap rather than truncating."
+            );
+            let n2 = n.clone();
+            vm.register_native_with_ctx_closure(name, move |ctx, args: &[Value]| {
+                let vals: Vec<i64> = args
+                    .iter()
+                    .take(ac)
+                    .enumerate()
+                    .map(|(pos, v)| match v {
+                        Value::Int(x) => *x,
+                        Value::Byte(b) => i64::from(*b),
+                        Value::Bool(b) => i64::from(*b),
+                        _ => {
+                            SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                            // Record WHICH position, so the native side can mask
+                            // the same one instead of the module being discarded.
+                            REF_POSITIONS.with(|r| {
+                                r.borrow_mut().insert((idx, pos));
+                            });
+                            0
+                        }
+                    })
+                    .collect();
+                let parts: Vec<String> = vals.iter().map(|a| a.to_string()).collect();
+                LOG.with(|l| l.borrow_mut().push(format!("{n2}({})", parts.join(", "))));
+
+                let wb = ctx.word_bytes;
+                let fc = keleusma::flat_value::FlatComposite::build_in_arena(
+                    ctx.arena,
+                    size as usize,
+                    |dst| {
+                        composite_stub_bytes(size, wb, dst);
+                        Ok(())
+                    },
+                )
+                .map_err(|_| {
+                    keleusma::vm::VmError::NativeError("arena exhausted in composite stub".into())
+                })?
+                .ok_or_else(|| {
+                    keleusma::vm::VmError::NativeError("composite stub body not flat".into())
+                })?;
+                // Every composite body has a `Flat` variant, so all four kinds
+                // are constructible from the same bytes. Kind is taken from the
+                // RECORDED shape rather than guessed.
+                Ok(match kind {
+                    3 => Value::Enum(keleusma::bytecode::EnumBody::Flat(fc)),
+                    2 => Value::Struct(keleusma::bytecode::StructBody::Flat(fc)),
+                    1 => Value::Array(keleusma::bytecode::ArrayBody::Flat(fc)),
+                    _ => Value::Tuple(keleusma::bytecode::TupleBody::Flat(fc)),
+                })
+            });
+            continue;
+        }
+
+        vm.register_native_closure(name, move |args: &[Value]| {
+            // **THE SECOND OF TWO REGISTRATION PATHS, and patching only the
+            // other one is how the mask silently did nothing.** A native with a
+            // recorded composite return shape registers through the ctx closure
+            // above; everything else lands here. `host::song_name` is here.
+            let vals: Vec<i64> = args
+                .iter()
+                .take(ac)
+                .enumerate()
+                .map(|(pos, v)| match v {
+                    Value::Int(x) => *x,
+                    Value::Byte(b) => i64::from(*b),
+                    Value::Bool(b) => i64::from(*b),
+                    _ => {
+                        SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                        REF_POSITIONS.with(|r| {
+                            r.borrow_mut().insert((idx, pos));
+                        });
+                        0
+                    }
+                })
+                .collect();
+            let parts: Vec<String> = vals.iter().map(|a| a.to_string()).collect();
+            LOG.with(|l| l.borrow_mut().push(format!("{n}({})", parts.join(", "))));
+            Ok(Value::Int(stub_value(idx, &vals)))
+        });
+    }
+
+    let entry = m.entry_point.expect("entry");
+    let n = m.chunks[entry].param_count as usize;
+    // A Stream's first call is tick 0, matching the native driver's `f.call(0)`.
+    // Passing `args_for_seed` here instead desynchronised every stream in the corpus,
+    // which showed up as a call-count difference rather than a value difference.
+    let vals: Vec<Value> = if m.chunks[entry].block_type == BlockType::Stream && n == 1 {
+        vec![Value::Int(0)]
+    } else {
+        args_for_seed(n, seed).into_iter().map(Value::Int).collect()
+    };
+    let mut shared = vec![0u8; shared_data_bytes_for(m)];
+    match preseed {
+        Some(bytes) => shared.copy_from_slice(bytes),
+        None => {
+            seed_len_bytes(m, &mut shared);
+        }
+    }
+    // **The segment as the module FOUND it**, kept so vacuity can ask whether the
+    // run changed anything rather than whether the buffer is non-zero. Seeding
+    // makes a non-zero test true before the module executes a single op, so
+    // without this a seeded module leaves the vacuous set BY CONSTRUCTION and the
+    // departure is evidence of nothing. See `is_vacuous`.
+    let initial_shared = shared.clone();
+    let mut results = Vec::new();
+
+    let first = match vm.call_with_shared(&mut shared, &vals) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err((
+                format!("the VM refuses to run it: {e:?}"),
+                ExemptClass::FaultsAndIsFaultComparable,
+            ));
+        }
+    };
+    results.push(scalar_of(&first));
+    let mut ret_bytes: Vec<Vec<u8>> = vec![flat_ret_bytes(&first, &arena)];
+    if m.chunks[entry].block_type == BlockType::Stream {
+        for t in 1..TICKS {
+            // One tick is a `Reset` leg then a `Yielded` leg, and the SAME reply
+            // goes to both. A fresh reply on the Reset leg is silently discarded.
+            let mut st = match vm.resume_with_shared(&mut shared, Value::Int(t)) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err((
+                        format!("the VM refuses to resume it: {e:?}"),
+                        ExemptClass::FaultsAndIsFaultComparable,
+                    ));
+                }
+            };
+            if matches!(st, VmState::Reset) {
+                st = match vm.resume_with_shared(&mut shared, Value::Int(t)) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err((
+                            format!("the VM refuses to resume it: {e:?}"),
+                            ExemptClass::FaultsAndIsFaultComparable,
+                        ));
+                    }
+                };
+            }
+            results.push(scalar_of(&st));
+            ret_bytes.push(flat_ret_bytes(&st, &arena));
+        }
+    }
+    // **THIS USED TO EXEMPT THE MODULE, AND NOW MASKS ONE FIELD INSTEAD.**
+    //
+    // A reference argument still cannot be compared: it is an arena handle here
+    // and a pointer natively. But that is ONE FIELD, and discarding the module
+    // over it left the call sequence, the native names, every scalar argument,
+    // the return value and the shared segment uncompared. Ten modules -- the
+    // largest exempt class -- were declined on that basis.
+    //
+    // **An exemption says nothing was compared; a masked comparison says
+    // everything except this was.** `REF_POSITIONS` carries the exact positions
+    // to both sides, so the strings are excluded and the rest is checked.
+    //
+    // The earlier decline was not wrong about its own subject -- it argued
+    // against DEREFERENCING the pointer to compare string CONTENT, which is
+    // still declined and still for three measured reasons. It simply never
+    // considered the cheap version.
+    Ok(Run {
+        results,
+        wrote_shared: shared != initial_shared,
+        log: take_log(),
+        shared,
+        ret_bytes,
+    })
+}
+
+/// A scalar outcome, or a stable marker for anything else.
+///
+/// A composite result is compared through the shared segment and the call log
+/// rather than decoded here; marking it keeps the two sides comparable without
+/// pretending to read a body the harness did not build.
+/// PROBE: a composite result's FLAT BYTES, straight from the arena.
+///
+/// No layout opinion of ours: `FlatComposite::resolve` hands back the canonical
+/// body. A scalar or unit result yields none.
+fn flat_ret_bytes(st: &VmState, arena: &keleusma_arena::Arena) -> Vec<u8> {
+    use keleusma::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody};
+    let v = match st {
+        VmState::Yielded(v) | VmState::Finished(v) => v,
+        _ => return Vec::new(),
+    };
+    let fc = match v {
+        Value::Tuple(TupleBody::Flat(f)) => f,
+        Value::Struct(StructBody::Flat(f)) => f,
+        Value::Enum(EnumBody::Flat(f)) => f,
+        Value::Array(ArrayBody::Flat(f)) => f,
+        _ => return Vec::new(),
+    };
+    fc.resolve(arena).map(|b| b.to_vec()).unwrap_or_default()
+}
+
+/// **SENTINEL CLASS: compared, never interpreted.** A differential runs the SAME
+/// source twice -- reference-compiled and backend-compiled -- and compares the
+/// two result streams. A stage failure sentinel appears identically on both
+/// sides, so it cannot manufacture a false agreement; the value's MEANING is
+/// never consulted. Classified 2026-08-26 in the sentinel audit; see
+/// `is_stage_sentinel` in `corpus_differential.rs`.
+fn scalar_of(st: &VmState) -> i64 {
+    match st {
+        VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => *v,
+        VmState::Yielded(Value::Unit) | VmState::Finished(Value::Unit) => 0,
+        VmState::Reset => i64::MIN + 1,
+        _ => i64::MIN,
+    }
+}
+
+fn run_native(
+    m: &Module,
+    table: &[NativeEntry],
+    seed: usize,
+    preseed: Option<&[u8]>,
+) -> Option<Run> {
+    let _ = take_log();
+    TABLE.with(|t| *t.borrow_mut() = table.to_vec());
+    let addrs = stub_addrs();
+    std::hint::black_box(&addrs);
+
+    let entry = m.entry_point.expect("entry");
+    let n_shared = shared_data_bytes_for(m);
+    // **THE PRIVATE REGION IS SIZED BY THE HOST CONTRACT, NOT BY THE SLOT
+    // COUNT.**
+    //
+    // It was one word per private slot, with the canary immediately after. That
+    // bound was TIGHTER THAN THE CONTRACT this backend publishes, which is
+    // `required_persistent_capacity_for` plus `persistent_supplement_bytes` — the
+    // slot array, the persistent composite pool, and the stream resume-state
+    // word. Nothing used the space beyond the slot array, so the mismatch was
+    // invisible until the composite copy landed and wrote into the pool, where
+    // the canary was sitting.
+    //
+    // **No real tightness is lost.** The old bound did not correspond to any
+    // contract; a host sizing a buffer follows the two functions below, and a
+    // canary belongs at the end of what a host actually allocates. What the
+    // check still catches is a write past everything the backend is entitled to.
+    let n_priv_slots = m
+        .data_layout
+        .as_ref()
+        .map(|dl| {
+            dl.slots
+                .iter()
+                .filter(|s| s.visibility == SlotVisibility::Private)
+                .count()
+        })
+        .unwrap_or(0);
+    let n_priv = (keleusma::vm::required_persistent_capacity_for(m)
+        + keleusma_native::region::persistent_supplement_bytes(m) as usize)
+        .div_ceil(8)
+        .max(n_priv_slots);
+    // Transitive, not the per-chunk sum: each call site now receives a disjoint
+    // block of the caller's region, so the entry needs everything it can reach.
+    let n_region: usize = keleusma_native::region::region_total_bytes(m, entry, 0) as usize;
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
+
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    // Bind each declared native to its stub. The declaration is looked up FROM
+    // THE MODULE, so the harness never reproduces `native_symbol`'s mangling —
+    // getting that wrong is what segfaulted an earlier attempt.
+    let by_symbol: std::collections::BTreeMap<String, usize> = table
+        .iter()
+        .enumerate()
+        .filter(|(_, (n, _, _))| !n.is_empty())
+        .map(|(i, (n, _, _))| {
+            let mut s = String::from("kel_native_");
+            for c in n.chars() {
+                s.push(if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                });
+            }
+            (s, i)
+        })
+        .collect();
+    for f in lm.get_functions() {
+        let sym = f.get_name().to_string_lossy().to_string();
+        if let Some(&i) = by_symbol.get(&sym) {
+            assert!(i < STUBS, "native index {i} exceeds the {STUBS} stub slots");
+            ee.add_global_mapping(&f, addrs[i]);
+        }
+    }
+
+    const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
+    let mut shared = vec![0u8; n_shared + 8];
+    {
+        // Seeded into the SAME offsets as the VM side. The segment is plain
+        // bytes, so one helper serves both and there is no second encoding to
+        // drift.
+        let (body, _) = shared.split_at_mut(n_shared);
+        match preseed {
+            // **The SAME bytes, not a second construction.** A differential whose
+            // two sides build their own seed compares two encodings rather than
+            // two lowerings.
+            Some(bytes) => body.copy_from_slice(bytes),
+            None => {
+                seed_len_bytes(m, body);
+            }
+        }
+    }
+    shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
+    // The segment as the module found it. See `is_vacuous`: a seeded module is
+    // non-zero before it runs, so vacuity must ask what the run CHANGED.
+    let initial_shared = shared[..n_shared].to_vec();
+    let mut privs = vec![0u64; n_priv + 1];
+    privs[n_priv] = CANARY;
+    // **The host's obligation, exercised.** A private scalar slot's declared
+    // initializer lives in the module's `private_init` table and the runtime
+    // applies it at load. There is no native load step, so the host installs the
+    // published image; a harness that left this zeroed would compare a backend
+    // that never applies an initializer against a runtime that always does.
+    common::install_private_init(m, &mut privs[..n_priv]);
+    let mut region = vec![0u64; n_region.div_ceil(8) + 1];
+    let canary_at = n_region.div_ceil(8);
+    region[canary_at] = CANARY;
+
+    let sym = format!("kel_chunk_{entry}");
+    let fv = lm.get_function(&sym).expect("entry function");
+    let declared = fv.count_params() as usize;
+    let src_arity = m.chunks[entry].param_count as usize;
+    let ptrs = declared.checked_sub(src_arity).expect("declared >= arity");
+    // **Assert the ABI before calling through it.** A wrong signature is
+    // undefined behaviour that surfaces as SIGSEGV inside JIT code with no
+    // stack; it cost two cycles this session.
+    assert!(
+        ptrs == 0 || ptrs == 3,
+        "entry `{sym}` has {declared} parameters for arity {src_arity}: {ptrs} trailing \
+         pointers, which is neither none nor the three the ABI defines"
+    );
+
+    let a = args_for_seed(src_arity, seed);
+    let sp = shared.as_mut_ptr();
+    let pp = privs.as_mut_ptr() as *mut u8;
+    let rp = region.as_mut_ptr() as *mut u8;
+    let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+    let ticks = if is_stream { TICKS } else { 1 };
+    let mut results = Vec::new();
+
+    macro_rules! drive {
+        ($t:ty, $($x:expr),*) => {{
+            let f = unsafe { ee.get_function::<$t>(&sym) }.expect("entry symbol");
+            for t in 0..ticks {
+                let _ = t;
+                results.push(unsafe { f.call($($x),*) });
+            }
+        }};
+    }
+
+    // Only the shapes the corpus actually presents; anything else is reported
+    // as an exemption rather than driven through a guessed signature.
+    match (src_arity, ptrs, is_stream) {
+        (0, 0, _) => drive!(unsafe extern "C" fn() -> i64,),
+        (0, 3, _) => drive!(
+            unsafe extern "C" fn(*mut u8, *mut u8, *mut u8) -> i64,
+            sp,
+            pp,
+            rp
+        ),
+        (1, 0, false) => drive!(unsafe extern "C" fn(i64) -> i64, a[0]),
+        (1, 3, false) => {
+            drive!(
+                unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8) -> i64,
+                a[0],
+                sp,
+                pp,
+                rp
+            )
+        }
+        (1, 0, true) => {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }
+                .expect("entry symbol");
+            for t in 0..ticks {
+                results.push(unsafe { f.call(t) });
+            }
+        }
+        (1, 3, true) => {
+            let f = unsafe {
+                ee.get_function::<unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8) -> i64>(&sym)
+            }
+            .expect("entry symbol");
+            for t in 0..ticks {
+                results.push(unsafe { f.call(t, sp, pp, rp) });
+            }
+        }
+        (2, 0, false) => drive!(unsafe extern "C" fn(i64, i64) -> i64, a[0], a[1]),
+        (2, 3, false) => drive!(
+            unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8) -> i64,
+            a[0],
+            a[1],
+            sp,
+            pp,
+            rp
+        ),
+        (3, 0, false) => drive!(unsafe extern "C" fn(i64, i64, i64) -> i64, a[0], a[1], a[2]),
+        (3, 3, false) => drive!(
+            unsafe extern "C" fn(i64, i64, i64, *mut u8, *mut u8, *mut u8) -> i64,
+            a[0],
+            a[1],
+            a[2],
+            sp,
+            pp,
+            rp
+        ),
+        (4, 0, false) => drive!(
+            unsafe extern "C" fn(i64, i64, i64, i64) -> i64,
+            a[0],
+            a[1],
+            a[2],
+            a[3]
+        ),
+        (4, 3, false) => drive!(
+            unsafe extern "C" fn(i64, i64, i64, i64, *mut u8, *mut u8, *mut u8) -> i64,
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            sp,
+            pp,
+            rp
+        ),
+        (5, 0, false) => drive!(
+            unsafe extern "C" fn(i64, i64, i64, i64, i64) -> i64,
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            a[4]
+        ),
+        (5, 3, false) => drive!(
+            unsafe extern "C" fn(i64, i64, i64, i64, i64, *mut u8, *mut u8, *mut u8) -> i64,
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            a[4],
+            sp,
+            pp,
+            rp
+        ),
+        _ => return None,
+    }
+
+    assert_eq!(
+        &shared[n_shared..],
+        &CANARY.to_le_bytes(),
+        "wrote past the {n_shared}-byte shared segment"
+    );
+    assert_eq!(privs[n_priv], CANARY, "wrote past the private region");
+    assert_eq!(
+        region[canary_at], CANARY,
+        "wrote past the {n_region}-byte composite region"
+    );
+    // **THE COMPOSITE RETURN, READ BACK FROM OUR OWN BUFFER.**
+    //
+    // The lowered entry returns a POINTER into `region`, which this harness
+    // allocated and passed in as `rp`. That is what makes the read safe, and it
+    // is the decisive difference from the reference-argument case declined
+    // earlier: there the pointer came from the JIT and a wrong guess is a
+    // segfault; here the buffer is ours and the address is bounds-checked
+    // against it before a byte is touched.
+    //
+    // **The size is READ from the module**, `WireShape::Flat { size, .. }` on
+    // the entry's recorded return. No offset, field order, or encoding is
+    // invented here: the callee says WHERE and the module says HOW LONG.
+    let ret_bytes: Vec<Vec<u8>> = {
+        let size = match m.signatures.get(entry).map(|sg| &sg.ret) {
+            Some(WireShape::Flat { size, .. }) => *size as usize,
+            _ => 0,
+        };
+        let base = region.as_ptr() as usize;
+        results
+            .iter()
+            .map(|r| {
+                let addr = *r as usize;
+                let ok = size > 0
+                    && *r > 0
+                    && addr >= base
+                    && addr.saturating_add(size) <= base + n_region;
+                if !ok {
+                    return Vec::new();
+                }
+                // Safe: inside a buffer this function allocated, bounds checked.
+                unsafe { core::slice::from_raw_parts(addr as *const u8, size) }.to_vec()
+            })
+            .collect()
+    };
+
+    shared.truncate(n_shared);
+    Some(Run {
+        results,
+        wrote_shared: shared != initial_shared,
+        log: take_log(),
+        shared,
+        ret_bytes,
+    })
+}
+
+/// Do the two sides' captured composite-return bodies differ?
+///
+/// **Only pairs captured on both sides are compared.** A pair where either side
+/// is empty is skipped: the native capture is bounds-checked and can legitimately
+/// decline, and treating a declined read as a difference would invent
+/// disagreements. The count of declined captures is reported separately so the
+/// skip is visible rather than silent.
+fn ret_pairs_differ(v: &Run, n: &Run) -> bool {
+    v.ret_bytes
+        .iter()
+        .zip(&n.ret_bytes)
+        .any(|(a, b)| !a.is_empty() && !b.is_empty() && a != b)
+}
+
+/// Did this run produce any observable work at all?
+///
+/// The harness compares three things, and a module that exits immediately is
+/// trivial in all three at once: one repeated result, no host calls, and a shared
+/// segment the run never changed. Two sides agreeing on that state assert nothing
+/// about the emitter.
+///
+/// **THE THIRD TEST WAS "IS THE SEGMENT ALL ZERO" UNTIL 2026-08-16, AND SEEDING
+/// DEFEATED IT.** A seeded module holds a non-zero segment before it executes a
+/// single operation, so the zero test answered "was it seeded" rather than "did it
+/// do anything", and **every stage left this list the moment it was given a seed,
+/// whether or not the seed changed the run.** Three did, on 2026-08-15 and
+/// 2026-08-16, and the headline moved from 40 to 44 on the strength of it. The
+/// test now compares against the bytes the module was HANDED, so a seeded stage
+/// that writes nothing is correctly vacuous again and those three returned to this
+/// list. `reconstruct.kel` stayed out, which is the difference between a stage
+/// that does observable work and a stage that merely receives an input.
+///
+/// This is the same defect class the file already documents twice over: an
+/// experiment that cannot fail looks exactly like success.
+///
+/// **Conservative by construction.** A run is vacuous only when EVERY observable
+/// is trivial, so a module doing real work in any one of them is counted as
+/// executed. The consequence is that this under-reports vacuity rather than
+/// over-reporting it, which is the safe direction for a number quoted as
+/// coverage.
+///
+/// **Only a STREAM is judged.** A single-call module produces exactly one result
+/// by construction, so "every result is the same" is true of it vacuously and
+/// says nothing. A first attempt omitted this and classified 32 modules as
+/// vacuous, including `10_multbyte.kel` — the module whose execution exposed the
+/// composite-return aliasing defect, and therefore the clearest possible
+/// counterexample to its own classification.
+/// Is this yielded value a self-hosted stage's FAILURE SENTINEL rather than a
+/// measurement?
+///
+/// Two stage sources report a cause by yielding a negative tag in the same slot
+/// that otherwise carries a count or a token: `parse.kel`'s `pe_tag_base()` and
+/// `reconstruct.kel`'s `rc_fail_base()`, **both `0 - 900`**, each subtracting a
+/// positive code. So the band is `<= -901`. Measured across all twelve stage
+/// sources on 2026-08-26: those two carry the convention, `wire.kel` carries a
+/// large family of its own and is EXEMPT from this gate, and the remaining nine
+/// carry none.
+///
+/// **THE THRESHOLD IS THEIRS, NOT THIS LINE'S**, and a copied constant that
+/// drifts is worse than no constant. `the_sentinel_band_still_matches_the_stage_
+/// sources` reads both bases back out of the `.kel` text and fails if either
+/// moves.
+fn is_stage_sentinel(v: i64) -> bool {
+    v <= -901
+}
+
+fn is_vacuous(run: &Run) -> bool {
+    if run.results.len() < 2 {
+        return false;
+    }
+    let mut distinct: Vec<i64> = run.results.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    distinct.len() <= 1 && run.log.is_empty() && !run.wrote_shared
+}
+
+/// Modules that AGREE while producing nothing, tracked rather than counted.
+///
+/// Every one is a self-hosted compiler stage that reads its input from the shared
+/// data segment. This harness supplies that segment as zeros, so each takes an
+/// immediate end-of-input exit — `lexer.kel` yielded `62`, its own documented
+/// end-of-source marker, sixty times.
+///
+/// **They were inside the "executed and agreeing" count until 2026-08-14**, which
+/// is why the headline moved from 40 to 34. Nothing regressed; the number was
+/// measuring the harness rather than the emitter.
+///
+/// **The list GREW on 2026-08-16, and that is a repair rather than a regression.**
+/// `is_vacuous` had asked whether the shared segment was all zero, which a seeded
+/// module fails before it runs. Three `verify_*` stages had left this list on that
+/// basis alone and are now back. The count they were credited with, 44 executed,
+/// was measuring the fact that they had been seeded.
+///
+/// **Seeding a stage is not the same as a stage doing observable work.** Every
+/// departure and every return was forced by the set-equality assertion below
+/// rather than chosen.
+///
+/// **The three `verify_*` stages left again the same day, by a DIFFERENT and real
+/// mechanism.** Each writes its verdict as 1 for reject and 0 for accept, and the
+/// seeded buffer already holds 0, so a well-formed subject produced a decision
+/// that changed nothing. They are now seeded with a chunk carrying the defect each
+/// one actually checks for, the verdict moves to 1, and the segment moves with it.
+/// The count returning to 45 is earned by a moved observable, **not** evidence
+/// that dropping it to 42 was mistaken. That drop was correct and remains so.
+const KNOWN_VACUOUS: &[&str] = &[
+    // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
+    // is what noticed. It declares the documented `len` + `bytes` host
+    // convention, so `seed_len_bytes` now gives it a real payload and it does
+    // real work inside this harness rather than only in `stage_differential`.
+    //
+    // **`verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` left,
+    // came back, and left again on 2026-08-16.** The first departure was an
+    // artifact of the zero test and is recorded in `is_vacuous`. The second is
+    // real: they are seeded with a chunk carrying the defect each checks for, so
+    // the verdict moves from accept to reject and the segment changes.
+    //
+    // **Do NOT restore a well-formed subject to make them look better behaved.**
+    // On a well-formed chunk all three accept, write the 0 that was already there,
+    // and become vacuous again -- correctly. The accept direction is asserted in
+    // `probe_stage_vacuity` so a stage that rejected EVERYTHING could not pass.
+    //
+    // **`verify_datalayout.kel` will NOT leave this list by seeding, and that is
+    // correct rather than a gap.** It has no accessor by joint agreement: its
+    // verdict accumulates across three differently-encoded phases in the
+    // retained buffer, with a whole-module contiguity comparison at the end, so
+    // a single seeded buffer cannot produce a verdict at all. Do not invent a
+    // batch-zero seed for it -- it would run, agree, and mean nothing.
+    //
+    // **`reconstruct.kel` LEFT on 2026-08-16, and the report that had kept it
+    // here was WRONG.** This line told the `v0.2.3` line the stage was blocked
+    // because `ParsedFn`'s producer is private. It is not: `parse_functions` is
+    // `pub` and returns the parsed heads, so the multiheaded path was reachable
+    // the whole time and no new accessor was needed. The `v0.2.3` line caught
+    // the error. Only the single-head `seed_reconstruct_shared` was ever truly
+    // blocked, and it still is, on field accessors that are not on this tree.
+    //
+    // **`reconstruct.kel` stayed OUT when the vacuity test was repaired**, which is
+    // the difference that matters: it writes the reconstructed forest back into the
+    // segment, so its departure survived asking whether the run changed anything
+    // without needing a defective subject at all.
+    //
+    // **`verify_datalayout.kel` LEFT in absorption 82, and not by seeding**,
+    // which the note above correctly said could not move it. Upstream changed the
+    // stage, and its unseeded run now changes the segment. That agreement is
+    // still one sixty-tick run with no input, which the gate prints as its
+    // weakest residual; leaving this list does not make it strong evidence.
+    //
+    // **`template_scan.kel` JOINED in absorption 119, as the added fifteenth
+    // stage.** The host feeds it batches of tokens through `AnalysisMachine`, and
+    // this harness gives it no batch, so its run agrees while changing nothing.
+    // It stays here because this harness still seeds nothing. Its real-input
+    // evidence is elsewhere since 2026-10-30. The driver feeds it every token
+    // of every source, so `native_stage_factory.rs` runs it natively over the
+    // whole corpus, and `the_template_scan_stage_finds_templates_natively` gives
+    // it generic templates to find.
+    "template_scan.kel",
+];
+
+/// Modules KNOWN to disagree, tracked rather than ignored.
+///
+/// The test asserts the disagreement set EQUALS this list, so a new
+/// disagreement fails and a fixed one also fails — neither can rot into
+/// silence.
+///
+/// **EMPTY since 2026-08-14.** `10_multbyte.kel` was the only entry, and it left
+/// because the BEHAVIOUR CHANGED: the `sret` repair gives each call site a
+/// disjoint block of the caller's region, so two live composite returns no
+/// longer alias. It was not removed to make the suite green — the set-equality
+/// assertion failed on its departure, which is the mechanism working in the
+/// direction that means success.
+const KNOWN_DISAGREEMENTS: &[&str] = &[];
+
+/// **THE `Trap` OBSERVABLE.**
+///
+/// `(name, expected VM fault, kind)`. A name starting `synthetic:` is compiled
+/// from a source string below; anything else is a corpus file.
+///
+/// **THE TWO KINDS ARE NOT INTERCHANGEABLE, and conflating them cost a whole
+/// implementation of this test.** The first version used only corpus files that
+/// fault, and it passed. It also proved nothing about `Op::Trap`: `faulty.kel`
+/// faults through the emitter's DIVISION GUARD and `rogue_dungen.kel` through its
+/// BOUNDS CHECK, neither of which is the opcode. Measured afterwards with
+/// `dump_opcode_module_map`: **no module in the shipped corpus that faults on the
+/// virtual machine emits `Op::Trap` at all.** Mutating `Op::Trap` left the test
+/// green, which is how the gap surfaced.
+///
+/// So a synthetic subject is not a convenience here; it is the only way to reach
+/// the opcode. A multiheaded function whose guards all fail emits
+/// `Trap(NoMatchingHead)`.
+///
+/// # THAT CORPUS FACT EXPIRED ON 2026-08-20, AND `wire.kel` IS THE COUNTEREXAMPLE
+///
+/// "No module in the shipped corpus that faults on the virtual machine emits
+/// `Op::Trap` at all" was measured on 2026-08-14 and is **now false**.
+/// `wire.kel` faults on the virtual machine — `IndexOutOfBounds` at tick 19 —
+/// **and** emits `Op::Trap`. Pinned by
+/// `the_no_faulting_module_emits_op_trap_fact_has_expired`, which fails if either
+/// half stops holding, so the claim cannot quietly come back.
+///
+/// **It is still NOT admissible as a subject here, and the reason is the point.**
+/// Neither kind fits, and that is the taxonomy being right rather than
+/// insufficient:
+///
+/// - `Guard` is refused because the module emits `Op::Trap`.
+/// - `Op` would be a lie about WHICH fault was observed: the virtual machine
+///   reports a BOUNDS fault, not the opcode.
+///
+/// Admitting it under either label would let a `SIGTRAP` that might be the guard
+/// be counted as opcode coverage, or the reverse. **`SIGTRAP` proves a fault, not
+/// which**, so in a module containing both there is nothing to disambiguate them.
+/// A synthetic subject remains the only way to reach the opcode ON PURPOSE.
+const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
+    ("synthetic:no_matching_head", "NoMatchingHead", TrapKind::Op),
+    // **BOTH WERE `Guard` UNTIL ABSORPTION 82.** Upstream made division and
+    // indexing total, so the compiler now dispatches a zero divisor and an
+    // out-of-range index to `Trap(ZeroDivisor)` and `Trap(IndexOutOfBounds)`.
+    // The emitter's division guard and bounds trap no longer exist on these
+    // paths, and the fault each module reaches is the opcode.
+    ("faulty.kel", "DivisionByZero", TrapKind::Op),
+    ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Op),
+    // **TWO GUARD ROWS RETIRED IN ABSORPTION 124, 2026-10-30, NOT DELETED
+    // SILENTLY.** `synthetic:uninit_composite_slot` read a composite private
+    // slot on a path that never wrote it, and `synthetic:unwritten_sibling_element`
+    // read an array element a sibling's write did not cover. Both faulted on the
+    // virtual machine while the slot started as `Unit`. V0.2.X's widening, its
+    // pull request 666, gives every composite private slot its type's zero at
+    // load, so neither faults, and a slot still initialized to `Unit` must now
+    // be written on every path before a read, so verified source cannot reach
+    // the native initialisation-word guard at all. The guard stays as defense
+    // in depth. That both programs now read the zero on both sides is shown by
+    // `private_init_image.rs` and `indexed_composite_slot.rs`.
+];
+
+/// **A CORPUS FACT THIS FILE ASSERTS HAS EXPIRED, and one counterexample settles it.**
+///
+/// `TRAP_SUBJECTS` records that no corpus module which faults on the virtual
+/// machine emits `Op::Trap`. That was measured 2026-08-14 and justified the
+/// synthetic subject. `wire.kel` has grown a great deal since and now does both.
+///
+/// **A universal claim falls to one counterexample**, so this names `wire.kel`
+/// rather than re-walking the corpus. Both halves are asserted separately so a
+/// failure says WHICH half moved: a module that stops faulting and a module that
+/// stops emitting the opcode are different events with different consequences.
+///
+/// **What this does NOT establish.** It says nothing about whether the fault the
+/// virtual machine reports IS the `Op::Trap` — it is not; it is a bounds fault.
+/// That distinction is exactly why `wire.kel` is not a `TRAP_SUBJECTS` row.
+#[test]
+fn the_no_faulting_module_emits_op_trap_fact_has_expired() {
+    let src = subject_source("wire.kel").expect("wire.kel is in the corpus");
+    let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+    let emits_trap = m
+        .chunks
+        .iter()
+        .any(|c| c.ops.iter().any(|o| matches!(o, Op::Trap(_))));
+    assert!(
+        emits_trap,
+        "wire.kel no longer emits Op::Trap. The 2026-08-14 corpus fact may hold again;          re-measure it across the corpus before restoring the claim in TRAP_SUBJECTS."
+    );
+
+    let table = native_table(&m);
+    let err = match run_vm(&m, &table, 0, None) {
+        Err((e, _class)) => e,
+        Ok(_) => panic!(
+            "wire.kel no longer faults on the virtual machine. That is a real change in \
+             the module or the driver, and it would move wire.kel out of the exempt set \
+             in every_lowering_module_executes_or_is_exempt. Re-measure both."
+        ),
+    };
+    assert!(
+        err.contains("IndexOutOfBounds"),
+        "wire.kel faults, but not with the bounds fault measured on 2026-08-20; got {err}. \
+         The KIND is what is pinned here, not the operands, which are computed and move."
+    );
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TrapKind {
+    /// Reaches an `Op::Trap` instruction. Asserted, not assumed.
+    Op,
+    /// Faults through an emitter-inserted guard (division, bounds). Valuable,
+    /// and NOT evidence about `Op::Trap`.
+    ///
+    /// No row has used it since absorption 124 retired the two composite slot
+    /// subjects above. It is kept so that a new guard subject is labelled as
+    /// such rather than counted as opcode coverage.
+    #[allow(dead_code)]
+    Guard,
+}
+
+/// **WHY a module is exempt, attached AT THE SITE that exempts it.**
+///
+/// A bare exempt count -- **14** as re-derived 2026-08-27, **19** when this note
+/// was written -- reads as that many modules this line fails to cover, and that
+/// is wrong in both directions. Some cannot be compared by anything — a prelude has no
+/// entry to run. Others are compared perfectly well by a DIFFERENT observable:
+/// `wire.kel` faults on both sides at the same tick, which is agreement the
+/// value differential is structurally unable to see, because a faulting module
+/// has no values.
+///
+/// **Derived, not transcribed.** The class is chosen where the exemption is
+/// created, so it follows the harness's own control flow. A table keyed on the
+/// reason STRING would be a second opinion about code that is right here, and
+/// would drift the moment a message was reworded.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExemptClass {
+    /// The reference compiler would not build it. Nothing downstream exists to
+    /// compare, and it is not this line's surface.
+    NotAcceptedByReference,
+    /// No entry point. A prelude declares; it does not run.
+    NoRunnableEntry,
+    /// The virtual machine faults. **There are no values to compare, but the
+    /// FACT of the fault is comparable** — this is the class `wire.kel` turned
+    /// out to be in. Eligibility is not admission: a module that both emits
+    /// `Op::Trap` and faults through a guard cannot be admitted to
+    /// `TRAP_SUBJECTS`, because `SIGTRAP` cannot say which fired.
+    FaultsAndIsFaultComparable,
+    /// Covered by a hand-written differential instead. Real coverage, elsewhere.
+    CoveredByAnotherHarness,
+    /// A limit of this harness, not a fact about the module or the lowering.
+    HarnessCapacity,
+    /// The backend declines to lower it. **This one IS this line's deliverable.**
+    BackendRefusal,
+    /// The virtual machine would not LOAD it. Distinct from a run-time fault:
+    /// nothing executed. Kept separate rather than folded into a harness limit
+    /// because a genuine verifier rejection and a harness that declined to load
+    /// a signed module both arrive here, and only the observed instance is the
+    /// second.
+    RefusedAtLoad,
+}
+
+impl ExemptClass {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NotAcceptedByReference => "not accepted by the reference compiler",
+            Self::NoRunnableEntry => "no runnable entry",
+            Self::FaultsAndIsFaultComparable => "faults; comparable by the FAULT observable",
+            Self::CoveredByAnotherHarness => "covered by another harness",
+            Self::HarnessCapacity => "a limit of this harness",
+            Self::BackendRefusal => "the backend refuses to lower it",
+            Self::RefusedAtLoad => "the VM would not load it (nothing executed)",
+        }
+    }
+}
+
+/// A multiheaded function with no matching head, which is what emits `Op::Trap`.
+const SYNTHETIC_NO_MATCHING_HEAD: &str = "\
+fn pick(x: Word) -> Word when x > 100 { 1 }
+fn pick(x: Word) -> Word when x < 0 { 2 }
+fn main(a: Word) -> Word { pick(a) }
+";
+
+fn subject_source(name: &str) -> Option<String> {
+    if let Some(key) = name.strip_prefix("synthetic:") {
+        return match key {
+            "no_matching_head" => Some(SYNTHETIC_NO_MATCHING_HEAD.to_string()),
+            _ => None,
+        };
+    }
+    let path = sources()
+        .into_iter()
+        .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == name)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    if path.to_string_lossy().contains("/rtos/") {
+        let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").ok()?;
+        Some(format!("{prelude}\n{raw}"))
+    } else {
+        Some(raw)
+    }
+}
+
+/// **NO MODULE IS CURRENTLY EXCLUDED, and `led.kel`'s departure is the reason
+/// this list is empty rather than deleted.**
+///
+/// `led.kel` was here because its virtual-machine run faulted with
+/// `NoMatchingArm` while its native side died with **SIGSEGV, not SIGTRAP** — the
+/// two sides faulting for DIFFERENT reasons, which would have been a false
+/// agreement. The cause was the generic stub returning a plain integer where
+/// `host::gpio_set` records a sixteen-byte enum body, which the native side then
+/// dereferenced as an address.
+///
+/// **The stub now returns a real composite body on both sides, so `led.kel` does
+/// not fault at all** and is neither a subject nor an exclusion.
+///
+/// **THAT COST A TRAP SUBJECT RATHER THAN GAINING ONE, and the reasoning is
+/// worth keeping.** `led.kel` DOES emit `Op::Trap` (asserted in
+/// `does_led_kel_reach_op_trap`), so closing the exemption looked like it would
+/// hand this observable its first real-module opcode subject. It does the
+/// opposite: `led.kel` matches both `Status::Ok` and `Status::Err(code)`, so a
+/// FAITHFUL stub returns a valid variant, an arm matches, and the trap is never
+/// reached. Reaching it needs a discriminant matching no variant — an unfaithful
+/// stub, and a false agreement. **The two are mutually exclusive and
+/// faithfulness wins.** The `Op::Trap` subject remains synthetic.
+const TRAP_NOT_SUBJECTS: &[(&str, &str)] = &[];
+
+/// Marker the child prints immediately before entering native code.
+///
+/// **The vacuity guard.** Without it, a child that died before reaching the
+/// native call — a compile error, a missing file, a panic in setup — is
+/// indistinguishable from one that trapped, because the parent would only see
+/// "did not exit 0".
+const TRAP_CHILD_MARKER: &str = "TRAP-CHILD-ENTERING-NATIVE";
+
+/// The child half: runs ONE subject natively and is expected to die.
+///
+/// A no-op unless `KEL_TRAP_CHILD` names one, so the ordinary suite never pays
+/// for it and never dies from it.
+#[test]
+fn trap_child_runs_one_module_natively() {
+    let Ok(want) = std::env::var("KEL_TRAP_CHILD") else {
+        return;
+    };
+    let src = subject_source(&want).unwrap_or_else(|| panic!("no subject named {want}"));
+    let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let table = native_table(&m);
+
+    // Printed and FLUSHED before the native call, so the parent can tell "it
+    // trapped" from "it never got here".
+    println!("{TRAP_CHILD_MARKER}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+
+    let _ = run_native(&m, &table, 0, None);
+
+    // Reaching this line means the native side did NOT trap where the virtual
+    // machine faults. Exit non-zero WITHOUT a signal, which the parent reports
+    // distinctly from a clean trap.
+    println!("TRAP-CHILD-SURVIVED");
+    std::process::exit(3);
+}
+
+/// **Does the native side agree that a faulting program FAULTS?**
+///
+/// This closes the one hole the mutation census could not. `Op::Trap` was
+/// undetected across all 28 modules that emit it, and no seed could change that:
+/// `every_lowering_module_executes_or_is_exempt` runs the virtual machine FIRST
+/// precisely so a trapping module becomes a named exemption rather than a
+/// `SIGTRAP` that kills the run — so a module that REACHES a trap is never
+/// compared, and a module that IS compared reached none.
+///
+/// The observable therefore changes: not a returned value, but **the fact of the
+/// fault**. The virtual machine reports an error; natively `llvm.trap` raises
+/// `SIGTRAP`. Comparing those needs the native side in its own process.
+///
+/// **Cost control, stated because it is a real trade.** Under `KEL_ONLY_MODULE`
+/// — how `tools/mutation_sweep.py` drives this binary — only the `Op::Trap`
+/// subject runs, because that is the one the sweep needs and it is one spawn
+/// rather than three. A full run drives all of them.
+#[test]
+fn a_trapping_programs_native_side_dies_with_sigtrap() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let filtered = std::env::var("KEL_ONLY_MODULE").is_ok();
+    let (mut op_checked, mut guard_checked) = (0usize, 0usize);
+
+    for (name, want_fault, kind) in TRAP_SUBJECTS {
+        if filtered && *kind != TrapKind::Op {
+            continue;
+        }
+        let src = subject_source(name).unwrap_or_else(|| panic!("subject {name} is missing"));
+        let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+        // **THE ASSERTION THAT WOULD HAVE CAUGHT THE FIRST VERSION.** A subject
+        // labelled `Op` must actually contain the opcode; a `Guard` subject must
+        // not, or the two kinds are not being told apart.
+        let has_trap = m
+            .chunks
+            .iter()
+            .any(|c| c.ops.iter().any(|o| matches!(o, Op::Trap(_))));
+        // **A BOUNDS DISPATCH IS ADMITTED IN A GUARD SUBJECT, NARROWLY.** Since
+        // absorption 82 every indexed read carries the compiler's
+        // `Trap(IndexOutOfBounds)` on its out-of-range path, so a guard subject
+        // that indexes cannot avoid containing one. It is admitted only when
+        // the expected fault is not a bounds fault, which the reference run
+        // below confirms, so a SIGTRAP here is still the guard's and not the
+        // opcode's. Any other trap kind still disqualifies the label.
+        let bounds = keleusma::bytecode::TrapKind::IndexOutOfBounds.code();
+        let other_trap = m.chunks.iter().any(|c| {
+            c.ops
+                .iter()
+                .any(|o| matches!(o, Op::Trap(k) if *k != bounds))
+        });
+        match kind {
+            TrapKind::Op => assert!(
+                has_trap,
+                "{name} is labelled an Op::Trap subject and emits no Op::Trap. \
+                 Mutating Op::Trap could not affect it, so it would prove nothing."
+            ),
+            TrapKind::Guard => assert!(
+                !other_trap && (!has_trap || !want_fault.contains("IndexOutOfBounds")),
+                "{name} is labelled a guard subject but DOES emit an Op::Trap that \
+                 could be the fault it reports. Relabel it -- the distinction is what \
+                 stops guard coverage being read as opcode coverage."
+            ),
+        }
+
+        let table = native_table(&m);
+
+        // **The premise, checked rather than assumed.** If it stops faulting,
+        // this is comparing nothing and must say so instead of passing.
+        let vm_err = match run_vm(&m, &table, 0, None) {
+            Err((e, _class)) => e,
+            Ok(_) => panic!(
+                "{name} no longer faults on the VM side, so it is not a trap subject any more. \
+                 Do not delete the row silently -- `NATIVE_EXEMPTION_AUDIT.md` predicts exactly \
+                 that for the stub-artefact subjects."
+            ),
+        };
+        assert!(
+            vm_err.contains(want_fault),
+            "{name}: expected the VM to fault with {want_fault}, got {vm_err}"
+        );
+
+        let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .args([
+                "--exact",
+                "trap_child_runs_one_module_natively",
+                "--nocapture",
+            ])
+            .env("KEL_TRAP_CHILD", name)
+            .env_remove("KEL_ONLY_MODULE")
+            .output()
+            .expect("spawn the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        assert!(
+            stdout.contains(TRAP_CHILD_MARKER),
+            "{name}: the child never reached the native call, so its death says nothing \
+             about the lowering. This is the vacuity guard firing. stdout: {stdout}\nstderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !stdout.contains("TRAP-CHILD-SURVIVED"),
+            "{name}: the native side RETURNED where the VM faults with {want_fault}. \
+             A program that must abort instead produced a value."
+        );
+        assert_eq!(
+            out.status.signal(),
+            Some(SIGTRAP),
+            "{name}: expected the native side to die with SIGTRAP; got code {:?}, signal {:?}",
+            out.status.code(),
+            out.status.signal()
+        );
+        match kind {
+            TrapKind::Op => op_checked += 1,
+            TrapKind::Guard => guard_checked += 1,
+        }
+    }
+
+    // **At least one Op::Trap subject, always.** Without this the test could pass
+    // on guard subjects alone, which is precisely the state the first version
+    // shipped in.
+    assert!(
+        op_checked > 0,
+        "no Op::Trap subject was checked, so this asserts nothing about the opcode"
+    );
+    println!(
+        "  TRAP OBSERVABLE: {op_checked} Op::Trap and {guard_checked} guard subject(s) died with SIGTRAP"
+    );
+
+    // **The exclusion is ASSERTED, not commented.** If the composite return path
+    // lands and the stub returns a body address, this fires and `led.kel` should
+    // MOVE into TRAP_SUBJECTS -- a comment would have gone stale instead.
+    if !filtered {
+        for (name, why) in TRAP_NOT_SUBJECTS {
+            let Some(src) = subject_source(name) else {
+                continue;
+            };
+            let Ok(_m) = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")) else {
+                continue;
+            };
+            let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
+                .args([
+                    "--exact",
+                    "trap_child_runs_one_module_natively",
+                    "--nocapture",
+                ])
+                .env("KEL_TRAP_CHILD", name)
+                .env_remove("KEL_ONLY_MODULE")
+                .output()
+                .expect("spawn the child");
+            assert_ne!(
+                out.status.signal(),
+                Some(SIGTRAP),
+                "{name} now dies with SIGTRAP and is a valid trap subject. It was excluded \
+                 because: {why}. MOVE it into TRAP_SUBJECTS rather than deleting this check."
+            );
+        }
+    }
+}
+
+/// `SIGTRAP` is 5 on Linux and on macOS. Named so the one place another platform
+/// would change is obvious.
+const SIGTRAP: i32 = 5;
+
+/// The whole corpus, in one test, because the interesting output is the
+/// EXEMPTION LIST and that is a property of the set rather than of any module.
+#[test]
+fn every_lowering_module_executes_or_is_exempt() {
+    let mut executed: Vec<String> = Vec::new();
+    let mut vacuous: Vec<String> = Vec::new();
+    let mut exempt: Vec<(String, String, ExemptClass)> = Vec::new();
+    let mut obs_composite = 0usize;
+    let mut cap_pairs_both = 0usize;
+    let mut cap_pairs_declined = 0usize;
+    let mut cap_partial: Vec<String> = Vec::new();
+    let mut cap_never: Vec<String> = Vec::new();
+    let mut obs_multi_result = 0usize;
+    let mut obs_single_scalar_only = 0usize;
+    // **NAMED, so the overlap with the Order-1 stages is MEASURABLE.** Two
+    // counts that happen to be equal invite an inference about which
+    // modules they contain; only the names can settle it.
+    let mut obs_single_scalar_names: Vec<String> = Vec::new();
+    let mut obs_single_and_undrivable = 0usize;
+    let mut obs_visited = 0usize;
+    let mut nothing_compared: Vec<String> = Vec::new();
+    let mut obs_native_calls = 0usize;
+    let mut obs_wrote_shared = 0usize;
+    let mut seed_pairs = 0usize;
+    let mut seed_widened = 0usize;
+    // **How many argument vectors each module actually received.** Recorded
+    // per module because the Order-1 gate needs it for STAGES specifically,
+    // and the corpus-wide `seed_widened` cannot answer that: it is a count of
+    // modules, not a map, so a stage's own figure is not recoverable from it.
+    let mut sentinels_per_module: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut vectors_per_module: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    // **The COMPARISON count, which is the figure that actually applies to a
+    // stream.** Pooled across every seed: for a stream this is one entry per
+    // TICK, so a module driven at one argument vector can still be compared at
+    // sixty points. Recorded separately from the vector count because conflating
+    // them is exactly the error this report made once.
+    let mut compares_per_module: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut pin_reason: std::collections::BTreeMap<String, &'static str> =
+        std::collections::BTreeMap::new();
+    // Per seeded stage: how many SUBJECTS produced a seed, and how many
+    // declined. Declined is tracked separately because a subject that never
+    // built and a subject that built and compared identically produce the same
+    // downstream total, and only the first is an instrument fault.
+    let mut subjects_built: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut subjects_declined: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut disagreed: Vec<String> = Vec::new();
+    // Names found under `src/selfhost/kel`, for the Order-1 gate report below.
+    let mut stage_files: Vec<String> = Vec::new();
+
+    // **Single-module mode**, for the mutation sweep. `tools/mutation_sweep.py`
+    // runs this binary once per module in its own PROCESS, so a mutation that
+    // kills a module with SIGBUS or SIGTRAP costs one measurement rather than
+    // the whole census. Without process isolation two of the first four
+    // mutations tried took the entire run down and yielded no per-module data.
+    let only = std::env::var("KEL_ONLY_MODULE").ok();
+
+    for p in sources() {
+        let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        // **Stage membership comes from the PATH, not from a list of names.** A
+        // hand-written roster of twelve is exactly the thing that goes stale
+        // silently when a stage is added or removed, which is the failure the
+        // instruction-set census exists to prevent.
+        if p.components().any(|c| c.as_os_str() == "selfhost") {
+            stage_files.push(name.clone());
+        }
+        if let Some(want) = &only
+            && &name != want
+        {
+            continue;
+        }
+        let Some(src) = source_for(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            exempt.push((
+                name,
+                "rejected by the REFERENCE compiler".into(),
+                ExemptClass::NotAcceptedByReference,
+            ));
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            exempt.push((
+                name,
+                "the backend refuses it".into(),
+                ExemptClass::BackendRefusal,
+            ));
+            continue;
+        }
+        let Some(entry) = m.entry_point else {
+            exempt.push((
+                name,
+                "no entry point (a prelude declares, it does not run)".into(),
+                ExemptClass::NoRunnableEntry,
+            ));
+            continue;
+        };
+        if !params_are_scalar(&m, entry) {
+            exempt.push((
+                name,
+                "composite entry parameter; covered by a hand-written differential".into(),
+                ExemptClass::CoveredByAnotherHarness,
+            ));
+            continue;
+        }
+        let table = native_table(&m);
+        if table.len() > STUBS {
+            exempt.push((
+                name,
+                format!("{} natives exceeds {STUBS} stub slots", table.len()),
+                ExemptClass::HarnessCapacity,
+            ));
+            continue;
+        }
+
+        // **Drive each module with SEVERAL argument vectors, not one.**
+        //
+        // Seed 0 alone left a measured hole: with `Op::CmpLt` lowered as `SLE`,
+        // 126 sites across 25 modules, the whole differential passed. `SLT` and
+        // `SLE` differ only when the comparands are EQUAL, and seed 0's
+        // pairwise-distinct ascending arguments never make two equal.
+        //
+        // A stream's single parameter is the tick, which the driver already
+        // varies across 60 iterations, so seeding it would change what the run
+        // MEANS rather than broaden it. Streams keep seed 0.
+        let n_params = m.chunks[entry].param_count as usize;
+        let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+        let seeds = if is_stream || n_params == 0 { 1 } else { SEEDS };
+        // **WHY a module got one vector, not just THAT it did.** Two different
+        // reasons pin `seeds` to 1 and they support different conclusions. A
+        // ZERO-PARAMETER entry takes no input, so it genuinely cannot vary. A
+        // STREAM takes the tick, which the driver varies across its iterations
+        // -- so it is single-vector and still compared at many points. Reading
+        // the second as the first is how "single-vector" became "compared once".
+        pin_reason.insert(
+            name.clone(),
+            if is_stream {
+                "stream (tick varies across iterations)"
+            } else if n_params == 0 {
+                "zero-parameter entry (nothing to vary)"
+            } else {
+                "widened"
+            },
+        );
+
+        // **A real stage input, from the driver's own accessor.** Computed once
+        // per SUBJECT and handed to BOTH sides, so the comparison is of two
+        // lowerings rather than of two encodings.
+        //
+        // **SUBJECT IS A DIFFERENT AXIS FROM ARGUMENT VECTOR, and conflating them
+        // is what this harness got wrong once already.** `seeds` stays 1 for a
+        // stream -- correct, and deliberate. What varies here is WHAT THE STAGE
+        // IS LOOKING AT, which sixty ticks never varied.
+        let subject_seeds = stage_seeds(&m, &name);
+        // **Say whether a seed was APPLIED, not just whether one exists.** A seed
+        // the accessor declined to build and a seed the stage silently rejects
+        // produce the same downstream number -- "still vacuous" -- and only the
+        // first is an instrument fault. Printed for every stage that has an arm.
+        if STAGE_SEEDED.contains(&name.as_str()) {
+            for (subj, r) in &subject_seeds {
+                println!(
+                    "  stage seed for {name} [{subj}]: {}",
+                    match r {
+                        Ok(b) => format!(
+                            "APPLIED, {} bytes, {} non-zero",
+                            b.len(),
+                            b.iter().filter(|x| **x != 0).count()
+                        ),
+                        Err(why) => format!("NOT BUILT -- {why}"),
+                    }
+                );
+            }
+            let built = subject_seeds.iter().filter(|(_, r)| r.is_ok()).count();
+            let declined = subject_seeds.len() - built;
+            subjects_built.insert(name.clone(), built);
+            subjects_declined.insert(name.clone(), declined);
+        }
+        // The variants this module is driven at: (argument-vector seed, stage
+        // seed). A non-stage contributes one variant per SEED; a seeded stage
+        // contributes one per SUBJECT. **A declined subject is dropped here and
+        // counted above** -- it must stay visible rather than vanishing into a
+        // smaller total.
+        let ok_seeds: Vec<&Vec<u8>> = subject_seeds
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .collect();
+        let variants: Vec<(usize, Option<&[u8]>)> = if ok_seeds.is_empty() {
+            (0..seeds).map(|sd| (sd, None)).collect()
+        } else {
+            ok_seeds
+                .iter()
+                .flat_map(|b| (0..seeds).map(move |sd| (sd, Some(b.as_slice()))))
+                .collect()
+        };
+
+        let mut runs: Vec<(usize, Run, Run)> = Vec::new();
+        let mut bail: Option<(String, ExemptClass)> = None;
+        for (seed, stage_bytes) in variants.iter().copied() {
+            // **The virtual machine runs FIRST, and that ordering is load-bearing.**
+            // A module that traps reports an error here; natively the same trap is
+            // `llvm.trap`, which kills the process with SIGTRAP and takes the whole
+            // harness with it. Asking the tolerant side first turns a fatal signal
+            // into a named exemption.
+            let v = match run_vm(&m, &table, seed, stage_bytes) {
+                Ok(v) => v,
+                Err((why, class)) => {
+                    // A LATER seed that traps is not an exemption for the module:
+                    // seed 0 already ran. Stop widening and keep what agreed,
+                    // rather than discarding coverage the module does have.
+                    //
+                    // **The class comes from `run_vm`, which knows WHICH of its
+                    // refusals this was.** Assigning one here put every refusal
+                    // in the fault class, including ten modules that ran
+                    // perfectly and were declined by this harness.
+                    if seed == 0 {
+                        bail = Some((why, class));
+                    }
+                    break;
+                }
+            };
+            let Some(n) = run_native(&m, &table, seed, stage_bytes) else {
+                if seed == 0 {
+                    bail = Some((
+                        "entry signature shape the harness does not drive".into(),
+                        ExemptClass::HarnessCapacity,
+                    ));
+                }
+                break;
+            };
+            runs.push((seed, v, n));
+        }
+        if let Some((why, class)) = bail {
+            exempt.push((name, why, class));
+            continue;
+        }
+        seed_pairs += runs.len();
+        // **`seeds`, NOT `runs.len()`.** Subject widening made a stage's run
+        // count `subjects * seeds`, so `runs.len()` silently became a VARIANT
+        // count and this line started reporting streams as "driven at more than
+        // one argument vector" -- which is false, and is precisely the axis
+        // conflation this whole section exists to prevent. Caught by reading the
+        // report after the widening landed, not by the compiler.
+        vectors_per_module.insert(name.clone(), seeds);
+        // **DID THE STAGE AGREE ON A FAILURE?** `is_vacuous` catches a stage that
+        // errors and writes nothing, but a stage that errors AND RECORDS ITS
+        // CAUSE writes the shared segment, so it counts as executed-and-agreeing
+        // with nothing saying the agreement is over a refusal. Both sides refuse
+        // identically, so the AGREEMENT IS REAL -- this does not weaken it. What
+        // it weakens is the coverage reading, and that was invisible.
+        //
+        // Surfaced by absorption 12: #279 gave `reconstruct.kel` a negative
+        // sentinel band, and this line then had to ask which of its own
+        // instruments could be reading one as a measurement.
+        sentinels_per_module.insert(
+            name.clone(),
+            runs.iter()
+                .flat_map(|(_, v, _)| v.results.iter().copied())
+                .filter(|r| is_stage_sentinel(*r))
+                .count(),
+        );
+        compares_per_module.insert(
+            name.clone(),
+            runs.iter().map(|(_, v, _)| v.results.len()).sum(),
+        );
+        if runs.len() > 1 {
+            seed_widened += 1;
+        }
+        if runs.is_empty() {
+            exempt.push((
+                name,
+                "no seed produced a comparable run".into(),
+                ExemptClass::HarnessCapacity,
+            ));
+            continue;
+        }
+        // Seed 0 supplies the reported observables, so the vacuity classification
+        // and the printed figures still describe the same run they always did.
+        // The native side of seed 0 is compared in the loop below with every
+        // other seed, so only the VM half is bound here.
+        let vm = &runs[0].1;
+
+        // A COMPOSITE return is a body address natively and a decoded value on
+        // the VM side; the two are not comparable as integers, and the hand-
+        // written differentials decode them per module. Here the observable is
+        // the call log and the data segment, which cover a composite-returning
+        // module's actual work. Stated rather than silently skipped.
+        let ret_is_composite = matches!(
+            m.signatures.get(entry).map(|s| &s.ret),
+            Some(WireShape::Flat { .. })
+        );
+        let ret_scalar = matches!(
+            m.signatures.get(entry).map(|s| &s.ret),
+            Some(WireShape::Scalar { .. })
+        );
+
+        // **EVERY seed is compared**, not only the one whose figures are
+        // reported. The first disagreeing seed is the one described, and its
+        // number is printed, because "module X disagrees" is far less useful than
+        // "module X disagrees on the all-equal argument vector".
+        let mut found: Option<(usize, &Run, &Run)> = None;
+        for (seed, v, n) in &runs {
+            let vm_scalar = v.results.iter().all(|x| *x != i64::MIN);
+            let differ = ret_scalar && vm_scalar && v.results != n.results;
+            // **THE COMPOSITE RETURN IS NOW COMPARED.** Only pairs captured on
+            // BOTH sides take part: an uncaptured one is skipped rather than
+            // read as a difference, which would manufacture disagreements out
+            // of a failed read. How many go uncaptured is reported below, so
+            // the skipping cannot become silent.
+            let ret_bytes_differ = ret_pairs_differ(v, n);
+            if differ || ret_bytes_differ || v.log != n.log || v.shared != n.shared {
+                found = Some((*seed, v, n));
+                break;
+            }
+        }
+        if let Some((seed, vm, nat)) = found {
+            let vm_scalar = vm.results.iter().all(|x| *x != i64::MIN);
+            let results_differ = ret_scalar && vm_scalar && vm.results != nat.results;
+            // Report the FIRST differing element, not the lengths. Lengths are
+            // equal in most real disagreements and say nothing.
+            let where_ = if results_differ {
+                let i = vm
+                    .results
+                    .iter()
+                    .zip(&nat.results)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(0);
+                format!(
+                    "result[{i}] vm={:?} native={:?}",
+                    vm.results.get(i),
+                    nat.results.get(i)
+                )
+            } else if ret_pairs_differ(vm, nat) {
+                // Named distinctly: a composite-return difference used to be
+                // impossible to report because the bodies were never compared,
+                // and falling through to the shared-segment arm printed
+                // `shared[0] vm=None native=None`, which describes nothing.
+                let i = vm
+                    .ret_bytes
+                    .iter()
+                    .zip(&nat.ret_bytes)
+                    .position(|(a, b)| !a.is_empty() && !b.is_empty() && a != b)
+                    .unwrap_or(0);
+                let (a, b) = (&vm.ret_bytes[i], &nat.ret_bytes[i]);
+                let k = a.iter().zip(b).position(|(x, y)| x != y).unwrap_or(0);
+                format!(
+                    "composite return[{i}] byte {k} of {}: vm={:?} native={:?}",
+                    a.len(),
+                    a.get(k),
+                    b.get(k)
+                )
+            } else if vm.log != nat.log {
+                let i = vm
+                    .log
+                    .iter()
+                    .zip(&nat.log)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(vm.log.len().min(nat.log.len()));
+                format!(
+                    "log[{i}] of {}/{} vm={:?} native={:?}",
+                    vm.log.len(),
+                    nat.log.len(),
+                    vm.log.get(i),
+                    nat.log.get(i)
+                )
+            } else {
+                let i = vm
+                    .shared
+                    .iter()
+                    .zip(&nat.shared)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(0);
+                format!(
+                    "shared[{i}] vm={:?} native={:?}",
+                    vm.shared.get(i),
+                    nat.shared.get(i)
+                )
+            };
+            disagreed.push(format!("{name}: seed {seed}: {where_}"));
+            continue;
+        }
+        // **Agreement is not evidence unless the run did something.** Nine of the
+        // stage sources agreed here for months while doing nothing at all: they
+        // read their input from the shared segment, which this harness supplies
+        // as zeros, so each took an immediate end-of-input exit. `lexer.kel`
+        // yielded 62 — its own documented end-of-source marker — sixty times.
+        //
+        // The three observables are all trivial in that state, so a run is
+        // classified vacuous only when EVERY one of them is, which is
+        // conservative: a module doing real work fails the test on any one.
+        if is_vacuous(vm) {
+            vacuous.push(name);
+            continue;
+        }
+        // **WHICH OBSERVABLE CARRIES THIS MODULE'S AGREEMENT.**
+        //
+        // The comparison checks four things, and the headline count checks none
+        // of them individually. A module can be non-vacuous on the strength of a
+        // native-call log alone while returning one value sixty times over, and
+        // "44 executed and agreeing" reads identically either way. Recorded per
+        // module so the distribution is visible rather than inferred.
+        //
+        // **ACROSS EVERY RUN, NOT SEED 0.** The reported observables come from
+        // `runs[0]`, and for a NON-STREAM module that run holds exactly ONE
+        // result -- one seed, one returned scalar. Counting distinct values
+        // there said "one" for every such module however well the seed sweep
+        // exercised it, which measured the harness's reporting convention
+        // rather than the module. A stream module's single run holds one value
+        // per tick, so the two populations only become comparable once every
+        // run is pooled.
+        let mut distinct: Vec<i64> = runs
+            .iter()
+            .flat_map(|(_, v, _)| v.results.clone())
+            .collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        obs_visited += 1;
+        let multi = distinct.len() > 1;
+        let logged = runs.iter().any(|(_, v, _)| !v.log.is_empty());
+        // **A COMPARED COMPOSITE RETURN IS AN OBSERVABLE.** Before the bodies
+        // were captured this was invisible, and twelve modules read as agreeing
+        // with nothing compared. They now agree on their whole return body.
+        let composite = runs.iter().any(|(_, v, n)| {
+            !v.ret_bytes.is_empty()
+                && !n.ret_bytes.is_empty()
+                && v.ret_bytes
+                    .iter()
+                    .zip(&n.ret_bytes)
+                    .any(|(a, b)| !a.is_empty() && !b.is_empty())
+        });
+        let wrote = runs.iter().any(|(_, v, _)| v.wrote_shared);
+        if composite {
+            obs_composite += 1;
+        }
+        // **PAIR GRANULARITY, because a module-level count is exactly what hides
+        // a pair-level gap.** `obs_composite` says a module captured AT LEAST
+        // ONCE. A module capturing on seed 0 and declining on the other 23 would
+        // be counted as compared, and the skip would be invisible -- which is the
+        // silent skipping the comparison's own justification claims cannot happen.
+        if ret_is_composite {
+            let mut both = 0usize;
+            let mut declined = 0usize;
+            for (_, v, n) in &runs {
+                for (a, b) in v.ret_bytes.iter().zip(&n.ret_bytes) {
+                    if !a.is_empty() && !b.is_empty() {
+                        both += 1;
+                    } else {
+                        declined += 1;
+                    }
+                }
+            }
+            cap_pairs_both += both;
+            cap_pairs_declined += declined;
+            if declined > 0 {
+                cap_partial.push(format!("{name}: {both} captured, {declined} declined"));
+            }
+            if both == 0 {
+                cap_never.push(name.clone());
+            }
+        }
+        if multi {
+            obs_multi_result += 1;
+        }
+        if logged {
+            obs_native_calls += 1;
+        }
+        if wrote {
+            obs_wrote_shared += 1;
+        }
+        if !multi && !logged && !wrote && !composite {
+            obs_single_scalar_only += 1;
+            obs_single_scalar_names.push(name.clone());
+            // **CAN this module vary at all?** A module driven at ONE argument
+            // vector cannot produce a second distinct result however good the
+            // lowering is, so "one scalar only" says something about the harness
+            // rather than the emitter. Split, because the two readings differ:
+            // one is a corpus that takes no input, the other is a sweep that
+            // failed to move an output.
+            if runs.len() == 1 {
+                obs_single_and_undrivable += 1;
+            } else {
+                // **NAMED, not just counted, and naming them found the cause.**
+                // These do not "fail to vary": every one returns a COMPOSITE,
+                // and a composite return is deliberately excluded from the
+                // results comparison -- `vm_scalar` is false, so `differ` is
+                // false whatever either side produced.
+                //
+                // The design justifies that exclusion by saying the call log and
+                // the data segment "cover a composite-returning module's actual
+                // work". **For these modules both are EMPTY**, so the stated
+                // fallback does not exist and NOTHING about them is compared.
+                // The return shape is READ, not assumed: a module landing here
+                // with a SCALAR return would have a different cause entirely and
+                // must not be labelled with this one.
+                if name.contains("item_scroll") || name.contains("item_potion") {
+                    let (_, v0, n0) = &runs[0];
+                    println!(
+                        "  RETBYTES {name}: vm {} bytes {:?}",
+                        v0.ret_bytes.len(),
+                        &v0.ret_bytes[..v0.ret_bytes.len().min(48)]
+                    );
+                    println!(
+                        "  RETBYTES {name}: nat {} bytes {:?}",
+                        n0.ret_bytes.len(),
+                        &n0.ret_bytes[..n0.ret_bytes.len().min(48)]
+                    );
+                }
+                nothing_compared.push(format!(
+                    "{name} ({} vectors, {} params, {} return)",
+                    runs.len(),
+                    n_params,
+                    if ret_scalar { "SCALAR" } else { "composite" }
+                ));
+            }
+        }
+        executed.push(name);
+    }
+
+    println!("================ CORPUS DIFFERENTIAL");
+    println!("  EXECUTED AND AGREEING : {}", executed.len());
+    println!(
+        "  AGREED BUT VACUOUS    : {}  <- agreement on a run that produced nothing",
+        vacuous.len()
+    );
+    for n in &vacuous {
+        println!("     {n:26}");
+    }
+    if !vacuous.is_empty() {
+        println!(
+            "     ^ these read their input from the shared segment, which this harness\n\
+             \x20      supplies as zeros. Real coverage for `lexer.kel` and `parse.kel` is in\n\
+             \x20      `stage_differential.rs`, which seeds the segment on BOTH sides."
+        );
+    }
+    // **WHAT CARRIES THE AGREEMENT, since the headline count says nothing about it.**
+    // These are not independent: one module can appear in all three. Reported and
+    // deliberately NOT asserted -- pinning a distribution fails on ordinary corpus
+    // growth and teaches the next reader to delete the check.
+    println!("\n  of these {}, agreement is carried by:", executed.len());
+    println!("    {obs_multi_result:>3}  more than one distinct result value");
+    println!("    {obs_native_calls:>3}  a native call log");
+    println!("    {obs_composite:>3}  a COMPOSITE RETURN BODY compared byte for byte");
+    println!("    {obs_wrote_shared:>3}  writing the shared segment");
+    println!("    {obs_single_scalar_only:>3}  NONE of the three -- one scalar, no call, no write");
+
+    // ================= THE ROADMAP'S ORDER-1 GATE, AS A MEASURED FIGURE
+    //
+    // `V0_3_X_ROADMAP.md` states the gate in words -- "the self-hosted
+    // compiler's own bytecode runs correctly as native code, differential-tested
+    // against the VM" -- and NOTHING HAS EVER SAID WHETHER IT IS MET. This
+    // harness already drives every stage; it simply never separated them from
+    // the other fifty-odd modules. No second walker is introduced: these are the
+    // same results, partitioned by where the source lives.
+    //
+    // **THIS DELIBERATELY DOES NOT ASSERT THAT THE GATE IS MET.** "Eleven of
+    // twelve agree" is the shape of headline this file already inflated once,
+    // when `is_vacuous` asked whether a SEEDED segment was non-zero -- which it
+    // is before a module executes a single operation -- and three stages left
+    // the vacuous set for no reason at all. The figure is reported with the
+    // qualifications beside it and a reader draws the conclusion.
+    //
+    // ⚠ **SKIPPED ENTIRELY UNDER `KEL_ONLY_MODULE`, AND THIS REPAIRS AN
+    // INSTRUMENT THAT WAS BROKEN IN THE DIRECTION THAT FABRICATES COVERAGE.**
+    //
+    // `tools/mutation_sweep.py` drives this binary one module at a time. Every
+    // stage source is then filtered out, so `subjects_built` is empty and the
+    // seeded-stage assertion below fired on EVERY sweep invocation --
+    // *"seeded stage codegen.kel was driven at 0 subject(s)"* -- for a reason
+    // having nothing to do with any mutation.
+    //
+    // **The sweep classifies on the EXIT STATUS**: a non-zero exit is recorded
+    // as `DISAGREE`, which counts as DETECTED. So a sweep run in this state
+    // reports every mutation detected by every module, and would put a
+    // fabricated *"no hole open"* into `NATIVE_MUTATION_CENSUS.md` with total
+    // confidence. The census's own banner warns that a hang could fabricate
+    // coverage; this was worse, because it was deterministic.
+    //
+    // **Dated: the assertion landed 2026-08-21 (`0a8d8547`), five days after the
+    // census was measured on 2026-08-16 (`f1800820`).** The 12h51m re-run
+    // attempted on 2026-09-02 was therefore driving a broken instrument, and its
+    // verdicts are artefacts rather than measurements.
+    //
+    // The gate itself is NOT weakened: a full run still drives every stage and
+    // still enforces the assertion. What is skipped is a report about modules
+    // this invocation deliberately did not run.
+    if std::env::var("KEL_ONLY_MODULE").is_ok() {
+        println!(
+            "\n================ ORDER-1 GATE: SKIPPED under KEL_ONLY_MODULE.\n               A single-module invocation drives no stage sources, so this gate has\n               nothing to measure. A full run reports and asserts it."
+        );
+    } else {
+        let in_stage = |n: &String| stage_files.contains(n);
+        let ex: Vec<&String> = executed.iter().filter(|n| in_stage(n)).collect();
+        let vac: Vec<&String> = vacuous.iter().filter(|n| in_stage(n)).collect();
+        let exm: Vec<&(String, String, ExemptClass)> =
+            exempt.iter().filter(|(n, _, _)| in_stage(n)).collect();
+        let dis: Vec<&String> = disagreed.iter().filter(|n| in_stage(n)).collect();
+
+        println!("\n================ ORDER-1 GATE (self-hosted stages)");
+        println!("  stage sources found       : {}", stage_files.len());
+        println!("  EXECUTE and AGREE         : {}", ex.len());
+
+        // **AGREEING ON A REFUSAL IS STILL AGREEING, AND IS REPORTED SEPARATELY.**
+        let on_sentinel: Vec<(&String, usize)> = ex
+            .iter()
+            .map(|n| (*n, sentinels_per_module.get(*n).copied().unwrap_or(0)))
+            .filter(|(_, c)| *c > 0)
+            .collect();
+        if on_sentinel.is_empty() {
+            println!(
+                "    none of the {} agreeing stages yielded a FAILURE SENTINEL \
+                 (band <= -901)",
+                ex.len()
+            );
+        } else {
+            println!(
+                "    ⚠ {} of {} agreeing stages yielded a FAILURE SENTINEL -- the \
+                 agreement is real, the COVERAGE is not what the count suggests:",
+                on_sentinel.len(),
+                ex.len()
+            );
+            for (n, c) in &on_sentinel {
+                println!("      {n:26} {c} sentinel result(s)");
+            }
+        }
+
+        // **HOW STRONG IS THAT AGREEMENT? The vector count, for STAGES only.**
+        //
+        // Nothing measured this until now, and an adjacent report made it look
+        // as though something had. The corpus-wide observable breakdown ends
+        // with a line reading "of those, N were driven at ONE argument vector",
+        // and for a long time BOTH FIGURES WERE TEN -- that line's N, and this
+        // block's EXECUTE-and-AGREE count. They are unrelated populations: that
+        // one counts modules across the WHOLE corpus whose agreement rests on a
+        // single scalar, this one counts self-hosted stages. **A reader who
+        // took them together concluded the ten agreeing stages were all
+        // single-vector, which nothing had measured.** The orphaned line now
+        // names its own population; this block answers the question it looked
+        // like it was answering.
+        //
+        // **THE FIGURE IS REPORTED, NOT PINNED.** It moves with `SEEDS` and with
+        // the corpus. What is asserted is that it was derived from the runs
+        // actually performed over a non-empty set -- a distribution assertion
+        // would fail on ordinary growth and teach the next reader to delete it.
+        let stage_vectors: Vec<(&String, usize)> = ex
+            .iter()
+            .map(|n| (*n, vectors_per_module.get(*n).copied().unwrap_or(0)))
+            .collect();
+        let single = stage_vectors.iter().filter(|(_, v)| *v == 1).count();
+        let widened = stage_vectors.iter().filter(|(_, v)| *v > 1).count();
+        let unrecorded = stage_vectors.iter().filter(|(_, v)| *v == 0).count();
+        let max_v = stage_vectors.iter().map(|(_, v)| *v).max().unwrap_or(0);
+        println!(
+            "    of those {} agreeing stages: {single} driven at ONE argument \
+             vector, {widened} at more than one (max {max_v})",
+            ex.len()
+        );
+        // **AND THE VECTOR COUNT IS THE WRONG STRENGTH MEASURE HERE, WHICH TOOK
+        // A SECOND PASS TO SEE.** Every one of the twelve stage entries is a
+        // `Stream` taking ONE parameter -- the TICK. `seeds` is pinned to 1 for a
+        // stream deliberately: the driver already varies the tick across its
+        // iterations, so seeding it would change what the run MEANS rather than
+        // broaden it.
+        //
+        // So "single-vector" is TRUE and "compared once" is FALSE. The first
+        // reading of this figure said the gate was "ten stages each compared at
+        // exactly one input". **That was wrong, and it understated the gate.**
+        // It is recorded rather than quietly replaced, because the mistake is
+        // the same species as the one this block exists to fix: a number read
+        // against the wrong population.
+        //
+        // **The measure that applies to a stream is the number of TICKS
+        // compared**, below.
+        let stage_compares: Vec<(&String, usize)> = ex
+            .iter()
+            .map(|n| (*n, compares_per_module.get(*n).copied().unwrap_or(0)))
+            .collect();
+        let min_c = stage_compares.iter().map(|(_, c)| *c).min().unwrap_or(0);
+        let max_c = stage_compares.iter().map(|(_, c)| *c).max().unwrap_or(0);
+        let total_c: usize = stage_compares.iter().map(|(_, c)| *c).sum();
+        println!("    EVERY STAGE ENTRY IS A STREAM, so the vector count is NOT the strength");
+        println!(
+            "    measure. Result comparisons across ticks: {total_c} total, min {min_c}, max {max_c}"
+        );
+        println!("    per stage. A stage driven at ONE argument vector is still compared at");
+        println!("    every tick it runs.");
+        // **THE RESIDUAL, RESTATED AT ITS NEW POSITION.** Sixty ticks vary a
+        // stage's POSITION WITHIN A RUN, never what it is LOOKING AT. That second
+        // axis is the subject, and it was one hardcoded file until 2026-08-21.
+        println!("    SUBJECTS per seeded stage (the axis ticks do NOT vary):");
+        for st in STAGE_SEEDED {
+            let b = subjects_built.get(*st).copied().unwrap_or(0);
+            let d = subjects_declined.get(*st).copied().unwrap_or(0);
+            println!("      {st:26} {b} subject(s) seeded, {d} declined");
+        }
+        // **THE OLD RESIDUAL IS CLOSED AND IS NOT LEFT PRINTING.** It read
+        // "`reconstruct.kel` still sees ONE subject, and the obstacle is real --
+        // its seed is a parsed multiheaded group and it asserts the subject
+        // declares exactly four heads." **That was true of the MULTIHEAD path
+        // only.** The single-head entry point takes `body_records()`, which is
+        // public; this file's note calling it blocked was true when written and
+        // had stopped being true. Reconstruct now carries five subjects across
+        // BOTH entry points.
+        //
+        // **A residual that has been addressed must stop being printed**, or the
+        // report describes a gate that no longer exists -- which is the stale-count
+        // class this line triaged on 2026-08-27.
+        let weakest = STAGE_SEEDED
+            .iter()
+            .map(|st| subjects_built.get(*st).copied().unwrap_or(0))
+            .filter(|n| *n > 0)
+            .min()
+            .unwrap_or(0);
+        println!(
+            "    RESIDUAL: the thinnest seeded stage now carries {weakest} subject(s). \
+             The subject axis is no longer any stage's binding constraint."
+        );
+        println!("    What remains here is NOT a subject count. The stages this tick");
+        println!("    harness cannot drive meaningfully are driven by HOST PROTOCOL in");
+        println!("    `stage_differential.rs`: `wire.kel` by command scripts over real");
+        println!("    artifacts, `verify_datalayout.kel` across its batched phases, and");
+        println!("    `wire_debug.kel` with `wire_schema.kel` in a lockstep debug-pool");
+        println!("    round trip. Their figures below describe THIS harness only.");
+        // **NAME the unseeded stages, do not merely count them.** A count tells
+        // the next reader how much is left; a list tells them where to start.
+        let unseeded: Vec<&String> = ex
+            .iter()
+            .filter(|n| !STAGE_SEEDED.contains(&n.as_str()))
+            .copied()
+            .collect();
+        println!(
+            "    UNSEEDED and varying NEITHER axis ({}): {:?}",
+            unseeded.len(),
+            unseeded.iter().map(|n| n.as_str()).collect::<Vec<_>>()
+        );
+        println!("    Each is one run of sixty ticks with no input HERE; each is driven");
+        println!("    on real input in `stage_differential.rs`.");
+
+        // **A seeded stage that silently falls back to one subject is what this
+        // guards.** `reconstruct.kel` is exempt BY NAME with its obstacle stated
+        // above, not by a threshold that would also hide a real fallback. The
+        // count is NOT pinned -- it moves with `STAGE_SUBJECTS`.
+        for st in STAGE_SEEDED {
+            if *st == "reconstruct.kel" {
+                continue;
+            }
+            let b = subjects_built.get(*st).copied().unwrap_or(0);
+            assert!(
+                b >= 2,
+                "seeded stage {st} was driven at {b} subject(s). Widening has \
+                 regressed to the single-subject case, or every added subject \
+                 declined -- check the NOT BUILT lines"
+            );
+        }
+        assert!(
+            min_c > 0,
+            "an agreeing stage was compared at ZERO points, so its agreement is \
+             vacuous and the gate counts it anyway"
+        );
+        assert_eq!(
+            unrecorded, 0,
+            "{unrecorded} agreeing stage(s) have no recorded vector count, so \
+             this figure describes a subset while looking complete"
+        );
+        assert!(
+            !stage_vectors.is_empty(),
+            "the stage-vector figure was derived from an empty set, so its \
+             numbers say nothing"
+        );
+
+        // **ARE THE TWO TENS THE SAME TEN? MEASURED AT ZERO OVERLAP.**
+        //
+        // They are DISJOINT. Three unrelated tens sat in one report: ten
+        // corpus-wide modules agreeing on a single scalar, ten of those driven
+        // at one vector, and ten agreeing stages -- with no stage in either of
+        // the first two sets.
+        //
+        // **AND THE INFERENCE A READER WOULD HAVE DRAWN IS TRUE ANYWAY.** Every
+        // agreeing stage IS single-vector, as the line above now measures. So
+        // the orphaned sentence led to a correct conclusion by a route that
+        // supported none of it.
+        //
+        // **THAT IS THE WORST CASE, NOT THE HARMLESS ONE.** A bad inference that
+        // yields a wrong answer gets caught by the next check. One that yields
+        // the RIGHT answer certifies the reasoning that produced it, and the
+        // next reader reuses the route. The fix is therefore not "the number was
+        // fine after all" -- it is that the figure now comes from a measurement
+        // over the population it names.
+        let overlap = ex
+            .iter()
+            .filter(|n| obs_single_scalar_names.contains(**n))
+            .count();
+        println!(
+            "    overlap with the corpus-wide ONE-SCALAR-ONLY set: {overlap} of \
+             {} stages (that set has {} members)",
+            ex.len(),
+            obs_single_scalar_names.len()
+        );
+        println!("  agree but VACUOUS         : {}", vac.len());
+        for n in &vac {
+            println!("     {n}");
+        }
+        println!("  EXEMPT                    : {}", exm.len());
+        for (n, why, _) in &exm {
+            println!("     {n:24} {why}");
+        }
+        println!("  DISAGREE                  : {}", dis.len());
+        for n in &dis {
+            println!("     {n}");
+        }
+        println!(
+            "\n  THREE STATES, KEPT APART. Exempt is not failed, and vacuous is not\n  \
+             agreeing about anything. A stage counted in one column is not in\n  \
+             another, and the four sum to the sources found.\n  \
+             \n  \
+             TWO QUALIFICATIONS BELONG BESIDE THIS FIGURE, NOT ELSEWHERE:\n  \
+             \n  \
+             `verify_datalayout.kel` produces no verdict HERE: its verdict\n  \
+             accumulates across three differently-encoded phases fed by the\n  \
+             host. Do not invent a batch-zero seed for it. Its phases are\n  \
+             driven, with verdicts in both directions, in stage_differential.rs.\n  \
+             \n  \
+             `wire.kel` is EXEMPT HERE AND IS NOT A DISAGREEMENT. Driven with\n  \
+             the tick as its command, it faults at tick 19 on both sides, the\n  \
+             virtual machine naming IndexOutOfBounds and the native side raising\n  \
+             SIGTRAP. That is agreement in the FACT and POSITION of a fault the\n  \
+             input order causes. Driven by its host's commands over real\n  \
+             artifacts in stage_differential.rs, it executes and agrees.\n  \
+             \n  \
+             THE STAGES ARE SEEDED. Read the carrier breakdown above before\n  \
+             treating any stage's agreement as substantive."
+        );
+        println!("================");
+
+        // A report over an empty stage set must FAIL rather than look like a
+        // result. The rest is reported, not pinned: the distribution moves with
+        // the corpus and with the harness.
+        assert!(
+            stage_files.len() >= 10,
+            "only {} self-hosted stage sources were found, so this Order-1 report \
+             is reading the wrong tree and its zero says nothing",
+            stage_files.len()
+        );
+        assert_eq!(
+            ex.len() + vac.len() + exm.len() + dis.len(),
+            stage_files.len(),
+            "the Order-1 columns do not partition the stage sources, so a stage \
+             has fallen out of the accounting while the columns still look sane"
+        );
+    }
+    // **THIS LINE NAMES ITS POPULATION, AND THAT IS THE WHOLE FIX.** It
+    // continues the corpus-wide breakdown opened ~85 lines above, but the
+    // Order-1 gate block prints BETWEEN them and closes with its own
+    // `================` terminator. So this sentence used to arrive after a
+    // section rule belonging to a different report, saying "of those" and
+    // meaning a population the reader had lost sight of. **Both figures were
+    // TEN**, which made the misreading close to forced. Do not restore a
+    // relative reference here; proximity is not a citation.
+    println!(
+        "  of the {} modules agreeing on ONE SCALAR ONLY (whole corpus, NOT the \
+         Order-1 stages above), {obs_single_and_undrivable} were driven at ONE \
+         argument vector and could not have varied",
+        obs_single_scalar_only
+    );
+    {
+        let zero_param = obs_single_scalar_names
+            .iter()
+            .filter(|n| pin_reason.get(*n).is_some_and(|r| r.starts_with("zero")))
+            .count();
+        let streamed = obs_single_scalar_names
+            .iter()
+            .filter(|n| pin_reason.get(*n).is_some_and(|r| r.starts_with("stream")))
+            .count();
+        println!(
+            "       of those, {zero_param} have a ZERO-PARAMETER entry (nothing to vary) and \
+             {streamed} are streams"
+        );
+    }
+    // **NON-VACUITY ONLY.** The distribution above is REPORTED, never asserted:
+    // pinning it would fail on ordinary corpus growth and teach the next reader
+    // to delete the check. What must hold is that the breakdown looked at every
+    // agreeing module -- a classification that silently skips some would show a
+    // reassuring shape while describing a subset.
+    assert_eq!(
+        obs_visited,
+        executed.len(),
+        "the observable breakdown classified {obs_visited} modules but {} are \
+         reported as executing and agreeing; it is describing a subset",
+        executed.len()
+    );
+    if !nothing_compared.is_empty() {
+        println!(
+            "\n  *** COUNTED AS AGREEING WITH NOTHING COMPARED ({}) ***",
+            nothing_compared.len()
+        );
+        println!("  Composite return => results excluded by design; log EMPTY; segment UNWRITTEN.");
+        println!("  The exclusion is justified by the log and segment covering the work.");
+        println!("  For these modules they carry nothing, so the justification does not hold.");
+        for u in &nothing_compared {
+            println!("     {u}");
+        }
+    }
+    // **THE UNIT IS A RESULT SLOT, NOT A (MODULE, SEED) PAIR.** A stream entry
+    // contributes one slot per TICK and a non-stream entry one per seed, so this
+    // total exceeds the pair count printed below and is NOT comparable to it.
+    // Naming a unit wrongly is the same class of defect this audit exists to catch.
+    println!("\n  COMPOSITE CAPTURE AUDIT (per RESULT SLOT, not per module):");
+    println!("    {cap_pairs_both:>5}  slots with a body captured on BOTH sides");
+    println!("    {cap_pairs_declined:>5}  slots where either side declined");
+    println!(
+        "    {:>5}  modules with AT LEAST ONE declined capture",
+        cap_partial.len()
+    );
+    for c in &cap_partial {
+        println!("        {c}");
+    }
+    println!(
+        "    {:>5}  modules with a composite return captured on NEITHER side",
+        cap_never.len()
+    );
+    for c in &cap_never {
+        println!("        {c}");
+    }
+    println!("  (module, seed) pairs compared : {seed_pairs}");
+    println!("  modules driven at >1 seed     : {seed_widened}");
+
+    // **THE SEED SWEEP'S OWN NON-VACUITY GUARD.**
+    //
+    // `SEEDS` widens only modules with a scalar entry of at least one parameter:
+    // a `Stream` entry and a zero-parameter entry both keep a single vector. If a
+    // change ever collapses that set to nothing, every figure above stays exactly
+    // the same while the sweep silently measures seed 0 only -- which is the state
+    // that hid the `SLT`/`SLE` defect when the count was 4. Measured 2026-08-20:
+    // 19 modules widen, 482 pairs at `SEEDS = 24`.
+    // ⚠ **POPULATION GUARDS, SKIPPED UNDER `KEL_ONLY_MODULE`. THE DISTINCTION IS
+    // THE POINT AND IS STATED SO IT IS NOT BLURRED LATER.**
+    //
+    // This test carries two kinds of assertion, and only one kind may be skipped:
+    //
+    //   * **POPULATION guards** -- "some module widened its seeds", "something was
+    //     exempt". They say the CORPUS is being swept properly. A deliberate
+    //     one-module invocation makes them vacuous or false for a reason that has
+    //     nothing to do with correctness.
+    //   * **CONSISTENCY guards** -- "the breakdown classified as many modules as
+    //     executed", "the histogram accounts for every exemption". They hold at
+    //     ANY population, including one. **These are NOT skipped**, and skipping
+    //     them to make a single-module run quiet would remove the checks that
+    //     still mean something there.
+    //
+    // See the Order-1 gate above for why this matters: the sweep classifies on
+    // exit status, so a population guard firing under `KEL_ONLY_MODULE` is read
+    // as a DETECTED mutation and fabricates coverage.
+    if std::env::var("KEL_ONLY_MODULE").is_err() {
+        assert!(
+            seed_widened > 0,
+            "no module ran more than one argument vector, so SEEDS is widening nothing \
+             and this whole differential is a seed-0 measurement wearing a sweep's name"
+        );
+        assert!(
+            seed_pairs > executed.len() + vacuous.len(),
+            "{seed_pairs} (module, seed) pairs across {} comparable modules means at most \
+             one vector each; the sweep is not sweeping",
+            executed.len() + vacuous.len()
+        );
+    }
+    println!("  EXEMPT                : {}", exempt.len());
+    for (n, why, _class) in &exempt {
+        println!("     {n:26} {why}");
+    }
+
+    // **WHAT "EXEMPT" ACTUALLY MEANS, BROKEN OUT BY CLASS.**
+    //
+    // A bare count reads as "modules this line fails to cover" and that is wrong
+    // in both directions. A prelude has no entry to run and never will. A module
+    // that faults has no VALUES to compare, but the FACT of its fault is
+    // comparable and `wire.kel` was measured agreeing on both sides at tick 19 --
+    // agreement the value differential is structurally unable to see.
+    //
+    // The class is attached where the exemption is created, so this histogram
+    // follows the harness's control flow rather than a table keyed on wording.
+    println!("\n  exempt, by class:");
+    let all_classes = [
+        ExemptClass::NotAcceptedByReference,
+        ExemptClass::NoRunnableEntry,
+        ExemptClass::FaultsAndIsFaultComparable,
+        ExemptClass::CoveredByAnotherHarness,
+        ExemptClass::HarnessCapacity,
+        ExemptClass::BackendRefusal,
+        ExemptClass::RefusedAtLoad,
+    ];
+    let mut classified = 0usize;
+    for c in all_classes {
+        let n = exempt.iter().filter(|(_, _, k)| *k == c).count();
+        classified += n;
+        if n > 0 {
+            println!("    {n:>3}  {}", c.label());
+        }
+    }
+    // **The histogram must account for every exemption.** A class added at a new
+    // site and left out of `all_classes` would silently vanish from this summary
+    // while the total above stayed right, which is precisely the shape of
+    // under-reporting this whole breakdown exists to remove.
+    assert_eq!(
+        classified,
+        exempt.len(),
+        "the class histogram accounts for {classified} of {} exemptions; a site \
+         introduced a class that `all_classes` does not list",
+        exempt.len()
+    );
+    // A POPULATION guard: see the note above. One module may legitimately be
+    // exempt of nothing.
+    assert!(
+        !exempt.is_empty() || std::env::var("KEL_ONLY_MODULE").is_ok(),
+        "no module was exempt at all, so this breakdown describes nothing and its \
+         guards cannot fire"
+    );
+
+    // **THE "COVERED ELSEWHERE" CLAIM, CHECKED RATHER THAN ASSERTED IN PROSE.**
+    //
+    // Thirteen of the nineteen exemptions rest on a claim that some OTHER
+    // harness covers the module: three say so in their reason, and the ten
+    // `piano_roll` modules are declined here for a reference argument while
+    // `module_differential.rs` drives them whole. **Until now that was a
+    // comment.** Rename, narrow or delete one of those hand-written tests and
+    // the exemption stays exactly as it reads while the coverage goes to zero.
+    //
+    // Derived from the sibling harness SOURCES rather than from a list of names,
+    // because a list is the thing that goes stale silently.
+    //
+    // **COMMENT LINES ARE EXCLUDED, AND THAT IS A REPAIR RATHER THAN A REFINEMENT
+    // (2026-08-24).** A harness DRIVES a module by naming it in code; naming it
+    // in prose proves nothing. Before this, any comment anywhere in a sibling
+    // source satisfied the claim.
+    //
+    // **IT WAS LIVE, NOT HYPOTHETICAL, AND THIS LINE CAUSED IT.**
+    // `comment_citations.rs` documents its prefix-resolution rule using the
+    // `rogue_ai` corpus family as the worked example, so it mentions
+    // `rogue_ai_boss` and `rogue_ai_hunter` -- two modules exempted here on the
+    // ground that another harness covers them. **Their exemption was being
+    // satisfied by a paragraph about citation scanning.** The coverage claim
+    // happens to remain TRUE (`rogue_ai_differential.rs` drives them), but the
+    // check would have passed with that harness deleted.
+    //
+    // Found by the `v0.2.3` line's generalisation of a different defect: **any
+    // figure counting things in a population that includes its own record has
+    // this shape.** Sibling sources are a population that every new test file in
+    // this package joins, including files with nothing to do with the corpus.
+    let sibling_sources: String = {
+        let mut acc = String::new();
+        let mut seen = 0usize;
+        if let Ok(rd) = std::fs::read_dir("tests") {
+            for e in rd.filter_map(|e| e.ok()) {
+                let p = e.path();
+                if p.extension().is_some_and(|x| x == "rs")
+                    && p.file_name().is_some_and(|n| n != "corpus_differential.rs")
+                    && let Ok(t) = std::fs::read_to_string(&p)
+                {
+                    seen += 1;
+                    for line in t.lines() {
+                        if !line.trim_start().starts_with("//") {
+                            acc.push_str(line);
+                            acc.push('\n');
+                        }
+                    }
+                }
+            }
+        }
+        // Without this the search below matches nothing and every claim "passes".
+        assert!(
+            seen > 5 && acc.len() > 10_000,
+            "only {seen} sibling harness sources ({} bytes) were read, so the \
+             coverage search would report every module uncovered -- or, worse, \
+             find nothing and be read as agreement",
+            acc.len()
+        );
+        acc
+    };
+    let uncovered: Vec<&str> = exempt
+        .iter()
+        .filter(|(_, _, k)| {
+            matches!(
+                k,
+                ExemptClass::CoveredByAnotherHarness | ExemptClass::HarnessCapacity
+            )
+        })
+        .map(|(n, _, _)| n.as_str())
+        .filter(|n| !sibling_sources.contains(*n))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "these modules are exempt from THIS differential on the understanding that \
+         another harness covers them, and no sibling harness source mentions them. \
+         Either the covering test was renamed or removed, or the exemption was \
+         never justified:\n  {}",
+        uncovered.join("\n  ")
+    );
+    if !disagreed.is_empty() {
+        println!("  DISAGREED             : {}", disagreed.len());
+        for d in &disagreed {
+            println!("     {d}");
+        }
+    }
+    println!("================");
+
+    // In single-module mode the pinned sets describe the WHOLE corpus and would
+    // fail spuriously, so the run reports and exits instead. The sweep reads the
+    // exit status, so the disagreement must still fail the process.
+    if only.is_some() {
+        assert!(disagreed.is_empty(), "disagreed: {}", disagreed.join("; "));
+        return;
+    }
+
+    let mut names: Vec<&str> = disagreed
+        .iter()
+        .map(|d| d.split(':').next().unwrap_or(d))
+        .collect();
+    names.sort();
+    names.dedup();
+    let mut known: Vec<&str> = KNOWN_DISAGREEMENTS.to_vec();
+    known.sort();
+    assert_eq!(
+        names,
+        known,
+        "the disagreement set changed.\n  NEW disagreements are real defects; a \
+         module that LEFT the list is fixed and should be removed from \
+         KNOWN_DISAGREEMENTS.\n  detail:\n{}",
+        disagreed.join("\n")
+    );
+    let mut vac: Vec<&str> = vacuous.iter().map(String::as_str).collect();
+    vac.sort();
+    let mut known_vac: Vec<&str> = KNOWN_VACUOUS.to_vec();
+    known_vac.sort();
+    assert_eq!(
+        vac, known_vac,
+        "the VACUOUS set changed.\n  A module that JOINED it agrees while producing \
+         nothing, so its entry in the executed count was never evidence.\n  A module \
+         that LEFT it is now doing real work and should be removed from KNOWN_VACUOUS.\n  \
+         Neither direction may pass silently: this list was 40-strong-looking coverage \
+         for months precisely because nothing checked it."
+    );
+
+    // **TIGHTENED from 20 to 56 on 2026-08-29.** At 61 executing modules a floor
+    // of 20 tolerated losing TWO THIRDS of the correctness comparison in
+    // silence, which is the failure mode the `KNOWN_VACUOUS` check above exists
+    // to prevent one module at a time. The two guards want the same thing.
+    //
+    // **This is the figure most worth flooring**, because a lowering regression
+    // reaches it INDIRECTLY and therefore quietly: `module_refusals` reports per
+    // chunk, but this harness exempts per MODULE, so one newly-refusing chunk
+    // removes a whole file from the comparison without any refusal being wrong.
+    //
+    // A FLOOR, NOT A PIN, with five modules of slack — enough that a source
+    // legitimately joining the exempt set is recorded rather than fought.
+    const EXECUTED_FLOOR: usize = 56;
+    assert!(
+        executed.len() >= EXECUTED_FLOOR,
+        "only {} modules executed and agreed, below the floor of {EXECUTED_FLOOR} \
+         calibrated against 61 on 2026-08-29. A drop here need not mean a wrong \
+         refusal: one newly-refusing CHUNK exempts a whole MODULE. Either way \
+         the correctness comparison shrank and every exemption above should be \
+         read as unfinished work",
+        executed.len()
+    );
+}
+
+/// The sentinel band this harness uses must still be the band the stage sources
+/// actually emit.
+///
+/// **THE CONSTANT IS THE OTHER LINE'S.** `parse.kel` and `reconstruct.kel` each
+/// declare a base of `0 - 900` and subtract a positive code, so a failure lands
+/// at `<= -901`. A copy of someone else's constant that drifts silently is worse
+/// than no copy, so this reads both bases back out of the `.kel` text.
+///
+/// **AND IT PROVES THE PREDICATE CAN FIRE**, because the gate currently reports
+/// that NO agreeing stage yields a sentinel — a clean verdict, and a clean
+/// verdict is evidence about the checker before it is evidence about the tree.
+#[test]
+fn the_sentinel_band_still_matches_the_stage_sources() {
+    // Same relative form the lexer-source read above already uses; these tests
+    // run with `native_codegen/` as the working directory.
+    let mut found = Vec::new();
+    for (file, decl) in [
+        ("parse.kel", "fn pe_tag_base()"),
+        ("reconstruct.kel", "fn rc_fail_base()"),
+    ] {
+        let p = std::path::Path::new("../src/selfhost/kel").join(file);
+        let src = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {file}: {e}"));
+        match sentinel_base_in(&src, decl) {
+            Ok(base) => assert_eq!(
+                base, -900,
+                "{file}: `{decl}` declares base {base}, not -900. The band in \
+                 `is_stage_sentinel` was derived from -900 and must be re-derived."
+            ),
+            Err(why) => panic!("{file}: {why}"),
+        }
+        found.push(file);
+    }
+    assert_eq!(found.len(), 2, "both stage sources must be inspected");
+
+    // **THE PREDICATE ITSELF, over the values that actually occur.** -905 is the
+    // real `rc_range_arity` refusal observed on `08_method_dispatch.kel`.
+    assert!(
+        is_stage_sentinel(-905),
+        "a real observed refusal must classify"
+    );
+    assert!(
+        is_stage_sentinel(-901),
+        "the first code below the base must classify"
+    );
+    assert!(
+        !is_stage_sentinel(-900),
+        "the BASE ITSELF is not a refusal -- a cause subtracts a POSITIVE code"
+    );
+    assert!(!is_stage_sentinel(4), "a node count must not classify");
+    assert!(!is_stage_sentinel(0), "an empty result must not classify");
+    assert!(
+        !is_stage_sentinel(-1),
+        "an ordinary negative must not classify, or the band would swallow real values"
+    );
+
+    // **THE FILE-READING HALF IS PROVEN TO FIRE, and it could not be proven the
+    // obvious way.** Demonstrating it by mutating `parse.kel` is not available:
+    // `src/selfhost/` is the `v0.2.3` line's and is READ-ONLY here, and a guard
+    // temporarily "proven" by an edit that must then be reverted is a guard
+    // proven on a tree that no longer exists. So the check takes SOURCE TEXT and
+    // is exercised against text this test owns.
+    assert_eq!(
+        sentinel_base_in("fn pe_tag_base() -> Word { 0 - 900 }", "fn pe_tag_base()"),
+        Ok(-900),
+        "the real declaration form must parse"
+    );
+    assert_eq!(
+        sentinel_base_in("fn pe_tag_base() -> Word { 0 - 512 }", "fn pe_tag_base()"),
+        Ok(-512),
+        "a MOVED base must be read as moved rather than silently accepted"
+    );
+    assert!(
+        sentinel_base_in(
+            "fn something_else() -> Word { 0 - 900 }",
+            "fn pe_tag_base()"
+        )
+        .is_err(),
+        "a REMOVED declaration must be an error, not a default"
+    );
+}
+
+/// Read `fn <decl>() -> Word { 0 - N }` out of stage source text and return `-N`.
+///
+/// Split out from its caller so the caller can exercise it on text rather than on
+/// a file, because the files it reads in production belong to the `v0.2.3` line
+/// and cannot be mutated to prove this fires.
+fn sentinel_base_in(src: &str, decl: &str) -> Result<i64, String> {
+    let line = src
+        .lines()
+        .find(|l| l.trim_start().starts_with(decl))
+        .ok_or_else(|| {
+            format!(
+                "no longer declares `{decl}`. The sentinel convention moved; re-derive \
+                 the band rather than adjusting the test to match."
+            )
+        })?;
+    let (_, rest) = line
+        .split_once("0 - ")
+        .ok_or_else(|| format!("`{decl}` no longer reads `0 - N`: {}", line.trim()))?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return Err(format!(
+            "`{decl}` has no numeral after `0 - `: {}",
+            line.trim()
+        ));
+    }
+    digits
+        .parse::<i64>()
+        .map(|n| -n)
+        .map_err(|e| format!("`{decl}` base does not parse: {e}"))
+}
+
+/// The PRE-REGISTERED mutation family, fixed before any subject was measured.
+///
+/// # WIDENED 2026-08-29: the reason for excluding control flow has expired
+///
+/// This family was arithmetic and bitwise only, and the recorded reason was that
+/// a comparison swap can change a loop's trip count, the native side carries no
+/// bound check, and a mutant could then run forever and hang the suite.
+///
+/// **Two filters built since then handle exactly that**, each forced by a real
+/// failure rather than anticipated: a mutant that is no longer ADMISSIBLE is
+/// refused before it is lowered (which is what a changed trip count produces —
+/// measured, as a SIGBUS), and a mutant that FAULTS is caught by running the
+/// tolerant side first (measured, as a SIGTRAP).
+///
+/// **Amended because the basis expired, not because of any result.** No subject
+/// was reclassified before this change was made, and the same rule governed the
+/// earlier `CheckedAdd` amendment.
+///
+/// Comparison and negation swaps exercise control flow, which arithmetic swaps
+/// largely do not, so they should produce killable mutants the old family could
+/// not reach.
+///
+/// Tried in this order at each op, scanning chunks in index order and ops in
+/// program order; the FIRST applicable site is mutated and nothing else is.
+/// Choosing sites by where the insensitive subjects turned out to be would make
+/// this a demonstration rather than a measurement — the rule `corpus_differential`
+/// already applies to its opcode sweep.
+fn pre_registered_sites(m: &Module) -> Vec<(usize, usize, Op)> {
+    let mut out = Vec::new();
+    for (ci, c) in m.chunks.iter().enumerate() {
+        for (oi, op) in c.ops.iter().enumerate() {
+            let rep = match op {
+                // **The CHECKED forms come first because they are what the
+                // corpus actually emits.** Keleusma is total, so ordinary source
+                // arithmetic compiles to `CheckedAdd`/`CheckedSub`, not `Add`.
+                // The first draft of this family listed only the unchecked forms
+                // and found a site in 4 modules out of 65 — the non-vacuity
+                // assertion below is what caught it.
+                //
+                // **The family was amended for near-zero applicability, NOT
+                // tuned to results.** At the time of the amendment no subject
+                // had been classified as insensitive, so the ordering cannot
+                // have been chosen to flatter it.
+                Op::CheckedAdd => Op::CheckedSub,
+                Op::CheckedSub => Op::CheckedAdd,
+                Op::Add => Op::Sub,
+                Op::Sub => Op::Add,
+                Op::Mul => Op::Add,
+                Op::BitAnd => Op::BitOr,
+                Op::Shl => Op::Shr,
+                // CONTROL FLOW, admitted by the widening above. `CmpLt`/`CmpLe`
+                // is the pair this backend already got wrong once: lowering
+                // `CmpLt` as `SLE` passed the whole differential because seed 0
+                // never made two comparands equal.
+                Op::CmpLt => Op::CmpLe,
+                Op::CmpLe => Op::CmpLt,
+                Op::CmpGt => Op::CmpGe,
+                Op::CmpGe => Op::CmpGt,
+                Op::CmpEq => Op::CmpNe,
+                Op::CmpNe => Op::CmpEq,
+                Op::Not => Op::Neg,
+                _ => continue,
+            };
+            out.push((ci, oi, rep));
+        }
+    }
+    out
+}
+
+/// The census's per-module sample.
+///
+/// **Reduced from three sites to one on 2026-08-29, when the family was widened
+/// to include control flow.** The two instruments are now split by role rather
+/// than both doing both: this census is BREADTH — every module, one site — and
+/// `how_deep_does_the_undetected_set_go` is DEPTH, re-sweeping at eight sites
+/// exactly the subjects this one finds nothing in.
+///
+/// **The widening's gain came from REACHING NEW OPCODES, not from three sites.**
+/// Adding the comparison swaps took detected from 39 to 48 and cut subjects with
+/// no applicable site at all from 10 to 3; that is breadth, and one site per
+/// module keeps it. What three sites bought was depth in the subjects that showed
+/// nothing, which is precisely what the deep sweep does, at greater depth.
+///
+/// The measured reason for the split: with three sites the mutation binary did
+/// not finish a census in thirty minutes under gate contention, against about
+/// 600s before the widening. **A gate that takes most of an hour is run less
+/// often**, and that costs more correctness than the sample it buys.
+fn sampled_mutants(m: &Module) -> Vec<(Module, String)> {
+    // **Delegates, because it was a second copy of the same selection.** This
+    // picked the middle site as `len / 2` while `sampled_mutants_capped` picks
+    // `(total - 1) / 2`; the two differ for some lengths, so the census and the
+    // deep sweep disagreed about which subjects showed nothing at three sites —
+    // `verify_typed.kel` sat in one list and not the other. Sharing the code
+    // makes them agree by construction rather than by coincidence.
+    sampled_mutants_capped(m, 1).0
+}
+
+/// **WOULD EACH SUBJECT NOTICE A WRONG BACKEND?**
+///
+/// `every_lowering_module_executes_or_is_exempt` counts modules that execute and
+/// agree. **Agreement is only evidence if disagreement was possible**, and for
+/// one class of subject that had never been shown. `is_vacuous` returns false
+/// immediately for a module with fewer than two results, so every single-call
+/// module inside the count is unexamined by it; `probe_agreement_depth` sized
+/// that blind spot at 15 single-call modules with agreement trivial on all three
+/// of its axes, and deliberately stopped short of classifying them.
+///
+/// This runs the reference on the ORIGINAL module and the native side on a
+/// MUTATED clone. That is a simulated backend defect. A subject that still agrees
+/// did not distinguish it.
+///
+/// # Three outcomes, and conflating them would manufacture a finding
+///
+/// * **detected** — the subject is load-bearing for this defect family.
+/// * **undetected** — agreement did not distinguish a wrong backend.
+/// * **UNMEASURED** — no applicable mutation site, or the mutant did not run.
+///   Reporting these as undetecting would invent a result. A previous guard on
+///   this line counted 33 where the truth was 10 by matching a word in comments.
+///
+/// # What this does NOT establish
+///
+/// **Undetected here means undetected against ONE pre-registered family**, not
+/// that the subject detects nothing. Nothing is deleted or exempted on this
+/// evidence: coverage present before this test is present after it.
+/// # Cost, measured rather than inferred
+///
+/// **This sweep RUNS in the everyday gate. Measured at 206s** on 2026-08-29 at a
+/// load average near 5, after the reference runs were hoisted out of the mutant
+/// loop and the per-module sample cut to one site.
+///
+/// **It was briefly marked `#[ignore]` and that was a mistake**, made on a 4132s
+/// figure taken under a load average near 13 which the same commit had already
+/// disclaimed in writing as contaminated. A guard was removed on a number its
+/// own author had rejected. Measuring the two sweeps separately settled it:
+/// **206s here against 710s** for `how_deep_does_the_undetected_set_go`, which
+/// remains opt-in. The cost was almost entirely the other one.
+///
+/// Recorded because the intermediate reasoning was wrong twice in opposite
+/// directions — first that the deep sweep dominated (correct), then that this
+/// census did (wrong, from watching libtest print its over-60-seconds notice for
+/// every long test running in parallel). **Only the separate measurement
+/// settled it.**
+#[test]
+fn which_subjects_would_notice_a_wrong_backend() {
+    let mut detected: Vec<String> = Vec::new();
+    let mut undetected: Vec<String> = Vec::new();
+    let mut no_site: Vec<String> = Vec::new();
+    let mut mutant_declined: Vec<String> = Vec::new();
+    let mut mutant_inadmissible: Vec<String> = Vec::new();
+    let mut mutant_faults: Vec<String> = Vec::new();
+    let mut mutant_equivalent: Vec<String> = Vec::new();
+    let mut equiv_total = 0usize;
+
+    for p in sources() {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let Some(src) = source_for(&p) else { continue };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        // Only subjects the main sweep actually drives. Measuring a module it
+        // exempts would report detection for a subject that contributes none.
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        let table = native_table(&m);
+        if table.len() > STUBS {
+            continue;
+        }
+        let mutants = sampled_mutants(&m);
+        if mutants.is_empty() {
+            no_site.push(name);
+            continue;
+        }
+
+        // Drive the subject the way the MAIN SWEEP drives it. The first version
+        // of this census ran every subject at seed 0 with no stage seed and
+        // reported the self-hosted stages as undetecting; that was an artefact of
+        // the driver, since a stage reading an unseeded segment sees zeros. **A
+        // measurement that drives a subject more weakly than the harness it
+        // describes reports a weaker result and blames the subject** — the
+        // narrower-population error this line keeps making.
+        let n_params = m.chunks[entry].param_count as usize;
+        let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+        let seeds = if is_stream || n_params == 0 { 1 } else { SEEDS };
+        let subject_seeds = stage_seeds(&m, &name);
+        let ok_seeds: Vec<&Vec<u8>> = subject_seeds
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .collect();
+        let variants: Vec<(usize, Option<&[u8]>)> = if ok_seeds.is_empty() {
+            (0..seeds).map(|sd| (sd, None)).collect()
+        } else {
+            ok_seeds
+                .iter()
+                .flat_map(|b| (0..seeds).map(move |sd| (sd, Some(b.as_slice()))))
+                .collect()
+        };
+
+        // **THE SHARED PROBE**, so this census and the deep sweep cannot classify
+        // a subject differently. They once did, on `verify_typed.kel`, because
+        // each had its own copy handling a faulting mutant differently.
+        let out = probe_mutants(&m, &mutants, &table, &variants);
+        let any_diff = out.differed;
+        equiv_total += out.equivalent;
+        if out.usable == 0 && out.equivalent > 0 {
+            // Every mutant that ran was semantically inert. Nothing could have
+            // been caught, so this is UNMEASURED rather than a failure.
+            mutant_equivalent.push(name);
+        } else if out.usable == 0 && out.faulted > 0 {
+            mutant_faults.push(name);
+        } else if out.usable == 0 && out.inadmissible > 0 {
+            mutant_inadmissible.push(name);
+        } else if out.usable == 0 {
+            mutant_declined.push(name);
+        } else if any_diff {
+            detected.push(name);
+        } else {
+            undetected.push(name);
+        }
+    }
+
+    println!("\n================ WOULD EACH SUBJECT NOTICE A WRONG BACKEND?");
+    println!("  DETECTED the mutant      : {}", detected.len());
+    println!("  did NOT detect it        : {}", undetected.len());
+    for n in &undetected {
+        println!("     {n}");
+    }
+    println!(
+        "  UNMEASURED, no mutation site : {}  <- not a failure to detect",
+        no_site.len()
+    );
+    for n in &no_site {
+        println!("     {n}");
+    }
+    println!(
+        "  UNMEASURED, mutant declined  : {}  <- produced no comparison",
+        mutant_declined.len()
+    );
+    println!(
+        "  UNMEASURED, mutant unbounded : {}  <- `Vm::new` would refuse it, so it\n  \
+         {:29}   is not a WRONG BACKEND but an inadmissible program",
+        mutant_inadmissible.len(),
+        ""
+    );
+    println!(
+        "  UNMEASURED, mutant FAULTS    : {}  <- the mutation makes the program\n  \
+         {:29}   trap, which both sides do",
+        mutant_faults.len(),
+        ""
+    );
+    println!(
+        "  UNMEASURED, all mutants INERT: {}  <- the reference computes the same\n  \
+         {:29}   thing with and without them, so NO differential\n  \
+         {:29}   could detect them",
+        mutant_equivalent.len(),
+        "",
+        ""
+    );
+    for n in &mutant_equivalent {
+        println!("     {n}");
+    }
+    println!(
+        "  inert mutants excluded overall: {equiv_total}  <- counted, not dropped \
+         silently"
+    );
+    println!(
+        "\n  Scoped to ONE pre-registered family: Checked/plain Add-Sub, Mul, BitAnd, Shl,\n  \
+         the six comparison swaps and Not->Neg, at ONE site per module\n  \
+         (first, middle, last). `undetected` means undetected AGAINST THAT,\n  \
+         not that the subject detects nothing. Coverage for the self-hosted\n  \
+         stages also exists in `stage_differential.rs`, which seeds BOTH sides;\n  \
+         whether it detects these mutants is a separate, unasked question."
+    );
+    println!("================\n");
+
+    // NON-VACUOUS. A sweep that measured nothing, or that detected nothing,
+    // would otherwise pass while establishing the opposite of what it claims.
+    let measured = detected.len() + undetected.len();
+    assert!(
+        measured >= 20,
+        "only {measured} subjects were measured, so this says almost nothing \
+         about the {} the differential counts",
+        detected.len()
+            + undetected.len()
+            + no_site.len()
+            + mutant_declined.len()
+            + mutant_inadmissible.len()
+            + mutant_faults.len()
+            + mutant_equivalent.len()
+    );
+    // **A FLOOR, on the same principle as the coverage floors.** This figure now
+    // goes into the handoff, and a figure reported without a floor under it can
+    // collapse in silence — the defect this line closed one increment ago.
+    //
+    // A RATIO, because the measured population moves as the corpus and the
+    // mutation filters do.
+    //
+    // **RE-CALIBRATED for the widened family, 2026-08-29: 48 detected of 48
+    // measured.** The previous calibration (38 of 50) was taken against the
+    // arithmetic-only family and would have been read as slack that no longer
+    // describes this measurement. The floor stays at 60% rather than rising to
+    // match: `undetected` is now expected to be EMPTY, so any non-zero value is
+    // a finding, and a floor set just under 100% would fail on the first
+    // legitimately-insensitive subject instead of reporting it.
+    const DETECTION_RATIO_FLOOR: f64 = 0.60;
+    let ratio = detected.len() as f64 / measured as f64;
+    assert!(
+        ratio >= DETECTION_RATIO_FLOOR,
+        "{} of {measured} measured subjects detected a mutated backend ({:.0}%), \
+         below the {:.0}% floor calibrated against 38 of 50 on 2026-08-29. The \
+         differential's agreement is weaker evidence than it was",
+        detected.len(),
+        100.0 * ratio,
+        100.0 * DETECTION_RATIO_FLOOR
+    );
+    assert!(
+        !detected.is_empty(),
+        "NO subject detected a mutated backend. Either the mutation is not \
+         reaching execution or the comparison is not comparing, and in both \
+         cases the differential's agreement would be worth nothing"
+    );
+}
+
+/// **THE BACKEND LOWERS MODULES THE VIRTUAL MACHINE WOULD REFUSE TO LOAD.**
+///
+/// `lower_module` documents no admissibility precondition and checks none. A
+/// module that `verify()` accepts but that `Vm::new` REFUSES — because a loop
+/// has no statically extractable iteration bound — is lowered without complaint,
+/// and the resulting native code is not memory-safe.
+///
+/// **Measured, not reasoned about.** Mutating `04_for_in.kel` by a single
+/// `CheckedAdd` -> `CheckedSub` produces a module that is `verify()`-clean,
+/// refused by `auto_arena_capacity_for`, `module_wcmu` AND `Vm::new`, accepted by
+/// `module_refusals`, and whose lowered code died with **SIGBUS**.
+///
+/// **This is a precondition gap, not a live corpus defect.** Every module the
+/// backend lowers today is bounded — measured at 66 lowering, 0 unbounded. This
+/// test is what keeps that true, because the guarantee the project sells is a
+/// resource bound, and an execution path that runs what the bound analysis
+/// refuses is a hole in it.
+///
+/// See `docs/decisions/BACKEND_ADMISSIBILITY.md`.
+#[test]
+fn no_lowerable_corpus_module_is_unbounded() {
+    let mut lowers = 0usize;
+    let mut unbounded: Vec<String> = Vec::new();
+    for p in sources() {
+        let Some(src) = source_for(&p) else { continue };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        lowers += 1;
+        if keleusma::verify::module_wcmu(&m, &[]).is_err() {
+            unbounded.push(p.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(
+        lowers > 40,
+        "only {lowers} modules lowered, so this pin is far narrower than the \
+         population the coverage census reads and would pass by not looking"
+    );
+    assert!(
+        unbounded.is_empty(),
+        "the backend lowers {} module(s) that the resource analysis REFUSES: \
+         {unbounded:?}. `Vm::new` would not load them, so an AOT path would run \
+         what the bound analysis rejected — the guarantee this project sells. \
+         Either the module should not lower, or `lower_module` should require \
+         admissibility rather than merely documenting it",
+        unbounded.len()
+    );
+}
+
+/// The single mutation probe both censuses use.
+///
+/// **Written once because it was written twice.** The deep sweep re-derived
+/// membership by re-running a shallow probe of its own, and the two
+/// implementations handled a faulting mutant differently — one `continue`d to the
+/// next mutant, the other abandoned the subject. They disagreed on
+/// `verify_typed.kel`, and a disagreement between two copies of "the same query"
+/// is invisible unless something compares them. Sharing the code makes the
+/// disagreement impossible rather than detectable.
+///
+/// Returns whether any mutant produced an observable difference, plus the counts
+/// needed to tell UNMEASURED apart from undetected. The two unmeasured reasons
+/// are kept distinct because they support different conclusions: a mutant the
+/// resource analysis refuses is an inadmissible program, while one that faults is
+/// a program both sides correctly trap on.
+struct ProbeOutcome {
+    differed: bool,
+    /// Mutants that produced a real comparison.
+    usable: usize,
+    /// Mutants the backend or the resource analysis refused.
+    inadmissible: usize,
+    /// Mutants that made the program fault on the reference side.
+    faulted: usize,
+    /// **Mutants the reference computes IDENTICALLY to the unmutated module.**
+    ///
+    /// Semantically inert under these seeds — the site is not executed, or its
+    /// result never reaches an observable. A *correct* backend must also produce
+    /// that answer, so **no differential could ever detect one**. Counting these
+    /// as "the subject failed to notice a wrong backend" conflates an equivalent
+    /// mutant with a weak observable, which is what this census did until now.
+    equivalent: usize,
+}
+
+fn probe_mutants(
+    original: &Module,
+    mutants: &[(Module, String)],
+    table: &[NativeEntry],
+    variants: &[(usize, Option<&[u8]>)],
+) -> ProbeOutcome {
+    let mut usable = 0usize;
+    let mut inadmissible = 0usize;
+    let mut faulted = 0usize;
+    let mut equivalent = 0usize;
+
+    // **The reference runs ONCE per variant, not once per mutant.** It does not
+    // depend on the mutant, and recomputing it inside the loop did M x V virtual
+    // machine runs where V suffice. Pure efficiency: the comparisons made are
+    // identical. This matters because widening the mutation family made these
+    // sweeps the slowest thing in the gate, and a gate that takes most of an
+    // hour is run less often.
+    let baseline: Vec<Option<Run>> = variants
+        .iter()
+        .map(|(seed, sb)| run_vm(original, table, *seed, *sb).ok())
+        .collect();
+    for (mutant, _what) in mutants {
+        // An INADMISSIBLE mutant is not a wrong backend: it is a program the
+        // runtime would refuse, and lowering one killed a run with SIGBUS.
+        if !keleusma_native::module_refusals(mutant, LowerOptions::default()).is_empty() {
+            inadmissible += 1;
+            continue;
+        }
+        if keleusma::verify::module_wcmu(mutant, &[]).is_err() {
+            inadmissible += 1;
+            continue;
+        }
+        let mut compared = false;
+        let mut diff = false;
+        let mut hit_fault = false;
+        let mut killable = false;
+        for (vi, (seed, sb)) in variants.iter().copied().enumerate() {
+            // The tolerant side first. A mutation that makes the program TRAP is
+            // not a wrong backend either — both sides trap — but natively it
+            // arrives as a process-killing signal. Measured as SIGTRAP.
+            let Ok(vm_mut) = run_vm(mutant, table, seed, sb) else {
+                hit_fault = true;
+                break;
+            };
+            let Some(v) = baseline.get(vi).and_then(|o| o.as_ref()) else {
+                continue;
+            };
+            // **KILLABILITY, from a run this probe already made and discarded.**
+            // If the reference computes the same thing with and without the
+            // mutation, the mutant is inert under these seeds and a CORRECT
+            // backend must agree too. There is nothing for any differential to
+            // catch, so it cannot count against the subject.
+            if vm_mut.results != v.results
+                || vm_mut.log != v.log
+                || vm_mut.shared != v.shared
+                || ret_pairs_differ(v, &vm_mut)
+            {
+                killable = true;
+            }
+            let Some(n) = run_native(mutant, table, seed, sb) else {
+                continue;
+            };
+            compared = true;
+            // Detection is against the UNMUTATED reference: a correct backend
+            // versus a wrong one. Comparing the native side to `VM(mutant)`
+            // would instead ask whether the backend faithfully compiles a
+            // mutated program, which is not the question.
+            if v.results != n.results
+                || v.log != n.log
+                || v.shared != n.shared
+                || ret_pairs_differ(v, &n)
+            {
+                diff = true;
+                break;
+            }
+        }
+        if compared && !killable && !diff {
+            // Inert: excluded from `usable` so it cannot land in the undetected
+            // column, but counted so the denominators still add up.
+            equivalent += 1;
+            continue;
+        }
+        if compared {
+            usable += 1;
+        } else if hit_fault {
+            faulted += 1;
+        }
+        if diff {
+            return ProbeOutcome {
+                differed: true,
+                usable,
+                inadmissible,
+                faulted,
+                equivalent,
+            };
+        }
+    }
+    ProbeOutcome {
+        differed: false,
+        usable,
+        inadmissible,
+        faulted,
+        equivalent,
+    }
+}
+
+/// Up to `cap` sites per module, spread evenly across the applicable ones.
+///
+/// Generalises `sampled_mutants`, which is this with `cap == 3`. Positional and
+/// deterministic: the sites are chosen by index, not by reading which ones the
+/// insensitive subjects happen to execute.
+fn sampled_mutants_capped(m: &Module, cap: usize) -> (Vec<(Module, String)>, usize) {
+    let sites = pre_registered_sites(m);
+    let total = sites.len();
+    if total == 0 || cap == 0 {
+        return (Vec::new(), total);
+    }
+    let take = cap.min(total);
+    let mut idx: Vec<usize> = (0..take)
+        .map(|k| {
+            if take == 1 {
+                0
+            } else {
+                k * (total - 1) / (take - 1)
+            }
+        })
+        .collect();
+    idx.dedup();
+    let out = idx
+        .iter()
+        .map(|&i| {
+            let (ci, oi, rep) = sites[i];
+            let mut mutated = m.clone();
+            let what = format!("chunk {ci} op {oi} -> {rep:?}");
+            mutated.chunks[ci].ops[oi] = rep;
+            (mutated, what)
+        })
+        .collect();
+    (out, total)
+}
+
+/// **IS IT THE SITE, OR THE SUBJECT? — IT WAS NEITHER.**
+///
+/// **The question below was a false dichotomy and the `inert` column is the
+/// answer it was missing.** A mutant the reference computes identically to the
+/// unmutated module is semantically inert under these seeds; a *correct* backend
+/// must agree too, so there was never anything for any differential to catch.
+/// Once inert mutants are excluded, **the undetected column is empty** and the
+/// rows below that say `no` are rows where every mutant that ran was inert.
+///
+/// An earlier reading of this table concluded that `verify_datalayout` and
+/// `rogue_gear`, having been swept exhaustively, "point at the observable".
+/// **That was wrong.** They point at the seeds: those sites are not exercised.
+///
+/// The table is kept because the `sites`/`tried`/`cmp`/`inert` columns are the
+/// evidence for that, and because a killable mutant appearing where there were
+/// none is exactly what should be noticed.
+///
+/// `which_subjects_would_notice_a_wrong_backend` mutates three sites per module
+/// and leaves twelve subjects showing no difference, eight of them self-hosted
+/// stages seeded with real input. **Three sites is a thin basis for that**, and
+/// two explanations fit equally well:
+///
+/// * **the site** — the sampled ops are not on a path the seeds execute;
+/// * **the subject** — the compared observable does not reflect the computation.
+///
+/// Only the second is a weakness in the differential. They are distinguishable
+/// by sweeping far more sites in exactly the subjects that showed nothing.
+///
+/// # What a null result here would and would not establish
+///
+/// It would strengthen the claim from "missed three mutations" to "missed every
+/// arithmetic mutation exercised in this module". **It would not prove the
+/// observable is weak**, because "no sampled site is executed under these seeds"
+/// remains live. The printed per-subject denominators are what let a reader tell
+/// those apart rather than take a verdict on trust.
+/// # ⚠ THIS BLOCK SAID "OPT-IN" FOR TWO WEEKS WHILE THE TEST RAN EVERY GATE
+///
+/// **Corrected 2026-09-12.** It read *"OPT-IN: this does NOT run in the everyday
+/// gate … measured at 710s … it is over, so it stays opt-in"*. The test carries
+/// `#[test]` and no `#[ignore]`, and has run on every gate since `e55f307e`
+/// (2026-08-29), which restored it deliberately: the deep sweep had been paying
+/// for the census's variant axis twice, and removing that duplicated axis took it
+/// from 712s to 401s. **The saving came from deleting a redundant axis, not from
+/// trading coverage** — site depth was not reduced and the mutation family was not
+/// narrowed.
+///
+/// **A sixth record outliving its subject, and the most expensive yet**: it
+/// misdescribes the gate's cost structure to anyone deciding what to do about it,
+/// and reading it as current would justify deleting coverage that was restored on
+/// purpose.
+///
+/// # Cost, re-derived, with the conditions
+///
+/// **419s under default features and 429s under `narrow-float-32`**, measured
+/// 2026-09-12 at a one-minute load average of **27**, which is heavily loaded and
+/// not a best case. (This sentence first read *"on an otherwise-idle machine"*,
+/// written without checking — the precise error the paragraph below warns about,
+/// made while writing the warning.) The earlier
+/// figures name their load — 710s near load 5, 400s at load 8.2 — because **a
+/// duration without its conditions is not comparable**. The sibling census, which
+/// carries the breadth axis, remains the cheaper of the two.
+///
+/// # ⚠ TWO DIFFERENT 600s LIMITS, WHICH IS NEW
+///
+/// The 600s in the paragraph above is the **affordability threshold** this project
+/// fixed for whether a test earns its place in the gate. The harness that runs
+/// these commands **also** kills a single invocation at 600s. They are unrelated
+/// limits that happen to share a number.
+///
+/// At 419–429s this test is comfortably under the affordability threshold and
+/// **close to the harness ceiling**: one run was killed at >360s under contention
+/// and passed on re-run at 429s. **Machine load therefore decides whether a phase
+/// completes**, which is why the gate is now invoked as six separate commands
+/// rather than two. That is a property of the runner, not a reason to shrink the
+/// test.
+///
+/// **What it protects**: the DEPTH of mutation sensitivity — a subject that starts
+/// hiding a killable mutant beyond the census's single site. **Its green result IS
+/// a standing guarantee, asserted every gate run**, which is the opposite of what
+/// this paragraph claimed while the test was running. The breadth property, that
+/// every killable mutant found at one site per module is detected, is asserted by
+/// the sibling census.
+///
+/// The widened mutation family was kept rather than reverted: detected went from
+/// 39 to 48 and subjects with no applicable site at all from 10 to 3, which is
+/// more correctness than a fast gate is worth.
+#[test]
+fn how_deep_does_the_undetected_set_go() {
+    /// Disclosed rather than silent: a cap that is not printed reads as
+    /// exhaustive. Sites beyond it are reported per subject.
+    ///
+    /// **Reduced from 16 to 8 on 2026-08-29, when the mutation family was
+    /// widened to include control flow.** Widening roughly doubled the applicable
+    /// sites per module and took this binary from about 600s to 1379s alone, and
+    /// past 45 minutes inside the gate, where test binaries run in parallel and
+    /// this sweep is CPU-starved.
+    ///
+    /// **The trade was made on the goal, not on convenience.** A gate that takes
+    /// most of an hour is run less often, and this sweep's original question —
+    /// whether an undetected subject was a site problem or a subject problem —
+    /// is answered: the undetected column is empty. What remains is a regression
+    /// watch, and a watch does not need the deepest sweep available. **The
+    /// primary instrument is the census**, which mutates every module and is
+    /// cheap.
+    ///
+    /// The count of sites NOT exercised is printed, so the reduction is visible
+    /// rather than absorbed.
+    const SITE_CAP: usize = 8;
+
+    let mut rows: Vec<(String, usize, usize, usize, usize, bool)> = Vec::new();
+    for p in sources() {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let Some(src) = source_for(&p) else { continue };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        let table = native_table(&m);
+        if table.len() > STUBS {
+            continue;
+        }
+        // **The three-site sweep decides membership**, re-run rather than
+        // restated. A hand-copied list of the twelve could drift from the query
+        // that produced it and nobody would see the two disagree.
+        let (shallow, _) = sampled_mutants_capped(&m, 3);
+        if shallow.is_empty() {
+            continue;
+        }
+
+        let n_params = m.chunks[entry].param_count as usize;
+        let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+        let seeds = if is_stream || n_params == 0 { 1 } else { SEEDS };
+        let subject_seeds = stage_seeds(&m, &name);
+        let ok_seeds: Vec<&Vec<u8>> = subject_seeds
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .collect();
+        let variants: Vec<(usize, Option<&[u8]>)> = if ok_seeds.is_empty() {
+            (0..seeds).map(|sd| (sd, None)).collect()
+        } else {
+            ok_seeds
+                .iter()
+                .flat_map(|b| (0..seeds).map(move |sd| (sd, Some(b.as_slice()))))
+                .collect()
+        };
+
+        let shallow_diff = probe_mutants(&m, &shallow, &table, &variants).differed;
+        if shallow_diff {
+            continue; // detected at three sites; not part of the question
+        }
+        let (deep_mutants, total_sites) = sampled_mutants_capped(&m, SITE_CAP);
+        // **ONE reference configuration, because variants are the CENSUS's axis.**
+        // This sweep exists for depth in SITES; it was also paying for breadth in
+        // variants, which the census already covers at every module. Whether that
+        // costs any finding is measured against the recorded baseline rather than
+        // assumed — see `DEEP_SWEEP_AXES.md`.
+        let deep_variants: Vec<(usize, Option<&[u8]>)> = variants.iter().take(1).copied().collect();
+        let deep = probe_mutants(&m, &deep_mutants, &table, &deep_variants);
+        let (deep_diff, usable, equiv) = (deep.differed, deep.usable, deep.equivalent);
+        rows.push((
+            name,
+            total_sites,
+            deep_mutants.len(),
+            usable,
+            equiv,
+            deep_diff,
+        ));
+    }
+
+    println!("\n================ SITE, SUBJECT, OR INERT MUTANT?");
+    println!(
+        "  Subjects the census found nothing in, re-swept at up to {SITE_CAP} sites\n  \
+         against ONE reference configuration. `cmp` is how many mutants survived\n  \
+         the admissibility and fault filters to produce a real comparison."
+    );
+
+    println!(
+        "  {:28} {:>6} {:>6} {:>5} {:>6}  detected deeper?",
+        "subject", "sites", "tried", "cmp", "inert"
+    );
+    let mut moved = 0usize;
+    for (n, total, tried, usable, equiv, diff) in &rows {
+        if *diff {
+            moved += 1;
+        }
+        println!(
+            "  {n:28} {total:>6} {tried:>6} {usable:>5} {equiv:>6}  {}",
+            if *diff { "YES" } else { "no" }
+        );
+    }
+    let dropped: usize = rows
+        .iter()
+        .map(|(_, t, tr, _, _, _)| t.saturating_sub(*tr))
+        .sum();
+    println!(
+        "\n  {} subject(s) re-swept; {moved} moved OUT of undetected; {dropped} site(s) \
+         beyond the cap were NOT exercised.",
+        rows.len()
+    );
+    println!(
+        "  A `no` row with cmp 0 and inert > 0 means EVERY mutant that ran was\n  \
+         semantically inert — the seeds do not exercise those sites. It is not a\n  \
+         weak observable, and reading it as one is the error this table made\n  \
+         before the inert column existed."
+    );
+    println!("================\n");
+
+    assert!(
+        !rows.is_empty(),
+        "no subject was re-swept, so this test measured nothing. Either the \
+         three-site sweep now detects everywhere — in which case the finding it \
+         supports has changed and must be restated — or this query stopped \
+         selecting"
+    );
+    assert!(
+        rows.iter().any(|(_, _, _, usable, _, _)| *usable > 0),
+        "every re-swept subject produced ZERO usable comparisons, so the `no` \
+         column means 'nothing ran', not 'nothing was noticed'"
+    );
+}
+
+/// **The shared enumeration must return exactly what this harness's own
+/// `sources()` returns — asserted BEFORE anything is switched to it.**
+///
+/// Migrating a sweep to a shared walk on the assumption that the two agree is
+/// the very defect the shared walk exists to close, committed while closing it.
+/// This is the comparison that licenses the migration.
+#[test]
+fn the_shared_corpus_enumeration_matches_this_harness() {
+    let mine = sources();
+    let shared = common::corpus_sources();
+    assert!(
+        mine.len() > 40,
+        "this harness enumerated only {} sources, so the comparison below would \
+         pass by both sides being nearly empty",
+        mine.len()
+    );
+    let mut a: Vec<String> = mine.iter().map(|p| p.display().to_string()).collect();
+    let mut b: Vec<String> = shared.iter().map(|p| p.display().to_string()).collect();
+    a.sort();
+    b.sort();
+    assert_eq!(
+        a, b,
+        "the shared corpus enumeration and this harness's own walk disagree. \
+         Switching to the shared one would silently change the population every \
+         figure in this file rests on"
+    );
+}
+
+/// **THE HARNESS'S PRIVATE BUFFER WAS SIZED BY SLOT COUNT, NOT BY THE CONTRACT.**
+///
+/// It allocated one word per private slot with a canary immediately after. The
+/// backend's published contract is `required_persistent_capacity_for` plus
+/// `persistent_supplement_bytes` — the slot array, the persistent composite
+/// pool, and the stream resume-state word — and the buffer was short of it for
+/// every corpus module with private data.
+///
+/// # Why it stayed invisible, measured rather than supposed
+///
+/// **Nothing had ever used the space between the slot array and the contract's
+/// end.** Every corpus stream with private data lowers DEGENERATELY — no entry
+/// dispatch, so no resume-state word is written — and no composite had ever been
+/// copied into the pool, because a composite data slot was stored as a pointer
+/// in the slot array until the copy landed. The composite copy is the first
+/// lowering to reach that space, and the canary caught it on the first run.
+///
+/// # The part worth remembering
+///
+/// **A canary immediately after a too-small buffer only catches writes that land
+/// JUST past the end.** The pool began exactly at the canary word, which is the
+/// only reason this surfaced as a clean assertion rather than as a write into
+/// unrelated memory. Sizing the buffer to the contract is what makes the canary
+/// mean something; its position was doing work the sizing should have done.
+///
+/// This test is the non-vacuity check on that repair: if the contract never
+/// exceeded the slot array, the old sizing would have been correct all along and
+/// the change above would be cosmetic.
+#[test]
+fn the_private_contract_exceeds_the_slot_array_for_real_corpus_modules() {
+    let mut short = Vec::new();
+    for (name, m) in common::corpus() {
+        let slots = m
+            .data_layout
+            .as_ref()
+            .map(|dl| {
+                dl.slots
+                    .iter()
+                    .filter(|s| s.visibility == SlotVisibility::Private)
+                    .count()
+            })
+            .unwrap_or(0);
+        if slots == 0 {
+            continue;
+        }
+        let contract = keleusma::vm::required_persistent_capacity_for(&m)
+            + keleusma_native::region::persistent_supplement_bytes(&m) as usize;
+        if contract > slots * 8 {
+            short.push((name, slots * 8, contract));
+        }
+    }
+    assert!(
+        !short.is_empty(),
+        "no corpus module's persistent contract exceeds its slot array, so the \
+         harness's old sizing was never short and this repair measured nothing"
+    );
+    println!("\n================ PRIVATE REGION: SLOT ARRAY vs CONTRACT");
+    for (name, old, contract) in &short {
+        println!("  {name}: slot array {old} B, contract {contract} B");
+    }
+    println!("================\n");
+}

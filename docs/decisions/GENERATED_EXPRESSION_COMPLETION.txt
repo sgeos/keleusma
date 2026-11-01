@@ -1,0 +1,47 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. GENERATED PROGRAMS ARE COMPARED
+- A test generates programs rather than enumerating hand-written ones, compiles
+  them, and compares execution against the reference implementation.
+- Generation is seeded and deterministic, and a failing case reports enough to
+  reproduce it exactly.
+- The number of programs actually compared is asserted against a floor, so a run
+  that generated almost nothing cannot pass as coverage.
+- The programs are non-trivial: a floor on distinct shapes, or on operators
+  appearing, prevents collapse to what the existing fixed matrices already cover.
+
+2. THE GENERATOR IS HELD TO ACCOUNT
+- A generated program that fails to compile or to lower fails the test rather
+  than being silently discarded.
+- The tree records that such a failure is the generator's defect until shown
+  otherwise.
+
+3. REACH IS SHOWN, NOT ASSUMED
+- The tree records a perturbation demonstrating the comparison can fail, so "no
+  divergence" is a result rather than an untested assertion.
+
+4. THE CLAIM IS SCOPED
+- The tree states what the generated coverage does not reach — at minimum that
+  trapping arithmetic is excluded and why, and that a green run is not a
+  correctness claim about the lowering.
+
+5. COST IS BOUNDED
+- The added runtime is stated, and does not materially lengthen the gate's
+  longest phase.
+
+6. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any divergence found is recorded as a finding, reduced toward a minimal case,
+  and described as the two implementations disagreeing rather than as a verdict
+  about which is wrong.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+7. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

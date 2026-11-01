@@ -1,0 +1,302 @@
+//! The copy at the yield of operator question 24, 2026-10-31, forms three. The
+//! cursor's address is a COMPILE-TIME CONSTANT offset in the entry's region
+//! reservation. A slot's address is RUNTIME-AND-BOUNDED, the buffer's base plus
+//! the cursor times the slot size, formed only after the cursor is compared
+//! UNSIGNED against the slot count and branched to the trap. The yielded
+//! body's address becomes a pointer only for an operand whose width is proven
+//! equal to the slot size, the bytes the copy reads.
+//!
+//! The composite constant of question 13, 2026-10-30, forms one address, its
+//! region site's base at the COMPILE-TIME CONSTANT offset that
+//! `region::plan_chunk_region` gives the `Const`, inside a reservation of the
+//! constant body's full length.
+//!
+//! Order 6 adds five sites. Text equality turns two literal operands into
+//! pointers, which are addresses of constant records this backend emitted, and
+//! forms two byte addresses at eight plus an index bounded by the record's own
+//! length, which is RUNTIME-AND-BOUNDED. The enum zero fill forms one address
+//! at the end of the packed fields, a COMPILE-TIME CONSTANT inside the site's
+//! reservation of the enum's full byte size.
+//!
+//! The Order 4 instruction meter forms the address of one word of the host's
+//! meter array at a compile-time constant index, the chunk's first index plus
+//! the instruction's position. The array has one word per instruction of every
+//! chunk, so the index is always inside it.
+//!
+//! Coroutine trap reporting, Order 4, forms one address, the entry's trap
+//! record at a compile-time constant offset inside the caller's frame
+//! reservation. `coroutine::trap_offset` places it below the reservation's end
+//! and below the dialogue metadata, and the lowering refuses a frame whose
+//! continuation would overlap it. The callee's trap word is a constant index
+//! into the call context through the existing ownership field helper.
+//!
+//! Delegate metadata uses ten statically allocated pointer fields. Initialization
+//! enumerates exactly those fields. Yield updates use fixed index tuples
+//! one/three/five/six and two/seven/eight/nine. Field four remains the site pointer.
+//! One generalized builder address replaces separate flat destination addresses.
+//!
+//! Private scalar kind metadata follows the native private body pool. Checked
+//! arithmetic proves all metadata fits before the existing resume-state offset.
+//! Direct indices are constants. Indexed data guards bound runtime indices
+//! before both metadata and immutable initial-kind table addresses are formed.
+//! Packed pool ends need not be aligned, so metadata accesses use alignment one.
+//!
+//! Internal call metadata addresses use constant indices within three arrays
+//! of arg_count+1 words. Private value words use validated slot offsets and the
+//! existing unsigned indexed-data bound. Body copy sources have producer bounds,
+//! actual lengths are checked against pool capacity, and memmove permits aliases.
+//!
+//! Coroutine packing uses a constant region-site base and runtime field offsets.
+//! Each offset is a prefix of producer-bounded nonnegative lengths. The complete
+//! sum is checked against the reservation before any field address is formed.
+//! Padding starts at that checked sum and ends at the reservation boundary.
+//! Body sources retain their actual extent and are copied only when nonempty.
+//!
+//! Coroutine arrays with joined sizes use the selected runtime extent for
+//! their unsigned index bound. The larger alternative never enlarges that bound.
+//!
+//! Dialogue metadata addresses use a fixed aligned frame-tail offset. The
+//! delegate context stores that address in field four of its five-pointer layout.
+//! Guarded enum inspection casts an address only after its Enum tag matches.
+//! Its discriminant uses offset zero with a proven eight-byte minimum extent.
+//!
+//! Flat-input contexts use fixed field indices bounded by their allocated
+//! argument count plus one return flag. Delegate context fields are indices
+//! one through four in a five-pointer structure. Body copy pointers retain
+//! the exact verified operand or signature extent and require that many
+//! readable host bytes during start or resume. No input buffer is retained.
+//!
+//! **EVERY POINTER-ARITHMETIC SITE IN THE EMITTER, AND WHERE ITS OFFSET COMES
+//! FROM.**
+//!
+//! # Why this exists
+//!
+//! On 2026-09-08 `Op::GetIndex` was found computing `base + index * stride` for
+//! a RUNTIME index with no bound, on the strength of a comment claiming the
+//! compiler emitted a `BoundsCheck` that it does not emit. A three-element array
+//! indexed at 5 returned the caller region's filler bytes where the reference
+//! faults.
+//!
+//! That was found by accident. The premise sweep in
+//! `upstream_premise_census.rs` is the deliberate version for COMMENTS; this is
+//! the deliberate version for the thing a bad comment endangered — **the pointer
+//! arithmetic itself.**
+//!
+//! # The classification, which is the whole content
+//!
+//! An offset is safe when it is one of two things, and dangerous otherwise:
+//!
+//! 1. **Compile-time constant** — a local's slot, a field's offset, a call
+//!    site's region offset, the stream state word. Nothing a program supplies
+//!    reaches it.
+//! 2. **Runtime value, bounded before use** — an array index or a data-segment
+//!    index, compared UNSIGNED against a bound and branched to the trap on
+//!    failure. Unsigned matters: it catches a negative index with the same test.
+//!
+//! At the stamp, every site is one of those. The two that were not are the
+//! `GetIndex` pair, fixed the same day.
+//!
+//! | site | offset source |
+//! |---|---|
+//! | stable handle fields | constants 8 and 16 within `slot_bytes(frame_bytes)`, with eight-byte slot alignment required |
+//! | retcon delegate context fields | three constant structure field indices, written by one builder site and read through three parsed LLVM offsets |
+//! | delegated loop context fields | COMPILE-TIME CONSTANT. Three sites in `coroutine.rs` index the ten-pointer context by a literal field number below ten, two to copy the inherited context into a delegated `loop`'s own and one to read the latest-reply pointers at its `Reset` |
+//! | locals in the stream frame | constant — `plan_chunk_region` bytes plus slot index |
+//! | stream state word (three sites) | constant — `stream_state_off` |
+//! | call-site region base | constant — per-site plan |
+//! | shared data, indexed and not | runtime, guarded by the opcode's own bound |
+//! | private data, indexed and not | runtime, same guard — it precedes the shared/private split |
+//! | composite field write and read | constant — the layout's field offset |
+//! | composite body base | constant — the site's planned offset |
+//! | **flat array element** | **runtime, guarded by `guard_array_index`** |
+//! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
+//! | **nested array element** | **runtime, guarded by `guard_array_index`** — formed by integer ADD, not a gep |
+//! | **shared composite body, direct** | constant — the slot's stated offset in the host buffer; the int-to-pointer beside it takes the copy's source address, already formed |
+//! | **shared composite body, INDEXED** | runtime, guarded — `first + index * len`, where `index` was compared UNSIGNED against the instruction's declared element count, and the range was proven contiguous at that stated length and uniform in kind before any address was formed |
+//! | **composite-slot initialisation word** | constant — the flag array's base plus the slot's position in the module's own pool table, both fixed at lowering |
+//! | **persistent composite pool, direct** | constant — this backend's private-slot count times its slot width, plus the module table's pool offset. Neither term is a program value, and the placement is refused outright if it would reach the resume-state word |
+//! | **persistent composite pool, INDEXED** | runtime, guarded — `first + index * size`, where `index` was compared UNSIGNED against the instruction's own declared element count before the shared/private split, and `size` is validated uniform across the whole declared range |
+//! | **composite initialisation word, indexed** | runtime, guarded by the same check — the flag index moves with the element, so a written element cannot mark a sibling |
+//! | five int-to-pointer conversions | each takes an address already formed above; they add no offset of their own |
+//!
+//! # ⚠ A COUNT CANNOT SEE A SITE CHANGE CLASS
+//!
+//! **Recorded 2026-09-11, when it happened — and then AGAIN the same day.** The
+//! indexed composite data slot turned the pool address from a compile-time
+//! constant into `first + index * size`, and the indexed SHARED composite did the
+//! same to the host-buffer address. Both times the count held steady and the
+//! table had to be revised by hand, which is the limitation working exactly as
+//! this section describes and not being fixed by it. It is the SAME LINE — the same gep, fed a computed offset — so the
+//! count did not move, this census passed unchanged, and nothing forced the
+//! classification above to be revisited.
+//!
+//! A first attempt widened the matcher to bare `build_int_add`, which took the
+//! count from 22 to 38 by sweeping in every ordinary integer operation in the
+//! emitter. **That is not a stricter census, it is a broken one**: conflating
+//! value arithmetic with address arithmetic would make every future increment
+//! move the number for reasons unrelated to addressing.
+//!
+//! The honest statement is that this file catches NEW sites and not RECLASSIFIED
+//! ones, and that the rows above must be re-read whenever an existing site gains
+//! a runtime operand. No mechanism here enforces that.
+//!
+//! # What this test can and cannot do
+//!
+//! It counts sites. **It cannot prove a given site is guarded** — that is what
+//! the differential and `partial_operation_census.rs` do by execution. What it
+//! refuses is silent GROWTH: a new pointer-arithmetic site fails this, and the
+//! author must classify it above. A site added without a bound is how the
+//! `GetIndex` defect existed for as long as it did.
+
+/// Pointer-arithmetic sites in the emitter, at the stamp.
+///
+/// **Re-derive rather than trust.** It moves whenever a site is added or
+/// removed.
+// 24 -> 28, including the coroutine context and parsed intrinsic helper.
+// 28 -> 29 for constant header offsets within the declared stable slot.
+// 37 -> 41 with the site base and three bounded packing address sites.
+// 44 -> 45 in Order 4 for the constant trap-record offset described above.
+// 45 -> 46 for the instruction meter's constant word address.
+// 46 -> 51 for the five Order 6 sites described above.
+// 51 -> 52 for the composite constant's site base described above.
+// 52 -> 55 for the copy at the yield's three addresses described above.
+// 55 -> 58 in absorption 129 for the delegated loop context's three
+// constant field addresses described above.
+const RECORDED_GEP_SITES: usize = 58;
+// 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
+// compile-time constant.** The body's address is the slot's STATED offset in the
+// host buffer — a field of the layout, not a computed quantity — and the second
+// site is the int-to-pointer of the copy's source, which is the operand's own
+// address and adds no offset.
+//
+// 21 -> 22 on 2026-09-11, when the composite-slot initialisation words landed.
+// **Compile-time constant.** The flag's address is the array base plus the slot's
+// INDEX IN THE MODULE'S OWN TABLE, times eight — a position the emitter computes
+// while lowering, never a value the program supplies. The read-side test of that
+// flag is a load and a compare, neither of which forms an address.
+//
+// 19 -> 21 on 2026-09-11, when the persistent composite copy landed. **Both are
+// compile-time constant.** The pool address is a gep at `private slots x slot
+// width + table offset`, every term fixed at lowering; the second site is the
+// int-to-pointer of the copy's SOURCE, which is the operand's own address and
+// adds no offset. The copy LENGTH is not pointer arithmetic and is not counted
+// here — it is a derived size, validated against the module's declared pool
+// total in `private_composite_extent`, which is the check that matters for it.
+//
+// 12 -> 14 on 2026-09-09, when the operand spill slice landed. Both new sites
+// take a COMPILE-TIME constant offset: the slice base plus a slot index the
+// emitter counts out at lowering time, never a value the program supplies.
+// Classified here rather than absorbed into the count, which is the whole
+// contract of this file.
+
+/// Every way an address is FORMED in the emitter, not just the one this census
+/// was born from.
+///
+/// # ⚠ THIS LIST WAS ONE ENTRY LONG AND THAT WAS THE BLIND SPOT
+///
+/// The census matched `build_in_bounds_gep` alone, because the defect that
+/// prompted it — the unguarded flat array index — used a gep. **The NESTED array
+/// arm does the same arithmetic with `build_int_add` on the raw address**, and
+/// was therefore invisible to a file whose header claimed to cover "every
+/// pointer-arithmetic site in the emitter".
+///
+/// It is guarded, so nothing was wrong. **The CLAIM was broader than the
+/// measurement**, which is the shape this line records as fabricated coverage.
+///
+/// Found by asking of this census the question that produced the session's other
+/// findings: *what shape was the checker cast in?*
+const ADDRESS_FORMS: &[&str] = &[
+    // A pointer plus a byte offset.
+    "build_in_bounds_gep",
+    // The same arithmetic done on the address as an INTEGER, which a gep-only
+    // matcher cannot see.
+    //
+    "build_int_add(parent",
+    // An integer becoming a pointer: where a computed address enters pointer
+    // space and every later use trusts it.
+    "build_int_to_ptr",
+    "build_struct_gep(",
+    " = getelementptr ",
+];
+
+fn gep_sites() -> Vec<(&'static str, usize, String)> {
+    let mut sites = Vec::new();
+    for file in [
+        "src/lib.rs",
+        "src/coroutine.rs",
+        "src/coroutine/host.rs",
+        "src/coroutine/ownership.rs",
+        "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
+        "src/coroutine/arithmetic.rs",
+        "src/coroutine/private.rs",
+    ] {
+        let src = std::fs::read_to_string(file).expect("the emitter is readable");
+        for (i, line) in src.lines().enumerate() {
+            if ADDRESS_FORMS.iter().any(|form| line.contains(form)) {
+                sites.push((file, i + 1, line.trim().to_string()));
+            }
+        }
+    }
+    sites
+}
+
+#[test]
+fn every_pointer_offset_is_constant_or_bounded() {
+    let sites = gep_sites();
+    println!("\n================ POINTER-ARITHMETIC SITES IN THE EMITTER");
+    for (file, n, _) in &sites {
+        println!("  {file}:{n}");
+    }
+    println!("  ------------------------------------------------");
+    println!("  sites: {}", sites.len());
+    println!(
+        "\n  An offset is safe when it is a COMPILE-TIME CONSTANT or a RUNTIME\n  \
+         value BOUNDED before use. Every site is classified in this file's\n  \
+         header. The two that were neither returned foreign memory.\n================\n"
+    );
+
+    // **NON-VACUITY.** A matcher that finds nothing would pass forever.
+    assert!(
+        !sites.is_empty(),
+        "no pointer-arithmetic site matched, so either the emitter stopped using \
+         `build_in_bounds_gep` or this matcher has gone stale. A census that \
+         cannot fire is indistinguishable from no census."
+    );
+    assert_eq!(
+        sites.len(),
+        RECORDED_GEP_SITES,
+        "the number of pointer-arithmetic sites in the emitter has changed. Do \
+         not patch the number: classify the new site in this file's header as \
+         COMPILE-TIME CONSTANT or RUNTIME-AND-BOUNDED, and if it is neither, it \
+         is the defect this census was written after."
+    );
+}
+
+/// **The data-segment guard must precede BOTH the shared and private paths.**
+///
+/// The private path computes `base + index * PRIVATE_SLOT_BYTES` from the same
+/// runtime index. It is safe only because the bound check sits ahead of the
+/// branch that separates the two, which is a property of the ORDER of two
+/// statements and would be silently lost by a refactor that moved either.
+#[test]
+fn the_data_index_guard_precedes_the_shared_private_split() {
+    let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");
+    let guard = src
+        .find("\"dataoob\"")
+        .expect("the data-segment bound comparison is named `dataoob`");
+    let private = src
+        .find("\"pdataptr\"")
+        .expect("the private data pointer is named `pdataptr`");
+    let shared = src
+        .find("\"sdataptr\"")
+        .expect("the shared data pointer is named `sdataptr`");
+
+    assert!(
+        guard < shared && guard < private,
+        "the data-segment bound check no longer precedes both pointer \
+         computations (guard at {guard}, shared at {shared}, private at \
+         {private}). The private path indexes by the same runtime value, so it \
+         is bounded only by sitting after this check."
+    );
+}

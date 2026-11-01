@@ -1,0 +1,1304 @@
+//! Static placement of composite bodies in the arena's stack (bottom) section.
+//!
+//! # Why this is a layout pass and not an allocator
+//!
+//! The operator's model is that native Keleusma sets aside bump allocators for
+//! sections of code, laid out cleanly enough to express in assembler. Taken to its
+//! conclusion for a single section, the bump pointer disappears: if every
+//! construction site in a chunk is given a distinct offset from the chunk's region
+//! base, then allocation is a compile-time constant and there is no cursor to
+//! advance, no allocator to call, and nothing to fail at run time.
+//!
+//! That mirrors what `compiler.rs` already does for private composite data slots,
+//! which it describes as "linker-style fixed-address placement of program state".
+//! This is the same idea applied to temporaries, which is where the corpus's
+//! composites actually are.
+//!
+//! # ⚠ THE FIGURE THIS PARAGRAPH CARRIED WAS STALE AND HAD NO PRODUCER
+//!
+//! The superseded text read: *"0 of 239 construction sites are slot-homed and 239
+//! are temporaries (`spike_composite_shape.rs`)"*. **That spike no longer reports
+//! a 239 at all** — it reports chunks returning and taking composites — so the
+//! number was carried rather than measured, and the handoff simultaneously quoted
+//! **256 in 35 chunks** without either saying which population it meant.
+//!
+//! **Current, with its population named: 270 sites across 40 chunks of the
+//! SIX-ROOT corpus**, agreed independently by the planner and by a raw scan of the
+//! instruction stream (`site_count_agreement.rs`). It was 256 across 35 chunks of
+//! the four-root corpus's 69 compiling modules until 2026-10-28, when question 6
+//! added `src/hosted` and `src/crypto_frame` as roots. A narrower walk reports a
+//! different number about a different set.
+//!
+//! # The "0 slot-homed" half, now measured — and it was FALSE
+//!
+//! **One corpus composite does reach a private data slot**: `14_frame_log.kel`,
+//! whose `main` constructs at op 24 and stores at op 25. Two independent methods
+//! agree — a producer walk over the instruction stream, and the module's own
+//! `private_composite_layout` and `persistent_composite_bytes`. The expectation
+//! written before measuring was zero.
+//!
+//! **THE MODEL BELOW SURVIVES, AND THE REASON IS SPECIFIC.** The planner DOES
+//! place op 24 in the chunk region, so the construction is a **temporary whose
+//! value is subsequently copied** into the slot. No body lives only in a slot, so
+//! a chunk-relative placement remains the right model for every one of the 270
+//! sites. **"Constructed as a temporary" and "copied into persistent storage
+//! afterwards" are compatible; the old sentence conflated them.**
+//!
+//! Measured by `slot_homed_composites.rs`, which carries a must-fire control that
+//! really does bake a composite into a private slot.
+//!
+//! # What it deliberately does not do
+//!
+//! **Sites in disjoint scopes could share an offset and this pass does not let
+//! them.** Summing every site over-approximates the true high-water mark, so a
+//! chunk with two constructions in mutually exclusive branches reserves both. That
+//! is sound and loose, and tightening it needs a liveness analysis this pass
+//! deliberately omits. The looseness is bounded and small in practice: **bodies run
+//! 8 to 40 bytes with a median of 24, and the corpus-wide total over all 270 sites
+//! is 5,272 bytes.** It was 4,936 over 256 sites before the two roots of question 6.
+//!
+//! ⚠ **THREE OF THOSE FOUR FIGURES WERE WRONG UNTIL 2026-09-24, AND ALL THREE CAME
+//! FROM THE WALK THIS FILE ALREADY RETRACTED TWO PARAGRAPHS ABOVE.** The sentence
+//! read *"8 to 64 bytes with a median of 24, and the corpus-wide worst case over
+//! all 239 sites is 15,296 bytes"*.
+//!
+//! **`15,296` is exactly `239 × 64`** — the retracted site count multiplied by a
+//! maximum that is also wrong. Measured over the four-root corpus the maximum body
+//! is **40**, and the true total is **4,936**, about a third of what was claimed.
+//! Only the median survived.
+//!
+//! **The retraction above named the 239 as carried rather than measured and gave
+//! 256 in its place; this sentence kept using it anyway.** A correction that does
+//! not reach every instance leaves the stale one looking corroborated by the
+//! corrected one beside it. `the_documented_body_figures_are_measured` re-derives
+//! all four.
+//!
+//! **It does not decide the section.** A body that outlives its chunk cannot live
+//! at an offset from that chunk's base, and 23 of 826 corpus chunks return a flat
+//! composite. Those need the caller's region, which is a caller-supplied pointer
+//! rather than a different layout, and the first lowering slice refuses them
+//! instead of guessing.
+
+use keleusma::bytecode::{Chunk, ConstValue, NewCompositeOperand, Op};
+
+/// Where one construction site's body lives, relative to the chunk's region base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SitePlacement {
+    /// Index into the chunk's `ops` of the `NewComposite` that builds the body.
+    pub op_index: usize,
+    /// Byte offset from the chunk's region base.
+    pub offset: u32,
+    /// Body length in bytes, from the instruction's baked `byte_size`.
+    pub size: u32,
+}
+
+/// Every construction site in a chunk, placed, with the region size they imply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegionLayout {
+    /// Placements in `ops` order, which is also ascending offset order.
+    pub sites: Vec<SitePlacement>,
+    /// Bytes this chunk must reserve in the stack section. The sum of every
+    /// site's size, so an over-approximation of the true high-water mark.
+    pub bytes: u32,
+}
+
+impl RegionLayout {
+    /// Whether the chunk constructs anything at all. A chunk with no sites needs
+    /// no region and no region pointer.
+    pub fn is_empty(&self) -> bool {
+        self.sites.is_empty()
+    }
+}
+
+/// The byte alignment every body is placed at.
+///
+/// **The justification originally given here was FALSE and is corrected.** It
+/// said a flat body's fields are word-packed, so aligning the body keeps field
+/// accesses aligned. Measured 2026-08-13, the reference packs fields strictly
+/// cumulatively with NO padding: `struct M { a: Byte, b: Word }` is nine bytes
+/// with the word at offset ONE. Aligning the body does not align the fields, and
+/// nothing can, because the layout is chosen for density.
+///
+/// Eight is kept anyway — it costs at most seven bytes per site, keeps each
+/// address a single constant add, and gives the first field the best alignment
+/// available. **The emitter must still store and load UNALIGNED**, which is a
+/// property of the layout rather than of this constant.
+const BODY_ALIGN: u32 = 8;
+
+/// Round `n` up to the next multiple of [`BODY_ALIGN`], saturating.
+///
+/// Saturating rather than wrapping: a chunk whose sites exceed `u32::MAX` is
+/// already unrepresentable, and wrapping would hand the emitter a small offset
+/// for a huge body, which is a silent out-of-bounds write. Saturation makes the
+/// downstream capacity check fail closed instead.
+fn align_up(n: u32) -> u32 {
+    match n.checked_add(BODY_ALIGN - 1) {
+        Some(x) => x & !(BODY_ALIGN - 1),
+        None => u32::MAX,
+    }
+}
+
+/// Place every flat construction site in `chunk`.
+///
+/// Sites are placed in instruction order at ascending, eight-byte-aligned
+/// offsets. A `Boxed` operand is skipped, since it has no baked body size; the
+/// corpus contains none, and a lowering that meets one refuses it elsewhere
+/// rather than silently placing nothing.
+///
+/// # ⚠ NO SITE IS EVER REUSED, AND THAT IS NOT ONLY A COST
+///
+/// Every static construction site gets its own offset. Nothing here consults
+/// liveness, escape, aliasing, or confinement — the words do not appear in this
+/// file — so the region is `sites x size` where the runtime's verified figure is
+/// `peak_live x size`. **That difference is the measured arena bound gap: 11 of
+/// 71 corpus modules demand more arena than the verified heap figure, 24 to 96
+/// bytes each, and the gap is unbounded in static site count.**
+///
+/// It has always been recorded as a cost. **It is also the reason a wrong
+/// confinement verdict cannot miscompile anything on this line**, which is worth
+/// stating in the same place.
+///
+/// A planner that reuses a slot needs to be RIGHT that the previous occupant is
+/// dead. This one never reuses, so it never needs a verdict at all — not a
+/// correct one, not a conservative one, not any. **The conservatism that costs
+/// the bytes is what buys the immunity.**
+///
+/// # ⚠ THE LOWERING NOW CONSUMES A VERDICT. THIS PLANNER STILL DOES NOT.
+///
+/// Added 2026-08-31, and the distinction is the whole of why the paragraph above
+/// still stands. `lower_module` consults `keleusma::confine` and REFUSES a site
+/// the analysis reports as escaping its iteration. **Placement is unchanged**:
+/// nothing here consults a verdict, no two sites share storage, and
+/// `region_nonreuse.rs` is unweakened.
+///
+/// **The immunity survives in an exact form rather than in general.** The
+/// refusal is placed AFTER the syntactic hazard check in the `NewComposite` arm,
+/// so a verdict can only ADD a refusal and never remove one. A verdict wrong in
+/// the unsafe direction therefore costs a refusal that would have been added and
+/// leaves the lowering exactly where it was; it cannot admit a site that is
+/// refused today. **What would forfeit the immunity is the OTHER use** — the
+/// overlap described below, where a wrong `Confined` becomes a miscompile rather
+/// than a wasted byte. That is still not done here.
+///
+/// See `docs/decisions/CONFINEMENT_CONSUMPTION_BRIEF.md`.
+///
+/// **AND THAT NON-REUSE IS NOW ENFORCED, not merely stated here.**
+/// `region_nonreuse.rs` fails if any chunk plans two sites into overlapping
+/// storage — on RANGES, not offsets, since distinct offsets can still overlap.
+/// It was prose in four places and asserted in none until 2026-08-27, in a
+/// codebase where this line had spent three iterations arguing for a reusing
+/// planner. **The guard covers WITHIN-chunk reuse only**; cross-chunk collision
+/// is the separate recorded defect in `composite_return_aliasing.rs`.
+///
+/// # WHOEVER CLOSES THE GAP IS BUYING BOTH HALVES
+///
+/// That is the point of putting this here rather than in a decision document.
+/// Overlapping offsets for mutually exclusive or confined sites is the obvious
+/// win and it **takes on an exposure that does not exist today**: from that
+/// commit onward, a confinement verdict that is wrong in the unsafe direction is
+/// a miscompile rather than a wasted byte.
+///
+/// Two facts about the verdicts that would be consumed, both established by
+/// measurement on the `v0.2.3` line rather than argued here:
+///
+/// 1. **A `Confined` verdict is sound to trust; an `Escapes` verdict is only an
+///    upper bound.** Their escape count fell from 12 to 10 when callee summaries
+///    landed, and those two were **wrong rather than merely unestablished**. A
+///    conservative default hides false positives exactly as well as it hides
+///    gaps, and there is no third value to record one in.
+/// 2. **Neither line can yet say "confined to the CALLER'S iteration" about a
+///    region a helper built and returned.** Their per-chunk scoping reports such
+///    a site as escaping in the callee and the caller carries no site at all.
+///    Sound, and permanently pessimistic. A planner that overlaps on confinement
+///    gets nothing for this shape today.
+///
+/// So the gap is real and closing it is right, but **it is not free and it is not
+/// only about bytes.** See `docs/decisions/NATIVE_BOUNDS_TRANSFER.md` and the
+/// `v0.3.0` handoff's Workstream E notes.
+/// Ephemeral bytes a stream chunk reserves for its LOCALS, ahead of any
+/// composite site.
+///
+/// # Why locals move off the machine stack for a stream
+///
+/// A resumable stream returns at each `yield` and re-enters at the same point,
+/// so a local live across that boundary cannot be a machine-stack `alloca` — the
+/// frame is gone. It lives in the arena instead, which is also what makes a
+/// coroutine INSTANCE work: the arena IS the instance, so the same lowered code
+/// driven with two arenas is two independent streams.
+///
+/// **Ephemeral, not persistent**, because `Op::Reset` clears every local, and
+/// clearing is what an ephemeral region does. The resume-state word is the other
+/// half of the frame and is `.bss`-like, so it lives in the PERSISTENT region;
+/// see [`persistent_supplement_bytes`].
+///
+/// Reserved for every stream chunk, including the degenerate shape that does not
+/// need it. A predicate that disagreed with the lowering's own would be a worse
+/// defect than a few wasted bytes.
+///
+/// # Placed AFTER the composite sites, not before
+///
+/// A first attempt put this prefix at offset zero and broke three planner unit
+/// tests that assert clean properties of the COMPOSITE map — *"one site is
+/// placed at the base"* among them. Those tests were right: `plan_chunk_region`
+/// is about construction sites, and shifting them to make room for something
+/// else muddies what the pass means. The locals block therefore sits at
+/// `plan_chunk_region(chunk).bytes`, and [`region_total_bytes`] adds it.
+pub fn stream_locals_bytes(chunk: &Chunk) -> u32 {
+    if chunk.block_type != keleusma::bytecode::BlockType::Stream {
+        return 0;
+    }
+    align_up(u32::from(chunk.local_count).saturating_mul(8))
+}
+
+/// Ephemeral bytes reserved for OPERANDS that must survive a suspension.
+///
+/// # The problem this solves
+///
+/// A stream's locals live in the arena and survive the return at a `yield`.
+/// **Its operand stack does not** — operands are SSA values, and a function that
+/// returns keeps none of them. So a `yield` with anything stacked beneath the
+/// yielded value was refused: everything under the top would have to cross the
+/// return and there was nowhere to put it.
+///
+/// # Why this size, and why it cannot be exceeded
+///
+/// [`crate::MAX_STACK`] slots. **That is not a fresh estimate** — it is the
+/// provisioning ceiling the backend already applies to every chunk's operand
+/// stack, and a chunk that exceeds it is already refused with
+/// `OperandStackTooDeep` before reaching any suspension. So the slice is an
+/// upper bound the emitter enforces elsewhere rather than one asserted here.
+///
+/// Taking the number from where the system already states it is the same
+/// principle that sized the array bound from `WireShape::Flat` and the resume
+/// width from `param_types[0]`. A second computation of the same quantity is
+/// free to drift from the first; this one cannot.
+///
+/// **Fixed and static**, so the worst-case memory bound moves by a known
+/// constant and nothing dynamic is introduced — which is what makes it
+/// admissible for this project at all.
+///
+/// Reserved for every stream chunk, like [`stream_locals_bytes`] and for the
+/// same reason: a predicate disagreeing with the lowering's own would be a worse
+/// defect than unused bytes.
+///
+/// # ⚠ "A FEW UNUSED BYTES" WAS THIS COMMENT'S OWN WORDING, AND IT IS WRONG BY
+/// AN ORDER OF MAGNITUDE
+///
+/// Measured 2026-09-16 by `tests/arena_high_water.rs`: across three stream
+/// shapes the deepest reach into this block is **one eight-byte slot**, leaving
+/// 504 of 512 bytes untouched.
+///
+/// **And across the whole corpus** by `tests/region_composition.rs`: 28 modules
+/// have a stream chunk on the entry path, every one reserves the same flat
+/// block, and it is at least half the published figure for 25 of them. The share
+/// runs from 27% up to **98% for the twelve self-hosted compiler stages**, which
+/// plan almost nothing else. The first version of that census claimed the
+/// reservation dominates EVERY streaming module and the corpus refuted it on the
+/// first run.
+///
+/// **And dynamically, for those same twelve stages** by
+/// `tests/stage_differential.rs`: **zero bytes touched**, across every native
+/// stage drive, against plans of 520 and 600. They lower as degenerate streams
+/// with no composite sites, so the published figure for them is not merely
+/// dominated by reservation — it goes entirely unwritten. Reach proven by poking
+/// one byte into the region and watching the measurement move.
+///
+/// The trade-off stated above still
+/// holds — over-provisioning is safe in the direction that matters, and this
+/// figure is fixed and static so the bound moves by a known constant. But the
+/// cost is the DOMINANT term of the published host figure, not a rounding
+/// detail, and a reader sizing an arena deserves to know that before quoting
+/// `host_arena_supplement_bytes` as a tight bound.
+pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
+    if chunk.block_type != keleusma::bytecode::BlockType::Stream {
+        return 0;
+    }
+    align_up((crate::MAX_STACK as u32).saturating_mul(8))
+}
+
+/// **The PERSISTENT bytes a host must add when running this module natively.**
+///
+/// One word per stream chunk, holding the resume state: which `yield` to
+/// continue after. It is `.bss` — fixed size, fixed offset, and it must survive
+/// `Op::Reset`, which clears the ephemeral regions.
+///
+/// Sits immediately after `keleusma::vm::required_persistent_capacity_for`, so a
+/// host sizes the persistent region as that figure PLUS this one.
+///
+/// # This is the same weaker guarantee as [`host_arena_supplement_bytes`]
+///
+/// A figure the host must remember to add is not one the runtime's sizing
+/// function includes. A host that calls only `required_persistent_capacity_for`
+/// is under-provisioned for native streams, and publishing the figure does not
+/// change that.
+pub fn persistent_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    stream_state_supplement_bytes(module) + composite_init_supplement_bytes(module)
+}
+
+/// The resume-state half of the supplement: one word per stream chunk.
+pub fn stream_state_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    let streams = module
+        .chunks
+        .iter()
+        .filter(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
+        .count();
+    align_up((streams as u32).saturating_mul(8))
+}
+
+/// **ONE INITIALISATION WORD PER PRIVATE COMPOSITE SLOT.**
+///
+/// # The defect this closes
+///
+/// A composite private slot's load-time value is `Unit`, deliberately: the
+/// compiler keeps a write-before-read contract for composite slots rather than
+/// baking a zero body. The reference FAULTS on a read of an unwritten one —
+/// `TypeError("cannot access field on Unit")`.
+///
+/// **The pool is bytes, and zeros are indistinguishable from a written body of
+/// zeros**, so this backend answered `0` where the reference faulted. Measured on
+/// a slot written on one branch and read on the other.
+///
+/// # Why a separate word rather than a sentinel body
+///
+/// A magic value compared against the body would fault on a legitimate body that
+/// happened to equal it. The flag has to be outside the data it describes.
+///
+/// # Why persistent rather than ephemeral
+///
+/// The slot survives `Op::Reset`, so its "has been written" fact must survive it
+/// too. A flag in the ephemeral region would make a slot written in one stream
+/// cycle look unwritten in the next.
+///
+/// Fixed size, fixed offset, and statically bounded, so the worst-case memory
+/// figure moves by a known constant and nothing dynamic is introduced.
+pub fn composite_init_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    let slots = module
+        .data_layout
+        .as_ref()
+        .map(|dl| dl.private_composite_layout.len())
+        .unwrap_or(0);
+    align_up((slots as u32).saturating_mul(8))
+}
+
+/// The packed body of a composite constant, or `None` for a scalar constant and
+/// for a composite holding a member this backend does not pack.
+///
+/// The compiler pools a `Text<N>` literal cast as a tuple of its length word
+/// and an array of `N` bytes, which is the first composite constant this backend
+/// meets. A flat body is packed contiguously with no padding between fields, as
+/// `Value::pack_flat_in_arena` documents. A `Word` and a `Fixed` take eight
+/// bytes, because this backend lowers only a 64-bit word, and a `Byte` and a
+/// `Bool` take one. A tuple or an array inlines its members in order.
+///
+/// A float, a static string, a struct, an enum and `Unit` are refused rather
+/// than packed. A float's width is a module property this function does not
+/// see, and the others have layouts that no composite constant has needed. A
+/// refused constant keeps the `Const` arm's existing refusal.
+pub fn composite_constant_body(constant: &ConstValue) -> Option<Vec<u8>> {
+    fn pack(constant: &ConstValue, out: &mut Vec<u8>) -> Option<()> {
+        match constant {
+            ConstValue::Int(v) | ConstValue::Fixed(v) => out.extend_from_slice(&v.to_le_bytes()),
+            ConstValue::Byte(v) => out.push(*v),
+            ConstValue::Bool(v) => out.push(u8::from(*v)),
+            ConstValue::Tuple(items) | ConstValue::Array(items) => {
+                for item in items {
+                    pack(item, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    if !matches!(constant, ConstValue::Tuple(_) | ConstValue::Array(_)) {
+        return None;
+    }
+    let mut out = Vec::new();
+    pack(constant, &mut out)?;
+    Some(out)
+}
+
+/// The body size a flat construction site reserves, or `None` when `op` builds
+/// no flat body.
+///
+/// A `NewComposite` reserves its baked size, and a `Const` holding a composite
+/// that [`composite_constant_body`] packs reserves that body's length. A
+/// constant body is copied into its site when the `Const` executes, so it lives
+/// in the region like any constructed body, and every figure derived from
+/// [`plan_chunk_region`] counts it.
+pub fn flat_site_size(chunk: &Chunk, op: &Op) -> Option<u32> {
+    match op {
+        Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => {
+            Some(u32::from(*byte_size))
+        }
+        Op::Const(index) => chunk
+            .constants
+            .get(usize::from(*index))
+            .and_then(composite_constant_body)
+            .and_then(|body| u32::try_from(body.len()).ok()),
+        _ => None,
+    }
+}
+
+pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {
+    let mut sites = Vec::new();
+    let mut next: u32 = 0;
+    for (op_index, op) in chunk.ops.iter().enumerate() {
+        let Some(size) = flat_site_size(chunk, op) else {
+            continue;
+        };
+        sites.push(SitePlacement {
+            op_index,
+            offset: next,
+            size,
+        });
+        next = align_up(next.saturating_add(size));
+    }
+    RegionLayout { sites, bytes: next }
+}
+
+/// One `NewComposite` site that this pass places at a fixed offset, together
+/// with a `Yield` that can carry the value it builds out to the host while a
+/// later iteration overwrites that offset in place.
+///
+/// See [`yield_escape_hazards`] for what is and is not detected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YieldEscapeHazard {
+    /// Index into the chunk's `ops` of the construction site.
+    pub site_op: usize,
+    /// Index into the chunk's `ops` of a `Yield` in the same scope.
+    pub yield_op: usize,
+    /// The enclosing `Loop` scope, as a half-open `[lo, hi)` range over `ops`.
+    pub scope: (usize, usize),
+}
+
+/// Half-open `[lo, hi)` bodies of every `Loop` scope, innermost and outermost
+/// alike, paired with the scope's exit label.
+///
+/// Nesting is handled with a stack, so a site inside a `match` inside a `for`
+/// appears in BOTH scopes. That is what makes the enclosing-loop question
+/// answerable without a separate nesting walk.
+fn loop_scopes(ops: &[Op]) -> Vec<(usize, usize, u16)> {
+    let mut open: Vec<(usize, u16)> = Vec::new();
+    let mut out = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        match op {
+            Op::Loop(a) => open.push((i, *a)),
+            Op::EndLoop(_) => {
+                if let Some((s, a)) = open.pop() {
+                    out.push((s + 1, i, a));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Op indices of every `Flat` construction site that lies inside some `Loop`
+/// scope, and whose offset is therefore rewritten on each iteration.
+///
+/// This is the population the cross-iteration question is asked of. It says
+/// nothing about escape — [`yield_escape_hazards`] answers that for the
+/// single-chunk case, and the interprocedural case needs a call graph this
+/// function deliberately does not build.
+///
+/// Every `Loop` scope counts, including the ones the compiler emits for `match`
+/// and multi-clause dispatch, for the reason given on [`yield_escape_hazards`]:
+/// a real loop containing `break` cannot be told from a `match` by that test.
+pub fn loop_body_sites(chunk: &Chunk) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for (lo, hi, _exit) in loop_scopes(&chunk.ops) {
+        for (k, op) in chunk.ops[lo..hi].iter().enumerate() {
+            if matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. }))
+                && !out.contains(&(lo + k))
+            {
+                out.push(lo + k);
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Sites whose fixed offset can be overwritten while the host still holds the
+/// value built there.
+///
+/// # The defect this detects
+///
+/// [`plan_chunk_region`] gives each site ONE offset for the life of the chunk,
+/// so a site in a loop body writes the same bytes on every iteration. After
+/// B28 a composite is `FlatComposite::Arena(ArenaHandle<[u8]>)` — a pointer and
+/// length, not a copy — and the epoch it carries is advanced only by a `RESET`.
+/// **An overwrite in place advances nothing**, so a host holding iteration `n`'s
+/// handle calls `resolve`, succeeds, and reads iteration `n+1`'s bytes. The
+/// failure is a silently wrong value rather than a `Stale` error, which is why
+/// it must be refused at compile time instead of caught at run time.
+///
+/// Established against the runtime by the `v0.2.3` line and recorded in
+/// `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1.1.
+///
+/// # What this over-approximates, and in which direction
+///
+/// Every relaxation here reports MORE hazards than exist, never fewer, so a
+/// caller that refuses on a non-empty result cannot be argued into emitting the
+/// defect:
+///
+/// - **Every `Loop` scope counts as iterating.** `Op::Loop` is a break-scope
+///   marker that the compiler also emits for `match` and for multi-clause
+///   dispatch, and those run once. Excluding them would be the natural
+///   precision win and it is NOT taken: a real loop containing `break` is
+///   indistinguishable from a `match` by that test, and excluding it would drop
+///   a genuinely iterating scope.
+/// - **Any `Yield` in the scope counts**, including one textually before the
+///   site, because control returns to the top of the body and reaches it on the
+///   next iteration.
+/// - **No data flow is traced** from the site to the `Yield`. A site whose value
+///   demonstrably never reaches the yield is still reported.
+///
+/// # What it does NOT detect, stated rather than implied
+///
+/// **The interprocedural case is open.** A composite built in a loop body,
+/// returned to a caller, and yielded THERE is a hazard this function cannot
+/// see, because it reads one chunk. Callers must not read an empty result as
+/// "this module is free of the defect"; it means "no single-chunk instance".
+/// Bounding the residual is the `Call` disqualifier in
+/// `tests/loop_composite_census.rs`.
+///
+/// # Why a composite constant is not a site here
+///
+/// A `Const` site writes the same bytes on every execution, and no instruction
+/// writes into a flat body after its construction, so an overwrite in place
+/// leaves a body the host holds exactly as it was. The defect needs a second
+/// value at the same offset, and a constant has only one.
+pub fn yield_escape_hazards(chunk: &Chunk) -> Vec<YieldEscapeHazard> {
+    let mut out: Vec<YieldEscapeHazard> = Vec::new();
+    // `loop_scopes` completes an inner scope before the outer one that contains
+    // it, so the FIRST report for a site is its innermost enclosing scope. One
+    // site enclosed by several scopes is ONE hazard, not one per scope; without
+    // this a cost census would count the same defect twice and overstate what
+    // refusing costs.
+    for (lo, hi, _exit) in loop_scopes(&chunk.ops) {
+        let body = &chunk.ops[lo..hi];
+        let Some(yield_at) = body.iter().position(|o| matches!(o, Op::Yield)) else {
+            continue;
+        };
+        for (k, op) in body.iter().enumerate() {
+            if !matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. })) {
+                continue;
+            }
+            let site_op = lo + k;
+            if out.iter().any(|h| h.site_op == site_op) {
+                continue;
+            }
+            out.push(YieldEscapeHazard {
+                site_op,
+                yield_op: lo + yield_at,
+                scope: (lo, hi),
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keleusma::bytecode::Module;
+    use keleusma::value_layout::CompositeKind;
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    fn compile_src(src: &str) -> Module {
+        compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile")
+    }
+
+    fn flat(byte_size: u16, count: u16) -> Op {
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count,
+            byte_size,
+        })
+    }
+
+    /// A chunk carrying only what this pass reads. Built from a real compile so
+    /// the struct's other fields keep whatever the compiler considers valid,
+    /// rather than being invented here and drifting from it.
+    fn chunk_with(ops: Vec<Op>) -> Chunk {
+        let m = compile_src("loop main(r: Word) -> Word { yield r }");
+        let mut c = m.chunks.into_iter().next().expect("one chunk");
+        c.ops = ops;
+        c
+    }
+
+    /// A site enclosed by BOTH an inner `match` scope and an outer loop that
+    /// yields is one defect, and must be reported once.
+    ///
+    /// Built from ops directly because the shape needed -- a construction inside
+    /// a nested scope, with the `Yield` in the outer one -- is awkward to
+    /// provoke from source, and the property under test is about the walk rather
+    /// than about the compiler.
+    #[test]
+    fn a_site_under_nested_scopes_is_one_hazard_not_one_per_scope() {
+        let c = chunk_with(vec![
+            Op::Loop(1),    // 0  outer, iterating
+            Op::Loop(2),    // 1  inner, match-like
+            flat(8, 1),     // 2  the site
+            Op::EndLoop(2), // 3
+            Op::Yield,      // 4  reached on the next iteration
+            Op::EndLoop(1), // 5
+            Op::Return,     // 6
+        ]);
+        let h = yield_escape_hazards(&c);
+        assert_eq!(h.len(), 1, "one site, one hazard, got {h:?}");
+        assert_eq!(h[0].site_op, 2);
+        assert_eq!(h[0].yield_op, 4);
+        // The INNER scope has no `Yield`, so the hazard must be attributed to
+        // the outer one. Attributing it inward would name a scope in which the
+        // value cannot escape.
+        assert_eq!(h[0].scope, (1, 5));
+    }
+
+    /// The predicate must be able to return nothing, or the dedupe test above
+    /// proves only that it returns one of something.
+    #[test]
+    fn a_loop_without_a_yield_reports_no_hazard() {
+        let c = chunk_with(vec![Op::Loop(1), flat(8, 1), Op::EndLoop(1), Op::Return]);
+        assert!(yield_escape_hazards(&c).is_empty());
+    }
+
+    /// A chunk that constructs nothing reserves nothing, and must be
+    /// distinguishable from one that constructs a zero-byte body.
+    #[test]
+    fn a_chunk_without_construction_needs_no_region() {
+        let l = plan_chunk_region(&chunk_with(vec![Op::Return]));
+        assert!(l.is_empty());
+        assert_eq!(l.bytes, 0);
+    }
+
+    /// The single-site case, which was 80 of the corpus's 239 sites at 8 bytes
+    /// when this test was written.
+    ///
+    /// **DATED, NOT PINNED, and deliberately not re-derived.** No instrument
+    /// reports a corpus-wide site total, so this figure has no cheap re-derivation
+    /// path. **Its role is motivation** -- it says why the single-site case is
+    /// worth a test -- and the test is correct at any denominator. A reader who
+    /// needs a current number must count, and should not assume this one is it.
+    #[test]
+    fn one_site_is_placed_at_the_base() {
+        let l = plan_chunk_region(&chunk_with(vec![flat(8, 1), Op::Return]));
+        assert_eq!(l.sites.len(), 1);
+        assert_eq!(l.sites[0].offset, 0);
+        assert_eq!(l.sites[0].size, 8);
+        assert_eq!(l.bytes, 8);
+    }
+
+    /// **Placements must not overlap.** This is the property the whole pass
+    /// exists to provide, and it is asserted directly rather than inferred from
+    /// the arithmetic, over the real corpus shapes.
+    #[test]
+    fn placements_never_overlap() {
+        let l = plan_chunk_region(&chunk_with(vec![
+            flat(24, 3),
+            flat(8, 1),
+            flat(40, 5),
+            flat(16, 2),
+            Op::Return,
+        ]));
+        assert_eq!(l.sites.len(), 4);
+        for w in l.sites.windows(2) {
+            assert!(
+                w[0].offset + w[0].size <= w[1].offset,
+                "site at {} (+{}) overlaps the next at {}",
+                w[0].offset,
+                w[0].size,
+                w[1].offset
+            );
+        }
+        let last = l.sites.last().unwrap();
+        assert!(
+            last.offset + last.size <= l.bytes,
+            "the last body runs past the reserved region"
+        );
+    }
+
+    /// Every body starts eight-byte aligned, so no field access is misaligned.
+    #[test]
+    fn every_body_is_aligned() {
+        let l = plan_chunk_region(&chunk_with(vec![flat(4, 1), flat(12, 2), flat(8, 1)]));
+        for s in &l.sites {
+            assert_eq!(
+                s.offset % BODY_ALIGN,
+                0,
+                "body at {} is misaligned",
+                s.offset
+            );
+        }
+    }
+
+    /// A size that is not a multiple of the alignment must still leave the next
+    /// body aligned, and must not be rounded DOWN into its neighbour.
+    #[test]
+    fn an_unaligned_size_pads_rather_than_truncating() {
+        let l = plan_chunk_region(&chunk_with(vec![flat(12, 2), flat(8, 1)]));
+        assert_eq!(l.sites[0].size, 12, "the body keeps its true size");
+        assert_eq!(l.sites[1].offset, 16, "the next body is padded past it");
+        assert_eq!(l.bytes, 24);
+    }
+
+    /// A `Boxed` operand carries no baked body size and is skipped rather than
+    /// placed at a guessed size. The corpus contains none; this pins the
+    /// behaviour so meeting one is a refusal elsewhere, not a silent zero here.
+    #[test]
+    fn a_boxed_operand_is_not_placed() {
+        let boxed = Op::NewComposite(NewCompositeOperand::Boxed {
+            kind: CompositeKind::Struct,
+            count: 2,
+            meta: 0,
+        });
+        let l = plan_chunk_region(&chunk_with(vec![boxed, flat(8, 1)]));
+        assert_eq!(l.sites.len(), 1, "only the flat site is placed");
+        assert_eq!(l.sites[0].op_index, 1);
+    }
+
+    /// MUST-FIRE CONTROL, against a real compile rather than hand-built ops.
+    ///
+    /// Every other test here builds its own `Op`s, so all of them would pass if
+    /// the real compiler emitted a shape this pass cannot see. This one compiles
+    /// source and requires a placement to come out.
+    #[test]
+    fn a_real_compiled_construction_is_placed() {
+        let m = compile_src(
+            "struct P { x: Word, y: Word }\n\
+             fn build(a: Word) -> Word { let p = P { x: a, y: a }; p.y }\n\
+             loop main(r: Word) -> Word { yield build(r) }\n",
+        );
+        let placed: usize = m
+            .chunks
+            .iter()
+            .map(|c| plan_chunk_region(c).sites.len())
+            .sum();
+        assert!(
+            placed > 0,
+            "a source written to construct a struct produced no placement, so this \
+             pass cannot see what the compiler actually emits"
+        );
+    }
+
+    /// A `Text<N>` literal cast packs as its length word and its bytes zero
+    /// padded to the capacity, reserves a site of that length, and is placed
+    /// in the region. A constant the packer does not handle reserves nothing,
+    /// so the `Const` arm keeps its refusal for it.
+    #[test]
+    fn a_text_n_constant_is_a_site_and_other_constants_are_not() {
+        let m = compile_src("fn main() -> Word { let t = \"hi\" as Text<4>; 1 }");
+        let chunk = &m.chunks[m.entry_point.expect("entry")];
+        let (index, constant) = chunk
+            .constants
+            .iter()
+            .enumerate()
+            .find(|(_, c)| matches!(c, ConstValue::Tuple(_)))
+            .expect("the cast is pooled as a tuple constant");
+        let mut expected = 2i64.to_le_bytes().to_vec();
+        expected.extend_from_slice(b"hi\0\0");
+        assert_eq!(composite_constant_body(constant), Some(expected));
+        let op = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Const(i) if usize::from(*i) == index))
+            .expect("the constant is loaded");
+        let plan = plan_chunk_region(chunk);
+        assert!(
+            plan.sites.iter().any(|s| s.op_index == op && s.size == 12),
+            "the constant reserved no 12-byte site: {:?}",
+            plan.sites
+        );
+        for refused in [
+            ConstValue::Int(1),
+            ConstValue::Float(1.0),
+            ConstValue::StaticStr("a".into()),
+            ConstValue::Tuple(vec![ConstValue::Float(1.0)]),
+            ConstValue::Tuple(vec![ConstValue::Unit]),
+        ] {
+            assert_eq!(composite_constant_body(&refused), None, "{refused:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use crate::{Width, width_of_tag};
+    use keleusma::bytecode::TypeTag;
+
+    /// **The default must be `Unknown`, and this is the assertion that pins it.**
+    ///
+    /// A `Byte` occupies a full `i64` operand slot, so a `Byte` and a `Word` are
+    /// indistinguishable on the emitter's stack while packing to one byte and
+    /// eight. If an unstated width ever became a word, every byte field would
+    /// mispack silently, and the byte-identity oracle would only notice where
+    /// the corpus happens to build one.
+    #[test]
+    fn an_unknown_width_yields_no_byte_count() {
+        assert_eq!(Width::Unknown.bytes(), None);
+        assert_eq!(Width::Scalar(8).bytes(), Some(8));
+    }
+
+    /// **The distinction the byte count alone cannot make.** An eight-byte
+    /// nested body and a `Word` agree on `bytes()` and differ on everything the
+    /// emitter must do: one is stored, the other copied from the address the
+    /// operand holds. Storing a body would write the pointer into the parent
+    /// while every downstream offset still looked correct.
+    #[test]
+    fn a_body_and_a_scalar_of_equal_size_are_distinguishable() {
+        let scalar = Width::Scalar(8);
+        let body = Width::Body(8);
+        assert_eq!(scalar.bytes(), body.bytes(), "equal size is the hazard");
+        assert!(!scalar.is_body());
+        assert!(body.is_body());
+        assert_ne!(scalar, body);
+    }
+
+    /// **THIS ASSERTION USED TO BUNDLE THREE TAGS UNDER ONE RATIONALE, and the
+    /// rationale covered exactly one of them.**
+    ///
+    /// It read "a composite parameter's body length is not carried on its type
+    /// tag" and then asserted `Composite`, `Float` AND `Fixed` were all unknown.
+    /// That sentence is true of `Composite` and says nothing about the others.
+    /// `Float` had a good reason living elsewhere; **`Fixed` had no stated
+    /// reason anywhere**, and it was measurably wrong — the reference packs a
+    /// `Fixed` field at eight bytes, exactly like a `Word`.
+    ///
+    /// **A bundle inherits the credibility of its best-justified member.** Each
+    /// tag now carries its own reason, so a wrong one cannot hide behind a right
+    /// one.
+    #[test]
+    fn a_composite_body_length_is_not_on_its_tag() {
+        assert_eq!(width_of_tag(TypeTag::Composite), Width::Unknown);
+    }
+
+    /// `Float` stays unknown because this backend has NO float representation.
+    ///
+    /// Redundant with the module-level guard, which refuses a float by every
+    /// route it can take, and kept deliberately as a second line: the guard is
+    /// about admission, this is about what a width would mean if one arrived.
+    #[test]
+    fn a_float_tag_has_no_width_because_it_has_no_representation() {
+        assert_eq!(width_of_tag(TypeTag::Float), Width::Unknown);
+    }
+
+    /// The tags whose packed width the signature really does state.
+    ///
+    /// **`Fixed` belongs here and did not until 2026-08-21.** A Q-format value
+    /// is an `i64` of fixed-point bits and occupies a full slot; measured, the
+    /// reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at `byte_size:
+    /// 16`, identical to a pair of `Word`s.
+    #[test]
+    fn scalar_tags_state_their_width() {
+        assert_eq!(width_of_tag(TypeTag::Word), Width::Scalar(8));
+        assert_eq!(width_of_tag(TypeTag::Fixed), Width::Scalar(8));
+        assert_eq!(width_of_tag(TypeTag::Byte), Width::Scalar(1));
+        assert_eq!(width_of_tag(TypeTag::Bool), Width::Scalar(1));
+    }
+}
+
+/// Total region bytes a chunk needs INCLUDING every callee it can reach.
+///
+/// # Why the transitive figure, and why it terminates
+///
+/// A callee writes its own flat sites at offsets it plans from zero. If the
+/// caller hands it the same region base it uses itself, the two collide — and
+/// worse, two calls to ONE callee collide with each other, which is the
+/// `10_multbyte.kel` defect: `p[0]` reads `r[0]`'s value.
+///
+/// So each call site is given a DISJOINT BLOCK of the caller's region, big
+/// enough for everything the callee can reach. That is the authorised
+/// caller-allocated return slot expressed through the pointer the caller
+/// already passes: the callee never names an arena, it writes through an
+/// address its caller chose.
+///
+/// The recursion terminates because the type checker rejects direct and mutual
+/// recursion, so the call graph is acyclic — the same property the native stack
+/// bound leans on. An unresolvable callee index contributes zero rather than
+/// panicking; `lower_module` refuses such a module elsewhere.
+pub fn region_total_bytes(
+    module: &keleusma::bytecode::Module,
+    chunk_index: usize,
+    depth: usize,
+) -> u32 {
+    // Depth guard: acyclicity is a language property, and this is a library
+    // walking bytecode that may not have come from the compiler.
+    if depth > 64 {
+        return 0;
+    }
+    let Some(chunk) = module.chunks.get(chunk_index) else {
+        return 0;
+    };
+    // The composite map, then the stream chunk's locals block after it.
+    let mut total = align_up(
+        plan_chunk_region(chunk)
+            .bytes
+            .saturating_add(stream_locals_bytes(chunk))
+            .saturating_add(stream_spill_bytes(chunk)),
+    );
+    for op in &chunk.ops {
+        if let Op::Call(idx, _) = op {
+            total = align_up(total).saturating_add(region_total_bytes(
+                module,
+                usize::from(*idx),
+                depth + 1,
+            ));
+        }
+    }
+    total
+}
+
+/// **The arena bytes a host must ADD when running this module natively.**
+///
+/// # Why this exists, and what it closes
+///
+/// `keleusma::vm::auto_arena_capacity_for` is the documented way for a host to
+/// size an arena, and it returns the sum of exactly four terms: operand-stack
+/// bytes, call-frame bytes, the module's auxiliary arena bytes, and the
+/// verifier's `max_heap_bytes`. **None of them is this backend's composite
+/// region.** Measured over the corpus, eleven modules demand MORE than
+/// `max_heap_bytes` — the only term that could plausibly have covered composite
+/// bodies — so it does not bound this pool. The virtual machine puts composite
+/// bodies in the arena's TOP region; the backend takes its region from the
+/// BOTTOM section and gives every call site a DISJOINT block.
+///
+/// This function publishes the missing figure so a host can close the gap today,
+/// with no runtime change.
+///
+/// # THIS IS A WEAKER GUARANTEE THAN THE RUNTIME RETURNING IT
+///
+/// A figure the host must remember to ADD is not the same as one the sizing
+/// function includes. **A host that calls only `auto_arena_capacity_for` is
+/// still under-provisioned for native execution**, and nothing here changes
+/// that. Whether the runtime should absorb this term is an arena-accounting
+/// question that belongs to the operator; this crate publishing what it needs
+/// does not settle it.
+///
+/// # What the figure is rooted at
+///
+/// The module's ENTRY chunk, transitively through calls, because that is the
+/// call a host scopes a region for. A module with no entry point requires
+/// nothing here, since there is no call to scope.
+///
+/// Bytes, taken from the same planner the lowering itself uses. There is
+/// deliberately no second region model: a parallel one would measure the model.
+pub fn host_arena_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    match module.entry_point {
+        Some(entry) => {
+            let base = region_total_bytes(module, entry, 0);
+            match yield_copy(module) {
+                Some(copy) => copy.offset.saturating_add(copy.bytes()),
+                None => base,
+            }
+        }
+        None => 0,
+    }
+}
+
+/// **THE COPY AT THE YIELD, OPERATOR QUESTION 24.** Where an entry stream's
+/// yielded bodies are copied so that a host may hold each until the next
+/// `Reset`, as the virtual machine allows.
+///
+/// # Why a copy is needed
+///
+/// A construction site has one region offset for the life of the chunk, so a
+/// site inside a loop rewrites the same bytes on every iteration, and a host
+/// holding an earlier iteration's yielded body would read the later one's
+/// bytes. [`yield_escape_hazards`] refuses that shape. The virtual machine
+/// gives each body yielded within one stream cycle its own address until the
+/// `Reset`, and the operator confirmed on 2026-10-31 that such a composite may
+/// be yielded. So each yield of the entry copies its body into the next slot
+/// of a buffer in the region, the host receives the slot's address, and the
+/// cursor returns to the first slot at the `Reset`.
+///
+/// # When it applies, and why that is sound
+///
+/// Only to the entry chunk of a stream, and only when every condition holds.
+///
+/// - The entry has a [`yield_escape_hazards`] site, so a copy is needed.
+/// - Its declared yield is a flat body of a fixed size, the slot size.
+/// - `keleusma::verify::max_resumes_before_reset` bounds the yields between
+///   resets, the slot count, so the buffer is static.
+/// - With every entry `Yield` replaced by `Len`, which pops a composite and
+///   pushes a word without carrying a region, every iteration-scope site of
+///   the entry is `Confined` under `keleusma::confine::module_confinement`. The
+///   yield was then the only route out of the iteration, and the copy closes
+///   it. A site with another route keeps its refusal, because no plan exists.
+///
+/// The buffer is placed after everything the entry already reserves, one word
+/// for the cursor followed by the slots, and [`host_arena_supplement_bytes`]
+/// counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YieldCopy {
+    /// Byte offset of the cursor word from the region base. The slots follow it.
+    pub offset: u32,
+    /// Bytes per slot, the declared yield's body size.
+    pub slot_bytes: u32,
+    /// Slots, the bound on yields between resets.
+    pub slots: u32,
+}
+
+impl YieldCopy {
+    /// Bytes the cursor word and the slots occupy.
+    pub fn bytes(&self) -> u32 {
+        align_up(8u32.saturating_add(self.slot_bytes.saturating_mul(self.slots)))
+    }
+}
+
+/// The copy plan for the module's entry, or `None` when the entry needs no copy
+/// or cannot have one. See [`YieldCopy`].
+pub fn yield_copy(module: &keleusma::bytecode::Module) -> Option<YieldCopy> {
+    use keleusma::bytecode::{BlockType, WireShape};
+    use keleusma::confine::{Confinement, Scope};
+    let entry = module.entry_point?;
+    let chunk = module.chunks.get(entry)?;
+    if chunk.block_type != BlockType::Stream || yield_escape_hazards(chunk).is_empty() {
+        return None;
+    }
+    let WireShape::Flat { size, .. } = module.signatures.get(entry)?.ret else {
+        return None;
+    };
+    let slots = keleusma::verify::max_resumes_before_reset(module, entry).ok()?;
+    if size == 0 || slots == 0 {
+        return None;
+    }
+    size.checked_mul(slots)?.checked_add(8)?;
+    let mut without_yields = module.clone();
+    for op in &mut without_yields.chunks[entry].ops {
+        if matches!(op, Op::Yield) {
+            *op = Op::Len;
+        }
+    }
+    let verdicts = keleusma::confine::module_confinement(&without_yields);
+    let confined = verdicts.get(entry).is_some_and(|sites| {
+        sites
+            .iter()
+            .filter(|v| matches!(v.scope, Scope::Iteration { .. }))
+            .all(|v| matches!(v.verdict, Confinement::Confined))
+    });
+    if !confined {
+        return None;
+    }
+    Some(YieldCopy {
+        offset: align_up(region_total_bytes(module, entry, 0)),
+        slot_bytes: size,
+        slots,
+    })
+}
+
+/// Per-call-site region offsets for one chunk, in instruction order.
+///
+/// The chunk's own flat sites occupy `[0, plan_chunk_region(chunk).bytes)`;
+/// each `Op::Call` then receives a disjoint block sized by
+/// [`region_total_bytes`] of its callee. Returned as `(op_index, offset)` so the
+/// emitter can hand the callee `region_base + offset`.
+pub fn plan_call_site_regions(
+    module: &keleusma::bytecode::Module,
+    chunk_index: usize,
+) -> Vec<(usize, u32)> {
+    let Some(chunk) = module.chunks.get(chunk_index) else {
+        return Vec::new();
+    };
+    let mut next = align_up(plan_chunk_region(chunk).bytes);
+    let mut out = Vec::new();
+    for (op_index, op) in chunk.ops.iter().enumerate() {
+        if let Op::Call(idx, _) = op {
+            out.push((op_index, next));
+            next = align_up(next.saturating_add(region_total_bytes(module, usize::from(*idx), 0)));
+        }
+    }
+    out
+}
+
+/// **THE INITIAL CONTENTS OF THE PRIVATE SLOT ARRAY, FOR A HOST TO INSTALL.**
+///
+/// # The defect this closes
+///
+/// A private scalar slot carries its declared `= literal` initializer, or its
+/// type's zero, in the module's `private_init` table, and the reference runtime
+/// applies it when the module is loaded. **There is no native load step** — a
+/// host supplies the buffer — so this backend never applied it, and a program
+/// reading a slot it had not written got the host's zeros where the language
+/// promises the declared literal.
+///
+/// ```text
+/// private data log { count: Word = 7 }
+/// fn main(t: Word) -> Word { if t < 0 { log.count = 99; } log.count + 1 }
+///
+///   write skipped : reference 8, this backend 1
+/// ```
+///
+/// # It is the same weaker guarantee as [`host_arena_supplement_bytes`]
+///
+/// **A host that does not install this image is wrong in a way publishing it does
+/// not prevent.** It is stated, not enforced, exactly like the supplement figure
+/// a host must add to the runtime's sizing.
+///
+/// # A composite slot starts written with its type's zero
+///
+/// Until absorption 124 a composite slot's `private_init` was `Unit`, the image
+/// left its pool body and initialisation word zero, and a read of an unwritten
+/// slot faulted as the reference faulted. V0.2.X's widening, its pull request
+/// 666, gives every composite private slot its type's zero as its initializer,
+/// and the reference moves that body into the persistent pool when the module
+/// is constructed. So the image now covers the pool and the initialisation
+/// words. Each composite slot whose initializer is not `Unit` has its packed
+/// initializer written at its pool offset, zero padded to its pool entry, and
+/// its initialisation word set as a write sets it, the body's kind tag with its
+/// length above bit 32. A slot still
+/// initialized to `Unit`, which the reference requires to be written on every
+/// path before a read, keeps a zero word and so keeps faulting. A module with no
+/// composite slot keeps the image of its slot array alone.
+///
+/// # Failure is a refusal, not a guess
+///
+/// `None` when the module carries an initializer variant this backend cannot
+/// place at a stated width. A packed guess would be a wrong value in persistent
+/// state, which is the failure mode the whole increment is about.
+pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>> {
+    use keleusma::bytecode::{ConstValue, SlotVisibility};
+
+    let dl = module.data_layout.as_ref()?;
+    let private_slots = dl
+        .slots
+        .iter()
+        .filter(|s| s.visibility == SlotVisibility::Private)
+        .count();
+    let shared_slots = dl.slots.len() - private_slots;
+    let composites = &dl.private_composite_layout;
+    let pool_base = private_slots * crate::PRIVATE_SLOT_BYTES as usize;
+    let init_base = keleusma::vm::required_persistent_capacity_for(module)
+        + stream_state_supplement_bytes(module) as usize;
+    let image_len = if composites.is_empty() {
+        pool_base
+    } else {
+        init_base + composites.len() * 8
+    };
+    let mut out = vec![0u8; image_len];
+
+    for (i, v) in dl.private_init.iter().enumerate() {
+        if i >= private_slots {
+            break;
+        }
+        let composite = composites
+            .iter()
+            .position(|c| usize::from(c.slot) == shared_slots + i);
+        if let Some(index) = composite {
+            // A composite slot's body lives in the pool, and its slot word is
+            // not read. `Unit` keeps the slot unwritten.
+            if matches!(v, ConstValue::Unit) {
+                continue;
+            }
+            let entry = &composites[index];
+            let next = composites
+                .iter()
+                .map(|c| c.offset)
+                .filter(|o| *o > entry.offset)
+                .min()
+                .unwrap_or(module.persistent_composite_bytes);
+            let size = next.checked_sub(entry.offset)? as usize;
+            let body = initializer_body(v, module.float_bits_log2)?;
+            if body.len() > size {
+                return None;
+            }
+            let at = pool_base + entry.offset as usize;
+            out.get_mut(at..at + body.len())?.copy_from_slice(&body);
+            // The word a write stores: the body's kind tag in the low bits and
+            // its length above bit 32, which the coroutine route decodes, and
+            // which is nonzero, which is all the legacy route tests. The tag is
+            // the initializer's kind by the same function as the coroutine
+            // route's initial-kind table.
+            let tag = u64::from(crate::coroutine::types::initial_kind(v));
+            if tag < u64::from(crate::coroutine::types::TUPLE) {
+                return None;
+            }
+            let metadata = tag | ((size as u64) << 32);
+            let word = init_base + index * 8;
+            out.get_mut(word..word + 8)?
+                .copy_from_slice(&metadata.to_le_bytes());
+            continue;
+        }
+        // Each slot is a whole word in this backend's private ABI, so a scalar
+        // is placed as its i64 bit pattern and the reads at
+        // `PRIVATE_SLOT_BYTES` stride pick it up unchanged.
+        let bits: i64 = match v {
+            ConstValue::Unit => continue,
+            ConstValue::Bool(b) => i64::from(*b),
+            ConstValue::Int(n) | ConstValue::Fixed(n) => *n,
+            ConstValue::Byte(b) => i64::from(*b),
+            // No `cfg` gate: this package depends on `keleusma` with floats
+            // enabled and the emitter handles float values unconditionally
+            // elsewhere. A gate naming a feature this package does not declare
+            // is dead text that clippy correctly rejects.
+            // The slot is eight bytes, but the scalar payload follows the
+            // module's float width. Narrow bits occupy its low four bytes.
+            ConstValue::Float(f) => match module.float_bits_log2 {
+                5 => i64::from((*f as f32).to_bits()),
+                6 => f.to_bits() as i64,
+                _ => return None,
+            },
+            // A string, including the empty `Text` a `Text` slot now starts
+            // with, is an address this image cannot hold, and anything else is
+            // not a word. Refuse the whole image rather than install a partially
+            // correct one.
+            _ => return None,
+        };
+        let off = i * crate::PRIVATE_SLOT_BYTES as usize;
+        out[off..off + 8].copy_from_slice(&bits.to_le_bytes());
+    }
+    Some(out)
+}
+
+/// The flat body of a composite private initializer, as the reference packs it
+/// into the persistent pool, or `None` for a member this backend does not pack.
+///
+/// Members are packed contiguously in order with no padding, a `Word` and a
+/// `Fixed` in eight bytes, a `Byte` and a `Bool` in one, and a `Float` at the
+/// module's float width. An enum is its discriminant word followed by its
+/// payload, and it needs a resolved discriminant. A static string, `Unit`
+/// inside a body and an enum without a discriminant are refused.
+fn initializer_body(
+    constant: &keleusma::bytecode::ConstValue,
+    float_bits_log2: u8,
+) -> Option<Vec<u8>> {
+    use keleusma::bytecode::ConstValue;
+    fn pack(constant: &ConstValue, float_bits_log2: u8, out: &mut Vec<u8>) -> Option<()> {
+        match constant {
+            ConstValue::Int(v) | ConstValue::Fixed(v) => out.extend_from_slice(&v.to_le_bytes()),
+            ConstValue::Byte(v) => out.push(*v),
+            ConstValue::Bool(v) => out.push(u8::from(*v)),
+            ConstValue::Float(f) => match float_bits_log2 {
+                5 => out.extend_from_slice(&(*f as f32).to_bits().to_le_bytes()),
+                6 => out.extend_from_slice(&f.to_bits().to_le_bytes()),
+                _ => return None,
+            },
+            ConstValue::Tuple(items) | ConstValue::Array(items) => {
+                for item in items {
+                    pack(item, float_bits_log2, out)?;
+                }
+            }
+            ConstValue::Struct { fields, .. } => {
+                for (_, field) in fields {
+                    pack(field, float_bits_log2, out)?;
+                }
+            }
+            ConstValue::Enum {
+                discriminant: Some(d),
+                fields,
+                ..
+            } => {
+                out.extend_from_slice(&d.to_le_bytes());
+                for field in fields {
+                    pack(field, float_bits_log2, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    pack(constant, float_bits_log2, &mut out)?;
+    Some(out)
+}

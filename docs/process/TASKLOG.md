@@ -2547,6 +2547,30 @@ includes the guard repair, instruction reconciliation, upstream absorption and f
 native gates. Documentation-link and citation checks passed eight tests. This audit changed no
 implementation or global configuration.
 
+> **Currency note (2026-09-11, V0.3.X line). THREE DEFECTS CLOSED, AND NONE WAS WHAT THE INCREMENT
+> WAS CHECKING.**
+>
+> The increment set out to make one prose premise checkable — `Op::Reset` emits no arena reset. The
+> premise holds and the comment justifying it over-claimed. What the work produced instead: a local
+> live across a `yield` was wiped by the entry preamble on every resume (FIXED); a composite written
+> to a private data slot was stored as the body's ADDRESS rather than copied (REFUSED, then
+> IMPLEMENTED as a copy into the persistent pool); and the corpus harness sized its private buffer by
+> slot count rather than by the contract this backend publishes (FIXED).
+>
+> **All three agreed with the reference on every subject that existed before.** Two were found by
+> machinery added to make a check non-vacuous — a control subject, and a subject separating a copy
+> from an alias — and one by the gate, where the piecewise runs could not see it.
+>
+> A dramatic hypothesis about the third (weeks of heap corruption across eleven self-hosted stages)
+> was CHECKED AND IS FALSE: every corpus stream with private data lowers degenerately and has no
+> resume-state word.
+>
+> 519 tests, 0 failed (509 + 10), BOTH float configurations, every half frozen. No opcode added, no
+> `BYTECODE_VERSION` change, no edit to the repository-root `src/` or `tests/`.
+>
+> See `docs/process/handoffs/v0.3.0.md`.
+
+
 ## Kaizen token and context engineering spikes
 
 2026-10-24. Measured agent token use and surveyed token economization, then
@@ -6429,3 +6453,292 @@ Item 4 (StaticStr to rodata for flat Text fields) is complete end to end on `fea
 | 2026-05-08 | V0.0-M2 for-in arrays, tuple literals, utility natives, formal related-work pass with citations across knowledge graph. |
 | 2026-05-08 | V0.0-M1 productivity verification and WCET analysis (R22–R23). |
 | 2026-03-02 | Crate extracted from Vows of Love and War workspace. Knowledge graph created. Block-structured ISA transition (R22). |
+
+
+## V0.3.X verification receipt of 2026-09-28
+
+**Attributed to the V0.3.X line.** Handoff routing and verification requirements
+are repaired. Initial native gates passed on `e6698c5c`, clean and frozen. The
+final upstream checkpoint changes a document within the suite's reach and requires
+fresh native records. The machine-written rows and freshness reporter hold the
+current verdicts.
+The bounded native brief records one non-failing runner diagnostic and the
+non-reproducing isolated checks. The upstream current-state entries above are
+preserved. The upstream guard repair is merged. Final downstream integration is subject to
+root continuous integration on the completed feature branch. Read the native brief and machine-written
+gate record when resuming this line.
+
+
+## V0.3.X Workstream B progress of 2026-09-29
+
+Attributed to Codex on the V0.3.X line. Verified streams now lower through LLVM
+returned continuations with nested suspension, live scalar and flat values,
+bounded instance storage and stable host start, resume and release operations.
+Both complete native gates passed on clean, frozen `5a0fec1d`. The earlier
+mutation-placement failure remains recorded. Admission boundaries are documented
+in the native README and archive. Pull request 475 is integrated. Pull request
+478 tracks consolidation and green version integration of the remaining stack.
+Upstream task state above is preserved.
+
+
+## V0.3.X Workstream B completion progress of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Reentrant completion,
+multiple and zero arguments, and bounded flat completion lifetime now have
+virtual-machine differentials. All 46 coroutine tests and test-target Clippy pass
+in both float configurations. Fourteen native citation and handoff guards pass. All 13 targeted root
+documentation, citation and gate-correspondence tests pass.
+Full Workstream B remains active under its [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md).
+Complete native gates and integration remain outstanding. Upstream state above is preserved.
+
+
+## V0.3.X dialogue contracts of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Explicit yield-site
+contracts and a host site query support differing output, reply and completion
+types. New extent checks close a demonstrated short-body overread. All 53 coroutine
+tests and test-target Clippy pass in both float configurations. Complete gates
+and the remaining Workstream B admission audit are outstanding.
+
+
+## V0.3.X native body ownership of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Explicit native result
+lifetimes, entry-reachable emission, route checks and C snapshot-completion linkage
+are implemented. All 58 coroutine tests and test-target Clippy pass in both float
+configurations. Full Workstream B remains active. Mixed enum and scalar receiver
+inspection is a demonstrated remaining gap. Full native gates are outstanding.
+
+
+## V0.3.X runtime kinds and extents of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `61646c36`.
+Mixed enum receivers now carry runtime kinds, and successful tests refine payload
+reads only while their receiver bindings remain unchanged. Owned mixed values
+retain their selected size inside bounded storage. Field reads use a minimum
+extent, array bounds use the actual selected size, and Reset clears metadata.
+
+All 66 coroutine tests and test-target Clippy with warnings denied pass in both
+float configurations. The default non-corpus suite passes all 747 tests. This is
+one broad phase, not a complete gate. The original broad run exposed metadata
+underflow on malformed input and a census which mistook admission facts for
+emission sites. Both are fixed. The documented upstream confinement-panic
+exception remains unchanged. All 13 targeted root documentation checks pass.
+
+The refusal audit found another valid source case. A private Boolean protects a
+nested stream parameter so it is read only on the first iteration. The virtual
+machine yields 5 then zeros, but native admission rejects the parameter read.
+The tracked reproducer and [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md)
+name that implementation gap. Complete gates, the final audit and integration
+remain outstanding. Upstream current state and previous native reports are preserved.
+
+
+## V0.3.X cleared-value consumers of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `1fda7a04`.
+Nested stream parameters may now be read on paths where their original values
+remain valid. Bounded kind checks at typed consumers trap on cleared Unit values.
+Equality and enum inspection preserve their valid Unit behavior. Equality also
+retains floating-point NaN and signed-zero semantics. Native fault subprocesses
+must execute the expected prefix before the trap.
+
+All 71 coroutine tests pass in both float configurations. Test-target Clippy
+with warnings denied passes in both. The default non-corpus native phase passes
+all 752 tests with a frozen verdict. The 13 targeted root documentation checks
+pass. These results do not constitute either complete native gate.
+
+A further valid source case remains refused. Guarded tuple construction from a
+nested parameter encounters a joined Word-or-Unit width. The tracked reproducer
+and the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md) identify it
+as an implementation gap. Continue with value-driven composite packing. Complete
+Workstream B, full final gates and version integration remain outstanding.
+Upstream current state and earlier native reports are preserved.
+
+
+## V0.3.X actual value transfers of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `8c432401`.
+Composite packing now follows actual operand sizes within a bounded reservation.
+Internal calls preserve actual kinds and lengths through parameters and returns.
+Private composite slots retain actual view lengths and Unit values. Older aliases
+keep their captured lengths after shorter writes. Field and host boundary guards
+check actual lengths before access.
+
+All 80 coroutine tests pass in both float configurations. Test-target Clippy
+with warnings denied passes in both. The frozen default non-corpus run completed
+761 tests with 760 passing and one stale Return mutation template failing.
+The template is re-registered without changing its zero-return mutation.
+Both mutation-placement tests pass after that correction, along with 15 native
+citation, handoff and population checks and 13 root documentation checks.
+Neither complete gate is claimed.
+
+Upstream runtime finding, kept separate from native behavior. Private composite
+self-assignment reaches `persist_composite_body` in `src/vm.rs`, which invokes
+`copy_nonoverlapping` with overlapping source and destination. The debug runtime
+aborts on its unsafe precondition. Reproducer is the source in
+`native_private_self_assignment_preserves_the_current_view` in the native tests.
+That test checks the native overlap-safe copy against explicit expected values
+and region sentinels. It deliberately does not execute the undefined runtime
+operation as an oracle. Root runtime sources remain unchanged.
+
+Continue the admission audit with private scalar kind changes and correlated
+numeric kinds at dialogue joins. These remain audit questions, not proven
+refusal boundaries. Full Workstream B, both final gates and version integration
+remain outstanding. Upstream current state and preceding reports are preserved.
+
+
+## V0.3.X private kinds and ordering of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `335a939f`.
+Private scalar slots now retain actual kinds in checked persistent metadata.
+Kinds survive frame release and reuse with private payloads. Ordered comparisons
+select the runtime numeric kind, reject unequal kinds and preserve the virtual
+machine's NaN ordering. Transfer-time refusals were replaced with typed-consumer
+checks where the actual kind can be tested safely.
+
+All 87 coroutine tests and test-target Clippy with warnings denied pass in both
+float configurations. A frozen default non-corpus phase passed all 767 tests
+before the final indexed-placement guard. After that guard, all three lowering
+robustness tests pass. Neither complete native gate is claimed.
+
+The measured gap at that increment is now covered by
+`correlated_numeric_arithmetic_uses_the_actual_kind`. Its operands are both Byte
+or both Word depending on the same branch. The virtual machine added them
+successfully, while native admission then rejected `CheckedAdd`. Continue with actual-kind arithmetic selection and the remaining
+[acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md). Full Workstream B,
+final gates and version integration remain outstanding. Upstream current state
+and preceding native reports are preserved.
+
+
+## V0.3.X runtime arithmetic of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `ad184d07`.
+Checked and bare arithmetic now select actual numeric kinds after branch joins.
+All 92 coroutine tests and test-target Clippy with warnings denied pass in both
+float configurations. The former correlated-arithmetic refusal now executes.
+The corrected default non-corpus run passed all 773 tests with frozen inputs.
+The archive records two preceding guard failures and their corrections.
+No complete native gate or full Workstream B completion is claimed.
+
+Continue the acceptance-matrix audit with bounded differing composite stream
+reply extents. The virtual machine rejects scalar reply type mismatches, but its
+Composite category admits more than the current native dialogue constraint.
+This is a source-level audit question requiring an executable differential.
+Root runtime sources remain unchanged. The earlier private self-assignment
+runtime finding remains recorded above. Upstream current state and preceding
+native reports are preserved.
+
+
+## V0.3.X composite stream replies of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `b007a6dc`.
+Composite stream parameters now accept bounded differing reply shapes with actual
+kind, length and ownership preserved through direct yields, delegation and Reset.
+The initial refusal was verified against a successful virtual-machine sequence.
+All 95 coroutine tests and test-target Clippy pass in both float configurations.
+The archive records the memory-site classification. Verification assertions remain
+intact. Root runtime sources and earlier native reports are preserved.
+
+The default non-corpus run passed all 776 tests with frozen inputs. The final
+acceptance audit classifies remaining refusals and records the shared opcode and
+representation dependencies. No further suspension-specific gap was identified.
+Next, run both complete native gates separately on the final clean commit, then
+complete green version integration. The earlier private self-assignment runtime
+defect remains recorded above. This is not a full completion claim.
+
+
+## V0.3.X Workstream B verified implementation of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `5695ab1f`.
+Both complete native gates passed separately at that clean, frozen commit.
+Each ran formatting, all-target lint, 776 non-corpus tests, ten corpus tests and
+776 optimized non-corpus tests. The generated gate record preserves provenance.
+One default-phase object-linkage test passed with a non-failing nextest diagnostic.
+The archive records its qualification. Subsequent receipt edits receive targeted
+checks and must not be called the identical tested tree.
+
+The acceptance matrix and roadmap record the implementation evidence and shared
+backend dependencies. Pull request 482 tracks version integration. Read its live
+merge and check state before taking action. The active goal remains open until
+green version integration is verified. Publication remains held. Root runtime
+sources, root tests, the upstream current block and older native reports remain
+unchanged. The earlier private self-assignment runtime defect remains recorded.
+The receipt diff passed 13 root and 23 native documentation and record checks,
+with zero failures or skips and exit zero. No Rust source or tests changed.
+
+## Native audit follow-up of 2026-10-01
+
+Fixed both native gate shell findings on `fix/native-gate-shell`. ShellCheck, failure-path checks,
+30 reporter fixtures, 13 root and 23 native documentation checks pass. Full gates were not repeated.
+A scratch native workflow proposal awaits operator approval for its per-push cost. No job is activated.
+
+## Native continuous integration activation of 2026-10-01
+
+The operator approved the dedicated native workflow. It covers default-feature non-corpus
+execution in ordinary and optimized modes. Both local runs passed all 776 selected tests
+with unchanged tracked inputs. Formatting, ShellCheck and all-target Clippy also pass.
+The complete corpus and narrow-float gates remain separate. Consult workflow runs at
+the exact commit being integrated for hosted results.
+
+
+## V0.3.X Claude Code handoff of 2026-10-22
+
+Attributed to Codex on `v0.3.0`, describing `7d141fcc` plus this local, unpushed
+documentation commit. Resume at [the bounded brief](./handoffs/v0.3.0-BRIEF.md)
+in `keleusma-worktrees/arena-composites`. Pull requests 482 and 483 are merged.
+The exact merged head has 28 successful hosted checks and one deployment skip.
+All 150 historical ancestry anchors pass. The old handoff was invalid-and-stale.
+Upstream `cc48dc61` is 78 commits ahead of the absorbed history. Absorb and
+revalidate before further native implementation. Full-gate reach is `UNVERIFIED`
+for both configurations although their records remain PASS at `5695ab1f`.
+The reviewed interline checkpoint is included. No runtime code changed.
+The archive records verification limits and pilot sampling omissions.
+Verification passed 13 root and 23 native documentation and provenance tests.
+Both commands exited zero. Full native gates were not repeated.
+
+
+## V0.3.X absorption 82, 2026-10-22
+
+Claude Code on `feat/v3-absorption-82`, cut from `v0.3.0` at `13c9ed11` after the
+Codex handoff commit was pushed. Absorption 82 merged 78 upstream commits at
+`bd62e6fd`, through `cc48dc61`. The receipt is in
+`docs/decisions/ABSORPTION_82_BRIEF.md`.
+
+Upstream made division and indexed access total. The native backend now lowers the
+new contracts in both paths, computes checked division in 64 bits, and lowers a
+matched Fixed `Div` or `Mod` now that report 4 is answered. One emitter defect of
+the terminator-walk class was fixed in `certified_local_widths`, with four test
+walks of the same class. The four audit findings of the same day are closed as the
+operator directed. Report 4 is marked answered and report six is re-measured above.
+
+Verification before the gate commit: 777 non-corpus native tests and the corpus
+differential were run on intermediate trees while the repairs proceeded, and the
+root documentation, citation and correspondence guards passed 12 of 12 on the final
+edits. The complete native gates run on the committed tree, and their outcome is
+recorded in the receipt that follows this section, not predicted here.
+
+Open for the operator: whether a hosted run of the complete native gate satisfies
+the full-gate requirement before publication or `main`. Next intended step:
+reconcile the Workstream B acceptance matrix against the absorbed runtime.
+
+**Receipt, 2026-10-22.** Both complete native gates passed on clean, frozen `ece800a5`.
+Each configuration ran 777 tests outside the corpus, the 10 corpus differential tests,
+and the 777 again under the middle end, with no failure. Default features finished
+at 20:09 UTC and narrow-float-32 at 20:29 UTC. This receipt commit changes only the
+gate record and these process documents, so `tools/gate-status.sh` reports the later
+tree as `UNVERIFIED` by design, and the records name the tested commit.
+
+
+## V0.3.X fresh Codex handoff of 2026-10-23
+
+Attributed to Codex, describing `4c19e026` plus this local, unpushed documentation
+commit. The [bounded brief](./handoffs/v0.3.0-BRIEF.md) and archive now route the
+fresh session to upstream absorption followed by acceptance-matrix reconciliation.
+All 150 ancestry anchors pass. Hosted workflows passed at `4c19e026`.
+Upstream `f213f421` has 11 unabsorbed commits. Local full-gate reach remains
+`UNVERIFIED` against passing `ece800a5` records. The empty mailbox checkpoint was
+exported and reviewed. No implementation changed and full gates were not rerun.
+Root documentation checks pass all 12 tests with `RUSTC_WRAPPER=`. Initial
+commands were blocked by the sandboxed compiler cache. Native checks then stopped
+before test execution because LLVM 22 is missing. Restore that toolchain first.
+The archive records exact commands and limits. No native pass is claimed.

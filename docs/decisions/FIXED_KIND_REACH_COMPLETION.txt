@@ -1,0 +1,46 @@
+COMPLETION CONDITION — the reach of the fixed-point operand refusal
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test enumerates the distinct routes by which a fixed-point value can reach
+   the opcodes whose reference behaviour is to trap on such an operand, and drives
+   each one. Routes are written so that the operand under test is the one that
+   decides the outcome, rather than being masked by another operand that the
+   backend already recognises.
+
+2. For every route the test treats as closed, the reference is observed to trap
+   and the backend is observed to refuse. A route where the backend produces a
+   value fails the test, with a message that asks where the operand's kind was
+   dropped rather than asking for the row to be removed.
+
+3. Any route that remains open is pinned by a test that asserts the open state and
+   fails when it closes, and the tree states why it cannot be closed and what was
+   considered instead. An open route that is merely described in prose, with
+   nothing failing if it silently changes, is not sufficient.
+
+4. Wherever the backend already has a declared scalar kind available — a baked
+   field or element operand, a callee signature, a slot layout — that kind is
+   carried onto the operand stack rather than reduced to a single special case.
+
+5. A conversion that discards the fixed-point scale does not propagate the
+   fixed-point kind, and a test or a stated rationale distinguishes it from the
+   conversions that do.
+
+6. Any limitation rooted in information the runtime module does not carry is
+   reported to the other line in this line's outgoing channel, together with what
+   this line chose to do instead, and is watched so the report cannot outlive its
+   subject.
+
+7. The tree contains no conditional-compilation guard naming a feature that the
+   package containing it does not define.
+
+8. Every claim about which routes are refused is backed by an assertion that runs.
+
+9. The backend gate passes in both float configurations, and the recorded test
+   population figures agree with the tree.
+
+10. Files under src/ and tests/ at the repository root are unmodified.

@@ -1,0 +1,53 @@
+COMPLETION CONDITION — certified widths for agreeing multi-write locals
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE DISPOSITION FOLLOWS EVIDENCE
+   Either the backend now derives a packed width for a local written more than
+   once whose writes agree, or it does not and the tree records why the
+   derivation could not be made sound. Either outcome is acceptable. A widening
+   whose correctness rests only on a coverage figure is not.
+
+2. ANY WIDENING IS BACKED BY EXECUTION
+   If the backend accepts something it previously refused, a check in the tree
+   runs that thing and compares it against the reference implementation, and
+   evidence shows the check fails without the change.
+
+3. NO WIDTH IS DERIVED FROM AN OPERAND-DEPENDENT SOURCE
+   If widths are certified, the tree shows that only sources whose size is fixed
+   by the instruction itself are used, that an instruction pushing several
+   values is distinguished by which value is taken, and that a single
+   unclassifiable write prevents certification for that local. A test
+   demonstrates the refusing case as well as the accepting one.
+
+4. FIGURES ARE RE-DERIVED, AND A MOVE IS EXPLAINED
+   Corpus coverage figures are re-measured and stated whether or not they moved.
+   If they moved, the tree names which chunks became lowerable and why.
+
+5. NO REGRESSION IN AGREEMENT
+   The existing corpus-wide comparison against the reference still passes, so a
+   newly derived width cannot have changed the behaviour of anything that
+   already worked.
+
+6. THE ORIGINAL RULE IS DESCRIBED FAIRLY
+   Documentation does not present the previous behaviour as a defect. It records
+   that the restriction was sound and that its scope has been narrowed, stating
+   the condition under which the narrower rule is safe.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the project's verification gate, or of the
+   subproject step it contains, showing formatting, lint with warnings denied,
+   tests, and the documentation build all clean. Test results give both the
+   runner's exit status and the summed pass, fail and binary counts, and the two
+   agree.
+
+8. CLAIMS MATCH THE TREE
+   No document asserts a figure, blocker, or cause the tree contradicts.
+   Anything corrected is visible as corrected rather than silently replaced.
+
+9. WORK IS INTEGRATED AND CLEAN
+   No uncommitted changes remain and the local branch agrees with its remote.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

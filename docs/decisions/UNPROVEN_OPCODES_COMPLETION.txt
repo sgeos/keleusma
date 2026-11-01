@@ -1,0 +1,53 @@
+COMPLETION CONDITION — opcodes whose lowering has never executed
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. REACHABILITY IS DETERMINED BY MEASUREMENT, PER OPCODE
+   For each opcode the tree records as lowered but never executed, the tree
+   states whether a program that reaches it can be written today, and on what
+   evidence. A negative answer names what was tried and what the compiler or the
+   backend said, and distinguishes "the surface cannot express it" from "no form
+   was found".
+
+2. AT LEAST ONE REACHABLE CASE IS EXECUTED, OR NONE IS REACHABLE
+   Either some previously unexecuted lowering now runs and is compared against
+   the reference implementation, or the tree records that none of them is
+   reachable and why. Either outcome is acceptable; leaving the question
+   unanswered is not.
+
+3. A WITNESS RUNS, IT DOES NOT MERELY COMPILE
+   Any witness added executes the instruction and its result is compared with the
+   reference. A program that only reaches the lowering without running it does
+   not count, and the tree does not describe such a program as a witness.
+
+4. NOTHING IS WIDENED TO MAKE A TEST POSSIBLE
+   No guard or refusal is relaxed in order to reach an unexercised lowering. If a
+   guard blocks a witness, that is recorded as the reason the opcode is
+   unreachable.
+
+5. NO GUARD IS TRUSTED WITHOUT EVIDENCE IT CAN FIRE
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively.
+
+6. FIGURES ARE RE-DERIVED AND MOVEMENT IS STATED HONESTLY
+   The opcode census and corpus coverage figures are re-measured and stated
+   whether or not they moved, and the tree does not describe a figure as changed
+   when it has not.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the project's verification gate, or of the
+   subproject step it contains, showing formatting, lint with warnings denied,
+   tests, and the documentation build all clean. Test results give both the
+   runner's exit status and the summed pass, fail and binary counts, and the two
+   agree. A run terminated early is not reported as a result.
+
+8. CLAIMS MATCH THE TREE
+   No document asserts a figure, blocker, or cause the tree contradicts.
+   Anything corrected is visible as corrected rather than silently replaced.
+
+9. WORK IS INTEGRATED AND CLEAN
+   No uncommitted changes remain and the local branch agrees with its remote.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.
