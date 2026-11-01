@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 10b8985c HEAD     # the merge of PR 703 into v0.2.3
+git merge-base --is-ancestor b24d05c1 HEAD     # the merge of PR 708 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -88,10 +88,10 @@ run.
   the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
   count the pruned list. A backup is outside the repository.
-- **Propagation.** `origin/proofs`, unchanged since 2026-08-29, still holds the old
-  `wire_schema.rs` comment and four files matching kept terms, item K13. On this
-  line's scan of 2026-10-31, `main` and `v0.2.3` match no term. V0.3.X confirmed that
-  `v0.3.0` matches no term.
+- **Propagation.** The proofs line merged into `v0.2.3` as PR 708 on 2026-11-01 and its
+  remote branch is gone, closing K13. On this line's scans, `v0.2.3` at `b24d05c1` on
+  2026-11-01 and `main` on 2026-10-31 match no term. V0.3.X confirmed that `v0.3.0`
+  matches no term.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
@@ -114,11 +114,9 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
    shard evidence current until D1 is ruled.
-2. Claude Code makes its agent trees under `.claude/worktrees/` without
-   `worktree.sh`, so PR 697 does not link them, as the administrator session noted on
-   2026-10-31. Four held 11.7 GB of `target` on the data volume that day. Check for a
-   worktree hook, or report unlinked trees in `worktree.sh list`. Their output is the
-   operator's to move or delete.
+2. `worktree.sh list` now reports agent trees' unlinked output. If D5 is (a), write
+   and test the `WorktreeCreate` and `WorktreeRemove` hook scripts for the operator to
+   apply.
 3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
    about two weeks later and compare with the trial report.
 4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
@@ -129,16 +127,17 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) hold the
-list. D1 keeps or drops the pinned shard lists, D2 is the `idleCompaction: false`
-trial, D3 is a proofs session for K13, and D4 is Dependabot alert 6, `minimatch`
-in the editor extension, which no upstream client release can take yet. The operator's own checks K6, K9, K10 and
-K11 remain, and K14 is held.
+[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record the
+operator's ruling of that day. D1 keeps the pinned lists. D2 waits on the operator
+adding `"idleCompaction": false` to the global settings. D3 closed K13. D4 (a) broke
+the language client and was abandoned, so Dependabot alert 6 stays open. D5, a
+worktree hook, is new. The K-series checks K6, K9, K10 and K11 remain, and K14 is held.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
 - The fuzz workflow ran only locally. Its crash path and artifact upload are untested.
+- Dependabot alert 6 has no compatible fix. Recheck `vscode-languageclient` weekly.
 - Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
   They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
 

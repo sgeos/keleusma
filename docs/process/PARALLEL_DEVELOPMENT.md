@@ -423,6 +423,11 @@ inside it, one directory at a time, when nothing is building there.
 - **The gate builds there too.** With `SCRATCH_BASE` set, `gate-in-worktree.sh`
   defaults its `CARGO_TARGET_DIR` to `$SCRATCH_BASE/keleusma/.gate-target`, a plain
   directory rather than a link. `KEL_GATE_TARGET` still overrides it.
+- **Trees made elsewhere are reported, not linked.** Claude Code creates its agent
+  trees under `.claude/worktrees/` with `git worktree add`, so their output stays on
+  the system disk. With `SCRATCH_BASE` set, `list` names every package `target` of a
+  live tree that is a directory rather than a link, with its size, and changes
+  nothing.
 - **`scratch.sh` is vendored unchanged** from `sgeos/project-template` v1.0.8, so
   that it can be compared with the template's copy. Change it there first.
 

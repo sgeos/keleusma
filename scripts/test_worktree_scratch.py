@@ -148,6 +148,32 @@ class WorktreeScratchTests(unittest.TestCase):
         self.assertNotIn(str(self.home('nine')), result.stdout)
         self.assertTrue(orphan.is_dir())
 
+    def test_list_reports_a_tree_whose_target_is_not_a_link(self):
+        # Claude Code makes its agent trees with `git worktree add`, so their build
+        # output stays in the tree. `list` names each such target and touches none.
+        self.assertEqual(self.worktree('new', 'feat/linked').returncode, 0)
+        agent = self.tmp / 'agents' / 'eleven'
+        self.git('worktree', 'add', '-q', '-b', 'agent/eleven', str(agent))
+        (agent / 'compiler' / 'target').mkdir(parents=True)
+        (agent / 'compiler' / 'target' / 'marker').write_text('build output')
+        result = self.worktree('list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        unlinked = f'build output not on the scratch volume: {agent.resolve() / "compiler" / "target"} ('
+        self.assertIn(unlinked, result.stdout)
+        reports = [line for line in result.stdout.splitlines()
+                   if line.startswith('build output not on the scratch volume')]
+        # The agent tree has no root `target`, and the linked tree's targets are links.
+        self.assertEqual(len(reports), 1, reports)
+        self.assertEqual((agent / 'compiler' / 'target' / 'marker').read_text(), 'build output')
+
+    def test_list_without_scratch_base_reports_no_unlinked_target(self):
+        agent = self.tmp / 'agents' / 'twelve'
+        self.git('worktree', 'add', '-q', '-b', 'agent/twelve', str(agent))
+        (agent / 'target').mkdir()
+        result = self.worktree('list', scratch=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('not on the scratch volume', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
