@@ -249,21 +249,23 @@ fn a_delegated_loop_resumed_through_a_yield_helper() {
 }
 
 #[test]
-fn a_resume_value_of_the_wrong_type_for_a_delegated_loop_is_a_type_error() {
-    // The type checker does not require a delegated loop to share the entry
-    // loop's parameter type. The resume boundary now checks the callee's own
-    // parameter type, so the mismatch is a `TypeError` there rather than a
-    // `Unit` read deep in the body. Before the fix this program yielded 1,
-    // reset, and then failed with `condition must be Bool, got Unit`.
+fn a_delegated_loop_with_a_different_resume_type_is_refused_at_compile_time() {
+    // Before the fix this program yielded 1, reset, and then failed with
+    // `condition must be Bool, got Unit`. The type checker now refuses a
+    // delegated loop whose parameter type differs from the entry loop's, so
+    // the program never reaches the virtual machine. The resume boundary also
+    // checks the callee's own parameter type, as a second line of defence for
+    // a module that reaches the virtual machine without the type checker.
     let src = "loop child(a: bool) -> Word { if a { yield 1 } else { yield 2 } } \
                loop main(t: Word) -> Word { child(true) }";
-    let err = drive_with(src, 3, |_| REPLY).expect_err("a Word cannot rebind a bool");
-    match err {
-        VmError::TypeError(msg) => {
-            assert!(msg.contains("loop `child` resume expected"), "{msg}");
-        }
-        other => panic!("expected a TypeError, got {other:?}"),
-    }
+    let tokens = keleusma::lexer::tokenize(src).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let err = keleusma::compiler::compile(&program).expect_err("a Word cannot rebind a bool");
+    assert!(
+        err.message.contains("resumes with"),
+        "expected the delegated resume type refusal, got {}",
+        err.message
+    );
 }
 
 // -- The admitted shape, a delegated `yield` function -------------------------

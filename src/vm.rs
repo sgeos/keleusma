@@ -5756,9 +5756,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // program. See `tests/delegated_loop_reset.rs`.
         //
         // The parameter type check below is therefore made against the
-        // callee's own parameter type. The type checker does not require a
-        // delegated `loop` to share the entry loop's parameter type, so a
-        // mismatch surfaces here as a `TypeError` at the resume boundary.
+        // callee's own parameter type. The type checker refuses a delegated
+        // `loop` whose parameter type differs from the entry loop's, so this
+        // check is a second line of defence for a module that reaches the
+        // virtual machine without that check, and a mismatch surfaces here as
+        // a `TypeError` at the resume boundary.
         let stream_frame = {
             let aux = self.aux();
             self.frames
