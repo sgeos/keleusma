@@ -795,37 +795,15 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
             assert_eq!(native(src, first, &replies, optimize), expected, "{src}");
         }
     }
-    // The VM can expose a callee's distinct scalar tag despite the entry's
-    // return signature. The untagged native payload must refuse that mismatch,
-    // including Byte versus Bool, which have equal native widths.
-    for (src, expected) in [
-        (
-            "loop child() -> bool { yield true } loop main(t: Word) -> Byte { child(); yield (t as Byte) }",
-            Value::Bool(true),
-        ),
-        (
-            "yield emit() -> Float { yield 0.5; 0.5 } loop main(t: Word) -> Word { emit(); yield t }",
-            Value::Float(0.5),
-        ),
+    // The VM could expose a callee's distinct scalar tag despite the entry's
+    // return signature, and native lowering refused that mismatch, including
+    // Byte versus Bool, which have equal native widths. Upstream 702 refuses
+    // both programs at compile time, so neither reaches either side.
+    for src in [
+        "loop child() -> bool { yield true } loop main(t: Word) -> Byte { child(); yield (t as Byte) }",
+        "yield emit() -> Float { yield 0.5; 0.5 } loop main(t: Word) -> Word { emit(); yield t }",
     ] {
-        let p = common::build(src);
-        keleusma::verify::verify(&p).unwrap();
-        let ctx = Context::create();
-        let error = coroutine::lower(&ctx, &p, &machine(), 4096).unwrap_err();
-        assert!(
-            error.to_string().contains("scalar types are not proven"),
-            "{error}"
-        );
-        let need = required_persistent_capacity_for(&p);
-        let mut arena = keleusma_arena::Arena::with_capacity(
-            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
-        );
-        arena.resize_persistent(need).unwrap();
-        let mut vm = Vm::new(p, &arena).unwrap();
-        let VmState::Yielded(actual) = vm.call(&[Value::Int(0)]).unwrap() else {
-            panic!("callee must yield its distinct scalar type");
-        };
-        assert_eq!(actual, expected);
+        assert_refused_as_a_mismatched_delegation(src);
     }
 }
 
@@ -879,13 +857,11 @@ fn release_inside_a_callee_does_not_execute_its_remaining_effects() {
 
 #[test]
 fn delegated_composite_yields_remain_refused() {
-    let p = common::build(
+    // Native lowering refused this pair yield beneath a Word entry with
+    // "scalar types are not proven". Upstream 702 refuses it at compile time,
+    // so the reference no longer builds the module.
+    assert_refused_as_a_mismatched_delegation(
         "yield emit(a: Word) -> (Word, Word) { yield (a, a); (a, a) } loop main(t: Word) -> Word { emit(t); yield t }",
-    );
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("scalar types are not proven"),
-        "{error}"
     );
     // A live body operand is now admitted. Only the signature mismatch above
     // remains a refusal, so preserve the former negative as an executed control.
@@ -947,35 +923,14 @@ fn nested_stream_calls_preserve_state_across_callee_resets() {
     }
 }
 
+/// A delegated parameter once read Unit after Reset, and native code trapped
+/// rather than read it as zero. Upstream 704 rebinds it to the reply, so the
+/// read after Reset is neither Unit nor zero but the reply.
 #[test]
-fn nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
-    let source =
-        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }";
-    let p = common::build(source);
-    let need = required_persistent_capacity_for(&p);
-    let mut arena = keleusma_arena::Arena::with_capacity(
-        auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
-    );
-    arena.resize_persistent(need).unwrap();
-    let mut vm = Vm::new(p, &arena).unwrap();
-    assert!(matches!(
-        vm.call(&[Value::Int(5)]).unwrap(),
-        VmState::Yielded(Value::Int(6))
-    ));
-    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
-    let keleusma::vm::VmError::TypeError(fault) = vm.resume(Value::Int(7)).unwrap_err() else {
-        panic!("the cleared parameter must produce a type error");
-    };
-    assert!(fault.contains("Unit") && fault.contains("Int"), "{fault}");
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero",
-        source,
-        &[5],
-        &[6],
-        &[7],
+fn nested_stream_parameter_reads_take_the_reply_after_reset() {
+    assert_vm_and_native(
+        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }",
+        &[6, 8, 8, 8],
     );
 }
 
@@ -1585,7 +1540,6 @@ fn reset_clears_runtime_kinds_of_later_entry_parameters() {
 
 #[test]
 fn guarded_nested_parameter_uses_execute_before_reset() {
-    let replies = [7; 6];
     for (extra, parameter, argument, body, first) in [
         ("", "Word", "t", "a", 5),
         ("", "Word", "t", "a + 1", 6),
@@ -1608,16 +1562,17 @@ fn guarded_nested_parameter_uses_execute_before_reset() {
         let source = format!(
             "{extra} private data st {{ first: bool = true }} loop child(a: {parameter}) -> Word {{ if st.first {{ st.first = false; yield {body} }} else {{ yield 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
         );
-        let expected = [first, 0, 0, 0, 0, 0];
-        assert_eq!(common::general_vm_sequence(&source, 5, &replies), expected);
-        for optimize in [false, true] {
-            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        // Every parameter type but Word is a delegation upstream 702 refuses.
+        if parameter == "Word" {
+            assert_vm_and_native(&source, &[first, 0, 0, 0, 0, 0]);
+        } else {
+            assert_refused_as_a_mismatched_delegation(&source);
         }
     }
 }
 
 #[test]
-fn guarded_composite_construction_from_a_cleared_parameter_executes() {
+fn guarded_composite_construction_from_the_parameter_executes() {
     for (extra, parameter, argument, value) in [
         ("", "Word", "t", "(a, a).0"),
         (
@@ -1646,15 +1601,11 @@ fn guarded_composite_construction_from_a_cleared_parameter_executes() {
         let source = format!(
             "{extra} private data st {{ first: bool = true }} loop child(a: {parameter}) -> Word {{ if st.first {{ st.first = false; yield {value} }} else {{ yield 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
         );
-        let replies = [7; 4];
-        let expected = [5, 0, 0, 0];
-        assert_eq!(
-            common::general_vm_sequence(&source, 5, &replies),
-            expected,
-            "{source}"
-        );
-        for optimize in [false, true] {
-            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        // Every parameter type but Word is a delegation upstream 702 refuses.
+        if parameter == "Word" {
+            assert_vm_and_native(&source, &[5, 0, 0, 0]);
+        } else {
+            assert_refused_as_a_mismatched_delegation(&source);
         }
     }
 }
@@ -1674,41 +1625,34 @@ fn private_storage_preserves_actual_body_extents() {
     for (source, expected) in [
         (
             "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); yield st.saved.0 } loop main(t: Word) -> Word { child(t) }",
-            vec![5, 17, 17, 17],
+            vec![5, 7, 7, 7],
         ),
         (
             "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.0; yield old.1; yield now.0 } loop main(t: Word) -> Word { child(t) }",
-            vec![5, 17, 5, 17, 29, 17],
+            vec![5, 29, 5, 5, 29, 7],
         ),
         (
             "private data st { saved: [(Word, Word); 2] } loop child(a: Word) -> Word { st.saved[0] = (5, 29); st.saved[1] = (a, 17); for i in 0..2 { yield st.saved[i].0; } yield 99 } loop main(t: Word) -> Word { child(t) }",
-            vec![5, 5, 99, 5, 17, 99],
+            vec![5, 5, 99, 5, 7, 99],
         ),
     ] {
-        let replies = vec![7; expected.len()];
-        assert_eq!(
-            common::general_vm_sequence(source, 5, &replies),
-            expected,
-            "{source}"
-        );
-        for optimize in [false, true] {
-            assert_eq!(native(source, 5, &replies, optimize), expected, "{source}");
-        }
+        assert_vm_and_native(source, &expected);
     }
 }
 
 #[test]
 fn native_private_self_assignment_preserves_the_current_view() {
-    // The reference VM uses copy_nonoverlapping on this aliased body and aborts
-    // in debug builds. Do not execute that undefined operation as an oracle.
-    let source = "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); st.saved = st.saved; yield st.saved.0 } loop main(t: Word) -> Word { child(t) }";
-    for optimize in [false, true] {
-        assert_eq!(native(source, 5, &[7; 4], optimize), [5, 17, 17, 17]);
-    }
+    // The reference once aborted on this aliased body in debug builds, so the
+    // test ran native code alone. Upstream drives it in
+    // `tests/delegated_loop_reset.rs` since 704, so both are checked.
+    assert_vm_and_native(
+        "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); st.saved = st.saved; yield st.saved.0 } loop main(t: Word) -> Word { child(t) }",
+        &[5, 7, 7, 7],
+    );
 }
 
 #[test]
-fn private_scalar_slots_preserve_cleared_values() {
+fn private_scalar_slots_preserve_stored_parameters() {
     for (parameter, argument, declaration, write, condition) in [
         (
             "Word",
@@ -1749,9 +1693,11 @@ fn private_scalar_slots_preserve_cleared_values() {
         let source = format!(
             "private data st {{ {declaration} }} loop child(a: {parameter}) -> Word {{ {write}; yield if {condition} {{ 1 }} else {{ 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
         );
-        assert_eq!(common::general_vm_sequence(&source, 5, &[7; 4]), [1; 4]);
-        for optimize in [false, true] {
-            assert_eq!(native(&source, 5, &[7; 4], optimize), [1; 4]);
+        // Every parameter type but Word is a delegation upstream 702 refuses.
+        if parameter == "Word" {
+            assert_vm_and_native(&source, &[1; 4]);
+        } else {
+            assert_refused_as_a_mismatched_delegation(&source);
         }
     }
 }
@@ -2940,81 +2886,39 @@ fn private_scalar_kinds_survive_release_and_frame_reuse() {
     }
 }
 
+/// The store of the cleared parameter was a valid Unit store until upstream
+/// 704, and its consumption trapped. The store now writes the reply.
 #[test]
-fn private_scalar_consumption_traps_after_a_valid_unit_store() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
-    let source = "private data st { saved: Word = 99 } loop child(a: Word) -> Word { st.saved = a; yield st.saved + 1 } loop main(t: Word) -> Word { child(t) }";
-    let program = common::build(source);
-    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
-    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
-    arena.resize_persistent(capacity).unwrap();
-    let mut vm = Vm::new(program, &arena).unwrap();
-    assert!(matches!(
-        vm.call(&[Value::Int(5)]).unwrap(),
-        VmState::Yielded(Value::Int(6))
-    ));
-    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
-    assert!(vm.resume(Value::Int(7)).is_err());
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "private_scalar_consumption_traps_after_a_valid_unit_store",
-        source,
-        &[5],
-        &[6],
-        &[7],
+fn private_scalar_consumption_reads_the_stored_reply() {
+    assert_vm_and_native(
+        "private data st { saved: Word = 99 } loop child(a: Word) -> Word { st.saved = a; yield st.saved + 1 } loop main(t: Word) -> Word { child(t) }",
+        &[6, 8, 8, 8],
     );
 }
 
 #[test]
 fn private_composite_slots_preserve_unit_values_without_eager_faults() {
-    for (source, expected) in [
-        // Since absorption 124 the slot starts with its type's zero, `E::A`, so
-        // the first read matches `E::A` where it once read `Unit`.
-        (
-            "enum E { A, B } private data st { saved: E } loop main(t: Word) -> Word { yield match st.saved { E::A => 1, _ => 0 }; st.saved = E::A; 0 }",
-            [1, 1, 1, 1],
-        ),
-        (
-            "enum E { A, B } private data st { saved: E } loop child(a: E) -> Word { st.saved = a; yield match st.saved { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }",
-            [1, 0, 0, 0],
-        ),
-    ] {
-        assert_eq!(common::general_vm_sequence(source, 5, &[7; 4]), expected);
-        for optimize in [false, true] {
-            assert_eq!(native(source, 5, &[7; 4], optimize), expected);
-        }
-    }
+    // Since absorption 124 the slot starts with its type's zero, `E::A`, so
+    // the first read matches `E::A` where it once read `Unit`.
+    assert_vm_and_native(
+        "enum E { A, B } private data st { saved: E } loop main(t: Word) -> Word { yield match st.saved { E::A => 1, _ => 0 }; st.saved = E::A; 0 }",
+        &[1, 1, 1, 1],
+    );
+    // The delegated form stored an enum parameter cleared to Unit after Reset.
+    // Upstream 702 refuses it, since the parameter cannot take a Word reply.
+    assert_refused_as_a_mismatched_delegation(
+        "enum E { A, B } private data st { saved: E } loop child(a: E) -> Word { st.saved = a; yield match st.saved { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }",
+    );
 }
 
+/// The private copy of upstream 690 keeps `old` at its own value, and the
+/// rebinding of upstream 704 keeps `now` at full extent, so neither view traps.
+/// The sequence is the one V0.2.X pinned in sequence 223.
 #[test]
-fn shortened_private_view_traps_while_an_older_long_view_remains_valid() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
-    let source = "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.1; yield now.1 } loop main(t: Word) -> Word { child(t) }";
-    let program = common::build(source);
-    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
-    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
-    arena.resize_persistent(capacity).unwrap();
-    let mut vm = Vm::new(program, &arena).unwrap();
-    let mut state = vm.call(&[Value::Int(5)]).unwrap();
-    for (index, value) in [17, 17, 29].into_iter().enumerate() {
-        assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == value));
-        if index < 2 {
-            state = vm.resume(Value::Int(7)).unwrap();
-            if matches!(state, VmState::Reset) {
-                state = vm.resume(Value::Int(7)).unwrap();
-            }
-        }
-    }
-    assert!(vm.resume(Value::Int(7)).is_err());
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "shortened_private_view_traps_while_an_older_long_view_remains_valid",
-        source,
-        &[5],
-        &[17, 17, 29],
-        &[7; 3],
+fn older_and_newer_private_views_both_read_after_reset() {
+    assert_vm_and_native(
+        "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.1; yield now.1 } loop main(t: Word) -> Word { child(t) }",
+        &[29, 17, 29, 17, 29, 17],
     );
 }
 
@@ -3034,14 +2938,18 @@ fn owned_variable_bodies_cross_calls_and_delegated_suspension() {
 
 #[test]
 fn composite_packing_uses_actual_sizes_after_parameter_reset() {
+    // Until upstream 704 the parameter read Unit after the child's Reset, so
+    // these composites were packed around a zero width field. The parameter
+    // now holds the reply 7, and only the delegations upstream 702 refuses
+    // keep a parameter of another type.
     for (extra, parameter, argument, value, first, later) in [
-        ("", "Word", "t", "(a, 17, 29).0", 5, 17),
-        ("", "Word", "t", "((), a, 17).1", 5, 17),
-        ("", "Word", "t", "(a, 17, 29).1", 17, 29),
-        ("", "Word", "t", "(((a, 17), 29, 37).0).1", 17, 29),
+        ("", "Word", "t", "(a, 17, 29).0", 5, 7),
+        ("", "Word", "t", "((), a, 17).1", 5, 7),
+        ("", "Word", "t", "(a, 17, 29).1", 17, 17),
+        ("", "Word", "t", "(((a, 17), 29, 37).0).1", 17, 17),
         ("", "(Word, Word)", "(t, t + 1)", "((a, 17, 29).0).0", 5, 17),
-        ("", "Word", "t", "[a, 17, 29][0]", 5, 17),
-        ("", "Word", "t", "[a, 17, 29][1]", 17, 29),
+        ("", "Word", "t", "[a, 17, 29][0]", 5, 7),
+        ("", "Word", "t", "[a, 17, 29][1]", 17, 17),
         (
             "",
             "Byte",
@@ -3057,7 +2965,7 @@ fn composite_packing_uses_actual_sizes_after_parameter_reset() {
             "t",
             "S { a: a, b: 17, c: 29 }.b",
             17,
-            29,
+            17,
         ),
         (
             "struct S { a: Word, b: Word, c: Word }",
@@ -3065,7 +2973,7 @@ fn composite_packing_uses_actual_sizes_after_parameter_reset() {
             "t",
             "S { a: a, b: 17, c: 29 }.c",
             29,
-            0,
+            29,
         ),
         (
             "enum E { A(Word), B(Word, Word) }",
@@ -3073,52 +2981,32 @@ fn composite_packing_uses_actual_sizes_after_parameter_reset() {
             "t",
             "match E::A(a) { E::A(x) => x, _ => 99 }",
             5,
-            0,
+            7,
         ),
     ] {
         let source = format!(
             "{extra} loop child(a: {parameter}) -> Word {{ yield {value} }} loop main(t: Word) -> Word {{ child({argument}) }}"
         );
-        let expected = [first, later, later, later];
-        let replies = [7; 4];
-        assert_eq!(
-            common::general_vm_sequence(&source, 5, &replies),
-            expected,
-            "{source}"
-        );
-        for optimize in [false, true] {
-            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        if parameter == "Word" {
+            assert_vm_and_native(&source, &[first, later, later, later]);
+        } else {
+            assert_refused_as_a_mismatched_delegation(&source);
         }
     }
-    let source = "loop child(a: Word) -> Word { let p = (a, 17); yield 1; yield p.0 } loop main(t: Word) -> Word { child(t) }";
-    let expected = [1, 5, 1, 17, 1, 17];
-    assert_eq!(common::general_vm_sequence(source, 5, &[7; 6]), expected);
-    for optimize in [false, true] {
-        assert_eq!(native(source, 5, &[7; 6], optimize), expected);
-    }
+    assert_vm_and_native(
+        "loop child(a: Word) -> Word { let p = (a, 17); yield 1; yield p.0 } loop main(t: Word) -> Word { child(t) }",
+        &[1, 5, 1, 7, 1, 7],
+    );
 }
 
+/// A tuple built from the cleared parameter was shorter than its type until
+/// upstream 704, and native code trapped before the out of bounds read. The
+/// tuple now has its full extent on every cycle.
 #[test]
-fn shortened_constructed_tuple_traps_before_an_out_of_bounds_read() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
-    let source = "loop child(a: Word) -> Word { yield (a, 17, 29).2 } loop main(t: Word) -> Word { child(t) }";
-    let program = common::build(source);
-    let arena = keleusma_arena::Arena::with_capacity(65536);
-    let mut vm = Vm::new(program, &arena).unwrap();
-    assert!(matches!(
-        vm.call(&[Value::Int(5)]).unwrap(),
-        VmState::Yielded(Value::Int(29))
-    ));
-    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
-    assert!(vm.resume(Value::Int(7)).is_err());
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "shortened_constructed_tuple_traps_before_an_out_of_bounds_read",
-        source,
-        &[5],
-        &[29],
-        &[7],
+fn a_tuple_constructed_from_the_parameter_keeps_its_extent_after_reset() {
+    assert_vm_and_native(
+        "loop child(a: Word) -> Word { yield (a, 17, 29).2 } loop main(t: Word) -> Word { child(t) }",
+        &[29, 29, 29, 29],
     );
 }
 
@@ -3128,12 +3016,12 @@ fn internal_calls_preserve_actual_kinds_and_body_extents() {
         (
             "fn first(p: (Word, Word)) -> Word { p.0 }",
             "first((a, 17))",
-            [5, 17, 17, 17],
+            [5, 7, 7, 7],
         ),
         (
             "fn identity(p: (Word, Word)) -> (Word, Word) { p } fn first(p: (Word, Word)) -> Word { p.0 }",
             "first(identity((a, 17)))",
-            [5, 17, 17, 17],
+            [5, 7, 7, 7],
         ),
         (
             "fn equal(x: Word) -> Word { if x == x { 1 } else { 0 } }",
@@ -3148,129 +3036,82 @@ fn internal_calls_preserve_actual_kinds_and_body_extents() {
         (
             "fn identity(x: (Word, Word)) -> (Word, Word) { x }",
             "(identity((a, 17))).0",
-            [5, 17, 17, 17],
+            [5, 7, 7, 7],
         ),
     ] {
-        let source = format!(
-            "{extra} loop child(a: Word) -> Word {{ yield {expression} }} loop main(t: Word) -> Word {{ child(t) }}"
+        assert_vm_and_native(
+            &format!(
+                "{extra} loop child(a: Word) -> Word {{ yield {expression} }} loop main(t: Word) -> Word {{ child(t) }}"
+            ),
+            &expected,
         );
-        assert_eq!(
-            common::general_vm_sequence(&source, 5, &[7; 4]),
-            expected,
-            "{source}"
-        );
-        for optimize in [false, true] {
-            assert_eq!(native(&source, 5, &[7; 4], optimize), expected, "{source}");
-        }
     }
-    let source = "fn identity(x: Float) -> Float { x } fn eq(x: Float) -> Word { if x == x { 1 } else { 0 } } loop child(a: Float) -> Word { yield eq(identity(a)) } loop main(t: Word) -> Word { child(t as Float) }";
-    assert_eq!(common::general_vm_sequence(source, 5, &[7; 4]), [1; 4]);
-    for optimize in [false, true] {
-        assert_eq!(native(source, 5, &[7; 4], optimize), [1; 4]);
-    }
-}
-
-#[test]
-fn cleared_nested_body_access_traps_before_dereferencing_unit() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
-    let source = "loop child(a: [Word; 2]) -> Word { yield a[0] } loop main(t: Word) -> Word { child([t, t + 1]) }";
-    let program = common::build(source);
-    let arena = keleusma_arena::Arena::with_capacity(65536);
-    let mut vm = Vm::new(program, &arena).unwrap();
-    assert!(matches!(
-        vm.call(&[Value::Int(5)]).unwrap(),
-        VmState::Yielded(Value::Int(5))
-    ));
-    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
-    let error = vm.resume(Value::Int(7)).unwrap_err();
-    assert!(format!("{error:?}").contains("Unit"), "{error:?}");
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "cleared_nested_body_access_traps_before_dereferencing_unit",
-        source,
-        &[5],
-        &[5],
-        &[7],
+    // A Float parameter beneath a Word entry is a delegation upstream 702
+    // refuses, so the Float call chain runs in the entry itself.
+    assert_refused_as_a_mismatched_delegation(
+        "fn identity(x: Float) -> Float { x } fn eq(x: Float) -> Word { if x == x { 1 } else { 0 } } loop child(a: Float) -> Word { yield eq(identity(a)) } loop main(t: Word) -> Word { child(t as Float) }",
+    );
+    assert_vm_and_native(
+        "fn identity(x: Float) -> Float { x } fn eq(x: Float) -> Word { if x == x { 1 } else { 0 } } loop main(t: Word) -> Word { yield eq(identity(t as Float)) }",
+        &[1; 4],
     );
 }
 
 #[test]
-fn nested_cleared_enum_inspection_remains_false_without_a_type_fault() {
-    let source = "enum E { A, B } loop child(a: E) -> Word { yield match a { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }";
-    let replies = [7; 5];
-    let expected = [1, 0, 0, 0, 0];
-    assert_eq!(common::general_vm_sequence(source, 5, &replies), expected);
-    for optimize in [false, true] {
-        assert_eq!(native(source, 5, &replies, optimize), expected);
-    }
+fn a_delegated_array_parameter_is_refused_for_its_resume_type() {
+    // The parameter read Unit after the child's Reset until upstream 704, and
+    // this test pinned the native trap on that read. Upstream 702 now refuses
+    // the program, since an array parameter cannot take the entry's Word reply.
+    assert_refused_as_a_mismatched_delegation(
+        "loop child(a: [Word; 2]) -> Word { yield a[0] } loop main(t: Word) -> Word { child([t, t + 1]) }",
+    );
+}
+
+/// An enum parameter read Unit after the child's Reset until upstream 704, and
+/// its inspection was pinned false. Upstream 702 now refuses the delegation,
+/// because an enum parameter cannot take the entry's Word reply.
+#[test]
+fn a_delegated_enum_parameter_is_refused_for_its_resume_type() {
+    assert_refused_as_a_mismatched_delegation(
+        "enum E { A, B } loop child(a: E) -> Word { yield match a { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }",
+    );
 }
 
 #[test]
-fn equality_of_cleared_values_matches_vm_partial_eq() {
-    for (parameter, argument, condition, initial) in [
-        ("Word", "t", "a == a", 1),
-        ("Word", "t", "a == 5", 1),
-        ("Word", "t", "a != 5", 0),
-        ("Byte", "t as Byte", "a == a", 1),
-        ("Fixed", "t as Fixed", "a == a", 1),
-        ("bool", "true", "a == a", 1),
-        ("Float", "t as Float", "a == a", 1),
-        ("Float", "0.0 / 0.0", "a == a", 0),
-        ("Float", "-0.0", "a == 0.0", 1),
+fn equality_of_rebound_parameters_matches_vm_partial_eq() {
+    // These conditions compared a parameter cleared to Unit until upstream 704.
+    // A Word parameter now compares the reply 7, and every other parameter
+    // type is a delegation upstream 702 refuses.
+    for (parameter, argument, condition, expected) in [
+        ("Word", "t", "a == a", [1, 1, 1, 1]),
+        ("Word", "t", "a == 5", [1, 0, 0, 0]),
+        ("Word", "t", "a != 5", [0, 1, 1, 1]),
+        ("Byte", "t as Byte", "a == a", [1; 4]),
+        ("Fixed", "t as Fixed", "a == a", [1; 4]),
+        ("bool", "true", "a == a", [1; 4]),
+        ("Float", "t as Float", "a == a", [1; 4]),
+        ("Float", "0.0 / 0.0", "a == a", [0; 4]),
+        ("Float", "-0.0", "a == 0.0", [1; 4]),
     ] {
         let source = format!(
             "loop child(a: {parameter}) -> Word {{ yield if {condition} {{ 1 }} else {{ 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
         );
-        let after_reset = i64::from(condition == "a == a" || condition == "a != 5");
-        let expected = [initial, after_reset, after_reset, after_reset];
-        let replies = [7; 4];
-        assert_eq!(
-            common::general_vm_sequence(&source, 5, &replies),
-            expected,
-            "{source}"
-        );
-        for optimize in [false, true] {
-            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        if parameter == "Word" {
+            assert_vm_and_native(&source, &expected);
+        } else {
+            assert_refused_as_a_mismatched_delegation(&source);
         }
     }
 }
 
+/// The parameter read Unit after the child's Reset until upstream 704, and the
+/// comparison trapped at its consumption. It now reads the reply.
 #[test]
-fn cleared_ordered_comparison_traps_at_consumption() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
-    let source = "loop child(a: Word) -> Word { yield if a > 0 { 1 } else { 0 } } loop main(t: Word) -> Word { child(t) }";
-    let program = common::build(source);
-    let arena = keleusma_arena::Arena::with_capacity(65536);
-    let mut vm = Vm::new(program, &arena).unwrap();
-    assert!(matches!(
-        vm.call(&[Value::Int(5)]).unwrap(),
-        VmState::Yielded(Value::Int(1))
-    ));
-    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
-    assert!(vm.resume(Value::Int(7)).is_err());
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "cleared_ordered_comparison_traps_at_consumption",
-        source,
-        &[5],
-        &[1],
-        &[7],
+fn an_ordered_comparison_reads_the_rebound_parameter() {
+    assert_vm_and_native(
+        "loop child(a: Word) -> Word { yield if a > 0 { 1 } else { 0 } } loop main(t: Word) -> Word { child(t) }",
+        &[1, 1, 1, 1],
     );
-}
-
-/// A child must first execute the correct prefix, then fault at the checked use.
-#[cfg(unix)]
-fn require_cleared_kind_trap(
-    test: &str,
-    source: &str,
-    arguments: &[i64],
-    prefix: &[i64],
-    replies: &[i64],
-) {
-    let program = common::build(source);
-    require_program_kind_trap(test, &program, None, arguments, prefix, replies, "default");
 }
 
 #[cfg(unix)]
@@ -3997,6 +3838,35 @@ fn assert_refused_for_its_resume_type(src: &str) {
     assert!(
         reference_admits(src).is_none(),
         "{src}: the reference admits a source that mixes a reply's type"
+    );
+}
+
+/// Require the reference and native code, unoptimized and optimized, to yield
+/// `expected` from first argument 5 with every reply 7.
+fn assert_vm_and_native(source: &str, expected: &[i64]) {
+    let replies = vec![7; expected.len()];
+    assert_eq!(
+        common::general_vm_sequence(source, 5, &replies),
+        expected,
+        "{source}"
+    );
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &replies, optimize), expected, "{source}");
+    }
+}
+
+/// Upstream 702 refuses a delegated callee whose yield type, or whose resume
+/// type for a `loop`, differs from the entry's. A refusal for any other reason
+/// fails, so a broken fixture cannot pass as this one.
+fn assert_refused_as_a_mismatched_delegation(src: &str) {
+    let ast =
+        keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+    let error = keleusma::compiler::compile(&ast).expect_err(src);
+    assert!(
+        error.message.starts_with("type error: the delegated `")
+            && (error.message.contains("` yields ") || error.message.contains("` resumes with ")),
+        "{src}: refused for another reason, {}",
+        error.message
     );
 }
 
@@ -4799,11 +4669,15 @@ fn per_site_dialogues_distinguish_yields_replies_and_completion() {
     use keleusma::vm::{Vm, VmState};
     use std::collections::BTreeMap;
     type Site = unsafe extern "C" fn(*mut u8) -> u64;
-    // A yield has its function's declared type since absorption 91, so the
-    // helper returns `bool` to yield one. The sites still differ, a Bool and
-    // two Words out, a Word, a Byte and a Float back.
-    let program = common::build(
+    // A yield has its function's declared type since absorption 91, and
+    // upstream 702 holds a delegated callee to the entry's yield type, so
+    // since absorption 129 the helper yields a Word where it yielded a Bool.
+    // The sites still differ in what comes back, a Word, a Byte and a Float.
+    assert_refused_as_a_mismatched_delegation(
         "yield helper(a: Word) -> bool { let r: Word = yield true; a + r > 9 } yield main(a: Word) -> Word { let b: Byte = yield a; let h = helper(a + (b as Word)); let n = if h { a + 9 } else { a }; let d: Float = yield n; n + (d as Word) }",
+    );
+    let program = common::build(
+        "yield helper(a: Word) -> Word { let r: Word = yield 1; if a + r > 9 { 1 } else { 0 } } yield main(a: Word) -> Word { let b: Byte = yield a; let h = helper(a + (b as Word)); let n = if h == 1 { a + 9 } else { a }; let d: Float = yield n; n + (d as Word) }",
     );
     let mut contracts = BTreeMap::new();
     let mut main_sites = Vec::new();
@@ -4819,7 +4693,7 @@ fn per_site_dialogues_distinguish_yields_replies_and_completion() {
             };
             let (yielded, reply) = if chunk.name == "helper" {
                 helper_site = Some(site);
-                (1, 3)
+                (3, 3)
             } else {
                 let first = main_sites.is_empty();
                 main_sites.push(site);
@@ -4843,7 +4717,7 @@ fn per_site_dialogues_distinguish_yields_replies_and_completion() {
     ));
     assert!(matches!(
         vm.resume(Value::Byte(2)).unwrap(),
-        VmState::Yielded(Value::Bool(true))
+        VmState::Yielded(Value::Int(1))
     ));
     assert!(matches!(
         vm.resume(Value::Int(7)).unwrap(),
@@ -4965,7 +4839,6 @@ fn explicit_flat_replies_survive_reuse_and_delegated_entry_completion() {
     use keleusma::vm::{Vm, VmState};
     use std::collections::BTreeMap;
     let pair = WireShape::Flat { kind: 0, size: 16 };
-    let triple = WireShape::Flat { kind: 0, size: 24 };
     let cases = [
         (
             "yield main(a: Word) -> Word { let keep = (a, a); for i in 0..2 { let replacement = yield keep.1; }; keep.0 }",
@@ -4974,16 +4847,6 @@ fn explicit_flat_replies_survive_reuse_and_delegated_entry_completion() {
             vec![vec![7, 8], vec![9, 10]],
             9,
             true,
-        ),
-        // The pair yields need a pair-returning function since absorption 91,
-        // so they move to a helper the Word-returning entry delegates to.
-        (
-            "yield helper(a: Word) -> (Word, Word) { let r: (Word, Word) = yield (a, a + 1); let s: (Word, Word, Word) = yield r; (r.0 + s.2 + a, s.0) } yield main(a: Word) -> Word { let p = helper(a); p.0 }",
-            vec![(pair, pair), (pair, triple)],
-            vec![vec![5, 6], vec![11, 12]],
-            vec![vec![11, 12], vec![31, 32, 33]],
-            49,
-            false,
         ),
         (
             "yield helper(a: Word) -> Word { let p: (Word, Word) = yield a + 1; p.0 + p.1 + a } yield main(a: Word) -> Word { helper(a) }",
@@ -4994,6 +4857,14 @@ fn explicit_flat_replies_survive_reuse_and_delegated_entry_completion() {
             false,
         ),
     ];
+    // A helper yielding pairs beneath this Word entry carried the pair yields
+    // from absorption 91. Upstream 702 refuses it, since a delegated callee
+    // must yield the entry's type, and a Word completion beside pair yields
+    // is not expressible. Pair yields from a delegate are driven by
+    // `native_snapshot_results_survive_calls_suspension_and_completion`.
+    assert_refused_as_a_mismatched_delegation(
+        "yield helper(a: Word) -> (Word, Word) { let r: (Word, Word) = yield (a, a + 1); let s: (Word, Word, Word) = yield r; (r.0 + s.2 + a, s.0) } yield main(a: Word) -> Word { let p = helper(a); p.0 }",
+    );
     for (source, shapes, outputs, replies, expected, reassign) in cases {
         let mut program = common::build(source);
         if reassign {
@@ -5810,17 +5681,21 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
     use keleusma::vm::{Vm, VmState};
     use std::collections::BTreeMap;
     for (delegated, external) in [(0, false), (1, false), (2, false), (1, true), (2, true)] {
-        // Scalar yields beside a pair completion need a Word-returning
-        // function since absorption 91, so `emit` yields and every other
-        // chunk delegates to it. The native results stay live across those
+        // Every chunk delegates its yields to `emit`. Upstream 702 holds a
+        // delegated callee to the entry's yield type, so `emit` yields the
+        // pair the entry completes with, where it yielded a Word until
+        // absorption 129. The native results stay live across those
         // suspensions as before.
         let source = if delegated == 2 {
-            "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } yield make(a: Word) -> (Word, Word) { let p: (Word, Word) = host::pair(a); let r = emit(p.0); p } yield main(a: Word) -> (Word, Word) { let keep = make(a); let later = make(a + 11); keep }"
+            "use host::pair\nyield emit(v: (Word, Word)) -> (Word, Word) { let r: Word = yield v; v } yield make(a: Word) -> (Word, Word) { let p: (Word, Word) = host::pair(a); let r = emit(p); p } yield main(a: Word) -> (Word, Word) { let keep = make(a); let later = make(a + 11); keep }"
         } else if delegated == 1 {
-            "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } fn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let keep = make(a); let r = emit(keep.0); let later = make(a + 10); let s = emit(later.1); keep }"
+            "use host::pair\nyield emit(v: (Word, Word)) -> (Word, Word) { let r: Word = yield v; v } fn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let keep = make(a); let r = emit(keep); let later = make(a + 10); let s = emit(later); keep }"
         } else {
-            "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } yield main(a: Word) -> (Word, Word) { let keep: (Word, Word) = host::pair(a); let r = emit(keep.0); let later: (Word, Word) = host::pair(a + 10); let s = emit(later.1); keep }"
+            "use host::pair\nyield emit(v: (Word, Word)) -> (Word, Word) { let r: Word = yield v; v } yield main(a: Word) -> (Word, Word) { let keep: (Word, Word) = host::pair(a); let r = emit(keep); let later: (Word, Word) = host::pair(a + 10); let s = emit(later); keep }"
         };
+        // The second yield is the later pair, built from `a + 11` in a yield
+        // function and from `a + 10` elsewhere.
+        let later = if delegated == 2 { [16, 17] } else { [15, 16] };
         let source = if external {
             source.replace("use host::pair", "use external host::pair")
         } else {
@@ -5840,7 +5715,7 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
                             instruction: ip as u32,
                         },
                         Dialogue {
-                            yielded: WireShape::Scalar { kind: 3 },
+                            yielded: WireShape::Flat { kind: 0, size: 16 },
                             reply: WireShape::Scalar { kind: 3 },
                         },
                     ))
@@ -5868,27 +5743,23 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
         } else {
             vm.register_fn("host::pair", |a: i64| (a, a + 1));
         }
-        assert!(matches!(
-            vm.call(&[Value::Int(5)]).unwrap(),
-            VmState::Yielded(Value::Int(5))
-        ));
-        assert!(matches!(
-            vm.resume(Value::Int(7)).unwrap(),
-            VmState::Yielded(Value::Int(16))
-        ));
-        let VmState::Finished(Value::Tuple(TupleBody::Flat(body))) =
-            vm.resume(Value::Int(0)).unwrap()
-        else {
-            panic!("expected completed pair")
+        let words = |state: VmState| {
+            let (VmState::Yielded(Value::Tuple(TupleBody::Flat(body)))
+            | VmState::Finished(Value::Tuple(TupleBody::Flat(body)))) = state
+            else {
+                panic!("expected a flat pair, found {state:?}")
+            };
+            body.resolve(&arena)
+                .unwrap()
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|bytes| i64::from_le_bytes(*bytes))
+                .collect::<Vec<_>>()
         };
-        let expected: Vec<_> = body
-            .resolve(&arena)
-            .unwrap()
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|bytes| i64::from_le_bytes(*bytes))
-            .collect();
+        assert_eq!(words(vm.call(&[Value::Int(5)]).unwrap()), [5, 6]);
+        assert_eq!(words(vm.resume(Value::Int(7)).unwrap()), later);
+        let expected = words(vm.resume(Value::Int(0)).unwrap());
         assert_eq!(expected, [5, 6]);
         for optimized in [false, true] {
             let context = Context::create();
@@ -5925,12 +5796,16 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
                     .unwrap();
                 for _ in 0..2 {
                     NATIVE_PAIR_CALLS.with(|calls| calls.set(0));
+                    let pair = |outcome: Outcome| {
+                        assert_eq!(outcome.live, 1);
+                        std::slice::from_raw_parts(outcome.value as *const i64, 2).to_vec()
+                    };
                     assert_eq!(
-                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
-                        Outcome { live: 1, value: 5 }
+                        pair(start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())),
+                        [5, 6]
                     );
                     NATIVE_PAIR_BUFFER.with(|buffer| *buffer.borrow_mut() = [99, 100]);
-                    assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 1, value: 16 });
+                    assert_eq!(pair(resume.call(slot.ptr(), 7)), later);
                     NATIVE_PAIR_BUFFER.with(|buffer| *buffer.borrow_mut() = [199, 200]);
                     let end = resume.call(slot.ptr(), 0);
                     assert_eq!(end.live, 2);
@@ -6236,10 +6111,11 @@ fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
     use keleusma::bytecode::{Op, WireShape};
     use std::collections::BTreeMap;
     use std::process::Command;
-    // The yield moved into `emit` at absorption 91, since a pair-returning
-    // entry can no longer yield a Word.
+    // The yield moved into `emit` at absorption 91. Upstream 702 holds a
+    // delegated callee to the entry's yield type, so since absorption 129
+    // `emit` yields the pair the entry completes with.
     let mut program = common::build(
-        "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } fn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let p = make(a); let r = emit(p.0); p }",
+        "use host::pair\nyield emit(v: (Word, Word)) -> (Word, Word) { let r: Word = yield v; v } fn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let p = make(a); let r = emit(p); p }",
     );
     program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
     let entry = program.entry_point.unwrap();
@@ -6260,7 +6136,7 @@ fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
         dialogues: Some(BTreeMap::from([(
             site,
             Dialogue {
-                yielded: WireShape::Scalar { kind: 3 },
+                yielded: WireShape::Flat { kind: 0, size: 16 },
                 reply: WireShape::Scalar { kind: 3 },
             },
         )])),
@@ -6306,10 +6182,12 @@ int main(void) {{
     struct guarded a, b;
     a.before = b.before = a.after = b.after = UINT64_C(0xa5a5a5a5a5a5a5a5);
     struct outcome first = kel_coroutine_{entry}_start(5, 0, 0, 0, a.slot);
-    assert(first.status == 1 && first.value == 5);
+    const int64_t *yielded = (const int64_t *)(uintptr_t)first.value;
+    assert(first.status == 1 && yielded[0] == 5 && yielded[1] == 6);
     assert(kel_coroutine_{entry}_yield_site(a.slot) == UINT64_C({site}));
     struct outcome second = kel_coroutine_{entry}_start(20, 0, 0, 0, b.slot);
-    assert(second.status == 1 && second.value == 20);
+    yielded = (const int64_t *)(uintptr_t)second.value;
+    assert(second.status == 1 && yielded[0] == 20 && yielded[1] == 21);
     transfer[0] = transfer[1] = 999;
     first = kel_coroutine_{entry}_resume(a.slot, 0);
     second = kel_coroutine_{entry}_resume(b.slot, 0);
@@ -6475,6 +6353,84 @@ fn host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks() {
                 ordinary.get_function("kel_yield").is_some(),
                 category == keleusma::bytecode::BlockType::Reentrant
             );
+        }
+    }
+}
+
+/// Upstream 704 rebinds the innermost stream frame's parameter at every resume,
+/// so a delegated `loop` reads the reply after its `Reset` as `loop main` does.
+/// The cases and sequences are those of `tests/delegated_loop_reset.rs`, which
+/// V0.2.X pinned in sequence 223. Native code must produce each one, and the
+/// reference is checked beside it so a later change on either side is caught
+/// here.
+#[test]
+fn delegated_loop_resets_rebind_the_innermost_parameter_like_the_vm() {
+    const PRIVATE: &str = "private data st { saved: (Word, Word) }";
+    let delegated = |decls: &str, kind: &str, body: &str| {
+        format!(
+            "{decls} {kind} child(a: Word) -> Word {{ {body} }} loop main(t: Word) -> Word {{ child(t) }}"
+        )
+    };
+    let mut cases = Vec::new();
+    for (decls, body, expected) in [
+        ("", "let s = (a, 17); yield s.1", vec![17; 6]),
+        ("", "let s = (a, 17); yield s.0", vec![5, 7, 7, 7, 7, 7]),
+        (
+            PRIVATE,
+            "st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.1; yield now.1",
+            vec![29, 17, 29, 17, 29, 17],
+        ),
+        (
+            PRIVATE,
+            "st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.0; yield old.1; yield now.0",
+            vec![5, 29, 5, 5, 29, 7, 5, 29, 7],
+        ),
+        (
+            PRIVATE,
+            "st.saved = (a, 17); st.saved = st.saved; yield st.saved.0",
+            vec![5, 7, 7, 7, 7, 7],
+        ),
+        ("", "yield a; yield a", vec![5, 7, 7, 7, 7, 7]),
+        (
+            "",
+            "let b = yield a; yield b + 100",
+            vec![5, 107, 7, 107, 7, 107],
+        ),
+        (
+            PRIVATE,
+            "let s = (a, 17); st.saved = (s.1, a); yield s.0; yield st.saved.1",
+            vec![5, 5, 7, 7, 7, 7],
+        ),
+        (
+            "yield helper(x: Word) -> Word { yield x + 1 }",
+            "helper(a)",
+            vec![6, 8, 8, 8],
+        ),
+    ] {
+        cases.push((delegated(decls, "loop", body), expected.clone()));
+        cases.push((
+            format!("{decls} loop main(a: Word) -> Word {{ {body} }}"),
+            expected,
+        ));
+    }
+    cases.push((
+        "loop leaf(c: Word) -> Word { let s = (c, 3); yield s.0 + s.1 } loop mid(b: Word) -> Word { leaf(b + 100) } loop main(t: Word) -> Word { mid(t) }".into(),
+        vec![108, 10, 10, 10, 10],
+    ));
+    // A `yield` callee's parameter is an argument, which no resume rebinds.
+    cases.push((
+        delegated("", "yield", "yield a; yield a"),
+        vec![5, 5, 7, 7, 7, 7],
+    ));
+    for (source, expected) in cases {
+        let replies = vec![7; expected.len()];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
         }
     }
 }

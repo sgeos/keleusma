@@ -4222,7 +4222,23 @@ fn lower_chunk_body<'ctx>(
             site_metadata,
         ))
     } else if retcon_delegate {
-        Some(func.get_last_param().unwrap().into_pointer_value())
+        let inherited = func.get_last_param().unwrap().into_pointer_value();
+        Some(if retcon_stream && chunk.param_count > 0 {
+            let flags = runtime_kinds.as_ref().unwrap();
+            let owned = match &ownership {
+                Some(flags) => flags.locals[0],
+                None => b.build_alloca(i64t, "loop_parameter_owned").unwrap(),
+            };
+            coroutine::rebind_delegate_parameter(
+                ctx,
+                &b,
+                inherited,
+                locals[0],
+                [owned, flags.locals[0], flags.local_sizes[0]],
+            )
+        } else {
+            inherited
+        })
     } else {
         None
     };
@@ -9321,10 +9337,15 @@ fn lower_chunk_body<'ctx>(
                 for l in &st.locals {
                     st.b.build_store(*l, i64t.const_zero()).unwrap();
                 }
-                // A nested Stream does not receive the host reply in its own
-                // parameter slot. Only the entry restores the latest reply.
-                if retcon && chunk.param_count > 0 {
-                    let latest = retcon_latest.as_ref().unwrap();
+                // The resume after a Reset writes the parameter of the
+                // innermost stream frame, so a delegated `loop` restores the
+                // latest reply into its own parameter as the entry does. Until
+                // upstream 704 the reference wrote the entry's slot instead,
+                // and the delegated parameter read Unit after its first Reset.
+                let inherited = (retcon_delegate && chunk.param_count > 0)
+                    .then(|| coroutine::inherited_latest(ctx, &st.b, delegate_context.unwrap()));
+                if chunk.param_count > 0 && (retcon || inherited.is_some()) {
+                    let latest = inherited.as_ref().or(retcon_latest.as_ref()).unwrap();
                     let reply = coroutine::ownership::load(&st.b, latest.value);
                     let owned = coroutine::ownership::load(&st.b, latest.owned);
                     let kind = coroutine::ownership::load(&st.b, latest.kind);

@@ -855,6 +855,71 @@ pub(crate) fn delegate_context<'ctx>(
     context
 }
 
+/// A delegated `loop` is the innermost stream frame while its body runs, so a
+/// resume rebinds its parameter and not the entry's, as `Vm::resume_after_enter`
+/// does since upstream 704. Its own yields and the delegates it calls receive a
+/// copy of the inherited context whose parameter destinations are this loop's
+/// slot and flags. The latest-reply fields are kept, so its `Reset` can restore
+/// the parameter from them.
+pub(crate) fn rebind_delegate_parameter<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    inherited: PointerValue<'ctx>,
+    parameter: PointerValue<'ctx>,
+    metadata: [PointerValue<'ctx>; 3],
+) -> PointerValue<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let context = builder.build_alloca(ty, "loop_delegate_context").unwrap();
+    for index in 0..10 {
+        let value = match index {
+            1 => parameter,
+            3 => metadata[0],
+            5 => metadata[1],
+            6 => metadata[2],
+            _ => {
+                let field = builder
+                    .build_struct_gep(ty, inherited, index, "inherited_field")
+                    .unwrap();
+                builder
+                    .build_load(ptr, field, "inherited")
+                    .unwrap()
+                    .into_pointer_value()
+            }
+        };
+        let field = builder
+            .build_struct_gep(ty, context, index, "context_field")
+            .unwrap();
+        builder.build_store(field, value).unwrap();
+    }
+    context
+}
+
+/// The entry's latest-reply state, read through a delegate's context.
+pub(crate) fn inherited_latest<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    context: PointerValue<'ctx>,
+) -> ReplyState<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let load = |index| {
+        let field = builder
+            .build_struct_gep(ty, context, index, "latest_field")
+            .unwrap();
+        builder
+            .build_load(ptr, field, "latest")
+            .unwrap()
+            .into_pointer_value()
+    };
+    ReplyState {
+        value: load(2),
+        owned: load(7),
+        kind: load(8),
+        bytes: load(9),
+    }
+}
+
 pub(crate) fn mark_delegate(ctx: &Context, function: FunctionValue<'_>) {
     function.set_linkage(inkwell::module::Linkage::Internal);
     function.add_attribute(
