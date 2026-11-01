@@ -420,6 +420,9 @@ inside it, one directory at a time, when nothing is building there.
   `rm` likewise keeps a folder whose name a live tree still uses.
 - **The path-scoped `pkill` pattern still matches.** nextest runs test binaries by
   their path in the tree, through the link, as observed on 2026-10-31.
+- **The gate builds there too.** With `SCRATCH_BASE` set, `gate-in-worktree.sh`
+  defaults its `CARGO_TARGET_DIR` to `$SCRATCH_BASE/keleusma/.gate-target`, a plain
+  directory rather than a link. `KEL_GATE_TARGET` still overrides it.
 - **`scratch.sh` is vendored unchanged** from `sgeos/project-template` v1.0.8, so
   that it can be compared with the template's copy. Change it there first.
 

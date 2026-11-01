@@ -218,3 +218,17 @@ and in `PARALLEL_DEVELOPMENT.md` instead, and `scripts/scratch.sh` is unchanged.
 same leaf elsewhere, such as this line's tree under `.worktrees/`. `rm` now keeps a
 folder that any current worktree's name still uses, and a test covers it. The data volume went from 698 GiB
 used with 85 GiB available to 690 GiB used with 93 GiB available.
+
+## The gate's build output, 2026-11-01
+
+The administrator session's survey of 2026-10-31 found four gate target directories
+under `../keleusma-worktrees/`, `.gate-target`, `.gate-target-native`,
+`.gate-target-wire` and `wire-corpus/.gate-target-wire`, 19.4 GB last written on 9 and
+10 August 2026. This line confirmed the sizes and dates and found that nothing current
+names them, the first being only the default of `KEL_GATE_TARGET` in
+`scripts/gate-in-worktree.sh`. The operator decided to delete them and to have the gate
+default to the scratch volume. This line deleted the four at 00:36 UTC on 2026-11-01.
+The data volume went from 652 GiB used with 106 GiB available to 633 GiB used with 124
+GiB available. With `SCRATCH_BASE` set, the gate's default target is now
+`$SCRATCH_BASE/keleusma/.gate-target`, and `scripts/test_gate_target_scratch.py` covers
+the default, the override and the refusal of an unusable `SCRATCH_BASE`.
