@@ -80,9 +80,8 @@ run.
   target` after any `cargo clean`. PR 697 made `worktree.sh` link and remove build
   output, the notices went out in sequences 213 to 215, and PR 703 moved the gate's
   output there. The redacted checkpoint merged in PR 698.
-- **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
-  so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
-  Applying it is the operator's decision.
+- **Idle compaction.** The operator set `idleCompaction` to false on 2026-11-01, D2.
+  See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
   at most. The blog's Pages build holds one shared runner for most of a busy day, by
   the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
@@ -114,11 +113,10 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
    shard evidence current until D1 is ruled.
-2. `worktree.sh list` now reports agent trees' unlinked output. If D5 is (a), write
-   and test the `WorktreeCreate` and `WorktreeRemove` hook scripts for the operator to
-   apply.
-3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
-   about two weeks later and compare with the trial report.
+2. Confirm that the D5 `build-dir` file takes effect on the next agent tree that
+   builds, by its size in `worktree.sh list` and a folder under scratch `agents/`.
+3. `idleCompaction` is false from 05:42 UTC on 2026-11-01. Run `context_quality.py`
+   again on about 2026-11-15 and compare with the trial report.
 4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
 5. Finish the three selection tasks, record their outcomes, and read the comparison.
@@ -127,11 +125,14 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record the
-operator's ruling of that day. D1 keeps the pinned lists. D2 waits on the operator
-adding `"idleCompaction": false` to the global settings. D3 closed K13. D4 (a) broke
-the language client and was abandoned, so Dependabot alert 6 stays open. D5, a
-worktree hook, is new. The K-series checks K6, K9, K10 and K11 remain, and K14 is held.
+[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record three
+rulings of that day. D4 stays open until upstream ships a `vscode-languageclient` that
+takes `minimatch` 11. The operator creates the D5 (c) `build-dir` file. Release signing
+is adopted from the first release after the operator makes a key. The operator decides
+whether V0.2.X removes the merged agent tree, whether V0.3.X's archive folder moves,
+and whether the main checkout's `target` is linked. The K-series checks K6, K9, K10 and
+K11 remain, and K14 is held. Merges into `v0.2.3` hold until V0.2.X reports that PR 707
+merged, by sequences 233 and 234.
 
 ## Concerns
 
