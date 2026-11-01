@@ -63,11 +63,14 @@ from the tagged commit. Deleting it is the operator's decision.
 
 **Another finding.** The copy sits under `keleusma-worktrees/`, not `keleusma/`. The
 current `scratch.sh` names the repository folder after the main checkout and would have
-used `/Volumes/Scratch/keleusma/kaizen-test-duration`. The copy was moved at 13:57 PDT on
-2026-10-30, and the template commit that added `scratch.sh`, `f397f03`, is dated 14:52
-the same day. **Inference.** An earlier version of the trial named the folder after the
-worktree's parent directory. The template's `rm` cleanup would not have found this copy
-either, so the sweep proposed below is needed in any case.
+used `/Volumes/Scratch/keleusma/kaizen-test-duration`. The template's `rm` cleanup would
+not have found this copy either, so the sweep proposed below is needed in any case.
+
+**Correction, 2026-10-31.** This report first inferred that an earlier version of the
+script had named the folder after the worktree's parent directory. The operator
+corrected the record. The administrator session moved the copy by hand during the
+trial of 30 October and named the folder after the parent directory. No version of the
+script did that.
 
 ## 3. Proposal
 
@@ -187,3 +190,45 @@ The operator decides whether to adopt the proposal and whether to delete the orp
 copy and this line's temporary target directories. When the proposal is approved, the
 kaizen line makes the change on its own branch and then sends notices to the other
 lines.
+
+## Operator decisions, 2026-10-31
+
+The operator's decisions reached this line in the session on 2026-10-31. The proposal
+is approved as written, to be implemented in its own pull request for the operator to
+merge, with notices to the other lines after it. The vendored script is to stay easy to
+compare with the template's, because the administrator session will propose matching
+fixes in `sgeos/project-template`. Deleting this line's old temporary target
+directories is approved. The administrator session deletes the orphaned copy itself.
+
+**The deletion.** At 22:03 UTC this line deleted seven folders under its sandbox
+temporary directory, `kaizen-fuzz-target`, `kaizen-guard-target`, `kaizen-main-target`,
+`kaizen-merge-target`, `kaizen-nodef-target`, `kaizen-target` and `kel-target-kaizen`,
+8.0 GB in all. Their dependency files named this line's worktrees or carried its name.
+Three folders there were kept. `target`, 535 MB, was built from another project, and
+`arch-target`, 1.1 MB, and `kel-target-o1`, empty, show no sign of being this line's.
+The 8.5 GB figure of section 1 had counted all ten.
+
+**One departure from the proposal.** Section 3 said to record the vendored script's
+source and version in its own header. To keep it byte-identical to the template's copy,
+as the operator asked, the implementation records them in the header of `worktree.sh`
+and in `PARALLEL_DEVELOPMENT.md` instead, and `scripts/scratch.sh` is unchanged.
+
+**One addition.** Review of the implementation found that `rm` of a tree missing from
+`../keleusma-worktrees/` would have deleted the scratch folder of a live tree with the
+same leaf elsewhere, such as this line's tree under `.worktrees/`. `rm` now keeps a
+folder that any current worktree's name still uses, and a test covers it. The data volume went from 698 GiB
+used with 85 GiB available to 690 GiB used with 93 GiB available.
+
+## The gate's build output, 2026-11-01
+
+The administrator session's survey of 2026-10-31 found four gate target directories
+under `../keleusma-worktrees/`, `.gate-target`, `.gate-target-native`,
+`.gate-target-wire` and `wire-corpus/.gate-target-wire`, 19.4 GB last written on 9 and
+10 August 2026. This line confirmed the sizes and dates and found that nothing current
+names them, the first being only the default of `KEL_GATE_TARGET` in
+`scripts/gate-in-worktree.sh`. The operator decided to delete them and to have the gate
+default to the scratch volume. This line deleted the four at 00:36 UTC on 2026-11-01.
+The data volume went from 652 GiB used with 106 GiB available to 633 GiB used with 124
+GiB available. With `SCRATCH_BASE` set, the gate's default target is now
+`$SCRATCH_BASE/keleusma/.gate-target`, and `scripts/test_gate_target_scratch.py` covers
+the default, the override and the refusal of an unusable `SCRATCH_BASE`.

@@ -353,6 +353,8 @@ match classify(value) {
 
 A function call and a `match` block are the valid pipeline targets. The pipeline operator is left-associative with lower precedence than all other operators.
 
+A pipeline target name resolves exactly as the name of the call it stands for. A local binding of the same name, whether a `let`, a parameter, a `match` binding or a loop variable, shadows the function or native, and since no local is callable, both the pipe and the call are rejected while it is in scope. The category-call discipline and the yield contract apply to a pipe as to a call.
+
 ### Yield Expressions
 
 The `yield` expression suspends the coroutine, sends a value to the host, and evaluates to the next input received from the host when the coroutine is resumed.
@@ -600,6 +602,8 @@ Only one `loop` function may exist per script, and it serves as the coroutine en
 ### 6.4 Yield Contract
 
 The yield contract of a `loop` or `yield` function is defined by its parameter type (input from host) and return type (output to host). When a `yield` function is called from a `loop` or another `yield` function, the contracts must match. This allows yield expressions in the callee to transparently propagate to the host.
+
+The type checker enforces the contract against the entry `main` at every call or pipe into a `yield` or `loop` function. The callee's return type, instantiated at the call, must be the entry's return type, since the host receives each value the callee yields as the entry's output. A `loop` callee that declares a first parameter declares a resume type, and that type must be the entry's first parameter type. Every `yield` expression in a delegated callee already has the entry's resume type, so a `yield` callee's parameters are ordinary arguments. A delegation that breaks the contract is refused at compile time.
 
 ````
 // Both share the yield contract: AudioCommand -> AudioAction

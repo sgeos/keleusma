@@ -398,6 +398,37 @@ defaults to `v0.2.3` and is overridable with `KEL_TRUNK`. Branch names follow th
 [`GIT_STRATEGY.md`](./GIT_STRATEGY.md) scope convention (`feat/`, `fix/`, `docs/`,
 `refactor/`, `test/`, `chore/`).
 
+### Build output on a scratch volume
+
+A machine may keep build output on a separate volume, so that it fills that volume
+instead of the system disk. When `SCRATCH_BASE` names the volume, `worktree.sh new`
+moves the `target` of every package present in the new tree, the root's and the
+nested ones listed in the script, to `$SCRATCH_BASE/keleusma/<leaf>/` through
+[`scripts/scratch.sh`](../../scripts/scratch.sh) and leaves symbolic links. `rm`
+deletes that folder once the tree is gone, and `list` reports any folder no tree
+uses, deleting none, because the operator decides deletions. Without `SCRATCH_BASE`
+nothing changes. An existing tree is moved with `scripts/scratch.sh link` from
+inside it, one directory at a time, when nothing is building there.
+
+- **A clean deletes the link.** `cargo clean` removes the link, not the copy, and the
+  next build makes a real `target` in the tree. Run `scripts/scratch.sh link` after a
+  clean and before building. If a build has already recreated it, `link` refuses,
+  and the stale copy on scratch must be deleted first.
+- **`new` refuses a leaf that is already in use** on scratch or by another worktree,
+  because the new tree would otherwise build into that tree's output. Trees under
+  `.worktrees/` and under `../keleusma-worktrees/` share one namespace on scratch, so
+  `rm` likewise keeps a folder whose name a live tree still uses.
+- **The path-scoped `pkill` pattern still matches.** nextest runs test binaries by
+  their path in the tree, through the link, as observed on 2026-10-31.
+- **The gate builds there too.** With `SCRATCH_BASE` set, `gate-in-worktree.sh`
+  defaults its `CARGO_TARGET_DIR` to `$SCRATCH_BASE/keleusma/.gate-target`, a plain
+  directory rather than a link. `KEL_GATE_TARGET` still overrides it.
+- **`scratch.sh` is vendored unchanged** from `sgeos/project-template` v1.0.8, so
+  that it can be compared with the template's copy. Change it there first.
+
+The operator approved this on 2026-10-31. See
+[the proposal](./kaizen/2026-10-31-scratch-volume-proposal.md).
+
 When spawning agents from within a Claude Code session instead of separate
 terminals, the `Agent` tool's `isolation: "worktree"` option provides the same
 isolation automatically for agents that mutate files.
