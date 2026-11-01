@@ -1,0 +1,75 @@
+COMPLETION CONDITION — absorption 16 and the Len blocker recheck
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The branch contains the v0.2.3 work adding a citation guard over process
+   documents, with nothing from that line left unabsorbed.
+
+2. Every census and gate figure quoted as current was re-derived against the
+   present tree after the last change capable of moving it, and where a
+   prediction was recorded in advance the outcome is reported against it whether
+   or not it was right.
+
+3. The tree records whether the bound extractor admits a for-in whose source has
+   no statically known length when a limit clause supplies the cap, and the
+   answer rests on running the compiler rather than on reading the grammar.
+
+4. Whatever that answer is, the verdict names which stage produced it. "Refused"
+   without saying whether parsing, type checking, verification or the resource
+   bound rejected it is not a result.
+
+5. Any program used to reach that verdict is shown to emit the length opcode
+   before its admission verdict is read. A probe that never reaches the opcode
+   settles nothing downstream.
+
+6. If the blocker is found to have expired, the existing structural argument is
+   left standing with the new finding beside it and what changed stated. It is
+   not deleted, and it is not described as having been wrong when written.
+
+7. If the blocker is found still to hold, that is recorded as a checked result
+   rather than an assumption carried forward, and the specific mechanism that
+   was tested against it is named.
+
+8. Nothing in the backend began lowering the length opcode as part of this
+   increment.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+12. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- The blocker expiring. A blocker confirmed still real after a specific attack is
+  a result, and a more informative one than a fifth expiry would have been.
+- Lowering the length opcode, even if it becomes admissible.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Concluding the blocker expired because four others did.
+- Concluding it holds because the argument reads well, without testing the
+  mechanism that could have invalidated it.
+- Testing a limit clause on a range and reporting it as an answer about a source
+  with no static length.
+- Reading an admission verdict from a program never shown to emit the opcode.
+- A suite result read from a pipeline's exit status rather than the command's.

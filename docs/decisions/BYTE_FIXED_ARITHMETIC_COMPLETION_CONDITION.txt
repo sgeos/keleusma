@@ -1,0 +1,48 @@
+COMPLETION CONDITION — Byte and Fixed arithmetic lowering
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The tree records, from measurement rather than assertion, which surface types
+   cause each of the generic arithmetic opcodes to be emitted, including the
+   correction that two earlier records disagreed and each was incomplete.
+
+2. The backend's float guard is either extended to close routes beyond a chunk
+   signature by which a float value can enter a module, or the tree states
+   explicitly which routes remain unchecked. A guard is not described as total
+   unless each route it claims to close is named and tested.
+
+3. If the generic arithmetic opcodes are lowered for the non-float types, then:
+   a. a test shows the lowered code AGREES WITH THE VIRTUAL MACHINE on executed
+      programs, not merely that the module was accepted;
+   b. the byte-width result is shown to be truncated to eight bits, and the
+      wider fixed-point result is shown NOT to be truncated;
+   c. a recorded mutation demonstrates the truncation is exercised: the
+      transcript states what was changed, that it failed or changed a result,
+      and that the revert was verified rather than assumed.
+
+4. A module carrying a float remains refused. No change makes a float value
+   lower as an integer operation.
+
+5. If the guard cannot be shown to close the routes it needs to, nothing is
+   lowered and the tree says why. Refusing correctly is an acceptable and
+   complete outcome for this condition.
+
+6. Any opcode-support figure stated anywhere in the tree matches what the
+   measurement now reports, and no figure is carried forward unmeasured.
+
+7. The resume document for this line no longer describes as blocked on an
+   operator decision anything the measurement shows is not, and states what the
+   operator decision genuinely still governs.
+
+8. The files recorded as read-only for this line are unmodified: the virtual
+   machine, the bytecode verifier, the bytecode definitions, the self-hosted
+   compiler sources, and the continuous-integration workflows.
+
+9. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken from
+   something other than a truncated or piped view of the output.
+
+10. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

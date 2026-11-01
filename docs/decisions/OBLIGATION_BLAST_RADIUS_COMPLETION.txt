@@ -1,0 +1,54 @@
+COMPLETION CONDITION — the obligation's blast radius and its decision
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE BLAST RADIUS IS MEASURED, NOT ESTIMATED
+   An executable check reports which corpus modules the soundness refusal would
+   reject once the refusal that currently shadows it no longer applies, and
+   whether corpus coverage would fall as a result. The answer comes from running
+   something over real modules rather than from reasoning about which shapes
+   exist.
+
+2. NOTHING IN THE BACKEND IS WEAKENED TO MEASURE IT
+   Any simulation of the future state is done by mutating compiled bytecode
+   inside a test. No guard or refusal in the lowering is relaxed.
+
+3. THE OBLIGATION'S STATE IS AVAILABLE IN ONE PLACE
+   The tree contains a single account of the obligation covering what is
+   guarded, what is measured, what remains open, and the options with their
+   costs, so that the decision does not require reassembling it from many
+   entries.
+
+4. THE ACCOUNT DISTINGUISHES RE-DERIVED FROM CARRIED
+   Anything in that account not re-measured for it is marked as carried, so a
+   reader can tell which figures were checked.
+
+5. NO DISPOSITION IS RECOMMENDED BEYOND THE EVIDENCE
+   Options are laid out with their costs. Where a cost is unbounded or unknown,
+   that is stated rather than smoothed into a preference, and the obligation is
+   not described as discharged.
+
+6. ANY CHECK ADDED CAN FAIL
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively, and no guard's conclusion is
+   made automatic by its own precondition.
+
+7. FIGURES CARRY THEIR POPULATION AND ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed, and every figure names the set it was measured over.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's state
+   is recorded, either from a run or with a stated reason why the change could
+   not affect it.
+
+9. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree says
+   why not. Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs,
+   and the CI workflow directory.

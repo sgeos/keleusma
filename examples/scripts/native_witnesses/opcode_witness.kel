@@ -1,0 +1,136 @@
+// A small mixed-arithmetic routine, written to EXERCISE OPCODES the rest of
+// the corpus never emits.
+//
+// The purpose is coverage and the file says so rather than pretending to be an
+// application. Every other corpus program is a real example; this one exists
+// because "100% of corpus opcode instances lower" was a statement about the
+// corpus and not about the instruction set, and sixteen of the sixty-six
+// opcodes had no witness anywhere.
+//
+// WHAT IT WITNESSES, each verified by compiling and reading the emitted
+// opcodes rather than by reasoning about what a construct should emit:
+//
+//   Byte arithmetic  -> Add, Sub, Mul, Neg   (Word operands take the Checked
+//                                             forms; Byte and Float take these)
+//   (Float conversion moved to `float_witness.kel` -- see below)
+//   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
+//   (external native moved to `external_native_witness.kel` -- the harness
+//    registers host::tick as VERIFIED, so a module calling it as external
+//    cannot be EXECUTED here at all, which held this file out of the
+//    comparison for a reason unrelated to the backend)
+//   2-level index    -> BoundsCheck          (a single level emits none)
+//   checked `/` `%`  -> CheckedDiv, CheckedMod  (a BARE `/` emits `Div`)
+//   for-in over `if` -> Len                   (an `if` EXPRESSION as the source
+//                                              defeats the static-length guard)
+//
+// Divisors are constants so no argument vector can make this fault: the
+// differential drives it with twenty-four of them.
+//
+// THE NATIVE BACKEND CURRENTLY REFUSES THIS FILE, AND THAT IS THE POINT.
+// Re-measured 2026-08-20 with `module_refusals`, which reports FOUR:
+//
+//   fixed_mix         UnsupportedOp("FixedDiv(16)")
+//   len_witness       UnsupportedOp("Len")
+//   is_struct_witness UnsupportedOp("IsStruct")
+//
+// `byte_mix` NO LONGER REFUSES: `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::Neg`
+// now lower for a matched Byte pair. `float_round_trip` MOVED OUT entirely, to
+// `float_witness.kel` -- its single float constant was refusing this whole
+// module and taking four unrelated opcodes' witnesses with it.
+//
+// TWO OF THOSE ROWS MOVED SINCE THIS FILE WAS WRITTEN, in both directions, which
+// is why the set is re-measured rather than carried forward. `fixed_mix` used to
+// refuse on `WordToFixed(16)`; that opcode now lowers, so the chunk gets further
+// and stops on the NEXT unsupported one. And `len_witness` is new here — adding
+// a witness for `Op::Len` immediately produced a fourth demonstrated refusal.
+//
+// A refusal names only the FIRST unsupported opcode in its chunk, so this list
+// is a floor on the remaining work and not a count of it. `backend_support_census`
+// exists because reading an earlier version of this list as a count reported
+// three when the true figure was ten.
+//
+// Before this file the corpus produced ZERO backend refusals, and that figure
+// was read as "everything lowers". It measured the corpus. The three refusals
+// above are the first concrete, demonstrated items of remaining Workstream A
+// scope, and they exist because a program finally emits the opcodes.
+//
+// So this file is EXPECTED to sit in the differential's exempt set under
+// "the backend refuses it" until those opcodes are lowered. Do not delete it
+// to restore a zero: the zero was the thing that was wrong.
+//
+// WITNESSES: Add, Sub, Mul, Neg, BoundsCheck, CheckedDiv, CheckedMod
+//
+// THE LINE ABOVE IS A MACHINE-CHECKED CLAIM, not a comment.
+// `witness_integrity.rs` compiles this file and asserts every opcode named
+// there is actually emitted. A witness that silently STOPS witnessing --
+// because the reference compiler folded the construct away, or because a
+// function moved to another file -- would otherwise drop a census figure
+// with nothing going red.
+//
+// That is not hypothetical: the `Op::IsStruct` construct was repaired out of
+// existence by the `v0.2.3` line one hour after this corpus adopted it.
+
+shared data grid {
+  cells: [[Word; 4]; 4],
+}
+
+// A MULTI-LEVEL indexed access. A single-level one folds its check into
+// `GetDataIndexed`'s own twenty-four-bit operand and emits no `BoundsCheck`;
+// only a per-level access emits the sixteen-bit form.
+fn grid_at(i: Word, j: Word) -> Word {
+  grid.cells[i][j]
+}
+
+fn byte_mix(a: Byte, b: Byte) -> Byte {
+  let sum = a + b;
+  let diff = a - b;
+  let prod = diff * b;
+  let neg = -prod;
+  sum + neg
+}
+
+// THE CHECKED-ARITHMETIC FORM. A bare `a / b` emits `Div`; only the form with
+// a `zero_divisor` arm emits `CheckedDiv`. `%` admits `zero_divisor` only, while
+// `/` also admits an `overflow` arm for the `i64::MIN / -1` corner.
+//
+// Found by the `v0.2.3` line after eight construct attempts here failed.
+//
+// WHY IT WAS HARD TO FIND: I was searching for an unusual TYPE when the answer
+// was an unusual FORM. I never questioned that `a / b` was the whole division
+// surface, so no amount of probing operand types could have reached it.
+//
+// A `CHANGELOG.md` defect sits nearby but is NOT the reason, and the first
+// account of it given to me was wrong in both directions. Verified here: lines
+// 561 and 571 are BOTH under `## [0.2.0]` (line 497, next header 645), so it is
+// one release section asserting both that the emission path "drops the
+// stamped-zero-flag fallback in favour of the new opcodes" AND that "division
+// and modulo continue to use the stamped-zero-flag pattern". Not staleness
+// across releases -- a self-contradiction within one. And 561 precedes 571, so a
+// top-down reader meets the CORRECT claim first and the wrong one last.
+//
+// NOT a defect, checked before anyone "fixes" it: 561 also says the construct
+// does not catch division by zero. That was true for 0.2.0. `zero_divisor`
+// arrives in 0.2.1 (line 461), so that sentence is correctly historical.
+fn checked_ratio(a: Word, b: Word) -> Word {
+  let q = a / b {
+    ok(v) => v,
+    zero_divisor(n) => 0,
+  };
+  let r = a % b {
+    ok(v) => v,
+    zero_divisor(n) => 0,
+  };
+  q + r
+}
+
+fn main(seed: Word) -> Word {
+  // **DRIVEN BY THE ARGUMENT, NOT BY LITERALS.** An executable module whose
+  // arithmetic is fed constants gives twenty-four comparisons of one value
+  // against itself, which this line has already recorded as inflating an
+  // agreement count. The differential supplies a varying `seed`, so the byte
+  // operands vary with it and the mask is exercised across the wrap.
+  let b = byte_mix(seed as Byte, (seed + 200) as Byte);
+  let g = grid_at(1, 2);
+  let c = checked_ratio(seed, 3);
+  (b as Word) + g + c
+}

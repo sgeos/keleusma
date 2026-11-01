@@ -1,0 +1,40 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE HANDOFF DESCRIBES THE TREE
+- Its newest session block covers the work most recently landed, including the
+  absorption, the arena measurements, the outgoing disclosure, and the optimiser
+  work.
+- Its state-table figures agree with the tree and its figure guard passes.
+- It does not gain an additional section claiming to be the place to resume; the
+  newest block is identifiable without ambiguity.
+
+2. VALIDITY IS RUNNABLE AND RUN
+- The handoff's ancestry block includes an anchor for this session's work, and
+  every anchor in it is an ancestor of the branch head when run.
+- The result of running it is stated, with the anchor count derived from the
+  block rather than quoted from prose.
+
+3. WHAT IS UNFINISHED IS VISIBLE
+- The tree names, in one place a resuming reader will reach, what remains open
+  and who it depends on: the reports outstanding with the other line, the
+  question outstanding with the operator, and any measurement deliberately
+  declined together with its recorded reasoning.
+- Nothing is described as complete that is blocked, and nothing is described as
+  blocked that this line could finish alone.
+
+4. CLAIMS MATCH THE TREE
+- No commit message or document asserts a change the tree does not contain.
+- Any guard whose pinned figure changed has the change explained.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any test that does not pass is recorded as a finding rather than deleted,
+  skipped, or weakened.
+
+6. TREE STATE
+- The working tree is clean and the branch's commits are on origin.

@@ -1,0 +1,116 @@
+# The LLVM native code generator (V0.3.x Workstream A).
+#
+# Standalone package with a detached [workspace] (like compiler/ and
+# examples/rtos): it is NOT a member of the parent workspace, so the parent's
+# `cargo test --workspace` never builds it and the released keleusma tarball
+# never carries it. That detachment is load-bearing here for a reason the other
+# detached packages do not have: this package requires an LLVM development
+# install. As a workspace member it would make LLVM a hard build dependency of
+# the whole repository, for everyone, including CI.
+#
+# It depends on the parent keleusma runtime by path. For now it consumes the
+# Rust reference compiler's in-memory `Module` (operator decision, 2026-08-08);
+# reading serialized artefacts through `keleusma::wire_schema` comes later.
+[package]
+name = "keleusma-native"
+version = "0.3.0-dev"
+edition = "2024"
+# **TESTED, NOT ASSUMED.** The root pins `rust-version = "1.88"`; this package is a
+# detached workspace root and so inherited no such pin, and neither do `compiler/` or
+# `examples/rtos/` — reported below rather than changed, since they are not this line's.
+#
+# Verified 2026-09-27 before writing the number: `cargo +1.88 check --all-targets` in a
+# fresh target directory, 25 crates compiled from scratch, exit 0, no errors, and 196
+# `.rmeta` artifacts including ones for individual test targets — so the TEST targets were
+# checked too, not just the library. The 14.5s runtime looked too fast to trust, which is
+# why the artifacts were counted rather than the exit status believed.
+#
+# Native continuous integration uses stable Rust, not this minimum version.
+# This package is `publish = false`. The pin turns a confusing failure on an older
+# toolchain into a clear one; it does not establish ongoing minimum-version coverage.
+rust-version = "1.88"
+publish = false
+description = "LLVM native code generation for verified Keleusma bytecode (V0.3.x)."
+license = "0BSD"
+
+# Detached from the parent workspace.
+[workspace]
+
+# **DETACHED MEANS THIS PACKAGE INHERITS NO PROFILE, INCLUDING THE ONE THE ROOT CHOSE
+# DELIBERATELY.** The root `Cargo.toml` sets `debug = "line-tables-only"` and says why:
+# faster dev and test compile/link, with backtraces still carrying file and line numbers,
+# because the dev/test loop does not need full DWARF. The `[workspace]` line above makes
+# this a workspace ROOT, so none of that reached here and this package built full debug
+# info for 155 test binaries across two float configurations.
+#
+# **MEASURED FROM AN EMPTY TARGET, 2026-09-27**, after the operator cleaned the worktree:
+# one default-features gate run leaves **6.7 GiB**, and adding one `narrow-float-32` run
+# takes it to **13 GiB**. That is the honest baseline for this profile.
+#
+# ⚠ **IT IS A BASELINE, NOT A SAVING.** The figures recorded before the clean -- 31, then
+# 38, then 44 GiB -- accumulated across many runs of both configurations over days. Setting
+# 13 against 44 would compare different quantities, which is the mismatched-units error this
+# session made once already.
+#
+# The same reasoning the root gives applies unchanged, so the same setting is made here.
+# **The timing effect is NOT claimed**: the first build after a profile change is cold and
+# therefore slower, and a fair comparison needs a warm run against the recorded phase
+# times. Gate time is this line's bottleneck, which is the motive, not the evidence.
+#
+# `opt-level = 1` follows the root as well, by the operator's ruling of 2026-10-28,
+# question 4 of `docs/process/handoffs/v0.3.0-QUESTIONS.md`. The root measured its gain
+# on virtual machine stage runs, which the differential tests here also perform. Only
+# `opt-level` changes, so debug assertions and overflow checks stay on. The emitted
+# LLVM IR is not expected to depend on this profile, and the full native suites
+# passed after the change with no pinned figure moved. The test hosts are built by
+# invoking `rustc` directly with fixed flags, so this profile does not reach them.
+[profile.dev]
+debug = "line-tables-only"
+opt-level = 1
+
+[dependencies]
+# **`floats` IS LISTED BECAUSE THIS PACKAGE USES IT, NOT BECAUSE IT NEEDS TURNING ON.**
+#
+# It was already reaching here, but only as a DEFAULT feature of the parent
+# crate. `self-host` implies `compile` and `verify`, so those two were genuinely
+# declared; `floats` was neither declared nor implied, and arrived solely because
+# `default-features` was never disabled.
+#
+# That made this line a false statement of intent: a reader concludes the backend
+# needs `compile` and `self-host`, when the float differential, the float
+# composite tests, the declared-width refusals and the ABI scope tests all rest on
+# `floats` as well. The realistic failure is a TIDY-UP -- adding
+# `default-features = false` is exactly what someone would do on seeing an
+# explicit list, and it reads as a clarification.
+#
+# **Scoped honestly, and measured rather than reasoned about.** Removing this
+# declaration AND the defaults does not merely fail a test: the package does not
+# COMPILE, because `ScalarKind::Float` disappears. So the behavioural probe in
+# `inherited_feature_declaration.rs` cannot be what catches that case, and the
+# DECLARATION RATCHET in the same file is the guard that does the work. What this
+# line buys is that the manifest describes what the package uses; what the ratchet
+# buys is that the description stays accurate.
+#
+# **It is NOT the runtime finding it resembles.** A float module verifying,
+# loading and then TRAPPING on a runtime built without floats is the `v0.2.3`
+# line's `INVALID_BYTECODE_CENSUS.md` Group B, a different and larger thing.
+keleusma = { path = "..", features = ["compile", "self-host", "floats"] }
+inkwell = { version = "0.9", features = ["llvm22-1"] }
+llvm-sys = "221"
+
+# **THE NARROW-FLOAT CONFIGURATION, MADE SELECTABLE.**
+#
+# `narrow-float-32` belongs to the `keleusma` crate, so without a forwarding
+# feature here the four-byte build is reachable only by editing this manifest by
+# hand -- which is exactly why it went unmeasured until 2026-08-31, when it was
+# found red. Selecting it is now `cargo test --features narrow-float-32`.
+[features]
+narrow-float-32 = ["keleusma/narrow-float-32"]
+
+[dev-dependencies]
+keleusma-arena = { path = "../keleusma-arena" }
+# The framing driver, `keleusma::crypto_frame`, exists only under `signatures`.
+# `native_stage_factory.rs` runs `frame.kel` natively through it, so the tests
+# enable the feature and the library itself does not.
+keleusma = { path = "..", features = ["signatures"] }
+ed25519-dalek = "3"

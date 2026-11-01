@@ -1,0 +1,53 @@
+COMPLETION CONDITION — the disposition of every unlowered opcode (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. EVERY OPCODE OUTSIDE THE LOWERED SET CARRIES A DISPOSITION.
+   For each one, the tree records which of these it is: support is missing;
+   refusal is deliberate and correct; accepted by a route the census does not
+   instrument; or no verdict is available because nothing exercises it.
+
+2. A DISPOSITION IS BACKED BY EVIDENCE, NOT BY A READING OF INTENT.
+   Each disposition points at something that was run, or at a named constraint
+   that makes the disposition correct. A comment asserting a reason is not by
+   itself evidence.
+
+3. A DELIBERATE REFUSAL IS DISTINGUISHED FROM AN UNIMPLEMENTED ONE.
+   Where refusing is the correct behaviour, the record says why refusing is
+   correct rather than leaving it to read as an unfinished feature.
+
+4. THE HEADLINE FRACTION CANNOT BE READ AS A COUNT OF MISSING SUPPORT.
+   Wherever a count of lowered opcodes is reported, a reader is not left to infer
+   that the remainder are unsupported. The census output itself carries this,
+   not only prose elsewhere.
+
+5. A DISPOSITION THAT DEPENDS ON ANOTHER LINE'S CODE SAYS SO.
+   Where the disposition rests on behaviour in files this line does not own, that
+   ownership and its consequence are stated.
+
+6. GUARDS ADDED HERE PROVE THEIR REACH.
+   Any check introduced is exercised against a case where it must fail. A check
+   demonstrated only on a case it passes does not satisfy this. Where a check
+   asserts a negative, the instrument behind it is shown capable of reporting the
+   positive.
+
+7. FIGURES CARRY THEIR POPULATION.
+   Any count states which census produced it and which population that census
+   reads, and complementary censuses are not presented as one.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and every disposition corresponds to output appearing in the
+   transcript. Figures carried from an earlier measurement are marked as carried.
+
+9. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test or refused compilation is named with its cause, and with a
+   statement of whether that cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed, how many commits were made, the order of the properties above, how
+many opcodes change disposition, or whether any other goal in the same session
+advanced.

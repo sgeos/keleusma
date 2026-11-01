@@ -1,0 +1,74 @@
+COMPLETION CONDITION — re-deriving the lowering coverage and its recommendation
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The document that recommends a next increment for native lowering states
+   coverage figures re-derived against the present tree, and its recommendation
+   is consistent with them. A recommendation naming a workstream that the
+   present measurement shows blocking nothing does not stand unqualified.
+
+2. Where a figure was superseded, the earlier text is visible rather than
+   deleted, and what changed is stated, so a reader meets the correction rather
+   than a silent edit.
+
+3. Figures given at different granularities are distinguished. A chunk-level
+   coverage number and a module-level one are not presented as the same measure,
+   and the relationship between them is stated.
+
+4. Any comparison between an old and a new figure is over the same measure, and
+   the fact that the underlying corpus changed size is stated rather than left
+   for the reader to notice.
+
+5. The modules or chunks that remain unlowerable are named, with the cause for
+   each, rather than summarised only as a count.
+
+6. No claim is made that the backend is complete. Remaining refusals are
+   reported, including those with established reasons of their own.
+
+7. No coverage figure is pinned as an equality that ordinary corpus growth would
+   move; figures are dated instead.
+
+8. Nothing in the backend's behaviour changed, and no workstream was started on
+   the strength of the superseded recommendation.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+12. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Choosing a replacement next increment. Establishing that the recorded one is
+  obsolete, and naming what actually remains, is the goal; deciding what to do
+  about it is separate.
+- Lowering any remaining refused opcode or module.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Leaving a recommendation standing that the present measurement contradicts.
+- Comparing an old figure to a new one at a different granularity, or without
+  noting the corpus changed size.
+- Describing the backend as complete or the remaining refusals as absent.
+- Deleting a superseded figure instead of correcting it visibly.
+- Pinning a coverage figure that corpus growth would move.
+- A suite result read from a pipeline's exit status rather than the command's.

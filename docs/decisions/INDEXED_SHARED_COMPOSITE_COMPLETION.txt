@@ -1,0 +1,38 @@
+COMPLETION CONDITION — the indexed shared composite slot
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. AN INDEXED SHARED COMPOSITE AGREES WITH THE REFERENCE.
+   A program that writes and reads elements of an array-of-composite SHARED data
+   field, at more than one index and including a runtime index, produces the same
+   result natively as on the virtual machine.
+
+2. THE HOST'S BYTES ARE THE OBSERVABLE.
+   After a native call, the element bodies are found in the host buffer at the
+   offsets the module's layout states, not merely inferred from a returned
+   scalar.
+
+3. THE STRIDE IS THE STATED LENGTH, CHECKED AGAINST THE OFFSETS.
+   The element size used is the length the layout states, and the range is
+   required to be contiguous at that stride and uniform in kind. A range failing
+   either is refused with the property that failed named.
+
+4. SCALAR SHARED ARRAYS ARE UNAFFECTED.
+   Existing indexed scalar shared access still lowers and still agrees.
+
+5. NO STALE REFUSAL TEXT REMAINS.
+   No comment or message still describes the indexed shared composite as
+   unsupported, and no placeholder label survives from the old refusal.
+
+6. THE CENSUSES ARE UPDATED, NOT BYPASSED.
+   Any new address-forming or value-moving site is classified, and any row or
+   test describing this shape as refused states what is true.
+
+7. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

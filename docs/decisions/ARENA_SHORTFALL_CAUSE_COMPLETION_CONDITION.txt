@@ -1,0 +1,47 @@
+COMPLETION CONDITION — arena shortfall cause
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The tree states the structural relation between the backend's
+   region demand and the verified heap figure, and supports it with
+   per-module arithmetic taken from a run: the number of composite
+   construction sites, the size of each, and the two figures.
+
+2. The earlier reading that the shortfall is a fixed per-entity
+   quantum is corrected wherever it was published, including any
+   summary table and any operator-facing decision list. No location
+   still asserts it.
+
+3. The tree states that the common divisor is a property of this
+   corpus rather than evidence of a unit, and shows at least one
+   module whose composite size differs from that divisor.
+
+4. The tree states that the gap grows with the number of static
+   composite sites rather than sitting at a fixed overhead, so the
+   observed multiple is a property of this corpus and not a ceiling.
+
+5. The byte magnitudes already reported are retained and remain
+   accurate. Only the interpretation attached to them changes.
+
+6. The tree does not describe the backend's allocation strategy as a
+   defect, and states that the two figures measure different things.
+
+7. The tree makes no recommendation about how to close the gap, and
+   continues to record that decision as the operator's.
+
+8. Any claim about the relation states what it was derived from and
+   what it did not read, so a reader can tell a measured fit from a
+   proof.
+
+9. Files owned by the other line are unmodified, checked against the
+   commit this line last absorbed rather than a moving branch tip.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.

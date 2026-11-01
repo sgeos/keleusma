@@ -1,0 +1,44 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. NESTED COMPOSITES ARE EXERCISED
+- A test builds composites containing composite-typed fields and reads values
+  back through the nesting, comparing against the reference.
+- At least one subject uses a single-field struct wrapping a word, the shape whose
+  body size equals the scalar it could be confused with.
+- At least one subject places a scalar neighbour after the nested field, so a
+  wrong width shifts something observable.
+- Values inside nested bodies come from computed expressions, not only from
+  parameters.
+
+2. THE DANGEROUS CONFUSION IS SHOWN TO BE DETECTABLE
+- The tree records a perturbation in which a nested body's width is treated as a
+  scalar of the same size, and states whether the coverage catches it.
+- If that perturbation is not caught, that is recorded as a finding and the
+  subjects are described as insufficient, rather than the green run being
+  reported as evidence.
+
+3. REFUSALS ARE READ, NOT ASSUMED
+- Any refusal encountered is recorded with its message and classified as either a
+  gap worth repairing or the conservative design working.
+- No refusal is repaired into a mispack.
+
+4. SCOPE
+- The tree states what the nesting coverage does not reach, and a green run is not
+  described as proof that body and scalar widths can never be confused.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any divergence is recorded as a finding, reduced toward a minimal case, and
+  described as the two implementations disagreeing rather than as a verdict about
+  which is wrong.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

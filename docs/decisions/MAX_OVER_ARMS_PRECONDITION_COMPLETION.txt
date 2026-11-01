@@ -1,0 +1,79 @@
+COMPLETION CONDITION — the soundness precondition for max-over-arms
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Something in the tree reports, for each module whose backend arena demand
+   exceeds its verified figure, whether any construction site sits inside a
+   conditional that is itself inside a loop.
+
+2. The report distinguishes three situations rather than two: a site in a bare
+   conditional, a site in a bare loop, and a site in a conditional nested within
+   a loop. Only the third is the hazard, and the report says so.
+
+3. A verdict is recorded on whether the max-over-arms rule would be sound on
+   this corpus. If it is clean, the verdict says the hazard is unexercised here
+   rather than that the rule is sound in general, and the difference is stated.
+
+4. The reasoning for why a loop is the hazard and a bare conditional is not is
+   recorded: that outside a loop only one arm ever executes, so escape is
+   irrelevant, while inside one an earlier iteration's region can still be live
+   when a later iteration reuses the offset.
+
+5. The relationship to the earlier escape finding is stated: escape matters in
+   combination with loop-carried reuse, not on its own.
+
+6. Any instrument used is demonstrated to discriminate between the three
+   situations in point 2, rather than trusted because its output looked
+   plausible.
+
+7. The measurement covers the same population and scope as the gap it is about.
+   If the gap is measured module-wide, the precondition is too.
+
+8. No remedy is implemented and none is presented as decided. Nothing in the
+   code-generation path changed; the region planner still assigns per static
+   site.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+12. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+13. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Adopting the remedy, or establishing its other preconditions.
+- A clean result. Finding the hazard exercised is a better outcome than not
+  finding it, and must not be avoided by narrowing what is examined.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Concluding the rule is sound from a corpus that never exercises the hazard,
+  without saying which was established.
+- Collapsing the loop-wrapped case together with the bare conditional case.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- Narrowing the scope or population so the hazard cannot appear.
+- A green reached by relaxing an assertion, unless what was excluded is still
+  reported with its cause.
+- A suite result read from a pipeline's exit status rather than the command's.

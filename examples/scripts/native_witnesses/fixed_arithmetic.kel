@@ -1,0 +1,91 @@
+// FIXED-POINT ARITHMETIC, IN THE CORPUS BECAUSE THE HAND-WRITTEN DIFFERENTIAL
+// CANNOT DRIVE IT.
+//
+// `Op::Add`, `Op::Sub` and `Op::Neg` lower for a matched `Fixed` pair. Verifying
+// that needs a function TAKING `Fixed` parameters: an operand's width is trusted
+// only where a signature states it and the chunk never writes the local, so a
+// `let x = w as Fixed<16>` is `Unknown` and refuses. The entry point cannot take
+// `Fixed`, because the harness and the virtual machine both pass integers.
+//
+// So the probe is necessarily MULTI-FUNCTION, and the hand-written differential
+// lowers `chunks[0]` while running the ENTRY POINT in the virtual machine --
+// different functions whenever a program has more than one. That harness now
+// refuses a multi-function source rather than comparing two unrelated things;
+// this file is the route that remains.
+//
+// A FALSE PASS IS WHAT EXPOSED ALL OF THIS. A two-function test compared
+// `add_fx` natively against `main` in the virtual machine and PASSED, because
+// fixed-point scaling is linear and `((a<<16) + (b<<16)) >> 16` equals `a + b`.
+// Agreement by mathematical accident, between two functions that were never the
+// same one.
+//
+// The corpus differential drives whole modules through the entry point on both
+// sides, so it compares like with like.
+//
+// WITNESSES: Add, Sub, Neg, GetField, GetIndex, NewComposite
+//
+// THE LINE ABOVE IS A MACHINE-CHECKED CLAIM, not a comment.
+// `witness_integrity.rs` compiles this file and asserts every opcode named
+// there is actually emitted. A witness that silently STOPS witnessing --
+// because the reference compiler folded the construct away, or because a
+// function moved to another file -- would otherwise drop a census figure
+// with nothing going red.
+//
+// That is not hypothetical: the `Op::IsStruct` construct was repaired out of
+// existence by the `v0.2.3` line one hour after this corpus adopted it.
+
+fn add_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> {
+  x + y
+}
+
+fn sub_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> {
+  x - y
+}
+
+fn neg_fx(x: Fixed<16>) -> Fixed<16> {
+  -x
+}
+
+// A COMPOSITE CARRYING `Fixed` FIELDS, and it was ABSENT for one increment
+// because it found a gap by trying.
+//
+// The operand-width widening made such a composite PACK -- the reference sizes
+// `struct { a: Fixed<16>, b: Fixed<16> }` at sixteen bytes, identical to a pair
+// of `Word`s. But READING one back refused:
+//
+//   pair_sum: UnsupportedOp("GetField reading Fixed is not lowered")
+//
+// Packing a field and reading it are SEPARATE ARMS, and only packing followed
+// from the width. `GetField` and `GetIndex` now read a `Fixed` exactly as they
+// read an `Int`: eight raw bytes of Q-format bits, no zero-extension, no mask,
+// no rescale. The bits are the value.
+//
+// IT IS HERE RATHER THAN IN A HAND-WRITTEN TEST because one refusing chunk
+// exempts a whole MODULE, and because the hand-written differential lowers
+// `chunks[0]` while running the ENTRY POINT -- so it cannot drive anything
+// multi-function, and a `Fixed` parameter requires a non-entry function.
+
+struct Pair { a: Fixed<16>, b: Fixed<16> }
+
+fn pair_sum(x: Fixed<16>) -> Fixed<16> {
+  let p = Pair { a: x, b: x };
+  add_fx(p.a, p.b)
+}
+
+// An ARRAY of `Fixed`, so the element read is exercised as well as the field
+// read. The two are different arms and the same widening reached both.
+fn elem_sum(x: Fixed<16>) -> Fixed<16> {
+  let xs = [x, x];
+  add_fx(xs[0], xs[1])
+}
+
+fn main(seed: Word) -> Word {
+  let x = seed as Fixed<16>;
+  let y = (seed + 3) as Fixed<16>;
+  let s = add_fx(x, y);
+  let d = sub_fx(x, y);
+  let n = neg_fx(x);
+  let p = pair_sum(x);
+  let e = elem_sum(y);
+  (s as Word) + (d as Word) + (n as Word) + (p as Word) + (e as Word)
+}

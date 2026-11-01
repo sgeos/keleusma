@@ -1,0 +1,32 @@
+COMPLETION CONDITION — audit of this session's artifacts
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Every decision document this session added or modified has been checked
+   against what the session later established, and the set checked is recorded
+   so a reader can see the population rather than only the findings.
+
+2. No such document asserts, in a form a reader would take as currently true, a
+   claim that a later increment of the same session falsified. Claims that were
+   true when written and are framed as a record of that moment may remain.
+
+3. Where a claim was falsified, the document says so in place, states what is
+   true instead, and retains the original claim rather than deleting it.
+
+4. The session record in the handoff states the number of records found to have
+   overstated the tree, and that number matches what the audit found rather than
+   an earlier count.
+
+5. Nothing in the tree claims that a full verification gate ran while the
+   toolchain cannot link. Any commit made in that state is identified as not
+   gate-verified, and the checks that were actually run are named.
+
+6. No new test or guard is added whose ability to detect a fault has not been
+   demonstrated.
+
+7. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+8. The working tree is clean.

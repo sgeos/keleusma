@@ -1,0 +1,25 @@
+shared data io {
+    zone_temp: [Fixed<8>; 3],
+    current_a: Fixed<8>,
+    zone_derate: [Fixed<8>; 3],
+    tripped: bool,
+    fault: Byte,
+}
+
+fn derate_for(t: Fixed<8>) -> Fixed<8> {
+    if t > 90 as Fixed<8> {
+        0 as Fixed<8>
+    } else {
+        if t > 70 as Fixed<8> { 50 as Fixed<8> } else { 100 as Fixed<8> }
+    }
+}
+
+fn main(a: Word, b: Word) -> Word {
+    let zones = [0, 1, 2];
+    for z in zones {
+        io.zone_derate[z] = derate_for(io.zone_temp[z]);
+    }
+    io.tripped = io.current_a > 200 as Fixed<8>;
+    io.fault = if io.tripped { 2 as Byte } else { 0 as Byte };
+    b
+}

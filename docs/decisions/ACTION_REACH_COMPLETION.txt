@@ -1,0 +1,48 @@
+COMPLETION CONDITION — reach discipline for actions, not only observations (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE DISTINCTION BETWEEN AN OVER-REACHING CHECK AND AN OVER-REACHING ACTION
+   IS RECORDED.
+   The record states that this project's reach discipline had been applied to
+   things that observe and not to things that change or destroy, and says why
+   the second needs it more: a check with excess reach reports something false,
+   an action with excess reach destroys something real.
+
+2. THE MECHANISM IS NAMED, NOT ONLY THE INCIDENT.
+   The record says that selecting a process by program name is inherently
+   machine-wide, and that the scoping property must come from something that
+   distinguishes this checkout from a sibling.
+
+3. VERIFICATION AFTER A DESTRUCTIVE ACTION IS ADDRESSED SEPARATELY.
+   The record states that confirmation must rest on a signal the damage itself
+   could not produce, and gives the concrete case where an orphaned process was
+   read as evidence of a healthy run.
+
+4. THE RULE IS STATED SO IT COVERS FUTURE INSTANCES, NOT THIS ONE.
+   It is phrased as a class of action rather than as a prohibition on the single
+   command that caused the incident.
+
+5. THE COST IS STATED PLAINLY AND ATTRIBUTED.
+   What was destroyed, whose it was, and that it happened while attempting to
+   yield resources to its owner. No framing that distributes the cause.
+
+6. A RECORD THAT ALREADY COVERED IT IS ACKNOWLEDGED IF ONE EXISTS.
+   If a prior document or comment already described the correct scoping, that is
+   named, along with the fact that it was not consulted.
+
+7. NOTHING IS CLAIMED THAT WAS NOT RUN OR OBSERVED.
+   Every process, load, or state claim corresponds to output in the transcript.
+   Figures carried from earlier are marked as carried.
+
+8. NO CLEANUP CLAIM RESTS ON ABSENCE ALONE.
+   Any statement that the machine or a worktree is clear identifies what was
+   checked and what such a check cannot see.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed or pushed, how many commits were made, the order of the properties
+above, or whether any other goal advanced.

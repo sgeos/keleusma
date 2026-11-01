@@ -1,0 +1,7 @@
+# Detached-workspace build directory.
+#
+# The repository root's .gitignore entry is anchored (`/target/`) and does not
+# reach a nested package, so a detached package needs its own. This mirrors
+# compiler/.gitignore. Without it, the first build drops thousands of untracked
+# files into `git status`.
+/target

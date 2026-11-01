@@ -1,0 +1,49 @@
+COMPLETION CONDITION — the scalar type × operator matrix
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test in native_codegen/tests/ drives a matrix of scalar operand types against
+   the operator surface, where the cells are enumerated from the type list and the
+   operator list rather than written out one by one, and every cell is assigned a
+   recorded class. A cell that is unclassified, or whose observed class differs
+   from its recorded class, fails the test. A run that produces fewer cells than a
+   recorded floor fails as a broken probe rather than passing.
+
+2. The classification can express, and distinguishes between, at least: the two
+   implementations agree; the reference compiler refuses the program; the
+   reference traps at run time while the backend refuses to lower; and the
+   reference traps at run time while the backend produces a value. The last of
+   these is recorded as a defect class, not as a form of agreement.
+
+3. No cell is in the state "the reference traps and the backend produces a value".
+   Either the backend refuses such a program, or the test records why producing a
+   value is correct there.
+
+4. Where a cell is refused by the reference compiler, the record states the actual
+   cause. In particular, any entry concerning a shift with a variable shift amount
+   distinguishes the type of the shift amount from the type of the shifted value,
+   and does not attribute the refusal to the wrong one of the two.
+
+5. The backend can distinguish fixed-point operands from plain word operands well
+   enough to act on the difference wherever the reference's behaviour differs
+   between them, and a test demonstrates that distinction being made.
+
+6. The type-checker behaviour that admits a program the reference virtual machine
+   refuses at run time is reported to the other line in this line's outgoing
+   channel, and a test watches the behaviour so that the report fails loudly
+   rather than silently outliving its subject.
+
+7. Any instrument that cannot represent an outcome it might encounter either gains
+   that vocabulary or carries a statement of what it cannot express.
+
+8. Every claim added to the tree about agreement between the two implementations
+   is backed by an assertion that runs.
+
+9. The backend gate passes in both float configurations, and the recorded test
+   population figures agree with the tree.
+
+10. Files under src/ and tests/ at the repository root are unmodified.

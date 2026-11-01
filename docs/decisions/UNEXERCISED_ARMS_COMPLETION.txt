@@ -1,0 +1,63 @@
+COMPLETION CONDITION — the unexercised lowering arms are named
+
+Ordering is NOT a completion criterion. No particular sequence of steps, branch,
+commit shape, or process is required. Judge the end state only.
+
+Complete when ALL of the following hold.
+
+1. THE ARMS ARE ENUMERATED AT KIND GRANULARITY
+   The tree records, for the lowering paths that branch on a scalar kind, which
+   (opcode, kind) combinations the backend distinguishes. Opcode-level coverage
+   alone does not satisfy this, because it cannot express an opcode whose one
+   kind arm is unwitnessed.
+
+2. CORPUS REACH IS MEASURED PER COMBINATION
+   For each such combination the tree records whether the corpus produces it,
+   measured from compiled modules rather than from parsing corpus or tooling
+   source text.
+
+3. EVERY UNREACHED COMBINATION IS RESOLVED
+   Each combination the corpus does not reach is either attributed to a named
+   test that exercises it, or recorded as unexercised. No combination is left
+   unaccounted for, and "unexercised" appears where it is true rather than being
+   quietly omitted.
+
+4. THE DISTINCTION IS KEPT
+   "The corpus does not reach it" and "nothing exercises it" are recorded as
+   different claims. A document that treats them as the same does not satisfy
+   this.
+
+5. POPULATIONS ARE STATED
+   Every count says what set it is over.
+
+6. THE INSTRUMENT'S REACH IS ESTABLISHED
+   The measurement demonstrates it is capable of reporting a non-empty or
+   uncovered result, so a clean sweep cannot be mistaken for a clean tree.
+
+7. NO SILENT SCOPE CHANGE
+   If any gap is closed as part of this work rather than only recorded, that is
+   stated plainly with what changed. If gaps remain open, no document claims or
+   implies they are covered.
+
+8. NOTHING AMBIGUOUS WAS DECIDED
+   The open operator questions stay untouched: Fixed, Text, Opaque and Unit
+   shared-slot representations remain unimplemented, and the region planner's
+   soundness obligation is not discharged or restated as discharged.
+
+9. THE SUITE IS GREEN AND THE COUNT RECONCILES
+   The native_codegen suite passes with zero failures, read from cargo's own
+   exit status AND from the summed per-binary counts, with the two agreeing and
+   the binary count matching expectation. The total is accounted for as the
+   previous total plus exactly the tests added.
+
+10. QUALITY GATES
+    Formatting, clippy at deny-warnings over tests as well as the library, and
+    the documentation build at deny-warnings are all clean.
+
+11. NO DEAD CITATIONS AND NO EXPIRED CLAIMS
+    Nothing added or changed names a test, file, function, or identifier that
+    does not exist, and no document left in the tree asserts a state that this
+    work has made false.
+
+If any item cannot be satisfied, say so explicitly with what was measured and
+why it blocks, and satisfy every other item in full.

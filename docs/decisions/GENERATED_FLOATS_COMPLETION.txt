@@ -1,0 +1,44 @@
+COMPLETION CONDITION — generated breadth over the float surface
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Something in the tree generates float-typed programs, in quantity rather than
+   as a handful of named cases, and compares each one's result against the
+   reference implementation.
+
+2. Every float value such a comparison relies on, operands and results alike, is
+   exactly representable in a four byte float, and something in the tree fails if
+   that stops being true. The tree states why: the reference runs at eight byte
+   float in both configurations while the backend lowers at the configured width.
+   Agreement is decided by exact comparison, not by a tolerance.
+
+3. The generated population is asserted, not assumed. A run that silently
+   produced no float programs, or produced programs containing no float
+   operations, fails rather than passes.
+
+4. The magnitude bound that keeps generated values exact is enforced or checked
+   in the tree, not only argued in a comment.
+
+5. Whatever the generator excludes is stated where a reader of that generator
+   will meet it, and no claim in the tree describes its coverage as broader than
+   what it emits.
+
+6. If any generated program diverges between the two implementations, the tree
+   records it as a finding with its inputs, or the emitter is changed so it no
+   longer diverges. A divergence is not resolved by loosening the comparison or
+   by removing the program that exposed it.
+
+7. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+8. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries or on one run assumed to cover both.
+
+9. The handoff state table agrees with the tree, figures that cannot be
+   re-derived name the commit they were measured at, and the guards that check it
+   pass.
+
+10. The working tree is clean and the branch is pushed.

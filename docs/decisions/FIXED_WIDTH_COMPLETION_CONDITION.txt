@@ -1,0 +1,49 @@
+COMPLETION CONDITION — fixed-point operand width
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The tree records, from measurement rather than assertion, what the reference
+   compiler packs a fixed-point field at, and whether the backend's declared
+   width for that type agrees with it.
+
+2. If the backend's width for the fixed-point type is changed, then:
+   a. fixed-point arithmetic on a matched pair agrees with the virtual machine
+      on executed programs, not merely lowers;
+   b. a composite carrying a fixed-point field packs to the same size the
+      reference computes, verified by execution or by byte comparison;
+   c. the fixed-point result is NOT truncated to eight bits, and the byte-width
+      result still is.
+
+3. The assertion that previously bundled several type tags under one shared
+   justification states a separate, accurate reason for each tag it still
+   covers. No tag is dropped from it merely to let another through.
+
+4. The float type's width remains unknown, and no change causes a float value to
+   be lowered as an integer operation.
+
+5. The report states plainly whether the opcode-support headline moved. If that
+   figure is unchanged, the tree does not present this work as having changed it.
+
+6. The size of what actually changed is reported as a measured delta — how much
+   more of the corpus lowers, or that nothing more does — rather than left to be
+   inferred.
+
+7. If any module that newly lowers disagrees with the virtual machine, the
+   widening is reverted and the disagreement is recorded. Coverage is not
+   retained at the cost of an unexplained disagreement.
+
+8. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+9. The files recorded as read-only for this line are unmodified: the virtual
+   machine, the bytecode verifier, the bytecode definitions, the self-hosted
+   compiler sources, and the continuous-integration workflows.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

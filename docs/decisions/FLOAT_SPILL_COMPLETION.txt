@@ -1,0 +1,43 @@
+COMPLETION CONDITION — a float on the spill slice
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. No document or comment in the tree claims that the generated float stream
+   subjects exercise the operand spill path, unless they actually do. What those
+   subjects do reach is described accurately where a reader of that file meets it.
+
+2. Either something in the tree drives a float operand that sits beneath a
+   yielded value across a suspension and compares the result against the
+   reference, or the tree records that the backend refuses such a program, with
+   the refusal's stated cause.
+
+3. If such a subject exists and runs, the tree carries evidence that it actually
+   detects a fault on the restore path, rather than passing for reasons unrelated
+   to the spill. Evidence means a recorded perturbation of the restore that the
+   subject fails under, not an argument that it ought to.
+
+4. The refusal of a composite body beneath a yielded value is unchanged.
+
+5. Every float value any differential relies on, operands and replies and yielded
+   values alike, is exactly representable in a four byte float, and something in
+   the tree fails if that stops being true.
+
+6. Any harness newly allocating host buffers for a native call derives its
+   private region size from the published contract and is declared wherever the
+   tree enumerates such harnesses.
+
+7. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+8. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+9. The handoff state table agrees with the tree, figures that cannot be
+   re-derived name the commit they were measured at, and the guards that check it
+   pass.
+
+10. The working tree is clean and the branch is pushed.
