@@ -277,6 +277,11 @@ pub const PARSE_GENERIC_CONST_ARG_TAG: i64 = 114;
 /// `Option<T>` payload's `T`, 1 `bool`, 2 `Byte` or 3 `Word`, and a constructor's variant
 /// record carries the `Option` name id, rather than a declared variant row.
 pub const PARSE_OPTION_PAYLOAD_BASE: i64 = 1 << 40;
+/// The base above which a tuple-projection record carries the variant row times 1024 plus
+/// the field position of a payload read from a single-variant enum `let` pattern, rather
+/// than a tuple element ordinal, which is below 256. `enum_payload_read` in `parse.kel`
+/// writes it.
+pub const PARSE_ENUM_PROJECTION_BASE: i64 = 1 << 40;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.

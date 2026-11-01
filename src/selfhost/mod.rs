@@ -4037,6 +4037,26 @@ pub fn try_call_type_inputs_from_pipeline(
                 "tuple projection metadata count"
             );
             for ((at, node), &(_, position)) in tuple_nodes.into_iter().zip(tuple_sources) {
+                // A payload field of a single-variant enum `let` pattern carries its variant
+                // row and field position above the base. The value read is the variant's enum,
+                // and the result has the field's declared type, as a payload binding has.
+                if position >= crate::selfhost_host::PARSE_ENUM_PROJECTION_BASE {
+                    let coordinates = position - crate::selfhost_host::PARSE_ENUM_PROJECTION_BASE;
+                    let variant =
+                        usize::try_from(coordinates / 1024).expect("negative variant index");
+                    let field =
+                        usize::try_from(coordinates % 1024).expect("negative payload position");
+                    let (name, types) = &enum_variants[variant];
+                    expressions.push((8, operand(node.lhs), (tag_of(*name), 0, String::new())));
+                    let (value, form, target) = declared_type_operand(
+                        &types[field],
+                        tag_of,
+                        &mut expressions,
+                        &mut bindings,
+                    );
+                    bindings.push((computed_names[&(at as i64)].clone(), value, form, target));
+                    continue;
+                }
                 let row = expressions.len();
                 expressions.push((19, operand(node.lhs), (position, 0, String::new())));
                 bindings.push((

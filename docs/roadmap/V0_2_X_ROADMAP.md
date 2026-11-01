@@ -510,8 +510,12 @@ execution returning seven. These results do not complete Keleusma wire serializa
 
 ## Current construct-support boundary, 2026-10-31
 
-The executable table in `tests/selfhost_codegen.rs` contains 122 cases with
-116 SOk / 2 Refuses / 2 Diverges / 2 RefRejects. The `let` pattern and pipe follow-ups of
+The executable table in `tests/selfhost_codegen.rs` contains 127 cases with
+121 SOk / 2 Refuses / 2 Diverges / 2 RefRejects. The operator's ruling of 2026-10-31 on
+`let` patterns moved the nested destructuring `let` from Refuses to SOk and added four cases
+that are SOk, a nested struct pattern, a struct pattern inside a tuple pattern, a tuple pattern
+inside a struct pattern and a single-variant enum pattern, with a typed destructuring pattern,
+which Refuses. The `let` pattern and pipe follow-ups of
 2026-10-31 moved the pipe into a template from Refuses to SOk, added two struct `let`
 destructuring cases, which are SOk, a nested destructuring `let`, which Refuses, and a
 refutable `let`, which the reference rejects. Order 6 slice 7 moved the generic function
