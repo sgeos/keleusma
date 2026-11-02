@@ -90,3 +90,79 @@ fn const_generic_enum_method() {
                fn main() -> Word { let x = E::<3>::A(42); x.tag() }";
     assert_eq!(run(src), 42);
 }
+
+/// Trait impls on the dimensioned families `Text<N>`, `Fixed<n>` and
+/// `Multiword<n>`.
+///
+/// Until 2026-11-01 the type checker registered such an impl under a key that
+/// carried the dimension, such as `Text<4>`, while method lookup, trait-bound
+/// checking and the compiler all keyed it by the family name, such as `Text`.
+/// The impl was admitted and could never be called, as a method or through a
+/// bound. An impl now belongs to the family, as the method lookup already
+/// assumed, and a second impl of one trait within one family is refused
+/// because both would mangle to the same name.
+mod dimensioned_families {
+    use super::*;
+
+    fn compile_err(src: &str) -> String {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        compile(&program)
+            .expect_err("expected a compile error")
+            .message
+    }
+
+    #[test]
+    fn a_method_on_a_text_capacity_is_callable() {
+        let src = "trait Shout { fn shout(self) -> Word; }\n\
+                   impl Shout for Text<4> { fn shout(t: Text<4>) -> Word { 7 } }\n\
+                   fn main() -> Word { let t = \"abcd\" as Text<4>; t.shout() }";
+        assert_eq!(run(src), 7);
+    }
+
+    #[test]
+    fn a_method_on_a_fixed_type_is_callable() {
+        let src = "trait Tag { fn tag(self) -> Word; }\n\
+                   impl Tag for Fixed { fn tag(x: Fixed) -> Word { 5 } }\n\
+                   fn main() -> Word { let a = 3 as Fixed; a.tag() }";
+        assert_eq!(run(src), 5);
+    }
+
+    #[test]
+    fn a_method_on_a_multiword_is_callable() {
+        let src = "trait Low { fn low(self) -> Word; }\n\
+                   impl Low for Multiword<2> { fn low(m: Multiword<2>) -> Word { m[0] } }\n\
+                   fn main() -> Word { let m = (9, 0) as Multiword<2>; m.low() }";
+        assert_eq!(run(src), 9);
+    }
+
+    #[test]
+    fn a_trait_bound_is_satisfied_by_a_text_capacity_impl() {
+        let src = "trait Shout { fn shout(self) -> Word; }\n\
+                   impl Shout for Text<4> { fn shout(t: Text<4>) -> Word { 8 } }\n\
+                   fn call<T: Shout>(x: T) -> Word { x.shout() }\n\
+                   fn main() -> Word { call(\"abcd\" as Text<4>) }";
+        assert_eq!(run(src), 8);
+    }
+
+    #[test]
+    fn two_impls_of_one_trait_within_one_family_are_refused() {
+        let src = "trait Shout { fn shout(self) -> Word; }\n\
+                   impl Shout for Text<4> { fn shout(t: Text<4>) -> Word { 1 } }\n\
+                   impl Shout for Text<8> { fn shout(t: Text<8>) -> Word { 2 } }\n\
+                   fn main() -> Word { 0 }";
+        let msg = compile_err(src);
+        assert!(msg.contains("more than once"), "{msg}");
+    }
+
+    #[test]
+    fn an_impl_for_one_capacity_does_not_accept_another_capacity() {
+        let src = "trait Shout { fn shout(self) -> Word; }\n\
+                   impl Shout for Text<4> { fn shout(t: Text<4>) -> Word { 1 } }\n\
+                   fn main() -> Word { let t = \"abcdefgh\" as Text<8>; t.shout() }";
+        // Refused because the receiver's capacity differs from the impl's,
+        // not because the method cannot be found, which was the old reason.
+        let msg = compile_err(src);
+        assert!(!msg.contains("has no method"), "{msg}");
+        assert!(msg.contains("Text<4>") && msg.contains("Text<8>"), "{msg}");
+    }
+}
