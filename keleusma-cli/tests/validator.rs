@@ -84,14 +84,39 @@ fn reference_disagreement_prevents_successful_admission() {
     use keleusma::selfhost::{VerificationVerdict, admit_module_via_kel};
     use keleusma::value_layout::ScalarKind;
 
-    // The selected typed-stage profile widens at a join. The reference retains
-    // this scalar shape, so the shipping consistency gate must catch the gap.
-    let mut module = keleusma::selfhost::compile_src("fn main(n: Word) -> Word { n }");
+    // The join at an `EndIf` that this test pinned until 2026-11-01 now keeps the scalar shape
+    // the reference keeps, a repair of the C5 review, so both refuse that module.
+    let mut module = keleusma::selfhost::compile_src("fn main(n: Word) -> Word { let a = n; a }");
     module.chunks[0].ops = vec![
         Op::GetLocal(0),
         Op::PushImmediate(1),
         Op::If(3),
         Op::EndIf,
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    assert!(keleusma::verify::verify(&module).is_err());
+    assert!(matches!(
+        admit_module_via_kel(&module, 65536).unwrap(),
+        VerificationVerdict::Rejected { .. }
+    ));
+
+    // The typed stage still forgets, after a loop, a local the body writes, where the reference
+    // joins the break states and keeps the scalar shape. That is residual 1 of
+    // docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md, so the shipping consistency gate must
+    // catch the gap.
+    module.chunks[0].ops = vec![
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::Loop(7),
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::Break(7),
+        Op::EndLoop(3),
+        Op::GetLocal(1),
         Op::GetField(StructField::Flat {
             offset: 0,
             kind: ScalarKind::Int,
