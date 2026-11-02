@@ -86,20 +86,27 @@ LIB = os.path.join(ROOT, "src", "lib.rs")
 # `old` must occur exactly once in `src/lib.rs`; the driver asserts that and
 # refuses to run a mutation it cannot place, so a silent no-op is impossible.
 # ---------------------------------------------------------------------------
-# Re-registered after flat-input ownership changed these arms. The copy flags
-# remain intact. Dup still zeros its second result in round one and both
-# results in round two; Return still replaces the returned value with zero.
+# Re-registered after flat-input ownership changed these arms, and Dup again
+# when its plain path began keeping width and kind. The copy flags remain
+# intact. Dup still zeros its second result in round one and both results in
+# round two; Return still replaces the returned value with zero.
 DUP_ARM = """Op::Dup => {
                 let w = st.width_at(0);
                 let k = st.kind_at(0);
                 let owned = st.owned_at(0);
                 let v = st.pop();
+                // **Both copies keep the operand's width and kind.** The plain
+                // path pushed them unlabelled, which reads as `Width::Unknown`
+                // and an `Int` kind, so a composite built from a duplicated
+                // field refused. The `text` method `concat` duplicates its
+                // length into the result tuple and was refused that way,
+                // found by `text_methods_differential.rs`.
                 if owned_bodies {
                     st.push_owned(v, w, k, owned);
                     st.push_owned(v, w, k, owned);
                 } else {
-                    st.push(v);
-                    st.push(v);
+                    st.push_k(v, w, k);
+                    st.push_k(v, w, k);
                 }
             }"""
 # Re-registered for actual return kind and extent metadata. Preserve those
@@ -141,8 +148,8 @@ DUP_SECOND_ZERO = replace_in_mutant(
         "st.push_owned(i64t.const_zero(), w, k, owned);\n                } else",
         1,
     ),
-    "st.push(v);\n                }",
-    "st.push(i64t.const_zero());\n                }",
+    "st.push_k(v, w, k);\n                }",
+    "st.push_k(i64t.const_zero(), w, k);\n                }",
     1,
 )
 DUP_BOTH_ZERO = replace_in_mutant(
@@ -152,7 +159,7 @@ DUP_BOTH_ZERO = replace_in_mutant(
         "st.push_owned(i64t.const_zero(), w, k, owned);",
         2,
     ),
-    "st.push(v);", "st.push(i64t.const_zero());", 2,
+    "st.push_k(v, w, k);", "st.push_k(i64t.const_zero(), w, k);", 2,
 )
 RETURN_ZERO = replace_in_mutant(
     replace_in_mutant(RETURN_ARM, "let v = st.pop();", "let _v = st.pop();", 1),

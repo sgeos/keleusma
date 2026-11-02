@@ -30,8 +30,10 @@
 //! three is what closed them: **`Op::Not` was a real gap**: a
 //! negated comparison could not fill a `bool` field while an un-negated one could,
 //! because the comparison arm pushed `Scalar(1)` and `Op::Not` pushed nothing.
-//! `Op::Dup` and `Op::PushImmediate` were measured at the same time and neither
-//! narrows anything — their results do not reach a composite. **Saying "not measured" is the honest half of a census**, and a
+//! `Op::Dup` and `Op::PushImmediate` were measured at the same time and judged
+//! to narrow nothing. For `Dup` that was wrong. The `text` method `concat`
+//! duplicates its length into a composite and was refused, so since 2026-11-01
+//! `Dup` keeps the width and no longer appears below. **Saying "not measured" is the honest half of a census**, and a
 //! reader deciding where to look next needs to tell it apart from "measured and
 //! sound".
 
@@ -68,11 +70,6 @@ const DISPOSITIONS: &[(&str, &str)] = &[
         "Op::Yield if general_stream => {",
         "sound: the reentrant reply of a general stream has no static shape, which \
          is why the typed verifier defers here too",
-    ),
-    (
-        "Op::Dup => {",
-        "sound, MEASURED: the short-circuit `andalso` form emits `Dup` and fills a \
-         `bool` field today, so the duplicate's lost width narrows nothing",
     ),
     (
         "Op::PushImmediate(imm) => {",

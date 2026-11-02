@@ -57,4 +57,3 @@ fn text_methods_agree_with_the_vm() {
     // Non-vacuity. Every case lowers and is compared on every pair.
     assert_eq!(compared, CASES.len() * ARGUMENTS.len() * 2);
 }
-
