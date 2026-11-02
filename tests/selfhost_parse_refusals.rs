@@ -123,11 +123,12 @@ fn a_refusal_is_returned_rather_than_ending_the_process() {
     // The point of the fallible entry point, stated as an executable claim: a
     // source that panics the original API comes back as a value here. If this
     // test runs to completion at all, the process was not aborted.
-    // A typed destructuring `let`, which the parser refuses. No shipped example is
-    // refused since `07_refinement.kel` came to compile on 2026-10-27. A pipe into a generic
-    // template was the source here until it came to compile on 2026-10-31, and a nested
-    // destructuring `let` until it came to compile later that day.
-    let src = String::from("fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }");
+    // A match binding a payload whose enum is declared after the enum holding it, which the
+    // parser refuses. No shipped example is refused since `07_refinement.kel` came to compile
+    // on 2026-10-27. A pipe into a generic template was the source here until it came to
+    // compile on 2026-10-31, a nested destructuring `let` until it came to compile later that
+    // day, and a typed destructuring `let` until it came to compile on 2026-11-01.
+    let src = String::from(FORWARD_PAYLOAD);
 
     let err = try_parse_functions(&src).expect_err("this source is refused today");
     assert!(
@@ -168,13 +169,15 @@ fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
     // array left in Order 6 slices 3a, 3e and 3d and are now supported controls below.
     // A newtype was the control here until newtypes came to compile on 2026-10-27, and a
     // pipe into a generic template until it came to compile on 2026-10-31, and a nested
-    // destructuring pattern until it came to compile later that day. The construct now is a
-    // typed destructuring pattern.
-    assert_unavailable(
-        "fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
-        21,
-    );
+    // destructuring pattern until it came to compile later that day, and a typed
+    // destructuring pattern until it came to compile on 2026-11-01. The construct now is a
+    // payload whose enum is declared after the enum that holds it.
+    assert_unavailable(FORWARD_PAYLOAD, 21);
 }
+
+/// A payload whose enum is declared after the enum holding it has no layout when the payload
+/// is laid out, so the parser refuses a read of it as unsupported syntax.
+const FORWARD_PAYLOAD: &str = "enum W { A(V, Word) }\nenum V { B(Word), C }\nfn main(w: W) -> Word { match w { W::A(v, y) => y } }";
 
 #[test]
 fn supported_loop_and_branch_controls_keep_complete_artifacts() {
@@ -184,6 +187,7 @@ fn supported_loop_and_branch_controls_keep_complete_artifacts() {
         "fn main() -> Word { if true { if false { 2 } else { 7 } } else { 3 } }",
         "struct P { x: Word } fn main() -> Word { let p = P { x: 7 }; p.x }",
         "fn main() -> Word { let (x, y) = (3, 4); x + y }",
+        "fn main() -> Word { let (x, y): (Word, Word) = (3, 4); x + y }",
         "signed fn main() -> Word { 7 }",
         "fn main() -> Word { let xs = [1, 2]; for x in xs { let y = x + 1; } 7 }",
     ] {

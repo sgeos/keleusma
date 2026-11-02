@@ -981,7 +981,20 @@ struct FirstPass {
     instances: Vec<(Instantiation, i64, i64)>,
     /// The newtypes the syntactic scan recognised, Order 6.
     newtypes: Vec<Newtype>,
+    /// The scalar kind of `loop main`'s first parameter, 1 `bool`, 2 `Byte` or 3 `Word`, -1
+    /// for a parameter of another type and 0 for none, from the syntactic scan. The
+    /// reference types every `yield` in a `yield` or `loop` function by that parameter.
+    resume_main: i64,
+    /// The resume kinds the probe rounds found, `(yield token position, kind)`.
+    resumes: Vec<ResumeFact>,
+    /// Whether this pass seeds a probe round, in which `parse.kel` reports fixed resume
+    /// kinds.
+    probe: bool,
 }
+
+/// A resume value's kind fixed by an annotated `let`: the `yield`'s token position and the
+/// kind, 1 `bool`, 2 `Byte` or 3 `Word`.
+type ResumeFact = (i64, i64);
 
 /// A newtype declaration, recognised syntactically, Order 6.
 ///
@@ -1103,6 +1116,14 @@ fn seed_generics(vm: &mut dyn StageExecutor, shared: &mut [u8], first: &FirstPas
         set(h::BR_P_SPEC_KEY + r, key);
         set(h::BR_P_SPEC_CHUNK + r, *chunk);
         set(h::BR_P_SPEC_NAME + r, *name);
+    }
+    set(h::BR_P_RES_MAIN, first.resume_main);
+    set(h::BR_P_RES_PROBE, i64::from(first.probe));
+    let resumes = &first.resumes[..first.resumes.len().min(h::RESUME_FACT_CAP)];
+    set(h::BR_P_RES_COUNT, resumes.len() as i64);
+    for (r, &(at, kind)) in resumes.iter().enumerate() {
+        set(h::BR_P_RES_AT + r, at);
+        set(h::BR_P_RES_KIND + r, kind);
     }
 }
 
@@ -1243,7 +1264,10 @@ fn first_pass(src: &str) -> FirstPass {
     if plain.templates.is_empty() {
         plain
     } else {
-        first_pass_with(src, &generic_instantiations(src))
+        let (instances, resumes) = generic_instantiations(src);
+        let mut first = first_pass_with(src, &instances);
+        first.resumes = resumes;
+        first
     }
 }
 
@@ -1272,6 +1296,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let mut scan = TemplateScan::new(&scan_arena);
     let mut runs: Vec<(i64, Vec<(i64, i64)>)> = Vec::new();
     let mut run_open = false;
+    let mut entry = EntryScan::default();
     while let Some(w) = lex_next(&mut vm, &mut shared) {
         let cur = (w.rem_euclid(256), w.div_euclid(256));
         // The brace depth before this token. `depth` lags by one token below.
@@ -1282,6 +1307,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
                 _ => 0,
             };
         scan.step(token_count as i64, depth_before, cur);
+        entry.step(depth_before, cur);
         // Top-level runs for the newtype scan, bounded at eight tokens each.
         if run_open {
             let run = &mut runs.last_mut().expect("open run").1;
@@ -1329,6 +1355,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let mut names = lex_names(&vm, &shared, src);
     let values = lex_values(&vm, &shared, names.len());
     let newtypes = newtypes_from_runs(&runs, &names);
+    let resume_main = entry.resume_kind(&names);
     // A template is not a chunk. Only a name every head of which is a template is dropped, so
     // a template sharing its name with a plain head stays a chunk and the parser refuses it.
     let templates: Vec<Template> = scan
@@ -1409,6 +1436,79 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
         methods,
         token_count,
         has_imports,
+        resume_main,
+        resumes: Vec::new(),
+        probe: false,
+    }
+}
+
+/// The syntactic scan of each top-level `loop NAME(` header for its first parameter's type,
+/// so the parser can type a resume value as the reference does, by `loop main`'s first
+/// parameter. Only `loop main()` and `loop main(p: T, ..)` or `loop main(p: T)` with `T` one
+/// identifier are read. Any other first parameter is recorded as unmodelled.
+#[derive(Default)]
+struct EntryScan {
+    /// 0 idle, 1 after `loop`, 2 after its name, 3 after `(`, 4 after the parameter name, 5
+    /// after `:`, 6 after the type name.
+    state: u8,
+    name: i64,
+    ty: i64,
+    /// Per header in source order, its name id and its first parameter, 0 none, -1
+    /// unmodelled, or the type name id plus one.
+    headers: Vec<(i64, i64)>,
+}
+
+impl EntryScan {
+    /// The most headers recorded, a bound on the scan's residency.
+    const HEADER_CAP: usize = 4096;
+
+    /// One token at brace depth `depth`.
+    fn step(&mut self, depth: i64, cur: (i64, i64)) {
+        let (next, closed) = match (self.state, cur.0) {
+            (0, 6) if depth == 0 => (1, None),
+            (1, 1) => {
+                self.name = cur.1;
+                (2, None)
+            }
+            (2, 7) => (3, None),
+            (3, 8) => (0, Some(0)),
+            (3, 1) => (4, None),
+            (4, 9) => (5, None),
+            (5, 1) => {
+                self.ty = cur.1;
+                (6, None)
+            }
+            (6, 8) | (6, 10) => (0, Some(self.ty + 1)),
+            (3..=6, _) => (0, Some(-1)),
+            _ => (0, None),
+        };
+        self.state = next;
+        if let Some(value) = closed
+            && self.headers.len() < Self::HEADER_CAP
+        {
+            self.headers.push((self.name, value));
+        }
+    }
+
+    /// The first `loop main` header's resume kind.
+    fn resume_kind(&self, names: &[String]) -> i64 {
+        let named = |id: i64| usize::try_from(id).ok().and_then(|i| names.get(i));
+        let Some(&(_, value)) = self
+            .headers
+            .iter()
+            .find(|(name, _)| named(*name).is_some_and(|n| n == "main"))
+        else {
+            return 0;
+        };
+        if value <= 0 {
+            return value;
+        }
+        match named(value - 1).map(String::as_str) {
+            Some("bool") => 1,
+            Some("Byte") => 2,
+            Some("Word") => 3,
+            _ => -1,
+        }
     }
 }
 
@@ -2242,9 +2342,10 @@ fn try_parse_functions_impl(
 /// final parse reports the unresolved call. A probe round that fails to parse stops the
 /// rounds too, and the final parse reports the failure. The result is cached per source,
 /// because several entry points derive the chunk table independently.
-fn generic_instantiations(src: &str) -> Vec<Instantiation> {
+fn generic_instantiations(src: &str) -> (Vec<Instantiation>, Vec<ResumeFact>) {
     use std::sync::Mutex;
-    static CACHE: Mutex<Vec<(String, Vec<Instantiation>)>> = Mutex::new(Vec::new());
+    type Found = (Vec<Instantiation>, Vec<ResumeFact>);
+    static CACHE: Mutex<Vec<(String, Found)>> = Mutex::new(Vec::new());
     if let Some((_, found)) = CACHE
         .lock()
         .expect("instantiation cache")
@@ -2255,16 +2356,25 @@ fn generic_instantiations(src: &str) -> Vec<Instantiation> {
     }
     const ROUNDS: usize = 8;
     let mut instances: Vec<Instantiation> = Vec::new();
+    // The resume kinds found so far. A round's kinds change the keys of the calls on those
+    // resume values, so a new one requires another round, as a new request does.
+    let mut resumes: Vec<ResumeFact> = Vec::new();
     for _ in 0..ROUNDS {
-        let first = first_pass_with(src, &instances);
+        let mut first = first_pass_with(src, &instances);
+        first.resumes = resumes.clone();
+        first.probe = true;
         let ntp: Vec<usize> = first
             .templates
             .iter()
             .map(|t| t.type_params.len())
             .collect();
         let mut requested: Vec<Instantiation> = Vec::new();
+        let mut fixed: Vec<ResumeFact> = Vec::new();
         let probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             try_parse_functions_impl_with(src, true, first, &mut |_, _| {}, &mut |code, val, _| {
+                if code == crate::selfhost_host::PARSE_RESUME_FACT_TAG {
+                    fixed.push((val / 16, val % 16));
+                }
                 if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
                     let template = (val % 16) as usize;
                     let mut key = val / 16;
@@ -2283,6 +2393,26 @@ fn generic_instantiations(src: &str) -> Vec<Instantiation> {
             .into_iter()
             .filter(|r| !instances.contains(r))
             .collect();
+        // The parser reports only positions it was not seeded with, the first annotation of
+        // each in source order, so the first report of a position is kept.
+        let mut fresh_resume = false;
+        for (at, kind) in fixed {
+            if !resumes.iter().any(|&(a, _)| a == at)
+                && resumes.len() < crate::selfhost_host::RESUME_FACT_CAP
+            {
+                resumes.push((at, kind));
+                fresh_resume = true;
+            }
+        }
+        // The requests of a round were keyed by the resume kinds it was seeded with, so a new
+        // kind discards them and the instantiations found so far, which the next round
+        // requests again under the new kinds. A stale one would otherwise remain a chunk the
+        // reference does not have. Every kind comes from a non-generic body, which the first
+        // round already parses whole, so this costs one round.
+        if fresh_resume {
+            instances.clear();
+            continue;
+        }
         if !matches!(probe, Ok(Ok(_))) && fresh.is_empty() {
             break;
         }
@@ -2299,8 +2429,8 @@ fn generic_instantiations(src: &str) -> Vec<Instantiation> {
     if cache.len() >= 16 {
         cache.remove(0);
     }
-    cache.push((src.to_string(), instances.clone()));
-    instances
+    cache.push((src.to_string(), (instances.clone(), resumes.clone())));
+    (instances, resumes)
 }
 
 fn try_parse_functions_impl_with(
@@ -2718,8 +2848,11 @@ fn try_parse_functions_impl_with(
                 );
                 return ControlFlow::Continue(());
             }
-            // A request for an instantiation, consumed by the probe rounds alone.
-            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
+            // A request for an instantiation or a fixed resume kind, consumed by the probe
+            // rounds alone.
+            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG
+                || code == crate::selfhost_host::PARSE_RESUME_FACT_TAG
+            {
                 return ControlFlow::Continue(());
             }
             if code == crate::selfhost_host::PARSE_DATA_FIELD_BASE_TAG {

@@ -8413,8 +8413,9 @@ fn the_boundary_tables_thin_families_are_the_ones_on_record() {
     // The acknowledged thin families. `literal` is the one that cost something: its single case is
     // `let s = "hi"`, and the string defects of 2026-08-30 lived exactly where that case does not
     // reach.
-    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it.
-    let acknowledged = ["literal", "tuple"];
+    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it, and
+    // `tuple` on 2026-11-01, when the tuple holding a range induction variable joined it.
+    let acknowledged = ["literal"];
     assert_eq!(
         thin.as_slice(),
         acknowledged.as_slice(),
@@ -9177,12 +9178,80 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "enum W { A(Word, Word) }\nfn f(w: W) -> Word { let W::A(x, y) = w; x * 10 + y }",
         ),
-        // A typed destructuring pattern, which the reference compiles and the filter
-        // refuses rather than rewriting.
+        // A typed destructuring pattern, which the filter rewrites by annotating the hidden
+        // binding that stores the value, 2026-11-01. It was `let/typed_pattern__GAP`,
+        // refused, before that.
         (
-            "let/typed_pattern__GAP",
-            Refuses,
+            "let/typed_pattern",
+            SOk,
             "fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
+        ),
+        (
+            "let/typed_nested_pattern",
+            SOk,
+            "fn f() -> Word { let (a, (b, c)): (Word, (Word, Word)) = (1, (2, 3)); a + b + c }",
+        ),
+        (
+            "let/typed_struct_pattern",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { x, y: b }: P = p; x + b }",
+        ),
+        // An enum-typed payload field of an enum declared earlier, read whole as the
+        // reference's `GetEnumField(FlatNested{Enum})` since 2026-11-01. It read as a unit
+        // field, a divergence, before that.
+        (
+            "match/enum_payload_enum_field",
+            SOk,
+            "enum V { B(Word), C }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { match w { W::A(v, y) => y } }",
+        ),
+        (
+            "match/enum_payload_enum_field_matched",
+            SOk,
+            "enum V { B(Word), C }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { match w { W::A(v, y) => match v { V::B(x) => x + y, V::C => y } } }",
+        ),
+        (
+            "let/enum_variant_enum_payload_destructure",
+            SOk,
+            "enum V { B(Word) }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { let W::A(V::B(x), y) = w; x + y }",
+        ),
+        // The payload enum declared after the enum holding it has no layout yet when the
+        // payload is laid out, so a read of the payload is refused.
+        (
+            "match/enum_payload_forward_enum__GAP",
+            Refuses,
+            "enum W { A(V, Word) }\nenum V { B(Word), C }\nfn f(w: W) -> Word { match w { W::A(v, y) => y } }",
+        ),
+        // An enum equality whose payload is an enum, which the reference compares field by
+        // field and the parser has no loop for, so it is refused rather than compared whole.
+        (
+            "eq/enum_enum_payload__GAP",
+            Refuses,
+            "enum V { B(Word), C }\nenum W { A(V, Word), D }\nfn f(a: W, b: W) -> bool { a == b }",
+        ),
+        // A range induction variable is a `Word` value, so a tuple holding it has a layout,
+        // 2026-11-01. It was a type-stage gap before that.
+        (
+            "tuple/of_induction_variable",
+            SOk,
+            "fn f() -> Word { for i in 0..3 { let t = (i, 2); } 0 }",
+        ),
+        // A generic call on a resume value takes the reference's resolved resume type, the
+        // kind a later annotated `let` fixes or `loop main`'s first parameter, 2026-11-01.
+        (
+            "scope/generic_resume_fixed_later",
+            SOk,
+            "fn id<T>(x: T) -> T { x }\nloop main() -> Word { let r = yield 1; let s = id(r); let u: Byte = r; yield 0 }",
+        ),
+        (
+            "scope/generic_resume_main_param",
+            SOk,
+            "fn id<T>(x: T) -> T { x }\nloop main(t: Byte) -> Word { let r = yield 1; let s = id(r); yield 0 }",
+        ),
+        // A resume type the parser does not model, a tuple parameter of `loop main`.
+        (
+            "scope/generic_resume_composite__GAP",
+            Refuses,
+            "fn id<T>(x: T) -> T { x }\nloop main(t: (Word, Word)) -> Word { let r = yield 1; let s = id(r); yield 0 }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (
@@ -9364,10 +9433,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // the destructuring filter, `dq_struct`, took it to 2403 on 2026-10-31 with the
             // peak unchanged. Nested and variant patterns, which replaced `dq_struct` with
             // the item and frame tables and their helpers, took it to 2744 on 2026-10-31,
-            // with the peak unchanged.
+            // with the peak unchanged. The typed pattern annotation, `dq_type`, `dq_top` and
+            // `dq_push_typed`, took it to 2823 on 2026-11-01 with the peak unchanged.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2744,
+            2823,
             421,
         ),
         (
