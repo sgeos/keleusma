@@ -285,3 +285,9 @@ host that sizes one arena from `auto_arena_capacity_for` must not add it. A
 double count over-provisions and never under-provisions. Whether the native
 region and the virtual machine's arena are one allocation for a native host
 is a question of the host ABI that the fold does not settle.
+
+**Superseded on 2026-11-01 for the function names.** On the operator's ruling that
+`auto_arena_capacity_for` right-size an arena, that function no longer includes this figure. The
+combined figure is `auto_arena_capacity_for_vm_and_native`, which includes it once, and a host
+running only native code sizes its buffers from `native_route_buffers_for`. The formula above is
+unchanged. See [the arena sizing record](./ARENA_SIZING_ROUTES.md).

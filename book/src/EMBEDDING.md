@@ -326,6 +326,8 @@ The empty slice argument represents per-native heap attestations. Pass attested 
 
 The bound includes the composite arguments and resume values that the host passes, which are copied into the arena and kept until the next `Reset`. A host whose composite inputs carry `Text` calls `auto_arena_capacity_with_input_text` with a bound on the text bytes in any one input.
 
+The bound is the virtual machine's alone. A host that runs the module as native code sizes its buffers from `keleusma::native_region::native_route_buffers_for`, and a host that keeps one arena for either route uses `keleusma::vm::auto_arena_capacity_for_vm_and_native`.
+
 **Option C. Provide a static buffer.** The arena can run from a host-owned buffer in `.bss` for embedded targets without a heap.
 
 ```rust

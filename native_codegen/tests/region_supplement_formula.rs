@@ -1,8 +1,11 @@
 //! **THE DOCUMENTED REGION SUPPLEMENT FORMULA IS THE BACKEND'S.**
 //!
-//! Operator question 22, answered on 2026-10-31, has V0.2.X fold the native
-//! region supplement into `auto_arena_capacity_for`, and V0.2.X asked for the
-//! formula as data. `docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md` states
+//! Operator question 22, answered on 2026-10-31, had V0.2.X fold the native
+//! region supplement into the runtime's sizing, and V0.2.X asked for the
+//! formula as data. Since absorption 131 the runtime adds it in
+//! `auto_arena_capacity_for_vm_and_native` and returns it from
+//! `native_route_buffers_for`, and `auto_arena_capacity_for` is the virtual
+//! machine's figure alone. `docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md` states
 //! it with a reference implementation in terms of `keleusma` types alone. This
 //! file compiles that implementation as the record prints it, and fails if the
 //! record's code block and this copy drift apart, or if the formula disagrees
@@ -171,7 +174,7 @@ fn the_documented_formula_reproduces_every_corpus_figure() {
 }
 
 /// Absorption 127 brought V0.2.X's own copy of the formula,
-/// `keleusma::native_region`, which `auto_arena_capacity_for` now adds. The
+/// `keleusma::native_region`, which the runtime's combined sizing adds. The
 /// backend stays the authority, so that copy is checked here against it on
 /// every corpus module, which is the check V0.2.X's module documentation says
 /// this line makes.
@@ -222,5 +225,43 @@ fn the_record_prints_this_code() {
         unindented.trim(),
         block.trim(),
         "the record's code and this file's reference module have drifted"
+    );
+}
+
+/// Upstream 719 split the runtime's sizing by route. A host sizing one arena
+/// for both routes uses `auto_arena_capacity_for_vm_and_native`, which must
+/// add the backend's region figure exactly once, and a host running only
+/// native code uses `native_route_buffers_for`, whose three buffers must be the
+/// figures this backend's header publishes. Both are checked on every corpus
+/// module, against the backend's own functions.
+#[test]
+fn the_runtimes_route_figures_are_the_backends() {
+    let mut compared = 0;
+    for (name, m) in common::corpus() {
+        let region = keleusma_native::region::host_arena_supplement_bytes(&m) as usize;
+        let buffers = keleusma::native_region::native_route_buffers_for(&m);
+        assert_eq!(buffers.region_bytes, region, "{name}: region buffer");
+        assert_eq!(
+            buffers.private_bytes,
+            keleusma::vm::required_persistent_capacity_for(&m)
+                + keleusma_native::region::persistent_supplement_bytes(&m) as usize,
+            "{name}: private buffer"
+        );
+        assert_eq!(
+            buffers.shared_bytes, m.shared_data_bytes as usize,
+            "{name}: shared buffer"
+        );
+        if let (Ok(vm), Ok(both)) = (
+            keleusma::vm::auto_arena_capacity_for(&m, &[]),
+            keleusma::vm::auto_arena_capacity_for_vm_and_native(&m, &[]),
+        ) {
+            assert_eq!(both, vm + region, "{name}: combined arena");
+            compared += 1;
+        }
+    }
+    // Non-vacuity. Most corpus modules have a VM figure to combine.
+    assert!(
+        compared >= 60,
+        "only {compared} corpus modules were combined"
     );
 }

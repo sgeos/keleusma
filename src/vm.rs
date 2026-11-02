@@ -991,13 +991,82 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     Ok(all_ops)
 }
 
-/// Compute the arena capacity (excluding the persistent `data` region) that
-/// the bundled `i64`/`f64` runtime needs to construct the given module, run it
-/// under the supplied native attestations, and receive its host inputs.
+/// The terms of the virtual machine's arena figure, each in bytes, as
+/// [`vm_arena_terms_for`] computes them for the bundled `i64`/`f64` runtime.
+///
+/// [`VmArenaTerms::total`] is the figure [`auto_arena_capacity_for`] returns.
+/// The terms are public so that a host or an auditor can see which part of the
+/// figure each requirement contributes, and so that a test can check the figure
+/// against the verifier's own quantities term by term.
+///
+/// None of these terms is the persistent region, which
+/// [`required_persistent_capacity_for`] sizes, and none is the native backend's
+/// composite region, which [`crate::native_region::native_route_buffers_for`]
+/// reports for a host that runs native code.
+#[cfg(feature = "verify")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VmArenaTerms {
+    /// The pre-sized operand stack, the verifier's module-wide peak slot count
+    /// floored at `MIN_STACK_RESERVE_SLOTS`, times the runtime's real slot
+    /// width.
+    pub operand_stack_bytes: usize,
+    /// The pre-sized call frames, the static call depth floored at
+    /// `MIN_FRAMES_RESERVE`, times the runtime's real frame width.
+    pub call_frame_bytes: usize,
+    /// The pre-sized opaque registry, the module's `aux_arena_bytes`.
+    pub opaque_registry_bytes: usize,
+    /// The verifier's peak per-iteration arena heap over every chunk.
+    pub iteration_heap_bytes: usize,
+    /// The host inputs of the entry chunk, [`host_input_arena_bytes_for`].
+    pub host_input_bytes: usize,
+    /// The flat bodies of the private composite initializers that construction
+    /// and a hot swap copy through the arena top region. The copy stays there
+    /// until the first `Reset`, so it coexists with the first iteration's heap
+    /// and inputs.
+    pub seeded_private_bytes: usize,
+    /// The momentary extra a seeded initializer with a nested composite needs
+    /// while it is packed, before any heap or input exists. Zero when no seeded
+    /// initializer nests a composite.
+    pub seeding_transient_bytes: usize,
+}
+
+#[cfg(feature = "verify")]
+impl VmArenaTerms {
+    /// The arena capacity these terms require, saturating at `usize::MAX`.
+    ///
+    /// The bottom region holds the operand stack, the call frames and the
+    /// opaque registry for the whole life of the virtual machine. The top
+    /// region holds the seeded initializers from construction to the first
+    /// `Reset`, together with either the transient of seeding, which happens
+    /// before any run, or the heap and inputs of a run, whichever is larger.
+    pub fn total(&self) -> usize {
+        let run = self
+            .iteration_heap_bytes
+            .saturating_add(self.host_input_bytes);
+        self.operand_stack_bytes
+            .saturating_add(self.call_frame_bytes)
+            .saturating_add(self.opaque_registry_bytes)
+            .saturating_add(self.seeded_private_bytes)
+            .saturating_add(run.max(self.seeding_transient_bytes))
+    }
+}
+
+/// Compute the arena capacity that the bundled `i64`/`f64` virtual machine
+/// needs to construct the given module, run it under the supplied native
+/// attestations, and receive its host inputs. The persistent region is not
+/// included, and a host adds [`required_persistent_capacity_for`].
+///
+/// **Route.** This is the virtual machine's figure only. A host that runs the
+/// module as native code sizes its buffers from
+/// [`crate::native_region::native_route_buffers_for`] instead, and needs none
+/// of the terms below. A host that keeps one arena for either route uses
+/// [`auto_arena_capacity_for_vm_and_native`]. Until 2026-11-01 this function
+/// returned that combined figure, as the changelog records.
 ///
 /// Because the runtime pre-allocates its entire bottom-region working set at
 /// construction (B28 P3 item 5, priority 1), the figure is the sum of every
-/// component, each sized to the real bundled-runtime footprint.
+/// component, each sized to the real bundled-runtime footprint, as
+/// [`VmArenaTerms`] lists them.
 ///
 /// - The operand stack, `max_operand_slots * size_of::<Value>()`.
 /// - The call frames, `max_frame_depth * size_of::<CallFrame>()`.
@@ -1005,21 +1074,29 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// - The per-iteration arena heap, `max_heap_bytes`.
 /// - The host inputs of the entry chunk, [`host_input_arena_bytes_for`] with
 ///   no text allowance.
+/// - The private composite initializers that construction copies through the
+///   arena top region, which stay there until the first `Reset`.
 ///
 /// The operand-slot and frame-depth components are floored at the same
 /// minimums the constructor applies (`MIN_STACK_RESERVE_SLOTS`,
-/// `MIN_FRAMES_RESERVE`), so the first four components exactly match the
-/// reservation the constructor makes and the program's own peak.
+/// `MIN_FRAMES_RESERVE`), so the first three components exactly match the
+/// reservation the constructor makes.
+///
+/// **Right-sized, not exact.** Every term is a bound the verifier or the
+/// module proves, and the figure adds nothing beyond them. A program's measured
+/// peak can be lower, where the verifier's per-iteration heap bound is a worst
+/// case over paths, where a loop exits early, or where the input term charges a
+/// packing transient that does not arise. The figure is never meant to be
+/// lower than a run of a verified module can reach.
 ///
 /// **Host inputs are included.** A composite argument to the entry chunk, and
 /// a composite resume value, is copied into the arena's top region when it
 /// enters the virtual machine, and the copy stays until the next `Reset`. An
 /// arena of exactly the returned size therefore admits `call` and every
 /// `resume` up to each `Reset`, for inputs of the declared types whose
-/// composites contain no `Text`. A scalar input needs nothing, so a module
-/// whose entry takes and resumes with scalars gets the same figure as before
-/// the inputs were counted. [`host_input_arena_bytes_for`] documents how the
-/// input term is bounded and where it is conservative.
+/// composites contain no `Text`. A scalar input needs nothing.
+/// [`host_input_arena_bytes_for`] documents how the input term is bounded and
+/// where it is conservative.
 ///
 /// **Text inside a composite input.** An owned `Text` field inside a
 /// composite input is copied into the arena as well, and its length is the
@@ -1027,29 +1104,15 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// inputs calls [`auto_arena_capacity_with_input_text`] with its own bound on
 /// the text bytes in any one input value.
 ///
-/// **Why one function rather than a companion.** A host that constructs a
-/// virtual machine also calls its entry, and a composite input it passes
-/// needs the space whether or not the figure counts it. A figure that omits
-/// that space is not a size that works, and no realistic host wants the
-/// smaller figure. The host inputs are therefore part of this function. The
-/// one input the module cannot bound, text inside a composite, is the only
-/// reason for the companion, which takes the host's allowance for it.
-///
-/// **Native allocation is included.** The figure also adds
-/// [`crate::native_region::native_region_supplement_bytes`], the region a
-/// native compilation of the module reserves, on the operator's ruling of
-/// 2026-10-31 that one figure serve both routes. A host that runs only the
-/// virtual machine is over-provisioned by exactly that supplement, and a host
-/// that formerly added the native figure itself must stop, or it counts it
-/// twice.
-///
 /// **Not covered.** A direct call of a non-entry chunk through
 /// `Vm::call_function` copies its composite arguments too, and is not counted.
 /// An input whose declared shape is not flat, which the module records as
 /// `WireShape::Top`, is not counted. A host-built value that does not conform
 /// to its declared type can occupy more than the declared size. Repeated calls
 /// of a non-`Stream` entry with no intervening `Reset` accumulate their
-/// argument copies, since only `Reset` reclaims the top region.
+/// argument copies, since only `Reset` reclaims the top region. A host-seeded
+/// private slot of a hot swap holding a value larger than its declared type is
+/// a contract violation and is not counted.
 ///
 /// **Slot width.** This entry point uses the bundled runtime's
 /// `size_of::<GenericValue<i64, f64>>()`, the common case. A narrow
@@ -1071,7 +1134,9 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// Returns `VmError::VerifyError` when the program's own footprint cannot be
 /// bounded, and when the entry resumes with a composite and the number of
 /// resumes before a `Reset` cannot be bounded, as
-/// [`verify::max_resumes_before_reset`] describes.
+/// [`verify::max_resumes_before_reset`] describes. A figure that would exceed
+/// `usize::MAX` saturates there, which no allocation can satisfy, so it fails
+/// at `Arena::with_capacity` rather than under-sizing.
 #[cfg(feature = "verify")]
 pub fn auto_arena_capacity_for(
     module: &crate::bytecode::Module,
@@ -1093,6 +1158,9 @@ pub fn auto_arena_capacity_for(
 /// pointer, keeps text-bearing composites boxed and does not copy their text,
 /// so the allowance only over-provisions there.
 ///
+/// Like [`auto_arena_capacity_for`], this is the virtual machine's figure only
+/// and excludes the native region.
+///
 /// # Errors
 ///
 /// As [`auto_arena_capacity_for`].
@@ -1102,21 +1170,162 @@ pub fn auto_arena_capacity_with_input_text(
     native_wcmu: &[u32],
     text_bytes_per_input: usize,
 ) -> Result<usize, VmError> {
+    Ok(vm_arena_terms_for(module, native_wcmu, text_bytes_per_input)?.total())
+}
+
+/// The terms of [`auto_arena_capacity_with_input_text`], one by one.
+///
+/// # Errors
+///
+/// As [`auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub fn vm_arena_terms_for(
+    module: &crate::bytecode::Module,
+    native_wcmu: &[u32],
+    text_bytes_per_input: usize,
+) -> Result<VmArenaTerms, VmError> {
     let footprint = verify::module_runtime_footprint(module, native_wcmu)
         .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
     let slots = (footprint.max_operand_slots as usize).max(MIN_STACK_RESERVE_SLOTS);
     let frames = (footprint.max_frame_depth as usize).max(MIN_FRAMES_RESERVE);
-    let stack_bytes =
-        slots.saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<i64, f64>>());
-    let frame_bytes = frames.saturating_mul(core::mem::size_of::<CallFrame>());
-    let inputs = host_input_arena_bytes_for(module, text_bytes_per_input)?;
-    let native = crate::native_region::native_region_supplement_bytes(module) as usize;
-    Ok(stack_bytes
-        .saturating_add(frame_bytes)
-        .saturating_add(module.aux_arena_bytes as usize)
-        .saturating_add(footprint.max_heap_bytes as usize)
-        .saturating_add(inputs)
-        .saturating_add(native))
+    let (seeded_private_bytes, seeding_transient_bytes) = seeded_private_arena_bytes(module);
+    Ok(VmArenaTerms {
+        operand_stack_bytes: slots
+            .saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<i64, f64>>()),
+        call_frame_bytes: frames.saturating_mul(core::mem::size_of::<CallFrame>()),
+        opaque_registry_bytes: module.aux_arena_bytes as usize,
+        iteration_heap_bytes: footprint.max_heap_bytes as usize,
+        host_input_bytes: host_input_arena_bytes_for(module, text_bytes_per_input)?,
+        seeded_private_bytes,
+        seeding_transient_bytes,
+    })
+}
+
+/// The arena capacity for a host that keeps one arena able to serve either
+/// route, the virtual machine and a native compilation of the same module.
+///
+/// The figure is [`auto_arena_capacity_for`] plus
+/// [`crate::native_region::native_region_supplement_bytes`]. It is what
+/// [`auto_arena_capacity_for`] returned from 2026-10-31, on the operator's
+/// ruling on question 22, until 2026-11-01, when that function became the
+/// virtual machine's figure alone. A host that relied on the combined figure
+/// switches to this function and is never sized smaller than before.
+///
+/// It over-provisions either route alone. The virtual machine does not use the
+/// native region, and a native-only host needs none of the virtual machine's
+/// terms. A host that runs only one route uses that route's function.
+///
+/// # Errors
+///
+/// As [`auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub fn auto_arena_capacity_for_vm_and_native(
+    module: &crate::bytecode::Module,
+    native_wcmu: &[u32],
+) -> Result<usize, VmError> {
+    Ok(auto_arena_capacity_for(module, native_wcmu)?
+        .saturating_add(crate::native_region::native_region_supplement_bytes(module) as usize))
+}
+
+/// The top-region bytes that seeding the private composite initializers
+/// occupies, as `(retained, transient)`.
+///
+/// Construction, and a hot swap, move each private composite initializer into
+/// the persistent pool through `into_arena_canonical`, which packs the body in
+/// the arena top region first. The packed copy is not reclaimed until the first
+/// `Reset`, so it is retained beside the first iteration's heap. Measured on
+/// 2026-11-01, `examples/scripts/14_frame_log.kel` left 24 bytes in the top
+/// region after `Vm::new`, the body of its `Frame` initializer, and failed with
+/// `OutOfArena` at a figure that omitted them.
+///
+/// The retained figure charges each composite pool slot whose initializer is
+/// not `Unit` its pool extent, which is its declared flat size, plus the bytes
+/// of every static string inside the initializer, which the packer copies into
+/// the arena. A slot whose initializer is missing from the table is charged as
+/// though present. The transient is the largest extent among initializers that
+/// nest a composite, since packing one holds its child bodies and its own body
+/// at once, at most twice its flat size.
+#[cfg(feature = "verify")]
+fn seeded_private_arena_bytes(module: &crate::bytecode::Module) -> (usize, usize) {
+    use crate::bytecode::{ConstValue, SlotVisibility};
+    let Some(dl) = module.data_layout.as_ref() else {
+        return (0, 0);
+    };
+    let shared = dl
+        .slots
+        .iter()
+        .filter(|s| matches!(s.visibility, SlotVisibility::Shared))
+        .count();
+    let pool = module.persistent_composite_bytes as usize;
+    let mut retained = 0usize;
+    let mut transient = 0usize;
+    for (i, entry) in dl.private_composite_layout.iter().enumerate() {
+        let start = entry.offset as usize;
+        let end = dl
+            .private_composite_layout
+            .iter()
+            .skip(i + 1)
+            .map(|e| e.offset as usize)
+            .filter(|&o| o > start)
+            .min()
+            .unwrap_or(pool);
+        let extent = end.saturating_sub(start);
+        let init = (entry.slot as usize)
+            .checked_sub(shared)
+            .and_then(|p| dl.private_init.get(p));
+        let (text, nested) = match init {
+            Some(ConstValue::Unit) => continue,
+            Some(value) => const_text_and_nesting(value),
+            None => (0, true),
+        };
+        retained = retained.saturating_add(extent).saturating_add(text);
+        if nested {
+            transient = transient.max(extent);
+        }
+    }
+    (retained, transient)
+}
+
+/// The static string bytes inside a constant, and whether it nests a
+/// composite inside a composite. The walk is iterative over an explicit
+/// worklist, so its depth is bounded by the constant's size rather than by
+/// the machine stack.
+#[cfg(feature = "verify")]
+fn const_text_and_nesting(value: &crate::bytecode::ConstValue) -> (usize, bool) {
+    use crate::bytecode::ConstValue;
+    fn children(v: &ConstValue) -> alloc::vec::Vec<&ConstValue> {
+        match v {
+            ConstValue::Tuple(xs) | ConstValue::Array(xs) => xs.iter().collect(),
+            ConstValue::Struct { fields, .. } => fields.iter().map(|(_, f)| f).collect(),
+            ConstValue::Enum { fields, .. } => fields.iter().collect(),
+            _ => alloc::vec::Vec::new(),
+        }
+    }
+    let is_composite = |v: &ConstValue| {
+        matches!(
+            v,
+            ConstValue::Tuple(_)
+                | ConstValue::Array(_)
+                | ConstValue::Struct { .. }
+                | ConstValue::Enum { .. }
+        )
+    };
+    let mut text = 0usize;
+    let mut nested = false;
+    let mut work: alloc::vec::Vec<(&ConstValue, bool)> = alloc::vec![(value, false)];
+    while let Some((v, inside_composite)) = work.pop() {
+        if let ConstValue::StaticStr(s) = v {
+            text = text.saturating_add(s.len());
+        }
+        let composite = is_composite(v);
+        if composite && inside_composite {
+            nested = true;
+        }
+        for c in children(v) {
+            work.push((c, inside_composite || composite));
+        }
+    }
+    (text, nested)
 }
 
 /// Arena bytes that the host inputs of the module's entry chunk occupy at
