@@ -3716,14 +3716,21 @@ fn compile_with_recorded_type_hook(
                         "const data does not produce runtime slots; const fields handled separately"
                     ),
                 };
-                let token = schema_type_token(peel_arrays(&field.type_expr), &program.types);
+                // ONE TOKEN PER FIELD, the form H2 the operator chose on 2026-10-31.
+                // An array field's token carries its element count, so resizing an
+                // array changes the hash, which the per-slot form expressed only by
+                // repeating the element's line.
+                let leaf = schema_type_token(peel_arrays(&field.type_expr), &program.types);
+                let token = if matches!(field.type_expr, TypeExpr::Array(..)) {
+                    format!("[{leaf};{n_slots}]")
+                } else {
+                    leaf
+                };
                 let tokens = match pass_visibility {
                     DataVisibility::Shared => &mut shared_tokens,
                     _ => &mut private_tokens,
                 };
-                for _ in 0..n_slots {
-                    tokens.push(token.clone());
-                }
+                tokens.push(token);
                 // ONE FIELD, HOWEVER MANY ELEMENTS IT HAS.
                 //
                 // Every element of an array still occupies one logical slot, so a

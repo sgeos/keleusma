@@ -4464,23 +4464,31 @@ pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
     crc32(&buf)
 }
 
-/// CRC-32 of the data-segment layout with each slot's declared type, the schema hash a module
+/// CRC-32 of the data-segment layout with each field's declared type, the schema hash a module
 /// carries.
 ///
-/// The canonical form extends [`compute_schema_hash`]'s. Each slot emits its name, a null byte,
-/// its visibility tag, a unit-separator byte `0x1F`, its type token from `slot_types`, which is
-/// parallel to the layout's logical slots, and a newline. A missing token is empty. The operator ruled on
-/// 2026-10-28 that the hot-swap schema hash cover slot types, so two modules whose slots share
-/// names but not types, a reordered struct for example, no longer hash alike.
+/// # The canonical form, H2
 ///
-/// The type token is the slot's element type after every outer array level is removed, since an
-/// array field takes one slot per element. A scalar renders as its name, such as `Word`, `Byte`,
-/// `bool`, `Text`, `Float` or `Fixed`, the last without its fraction-bit count, which does not
-/// change the layout. A struct renders as `Name{field:token,...}` in
-/// declaration order, an array inside one as `[token;N]`, a tuple as `(token,...)` and any other
-/// named type as its name. The reference compiler and the self-hosted driver both build these
-/// tokens, from the declared types and from the parser's records, and must agree byte for byte.
-pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, slot_types: &[String]) -> u32 {
+/// One line per FIELD, in layout order. Each emits the field's name, a null byte, its
+/// visibility tag (`0x53` `'S'` shared, `0x50` `'P'` private), a unit-separator byte `0x1F`,
+/// its type token from `field_types`, which is parallel to `layout.fields`, and a newline. A
+/// missing token is empty. The operator ruled on 2026-10-28 that the hot-swap schema hash cover
+/// the declared types, and on 2026-10-31 chose this per-field form, H2, over streaming the
+/// earlier per-slot form. Every hash of a module with an array changed with that choice.
+///
+/// A scalar renders as its name, such as `Word`, `Byte`, `bool`, `Text`, `Float` or `Fixed`,
+/// the last without its fraction-bit count, which does not change the layout. A struct renders
+/// as `Name{field:token,...}` in declaration order, an array inside one as `[token;N]`, a tuple
+/// as `(token,...)` and any other named type as its name. **An array FIELD renders as
+/// `[leaf;count]`**, where `leaf` is the token of its innermost element and `count` the product
+/// of its dimensions, the element count. So resizing, retyping or reordering an array each
+/// changes the hash. Two shapes of the same element count, `[[Word;3];4]` and `[Word;12]`,
+/// render alike, since they occupy the same slots, and because parse.kel's array record carries
+/// only the element count, which is what the self-hosted driver can reproduce. The reference
+/// compiler and the self-hosted driver both build these tokens and must agree byte for byte.
+///
+/// The work is a function of the field count, not of the element count.
+pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, field_types: &[String]) -> u32 {
     let layout = match layout {
         Some(l) => l,
         None => return 0,
@@ -4489,22 +4497,18 @@ pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, slot_types: &[Stri
         return 0;
     }
     let mut buf: Vec<u8> = Vec::new();
-    let mut i = 0usize;
-    for field in &layout.fields {
-        for _ in 0..field.count {
-            buf.extend_from_slice(field.name.as_bytes());
-            buf.push(0x00);
-            buf.push(match field.visibility {
-                SlotVisibility::Shared => b'S',
-                SlotVisibility::Private => b'P',
-            });
-            buf.push(0x1F);
-            if let Some(token) = slot_types.get(i) {
-                buf.extend_from_slice(token.as_bytes());
-            }
-            buf.push(b'\n');
-            i += 1;
+    for (field, i) in layout.fields.iter().zip(0usize..) {
+        buf.extend_from_slice(field.name.as_bytes());
+        buf.push(0x00);
+        buf.push(match field.visibility {
+            SlotVisibility::Shared => b'S',
+            SlotVisibility::Private => b'P',
+        });
+        buf.push(0x1F);
+        if let Some(token) = field_types.get(i) {
+            buf.extend_from_slice(token.as_bytes());
         }
+        buf.push(b'\n');
     }
     crc32(&buf)
 }

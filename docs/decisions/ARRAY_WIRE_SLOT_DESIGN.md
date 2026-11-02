@@ -729,8 +729,13 @@ stays at 32 and that a private array of composites occupies its pool bodies alon
 
 ### What remains of the rulings
 
-- **H2, the per-field schema hash.** Not done in this increment. The hash is still computed
-  over one canonical line per logical slot, with values unchanged for every module.
+- **H2, the per-field schema hash.** Landed in the increment after Encoding F, in both
+  compilers. One canonical line per field, an array field's token being `[leaf;count]` with
+  the element count, which is what parse.kel's array record carries and so what the
+  self-hosted driver can reproduce. Two array shapes of one element count, `[[Word;3];4]` and
+  `[Word;12]`, therefore hash alike, since they occupy the same slots. That representation is
+  a choice within the ruling, not a ruling. The untyped `compute_schema_hash` keeps its
+  per-slot form and values.
 - **Option B and S1.** Not done. Both change what a slot operand means and how private arrays
   are stored, and option B changes the host's shared-slot index space, so every embedder's
   `get_shared` and `set_shared` index changes with it.

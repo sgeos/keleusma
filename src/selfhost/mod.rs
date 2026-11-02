@@ -7070,7 +7070,7 @@ pub fn schema_hash_from_pipeline(src: &str) -> u32 {
     )
 }
 
-/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
+/// Each data field's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
 /// [`assemble_data_slots`], from parse.kel's data records and its struct records.
 ///
 /// A data record names each field's type, 6, and an array's element count, 8. A struct record
@@ -7128,13 +7128,15 @@ fn schema_slot_tokens(
             out.push('}');
         }
     }
-    // Data fields as (visibility, type id, slot count), in declaration order.
-    let mut fields: Vec<(i64, i64, i64)> = Vec::new();
+    // Data fields as (visibility, type id, element count when an array), in declaration
+    // order. The count is `None` for a field with no array record, so `[Word; 1]` and `Word`
+    // keep distinct tokens, as the reference's do.
+    let mut fields: Vec<(i64, i64, Option<i64>)> = Vec::new();
     let mut vis = 0;
     for &(code, val) in data_records {
         match code {
             9 => vis = val % 4,
-            4 => fields.push((vis, -1, 1)),
+            4 => fields.push((vis, -1, None)),
             6 => {
                 if let Some(f) = fields.last_mut() {
                     f.1 = val;
@@ -7142,20 +7144,23 @@ fn schema_slot_tokens(
             }
             8 => {
                 if let Some(f) = fields.last_mut() {
-                    f.2 = val;
+                    f.2 = Some(val);
                 }
             }
             _ => {}
         }
     }
+    // One token per FIELD, the form H2: an array field renders as `[leaf;count]` with the
+    // product of its dimensions, which is the count parse.kel's array record carries.
     let mut tokens = Vec::new();
     for pass in [0i64, 1i64] {
         for &(_, ty, count) in fields.iter().filter(|f| f.0 == pass) {
             let mut token = String::new();
             render(ty, 0, &name_of, &struct_id, &structs, &mut token);
-            for _ in 0..count.max(1) {
-                tokens.push(token.clone());
-            }
+            tokens.push(match count {
+                Some(n) => format!("[{token};{n}]"),
+                None => token,
+            });
         }
     }
     tokens
