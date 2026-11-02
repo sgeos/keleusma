@@ -1799,8 +1799,10 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => "Byte".to_string(),
             PrimType::Word => "Word".to_string(),
-            PrimType::Fixed(Some(n)) => alloc::format!("Fixed{}", n),
-            PrimType::Fixed(None) => "Fixed".to_string(),
+            // The family name for every frac-bit width, as the type checker
+            // and the compiler key a `Fixed` impl. Until 2026-11-01 this read
+            // `Fixed<n>` as `Fixed{n}`, which matched neither.
+            PrimType::Fixed(_) => "Fixed".to_string(),
             PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),
             PrimType::Text => "Text".to_string(),
