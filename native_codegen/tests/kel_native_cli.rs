@@ -234,15 +234,17 @@ fn every_documented_failure_reaches_its_exit_status() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A typed destructuring `let`. The reference compiler accepts it, and the
-/// self-hosted destructuring filter refuses it as outside the subset, which is
+/// A variant whose payload holds an enum, matched by a pattern that binds it.
+/// The reference compiler accepts it, and the self-hosted parser refuses it as
+/// outside the subset, because it does not model that payload layout. It is
 /// the witness `tests/self_hosted_backend.rs` uses for
 /// `SelfHostError::Unsupported`. Absorption 129 replaced a pipe into a generic
-/// template, when upstream pull request 694 brought pipes into the subset, and
-/// then a nested destructuring `let`, when upstream pull request 705 brought
-/// nested patterns into it.
-const OUTSIDE_SUBSET: &str = "loop main(t: Word) -> Word { \
-    let (a, b): (Word, Word) = (t, 2); let r = yield a + b; yield r }";
+/// template and then a nested destructuring `let`, and absorption 132 a typed
+/// destructuring `let`, each when upstream brought it into the subset, in pull
+/// requests 694, 705 and 723.
+const OUTSIDE_SUBSET: &str = "enum W { A(V, Word) }\nenum V { B(Word), C }\n\
+    loop main(t: Word) -> Word { let w = W::A(V::C, t); \
+    let r = yield match w { W::A(v, y) => y }; yield r }";
 
 /// **QUESTION 19, THE SELECTOR.** Each of the three compilers produces the
 /// module the native route lowers, and the libraries they yield are the same
