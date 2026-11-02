@@ -37,14 +37,15 @@ slack, as V0.2.X inferred, and none changed.
 
 ## Verification
 
-Made with `RUSTC_WRAPPER=` at the records commit.
+Made with `RUSTC_WRAPPER=` at `2ac77f6d`. The figures were written after the
+run, and only this file changed afterwards.
 
 | Check | Result |
 |---|---|
-| Native fmt, clippy in both float configurations, doc and shellcheck | FILL |
-| Native suites, default features and `narrow-float-32` | FILL |
-| Root `documentation_links`, `comment_citations`, `ci_shard_coverage` and `gate_ci_correspondence` | FILL |
-| Root `confinement_analysis`, `rogue_scripts`, and with `self-host` `selfhost_full_language` and `selfhost_parse_refusals` | FILL |
+| Native fmt, clippy in both float configurations, doc and shellcheck | passed |
+| Native suites, default features and `narrow-float-32` | 878 passed, 0 failed, 1 ignored each |
+| Root `documentation_links`, `comment_citations`, `ci_shard_coverage` and `gate_ci_correspondence` | 21 passed |
+| Root `confinement_analysis`, `rogue_scripts`, and with `self-host` `selfhost_full_language` and `selfhost_parse_refusals` | 62 and 122 passed |
 
 The root workspace suite was not run locally. The hosted run on the pull
 request covers it.
