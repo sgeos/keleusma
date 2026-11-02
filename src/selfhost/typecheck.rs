@@ -129,15 +129,23 @@ impl Layout {
             .as_ref()
             .ok_or_else(|| protocol("stage has no data layout"))?;
         let mut fields: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-        for (index, slot) in data.slots.iter().enumerate().take(data.shared_layout.len()) {
-            if slot.visibility != SlotVisibility::Shared || data.shared_layout[index].kind != 3 {
+        for field in data
+            .fields
+            .iter()
+            .filter(|f| f.visibility == SlotVisibility::Shared)
+        {
+            if field.kind != 3 {
                 return Err(protocol("type inputs must be shared Word slots"));
             }
-            let entry = fields.entry(slot.name.clone()).or_insert((index, 0));
-            if entry.0 + entry.1 != index {
+            if fields
+                .insert(
+                    field.name.clone(),
+                    (field.first_slot as usize, field.count as usize),
+                )
+                .is_some()
+            {
                 return Err(protocol("noncontiguous stage field"));
             }
-            entry.1 += 1;
         }
         Ok(Self(fields))
     }

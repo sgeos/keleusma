@@ -1579,12 +1579,10 @@ pub fn required_persistent_capacity_for(module: &crate::bytecode::Module) -> usi
 pub fn required_persistent_capacity_for_generic<W: crate::word::Word, F: crate::float::Float>(
     module: &crate::bytecode::Module,
 ) -> usize {
-    let private_count = module.data_layout.as_ref().map_or(0, |dl| {
-        dl.slots
-            .iter()
-            .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Private))
-            .count()
-    });
+    let private_count = module
+        .data_layout
+        .as_ref()
+        .map_or(0, crate::bytecode::DataLayout::private_slot_count);
     // The private-slot `Value` array, plus the persistent flat-composite body
     // pool those slots need (B28 P3 item 5, item 3a). A private slot holding a
     // flat composite stores its body in the pool, which follows the slot array
@@ -2914,24 +2912,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
             match view.data_layout() {
                 None => (0u32, 0u32),
-                Some(dl) => {
-                    let mut shared = 0u32;
-                    let mut private_ = 0u32;
-                    // Iterates RECORDS and adds each run, not logical slots:
-                    // `slot(i)` takes a record index, and a slot table is now
-                    // run-length encoded. Counting one per record would
-                    // undercount an array by its element count.
-                    for i in 0..dl.slot_record_count() {
-                        let Some(slot) = dl.slot(i) else { continue };
-                        let run = u32::from(slot.run);
-                        if slot.visibility == crate::wire_schema::visibility_tag::SHARED {
-                            shared = shared.saturating_add(run);
-                        } else {
-                            private_ = private_.saturating_add(run);
-                        }
-                    }
-                    (shared, private_)
-                }
+                // Sums FIELD counts, not records: one field stands for every
+                // element of an array, each of which takes a logical slot.
+                // `DataLayoutTable::parse` bounded the total by `MAX_DATA_ADDR`,
+                // so neither sum can exceed a `u32`.
+                Some(dl) => (
+                    u32::try_from(dl.shared_slot_count()).unwrap_or(u32::MAX),
+                    u32::try_from(dl.private_slot_count()).unwrap_or(u32::MAX),
+                ),
             }
         };
         let private_storage_bytes =
@@ -2953,18 +2941,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let aux_bytes = Self::aux_body_slice(bytes);
             let word_bytes = (1usize << bytes[12]) / 8;
             let float_bytes = (1usize << bytes[14]) / 8;
-            // The private-slot initialisers are a constant pool like any other,
-            // reached through the range the data layout records.
-            let inits: alloc::vec::Vec<crate::bytecode::ConstValue> =
-                match crate::wire_schema::AuxView::parse(aux_bytes)
-                    .ok()
-                    .and_then(|v| v.data_layout())
-                    .map(|dl| dl.private_init_range())
-                {
-                    Some(range) => crate::wire_schema::decode_constant_pool(aux_bytes, range)
-                        .unwrap_or_default(),
-                    None => alloc::vec::Vec::new(),
-                };
+            // One initialiser per private FIELD, applied to each of its
+            // elements. An initialiser that does not decode is refused, since
+            // starting a slot as `Unit` in its place would hand the program a
+            // value its verifier never accounted for.
+            let view = crate::wire_schema::AuxView::parse(aux_bytes)
+                .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+            let mut inits: alloc::vec::Vec<crate::bytecode::ConstValue> =
+                alloc::vec::Vec::with_capacity(private_count as usize);
+            if let Some(dl) = view.data_layout() {
+                for f in 0..dl.field_count() {
+                    let Some(r) = dl.field(f) else { continue };
+                    if r.visibility != crate::wire_schema::visibility_tag::PRIVATE {
+                        continue;
+                    }
+                    let cv = dl.field_init_value(f).map_err(|e| {
+                        VmError::TypeError(alloc::format!("private initialiser: {:?}", e))
+                    })?;
+                    for _ in 0..r.count {
+                        inits.push(cv.clone());
+                    }
+                }
+            }
             for i in 0..private_count as usize {
                 let value = match inits.get(i) {
                     Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
@@ -3141,33 +3139,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let (shared_count, private_count) = match module.data_layout.as_ref() {
             None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u32;
-                let mut private_ = 0u32;
-                for slot in &dl.slots {
-                    match slot.visibility {
-                        crate::bytecode::SlotVisibility::Shared => {
-                            shared = shared
-                                .checked_add(1)
-                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
-                                .ok_or_else(|| {
-                                    VmError::VerifyError(String::from(
-                                        "data layout shared slot count exceeds the 24-bit bound",
-                                    ))
-                                })?;
-                        }
-                        crate::bytecode::SlotVisibility::Private => {
-                            private_ = private_
-                                .checked_add(1)
-                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
-                                .ok_or_else(|| {
-                                    VmError::VerifyError(String::from(
-                                        "data layout private slot count exceeds the 24-bit bound",
-                                    ))
-                                })?;
-                        }
-                    }
-                }
-                (shared, private_)
+                let bounded = |n: usize, what: &str| {
+                    u32::try_from(n)
+                        .ok()
+                        .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                        .ok_or_else(|| {
+                            VmError::VerifyError(alloc::format!(
+                                "data layout {what} slot count exceeds the 24-bit bound",
+                            ))
+                        })
+                };
+                (
+                    bounded(dl.shared_slot_count(), "shared")?,
+                    bounded(dl.private_slot_count(), "private")?,
+                )
             }
         };
         let private_storage_bytes =
@@ -3205,8 +3190,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let inits = module
                 .data_layout
                 .as_ref()
-                .map(|dl| dl.private_init.as_slice())
-                .unwrap_or(&[]);
+                .map(crate::bytecode::DataLayout::private_init_values)
+                .unwrap_or_default();
             let word_bytes = (1usize << module.word_bits_log2) / 8;
             let float_bytes = (1usize << module.float_bits_log2) / 8;
             for i in 0..private_count as usize {
@@ -3320,59 +3305,33 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
-    /// The persistent composite pool offset for a private slot that holds a
-    /// flat composite body recorded in the module's private-composite layout
-    /// table (B28 item 2 step 6A). `None` for a scalar slot or an empty
-    /// composite slot, neither of which has a table entry. The table is sorted
-    /// ascending by slot, so this binary-searches it.
-    fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
+    /// The persistent composite pool region of a private slot that holds a
+    /// flat composite body (B28 item 2 step 6A), as `(offset, end)` with `end`
+    /// exclusive. `None` for a scalar slot or a composite with no flat body,
+    /// neither of which has a pool home.
+    ///
+    /// Resolved by binary search over the field records, whose bound is the
+    /// logarithm of the field count. The placement table this replaced was
+    /// scanned linearly on every private composite write, in a quantity the
+    /// program's declarations control.
+    ///
+    /// The element's own body length bounds its region (audit D4), so a
+    /// mismatched body cannot overwrite the adjacent element, which the
+    /// per-element placement table could only approximate by the next offset
+    /// because it carried no length.
+    fn private_composite_region(&self, slot: usize) -> Option<(usize, usize)> {
         let aux = self.aux();
         let dl = aux.data_layout()?;
-        let slot_u16 = u16::try_from(slot).ok()?;
-        // The table is sorted ascending by slot and `validate_data_layout`
-        // proves it, so a binary search is available -- but the table holds at
-        // most one entry per private composite slot, so a scan is both simpler
-        // and bounded by the same count the search would be.
-        for i in 0..dl.private_composite_count() {
-            let e = dl.private_composite(i)?;
-            if e.slot == slot_u16 {
-                return Some(e.offset as usize);
-            }
-        }
-        None
+        let (offset, len) = dl.private_composite(slot)?;
+        let offset = offset as usize;
+        Some((offset, offset.checked_add(usize::from(len))?))
     }
 
-    /// The exclusive upper bound of the private-composite pool region that
-    /// begins at `rel_offset` (audit D4). `validate_data_layout` proves the
-    /// `private_composite_layout` offsets strictly ascending, so a slot's region
-    /// ends at the next-higher table offset, or at the declared pool size for
-    /// the highest slot. Bounding a composite write to this extent prevents one
-    /// slot's body from overwriting the adjacent slot's region, which the
-    /// ascending-offset check alone does not since per-slot body size is not
-    /// carried in the wire format.
-    fn private_composite_slot_end(&self, rel_offset: usize) -> usize {
-        // The declared pool size is not mirrored on the aux body, so derive the
-        // pool's upper bound from the persistent region past the private-slot
-        // Value array. This is the exact bound for the highest slot; every
-        // interior slot is bounded tightly by the next table offset below. The
-        // arena-capacity check at the write independently bounds the physical
-        // region.
-        let private_storage = self.private_slot_count as usize
-            * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
-        let pool = self
-            .arena
-            .persistent_capacity()
-            .saturating_sub(private_storage);
-        let aux = self.aux();
-        let Some(dl) = aux.data_layout() else {
-            return pool;
-        };
-        (0..dl.private_composite_count())
-            .filter_map(|i| dl.private_composite(i))
-            .map(|e| e.offset as usize)
-            .filter(|&o| o > rel_offset)
-            .min()
-            .unwrap_or(pool)
+    /// The persistent composite pool offset of a private slot, see
+    /// [`Self::private_composite_region`].
+    fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
+        self.private_composite_region(slot)
+            .map(|(offset, _)| offset)
     }
 
     /// The shared layout entry for a shared slot, as `(byte offset, kind tag,
@@ -3459,9 +3418,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // through this one path. A scalar, an empty composite, or a boxed value
         // has no table entry and is stored directly.
         let to_store = if crate::bytecode::flat_composite_ref(&value).is_some()
-            && let Some(off) = self.private_composite_pool_offset(slot)
+            && let Some((off, end)) = self.private_composite_region(slot)
         {
-            self.persist_composite_body(value, off)?
+            self.persist_composite_body(value, off, end)?
         } else {
             value
         };
@@ -3551,6 +3510,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         &self,
         val: crate::bytecode::GenericValue<W, F>,
         rel_offset: usize,
+        slot_end: usize,
     ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         let private_storage = self.private_slot_count as usize
             * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
@@ -3562,9 +3522,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let len = bytes.len();
             // Bound the body within this slot's declared pool region (audit D4),
             // so a mismatched body cannot overwrite the adjacent slot's region.
-            // The ascending-offset validation alone does not catch this, since
-            // per-slot body size is not wire-carried.
-            let slot_end = self.private_composite_slot_end(rel_offset);
             if rel_offset.checked_add(len).is_none_or(|end| end > slot_end) {
                 return Err(VmError::InvalidBytecode(alloc::format!(
                     "private composite body of {len} bytes overruns its pool slot region ending at {slot_end}"
@@ -4670,33 +4627,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let (new_shared, new_private) = match new_module.data_layout.as_ref() {
             None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u32;
-                let mut private_ = 0u32;
-                for slot in &dl.slots {
-                    match slot.visibility {
-                        crate::bytecode::SlotVisibility::Shared => {
-                            shared = shared
-                                .checked_add(1)
-                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
-                                .ok_or_else(|| {
-                                    VmError::VerifyError(String::from(
-                                        "data layout shared slot count exceeds the 24-bit bound",
-                                    ))
-                                })?;
-                        }
-                        crate::bytecode::SlotVisibility::Private => {
-                            private_ = private_
-                                .checked_add(1)
-                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
-                                .ok_or_else(|| {
-                                    VmError::VerifyError(String::from(
-                                        "data layout private slot count exceeds the 24-bit bound",
-                                    ))
-                                })?;
-                        }
-                    }
-                }
-                (shared, private_)
+                let bounded = |n: usize, what: &str| {
+                    u32::try_from(n)
+                        .ok()
+                        .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                        .ok_or_else(|| {
+                            VmError::VerifyError(alloc::format!(
+                                "data layout {what} slot count exceeds the 24-bit bound",
+                            ))
+                        })
+                };
+                (
+                    bounded(dl.shared_slot_count(), "shared")?,
+                    bounded(dl.private_slot_count(), "private")?,
+                )
             }
         };
         if initial_data.len() != new_private as usize {
@@ -4804,8 +4748,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let new_inits = new_module
             .data_layout
             .as_ref()
-            .map(|dl| dl.private_init.as_slice())
-            .unwrap_or(&[]);
+            .map(crate::bytecode::DataLayout::private_init_values)
+            .unwrap_or_default();
         let private_init: Vec<crate::bytecode::GenericValue<W, F>> = initial_data
             .into_iter()
             .enumerate()
@@ -15169,31 +15113,30 @@ mod tests {
         let module = compile(&program).expect("compile");
         let wb = (1u32 << module.word_bits_log2) / 8;
         let dl = module.data_layout.as_ref().expect("data layout");
-        assert_eq!(dl.shared_layout.len(), 2, "one entry per shared slot");
+        let entries = dl.shared_slots();
+        assert_eq!(entries.len(), 2, "one entry per shared slot");
+        assert_eq!(dl.fields.len(), 2, "one field per declared field");
         // Slot 0: scalar `Word` at offset 0, kind tag 3 (Int), no body length.
-        assert_eq!(dl.shared_layout[0].offset, 0);
+        assert_eq!(entries[0].offset, 0);
         assert_eq!(
-            dl.shared_layout[0].kind,
+            entries[0].kind,
             crate::value_layout::ScalarKind::Int.to_tag()
         );
-        assert_eq!(dl.shared_layout[0].len, 0);
+        assert_eq!(entries[0].len, 0);
         // Slot 1: composite `(Word, Word)` at offset `wb`, body `2*wb` bytes,
         // tagged as a tuple via the composite flag plus the CompositeKind tag.
-        assert_eq!(dl.shared_layout[1].offset, wb);
+        assert_eq!(entries[1].offset, wb);
         assert_eq!(
-            dl.shared_layout[1].kind,
+            entries[1].kind,
             crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG
                 | crate::value_layout::CompositeKind::Tuple.to_tag()
         );
-        assert_eq!(dl.shared_layout[1].len as u32, 2 * wb);
+        assert_eq!(entries[1].len as u32, 2 * wb);
         assert_eq!(module.shared_data_bytes, 3 * wb);
-        // Wire roundtrip preserves the table.
+        // Wire roundtrip preserves the layout.
         let bytes = module.to_bytes().expect("to_bytes");
         let decoded = crate::bytecode::Module::from_bytes(&bytes).expect("from_bytes");
-        assert_eq!(
-            decoded.data_layout.as_ref().unwrap().shared_layout,
-            dl.shared_layout
-        );
+        assert_eq!(decoded.data_layout.as_ref(), Some(dl));
     }
 
     #[test]

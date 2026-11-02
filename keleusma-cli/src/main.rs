@@ -1221,10 +1221,10 @@ fn repl_run(prefix: &str) {
         .data_layout
         .as_ref()
         .map(|dl| {
-            dl.slots
+            dl.fields
                 .iter()
-                .filter(|s| matches!(s.visibility, keleusma::bytecode::SlotVisibility::Shared))
-                .map(|s| s.name.clone())
+                .filter(|f| matches!(f.visibility, keleusma::bytecode::SlotVisibility::Shared))
+                .flat_map(|f| (0..f.count).map(move |_| f.name.clone()))
                 .collect()
         })
         .unwrap_or_default();

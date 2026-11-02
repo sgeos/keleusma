@@ -420,23 +420,30 @@ fn decoded_constants_and_separate_initializer_pools_execute() {
             let region = directory
                 .regions
                 .iter()
-                .find(|r| r.kind == kind::DATA_INIT)
+                .find(|r| r.kind == kind::DATA_FIELDS)
                 .unwrap();
             let records = wire_schema_records_via_kel(region.kind, region.bytes).unwrap();
-            let WireSchemaRecord::DataInitRecord(init) = &records[0] else {
-                panic!("initializer record")
-            };
-            assert_ne!(
-                init.first,
-                u32::MAX,
-                "control must reach a stored initializer"
-            );
-            module.data_layout.as_mut().unwrap().private_init.clear();
-            module.data_layout.as_mut().unwrap().private_init =
-                wire_decode_constant_pools_via_kel(raw, &[(init.first, init.count)])
+            let layout = module.data_layout.as_mut().unwrap();
+            let mut reached = 0;
+            for (field, record) in layout.fields.iter_mut().zip(&records) {
+                let WireSchemaRecord::DataFieldRecord(r) = record else {
+                    panic!("field record")
+                };
+                if r.init != keleusma::wire_schema::init_form::CONST {
+                    continue;
+                }
+                // Cleared first, so the value the module runs with is the one
+                // the self-hosted decoder read back.
+                field.init = keleusma::bytecode::DataInit::Unit;
+                let value = wire_decode_constant_pools_via_kel(raw, &[(r.init_const, 1)])
                     .unwrap()
                     .pop()
+                    .and_then(|pool| pool.into_iter().next())
                     .unwrap();
+                field.init = keleusma::bytecode::DataInit::Const(value);
+                reached += 1;
+            }
+            assert!(reached > 0, "control must reach a stored initializer");
         }
         let need = required_persistent_capacity_for(&module);
         let mut arena = keleusma::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);

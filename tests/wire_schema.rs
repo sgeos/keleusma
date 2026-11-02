@@ -1265,273 +1265,188 @@ fn an_empty_pool_still_yields_a_usable_range() {
 }
 
 // ---------------------------------------------------------------------------
-// Data-segment layout.
+// Data-segment layout, Encoding F: one `DATA_FIELDS` record per declared field.
 // ---------------------------------------------------------------------------
 
 use keleusma::bytecode::{
-    DataLayout, DataSlot, PrivateCompositeSlot, SharedSlotLayout, SlotVisibility,
+    DataField, DataInit, DataLayout, MAX_DATA_ADDR, SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility,
 };
-use keleusma::wire_schema::{DataLayoutTable, decode_data_layout, visibility_tag};
+use keleusma::wire_schema::{
+    DataFieldRecord, DataLayoutTable, decode_data_layout, init_form, visibility_tag,
+};
+
+/// A struct composite kind tag in the shared-layout kind space.
+const STRUCT_KIND: u8 = SHARED_SLOT_COMPOSITE_FLAG | 2;
+/// The `Int` scalar kind tag.
+const INT_KIND: u8 = 3;
+/// The `Byte` scalar kind tag.
+const BYTE_KIND: u8 = 2;
+/// The `Bool` scalar kind tag.
+const BOOL_KIND: u8 = 1;
+/// The `Text` scalar kind tag.
+const TEXT_KIND: u8 = 6;
 
 fn sample_layout() -> DataLayout {
     DataLayout {
-        slots: vec![
-            DataSlot {
-                name: "buffer".into(),
-                visibility: SlotVisibility::Shared,
-            },
-            DataSlot {
-                name: "counter".into(),
-                visibility: SlotVisibility::Private,
-            },
-            DataSlot {
-                name: "state".into(),
-                visibility: SlotVisibility::Private,
+        fields: vec![
+            DataField::shared("buffer", 0, 1, STRUCT_KIND, 64, 4096, 0),
+            DataField::private("counter", 1, 1, INT_KIND, DataInit::Zero),
+            DataField {
+                offset: Some(128),
+                elem_len: 24,
+                ..DataField::private(
+                    "state",
+                    2,
+                    1,
+                    STRUCT_KIND,
+                    DataInit::Const(ConstValue::Struct {
+                        type_name: "S".into(),
+                        fields: vec![("x".into(), ConstValue::Int(0))],
+                    }),
+                )
             },
         ],
-        shared_layout: vec![SharedSlotLayout {
-            offset: 4096,
-            kind: 0x80 | 2,
-            len: 64,
-        }],
-        private_composite_layout: vec![PrivateCompositeSlot {
-            slot: 2,
-            offset: 128,
-        }],
-        private_init: vec![ConstValue::Int(0), ConstValue::Unit],
     }
+}
+
+fn encode_layout(layout: &DataLayout) -> Vec<u8> {
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(layout).unwrap();
+    b.finish().unwrap()
+}
+
+/// Byte offset of the `DATA_FIELDS` region's first record.
+fn fields_base(bytes: &[u8]) -> usize {
+    WireView::parse(bytes)
+        .unwrap()
+        .find_region(kind::DATA_FIELDS)
+        .expect("DATA_FIELDS present")
+        .byte_offset()
+        .unwrap()
 }
 
 #[test]
 fn a_data_layout_round_trips() {
     let want = sample_layout();
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&want).unwrap();
-    let bytes = b.finish().unwrap();
-
+    let bytes = encode_layout(&want);
     let got = decode_data_layout(&bytes).unwrap().expect("layout present");
-
-    assert_eq!(got.slots.len(), want.slots.len());
-    for (g, w) in got.slots.iter().zip(&want.slots) {
-        assert_eq!(g.name, w.name);
-        assert_eq!(g.visibility, w.visibility);
-    }
-    assert_eq!(got.shared_layout, want.shared_layout);
-    assert_eq!(got.private_composite_layout, want.private_composite_layout);
-    assert_eq!(got.private_init.len(), want.private_init.len());
-    for (g, w) in got.private_init.iter().zip(&want.private_init) {
-        assert!(deep_eq(g, w));
+    assert_eq!(got, want);
+    // `ConstValue`'s equality skips an enum discriminant, so the initialiser
+    // is compared structurally as well.
+    for (g, w) in got.fields.iter().zip(&want.fields) {
+        if let (DataInit::Const(a), DataInit::Const(b)) = (&g.init, &w.init) {
+            assert!(deep_eq(a, b));
+        }
     }
 }
 
-/// A shared layout built from `sample_layout` has exactly ONE shared slot, so
-/// every other test in this file exercises the run-length encoder with `run`
-/// fixed at 1. The grouping never fires and the binary search never resolves a
-/// non-zero offset within a run. **That makes the whole suite vacuous with
-/// respect to the encoding**, which is why this test exists separately rather
-/// than by widening the shared fixture.
-///
-/// Covered here: a real run, two runs separated by a break, exact round-trip
-/// of every logical slot, and resolution through the binary search. The
-/// `u16::MAX` chunking and the two non-grouping cases have their own tests
-/// below.
+/// Every element kind and visibility at the counts the design record names,
+/// one, two, 65,535, 65,536 and the largest count the slot space admits, round
+/// trips exactly and resolves at both ends of the field.
 #[test]
-fn a_shared_layout_run_round_trips_and_resolves_slot_by_slot() {
-    use keleusma::wire_schema::DataLayoutTable;
+fn every_kind_and_visibility_round_trips_at_the_boundary_counts() {
+    let max = MAX_DATA_ADDR - 1;
+    for count in [1u32, 2, 65_535, 65_536, max] {
+        let stride = |w: u32| if count > 1 { w } else { 0 };
+        let cases: Vec<DataField> = vec![
+            DataField::shared("s.w", 0, count, INT_KIND, 0, 0, stride(8)),
+            DataField::shared("s.b", 0, count, BYTE_KIND, 0, 0, stride(1)),
+            DataField::shared("s.p", 0, count, STRUCT_KIND, 16, 0, stride(16)),
+            DataField::private("p.w", 0, count, INT_KIND, DataInit::Zero),
+            DataField::private("p.b", 0, count, BYTE_KIND, DataInit::Zero),
+            DataField::private("p.t", 0, count, BOOL_KIND, DataInit::Zero),
+            DataField::private(
+                "p.x",
+                0,
+                count,
+                TEXT_KIND,
+                DataInit::Const(ConstValue::StaticStr(String::new())),
+            ),
+            DataField::private("p.u", 0, count, 0, DataInit::Unit),
+            DataField {
+                offset: Some(0),
+                elem_len: 16,
+                stride: stride(16),
+                ..DataField::private(
+                    "p.p",
+                    0,
+                    count,
+                    STRUCT_KIND,
+                    DataInit::Const(ConstValue::Struct {
+                        type_name: "P".into(),
+                        fields: vec![("a".into(), ConstValue::Int(0))],
+                    }),
+                )
+            },
+        ];
+        for field in cases {
+            let want = DataLayout {
+                fields: vec![field.clone()],
+            };
+            let bytes = encode_layout(&want);
+            let got = decode_data_layout(&bytes).unwrap().expect("layout");
+            assert_eq!(got, want, "{} at count {count}", field.name);
+            let t = DataLayoutTable::parse(&bytes).unwrap().unwrap();
+            assert_eq!(t.field_count(), 1, "one record per field");
+            assert_eq!(t.slot_count(), count as usize);
+            for slot in [0usize, count as usize - 1] {
+                assert_eq!(t.field_index_at(slot), Some(0));
+                if field.visibility == SlotVisibility::Shared {
+                    let e = t.shared_slot(slot).unwrap();
+                    assert_eq!(e.offset, slot as u32 * field.stride);
+                }
+            }
+            assert_eq!(t.field_index_at(count as usize), None);
+        }
+    }
+}
 
-    // 300 uniform 8-byte scalars, then a break in kind, then 40 more.
-    let mut shared = Vec::new();
-    for k in 0..300u32 {
-        shared.push(SharedSlotLayout {
-            offset: 1024 + k * 8,
-            kind: 1,
-            len: 0,
-        });
-    }
-    for k in 0..40u32 {
-        shared.push(SharedSlotLayout {
-            offset: 8192 + k * 64,
-            kind: 0x80 | 2,
-            len: 64,
-        });
-    }
-    let want = DataLayout {
-        shared_layout: shared.clone(),
-        ..sample_layout()
+/// THE PROPERTY ENCODING F EXISTS FOR. The data-layout bytes of an artifact
+/// do not depend on any field's element count, for every element kind and
+/// visibility. The record measured sixteen bytes per element for a private
+/// `Byte` or `bool` array and twenty-four for a private composite array.
+#[test]
+fn the_data_layout_size_is_independent_of_the_element_count() {
+    let layout_of = |count: u32| {
+        let stride = |w: u32| if count > 1 { w } else { 0 };
+        DataLayout {
+            fields: vec![
+                DataField::shared("s.w", 0, count, INT_KIND, 0, 0, stride(8)),
+                DataField::private("p.b", count, count, BYTE_KIND, DataInit::Zero),
+                DataField::private("p.t", 2 * count, count, BOOL_KIND, DataInit::Zero),
+                DataField {
+                    offset: Some(0),
+                    elem_len: 16,
+                    stride: stride(16),
+                    ..DataField::private(
+                        "p.p",
+                        3 * count,
+                        count,
+                        STRUCT_KIND,
+                        DataInit::Const(ConstValue::Struct {
+                            type_name: "P".into(),
+                            fields: vec![("a".into(), ConstValue::Int(0))],
+                        }),
+                    )
+                },
+            ],
+        }
     };
-
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&want).unwrap();
-    let bytes = b.finish().unwrap();
-
-    // The decode path expands runs; it must reproduce the input exactly.
-    let got = decode_data_layout(&bytes).unwrap().expect("layout present");
-    assert_eq!(
-        got.shared_layout, want.shared_layout,
-        "expanding the runs did not reproduce the declared layout"
-    );
-
-    let t = DataLayoutTable::parse(&bytes)
-        .unwrap()
-        .expect("table present");
-
-    // MUST-FIRE CONTROL. Without this the test passes just as well against an
-    // encoder that never groups anything, which is the state this whole
-    // increment exists to leave.
-    assert_eq!(
-        t.shared_slot_count(),
-        340,
-        "logical slot count must survive the encoding"
-    );
-    assert_eq!(
-        t.shared_record_count(),
-        2,
-        "the 340 slots must collapse to exactly two runs; if this reports 340 \
-         the encoder is emitting one record per slot and every assertion below \
-         is measuring nothing"
-    );
-
-    // The binary search must resolve every logical slot, including offsets
-    // strictly inside a run, which is the case a run=1 fixture cannot reach.
-    for (i, w) in want.shared_layout.iter().enumerate() {
-        let e = t
-            .shared_slot(i)
-            .unwrap_or_else(|| panic!("logical slot {i} did not resolve"));
+    let one = encode_layout(&layout_of(1)).len();
+    for count in [2u32, 1_000, 70_000, 1 << 20] {
         assert_eq!(
-            (e.offset, e.kind, e.len),
-            (w.offset, w.kind, w.len),
-            "logical slot {i} resolved to the wrong layout"
+            encode_layout(&layout_of(count)).len(),
+            one,
+            "the artifact grew with an element count of {count}"
         );
     }
-
-    // One past the end is None, not a wrapped or clamped answer.
-    assert!(t.shared_slot(340).is_none(), "slot 340 must not resolve");
-    assert!(
-        t.shared_slot(usize::MAX).is_none(),
-        "an absurd index must not resolve"
-    );
-}
-
-/// A run longer than `u16::MAX` chunks into several records and must still
-/// resolve slot by slot across the chunk boundary.
-///
-/// `lexer`'s largest real run is 393,216, so this is the production case rather
-/// than a corner. A chunk boundary is where a `first_slot` that was derived
-/// instead of stored would go wrong.
-#[test]
-fn a_shared_run_longer_than_u16_max_chunks_and_still_resolves() {
-    use keleusma::wire_schema::DataLayoutTable;
-
-    let n: u32 = 70_000; // > u16::MAX, so at least two records
-    let shared: Vec<SharedSlotLayout> = (0..n)
-        .map(|k| SharedSlotLayout {
-            offset: k * 4,
-            kind: 1,
-            len: 0,
-        })
-        .collect();
-    let want = DataLayout {
-        shared_layout: shared,
-        ..sample_layout()
-    };
-
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&want).unwrap();
-    let bytes = b.finish().unwrap();
-
-    let got = decode_data_layout(&bytes).unwrap().expect("layout present");
-    assert_eq!(got.shared_layout, want.shared_layout);
-
-    let t = DataLayoutTable::parse(&bytes)
+    let fields = WireView::parse(&encode_layout(&layout_of(1)))
         .unwrap()
-        .expect("table present");
-    assert_eq!(t.shared_slot_count(), n as usize);
-    // MUST-FIRE CONTROL: the chunking actually happened.
-    assert_eq!(
-        t.shared_record_count(),
-        2,
-        "70,000 slots must chunk into exactly two records at the u16 cap"
-    );
-
-    // Either side of the boundary, and the boundary itself.
-    for i in [0usize, 65_534, 65_535, 65_536, 69_999] {
-        let e = t.shared_slot(i).unwrap_or_else(|| panic!("slot {i}"));
-        assert_eq!(
-            e.offset,
-            (i as u32) * 4,
-            "slot {i} resolved to the wrong offset across the chunk boundary"
-        );
-    }
-}
-
-/// MUST-NOT-FIRE. A non-constant stride and an oversized stride must both fall
-/// back to single-slot records rather than being grouped, because a run record
-/// can only express a constant `u16` stride and grouping either would place
-/// every later slot at a wrong offset.
-#[test]
-fn shared_slots_that_cannot_form_a_run_are_not_grouped() {
-    use keleusma::wire_schema::DataLayoutTable;
-
-    // Non-constant stride: 0, 8, 24, 32.
-    let jagged: Vec<SharedSlotLayout> = [0u32, 8, 24, 32]
-        .iter()
-        .map(|&offset| SharedSlotLayout {
-            offset,
-            kind: 1,
-            len: 0,
-        })
-        .collect();
-    let want = DataLayout {
-        shared_layout: jagged.clone(),
-        ..sample_layout()
-    };
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&want).unwrap();
-    let bytes = b.finish().unwrap();
-    let got = decode_data_layout(&bytes).unwrap().expect("layout");
-    assert_eq!(
-        got.shared_layout, jagged,
-        "a jagged layout must round-trip exactly, grouped or not"
-    );
-    let t = DataLayoutTable::parse(&bytes).unwrap().expect("table");
-    assert_eq!(
-        t.shared_record_count(),
-        2,
-        "0,8 and 24,32 are each a constant-stride pair, so exactly two runs"
-    );
-    for (i, w) in jagged.iter().enumerate() {
-        assert_eq!(t.shared_slot(i).unwrap().offset, w.offset);
-    }
-
-    // A stride wider than u16::MAX must not be grouped, because the field
-    // cannot hold it and truncating would corrupt every later slot.
-    let far: Vec<SharedSlotLayout> = (0..4u32)
-        .map(|k| SharedSlotLayout {
-            offset: k * 100_000,
-            kind: 1,
-            len: 0,
-        })
-        .collect();
-    let want = DataLayout {
-        shared_layout: far.clone(),
-        ..sample_layout()
-    };
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&want).unwrap();
-    let bytes = b.finish().unwrap();
-    let got = decode_data_layout(&bytes).unwrap().expect("layout");
-    assert_eq!(
-        got.shared_layout, far,
-        "an oversized stride must round-trip exactly, which it only can if the \
-         encoder declined to group it rather than truncating the stride"
-    );
-    let t = DataLayoutTable::parse(&bytes).unwrap().expect("table");
-    assert_eq!(
-        t.shared_record_count(),
-        4,
-        "a stride of 100,000 exceeds the u16 field, so each slot needs its own \
-         record; grouping here would silently truncate to 34,464"
-    );
+        .find_region(kind::DATA_FIELDS)
+        .unwrap()
+        .byte_length()
+        .unwrap();
+    assert_eq!(fields, 4 * 32, "four fields at thirty-two bytes each");
 }
 
 #[test]
@@ -1546,52 +1461,41 @@ fn an_absent_data_layout_is_none_not_empty() {
     );
     assert!(DataLayoutTable::parse(&bytes).unwrap().is_none());
 
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&DataLayout {
-        slots: vec![],
-        shared_layout: vec![],
-        private_composite_layout: vec![],
-        private_init: vec![],
-    })
-    .unwrap();
-    let bytes = b.finish().unwrap();
+    let bytes = encode_layout(&DataLayout::default());
     let got = decode_data_layout(&bytes).unwrap();
     assert!(got.is_some(), "empty → Some, not None");
-    assert_eq!(got.unwrap().slots.len(), 0);
+    assert_eq!(got.unwrap().fields.len(), 0);
 }
 
 #[test]
-fn private_init_shares_the_constant_table_with_chunk_pools() {
-    // private_init is a forest of constant trees, so it goes through the same
-    // shared table rather than a parallel copy of the flattening machinery.
+fn a_field_initialiser_shares_the_constant_table_with_chunk_pools() {
+    // An explicit initialiser is a constant tree, so it goes through the same
+    // shared table rather than a parallel copy of the flattening machinery,
+    // one root per field.
     let mut b = SchemaBuilder::new();
     let chunk = b.add_constant_pool(&[ConstValue::StaticStr("chunk".into())]);
+    let init = ConstValue::Tuple(vec![ConstValue::Int(5)]);
     b.add_data_layout(&DataLayout {
-        slots: vec![DataSlot {
-            name: "s".into(),
-            visibility: SlotVisibility::Private,
-        }],
-        shared_layout: vec![],
-        private_composite_layout: vec![],
-        private_init: vec![ConstValue::Tuple(vec![ConstValue::Int(5)])],
+        fields: vec![DataField::private(
+            "s",
+            0,
+            3,
+            SHARED_SLOT_COMPOSITE_FLAG,
+            DataInit::Const(init.clone()),
+        )],
     })
     .unwrap();
     let bytes = b.finish().unwrap();
 
     let t = DataLayoutTable::parse(&bytes).unwrap().unwrap();
-    let init = t.private_init_range();
-    assert_ne!(init, chunk, "the two pools must occupy different ranges");
-
-    // Both readable from the one table.
+    let r = t.field(0).unwrap();
+    assert_eq!(r.init, init_form::CONST);
+    assert_ne!(r.init_const, chunk.0, "the two roots must be distinct");
+    assert!(deep_eq(&t.field_init_value(0).unwrap(), &init));
     let chunk_vals = decode_constant_pool(&bytes, chunk).unwrap();
-    let init_vals = decode_constant_pool(&bytes, init).unwrap();
     assert!(deep_eq(
         &chunk_vals[0],
         &ConstValue::StaticStr("chunk".into())
-    ));
-    assert!(deep_eq(
-        &init_vals[0],
-        &ConstValue::Tuple(vec![ConstValue::Int(5)])
     ));
 
     // And the forward-ordering invariant still holds with a nested initialiser.
@@ -1604,13 +1508,11 @@ fn private_init_shares_the_constant_table_with_chunk_pools() {
 }
 
 #[test]
-fn slot_names_alias_the_artifact() {
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&sample_layout()).unwrap();
-    let bytes = b.finish().unwrap();
+fn field_names_alias_the_artifact() {
+    let bytes = encode_layout(&sample_layout());
     let t = DataLayoutTable::parse(&bytes).unwrap().unwrap();
 
-    let n = t.slot_name(0).unwrap();
+    let n = t.field_name(0).unwrap();
     assert_eq!(n, b"buffer");
     let base = bytes.as_ptr() as usize;
     let at = n.as_ptr() as usize;
@@ -1622,66 +1524,172 @@ fn slot_names_alias_the_artifact() {
 }
 
 #[test]
-fn an_unknown_visibility_tag_is_rejected() {
-    // Zero is deliberately not a valid visibility, so a zeroed record cannot
-    // read as a well-formed shared slot.
-    assert_ne!(visibility_tag::SHARED, 0);
-    assert_ne!(visibility_tag::PRIVATE, 0);
-
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&sample_layout()).unwrap();
-    let mut bytes = b.finish().unwrap();
-
-    let base = {
-        let view = WireView::parse(&bytes).unwrap();
-        view.find_region(keleusma::wire_schema::kind::DATA_SLOTS)
-            .unwrap()
-            .byte_offset()
-            .unwrap()
-    };
-    bytes[base + keleusma::wire_schema::DataSlotRecord::OFFSET_VISIBILITY] = 0;
-    assert!(matches!(
-        DataLayoutTable::parse(&bytes),
-        Err(SchemaError::UnknownTag(0))
-    ));
+fn the_field_record_width_is_pinned() {
+    assert_eq!(
+        <DataFieldRecord as WireRecord>::STRIDE,
+        32,
+        "the operator approved a thirty-two-byte field record on 2026-10-31"
+    );
+    assert_eq!(DataFieldRecord::OFFSET_NAME, 0);
+    assert_eq!(DataFieldRecord::OFFSET_FIRST_SLOT, 4);
+    assert_eq!(DataFieldRecord::OFFSET_COUNT, 8);
+    assert_eq!(DataFieldRecord::OFFSET_OFFSET, 12);
+    assert_eq!(DataFieldRecord::OFFSET_STRIDE, 16);
+    assert_eq!(DataFieldRecord::OFFSET_ELEM_LEN, 20);
+    assert_eq!(DataFieldRecord::OFFSET_KIND, 22);
+    assert_eq!(DataFieldRecord::OFFSET_VISIBILITY, 23);
+    assert_eq!(DataFieldRecord::OFFSET_INIT, 24);
+    assert_eq!(DataFieldRecord::OFFSET_RESERVED0, 25);
+    assert_eq!(DataFieldRecord::OFFSET_RESERVED1, 26);
+    assert_eq!(DataFieldRecord::OFFSET_INIT_CONST, 28);
 }
 
-/// Record widths are pinned, and `SharedSlotRecord` is the one exception.
-///
-/// This test previously asserted that EVERY data record is one word. That
-/// stopped being true when `SHARED_LAYOUT` became run-length encoded: carrying
-/// `first_slot`, `run` and `stride` alongside the existing fields takes the
-/// record to two words. The assertion is kept and re-pointed rather than
-/// relaxed, because the width is exactly what makes the encoding pay or not.
-///
-/// **A two-word record is a size REGRESSION below a mean run of two.** The
-/// measured mean is 35,738 (`tests/shared_layout_runs.rs`), so it pays by four
-/// orders of magnitude — but that is a fact about how stages declare shared
-/// data, not a fact about the record. If this ever grows to three words, the
-/// break-even moves to a mean run of three and the trade needs re-deriving.
+/// Writes `value` little-endian at `offset` within field record `record`.
+fn poke(bytes: &mut [u8], record: usize, offset: usize, value: &[u8]) {
+    let at = fields_base(bytes) + record * <DataFieldRecord as WireRecord>::STRIDE + offset;
+    bytes[at..at + value.len()].copy_from_slice(value);
+}
+
+fn parse_err(bytes: &[u8]) -> SchemaError {
+    match DataLayoutTable::parse(bytes) {
+        Err(e) => e,
+        Ok(_) => panic!("a malformed field table was accepted"),
+    }
+}
+
+/// Every structural invariant the decoder states is refused when broken, and
+/// none of the refusals is a panic.
 #[test]
-fn data_record_widths_are_pinned() {
-    use keleusma::wire_schema::{DataInitRecord, PrivateCompositeRecord, SharedSlotRecord};
+fn malformed_field_records_are_refused() {
+    let good = encode_layout(&sample_layout());
+    assert!(DataLayoutTable::parse(&good).unwrap().is_some());
+    let case = |record: usize, offset: usize, value: &[u8]| {
+        let mut m = good.clone();
+        poke(&mut m, record, offset, value);
+        parse_err(&m)
+    };
+    // An unknown visibility, including the zero a zeroed record carries.
+    assert_ne!(visibility_tag::SHARED, 0);
+    assert_ne!(visibility_tag::PRIVATE, 0);
     assert_eq!(
-        <keleusma::wire_schema::DataSlotRecord as WireRecord>::STRIDE,
-        8
+        case(0, DataFieldRecord::OFFSET_VISIBILITY, &[0]),
+        SchemaError::UnknownTag(0)
     );
-    assert_eq!(<PrivateCompositeRecord as WireRecord>::STRIDE, 8);
-    assert_eq!(<DataInitRecord as WireRecord>::STRIDE, 8);
+    // A zero count.
     assert_eq!(
-        <SharedSlotRecord as WireRecord>::STRIDE,
-        16,
-        "SharedSlotRecord carries a run, a first_slot and a stride, so it is \
-         two words. Changing this width changes the mean run at which the \
-         run-length encoding stops paying for itself."
+        case(1, DataFieldRecord::OFFSET_COUNT, &0u32.to_le_bytes()),
+        SchemaError::BadDataField
     );
+    // A descending first slot, an overlapping one and a gap.
+    for first in [0u32, 2, 5] {
+        assert_eq!(
+            case(1, DataFieldRecord::OFFSET_FIRST_SLOT, &first.to_le_bytes()),
+            SchemaError::BadDataField,
+            "first slot {first}"
+        );
+    }
+    // `first_slot + count` past the twenty-four-bit slot space, and a count
+    // whose sum with `first_slot` overflows a `u32`.
+    for count in [MAX_DATA_ADDR, u32::MAX] {
+        assert_eq!(
+            case(2, DataFieldRecord::OFFSET_COUNT, &count.to_le_bytes()),
+            SchemaError::BadDataField,
+            "count {count}"
+        );
+    }
+    // Non-zero reserved bytes.
+    assert_eq!(
+        case(0, DataFieldRecord::OFFSET_RESERVED0, &[1]),
+        SchemaError::BadDataField
+    );
+    assert_eq!(
+        case(0, DataFieldRecord::OFFSET_RESERVED1, &1u16.to_le_bytes()),
+        SchemaError::BadDataField
+    );
+    // An unknown initialiser form.
+    assert_eq!(
+        case(1, DataFieldRecord::OFFSET_INIT, &[3]),
+        SchemaError::UnknownTag(3)
+    );
+    // A shared field with a module initialiser, and a Text field taking a
+    // zero its kind does not have.
+    assert_eq!(
+        case(0, DataFieldRecord::OFFSET_INIT, &[init_form::UNIT]),
+        SchemaError::BadDataField
+    );
+    assert_eq!(
+        case(1, DataFieldRecord::OFFSET_KIND, &[TEXT_KIND]),
+        SchemaError::BadDataField
+    );
+    // An initialiser constant past the constant table.
+    assert_eq!(
+        case(
+            2,
+            DataFieldRecord::OFFSET_INIT_CONST,
+            &1000u32.to_le_bytes()
+        ),
+        SchemaError::BadIndex
+    );
+    // A shared field after a private one.
+    assert_eq!(
+        case(
+            2,
+            DataFieldRecord::OFFSET_VISIBILITY,
+            &[visibility_tag::SHARED]
+        ),
+        SchemaError::BadDataField
+    );
+    // A shared field with no offset.
+    assert_eq!(
+        case(0, DataFieldRecord::OFFSET_OFFSET, &u32::MAX.to_le_bytes()),
+        SchemaError::BadDataField
+    );
+    // A scalar element with a body length.
+    assert_eq!(
+        case(1, DataFieldRecord::OFFSET_ELEM_LEN, &4u16.to_le_bytes()),
+        SchemaError::BadDataField
+    );
+    // A single element with a stride.
+    assert_eq!(
+        case(0, DataFieldRecord::OFFSET_STRIDE, &8u32.to_le_bytes()),
+        SchemaError::BadDataField
+    );
+}
+
+/// `count * stride` past `u32` is refused rather than wrapped, since a lookup
+/// of the last element would otherwise resolve to a wrong offset.
+#[test]
+fn a_field_whose_last_element_offset_overflows_is_refused() {
+    // With 2^20 elements a stride of 4,096 puts the last element at
+    // 2^32 - 4,096, the largest multiple that fits, and 4,097 overflows.
+    let wide = DataLayout {
+        fields: vec![DataField::shared("s", 0, 1 << 20, INT_KIND, 0, 0, 4096)],
+    };
+    let good = encode_layout(&wide);
+    assert!(DataLayoutTable::parse(&good).unwrap().is_some());
+    let mut m = good.clone();
+    poke(
+        &mut m,
+        0,
+        DataFieldRecord::OFFSET_STRIDE,
+        &4097u32.to_le_bytes(),
+    );
+    assert_eq!(parse_err(&m), SchemaError::BadDataField, "stride overflow");
+    // The offset joins the sum: element zero at 4,096 moves the last element
+    // to exactly 2^32.
+    let mut m = good.clone();
+    poke(
+        &mut m,
+        0,
+        DataFieldRecord::OFFSET_OFFSET,
+        &4096u32.to_le_bytes(),
+    );
+    assert_eq!(parse_err(&m), SchemaError::BadDataField, "offset overflow");
 }
 
 #[test]
 fn a_truncated_data_layout_is_rejected_at_every_length() {
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&sample_layout()).unwrap();
-    let bytes = b.finish().unwrap();
+    let bytes = encode_layout(&sample_layout());
     for cut in 0..bytes.len() {
         assert!(
             DataLayoutTable::parse(&bytes[..cut]).is_err(),
@@ -1693,41 +1701,126 @@ fn a_truncated_data_layout_is_rejected_at_every_length() {
 
 #[test]
 fn data_layout_corruption_never_panics() {
-    let mut b = SchemaBuilder::new();
-    b.add_data_layout(&sample_layout()).unwrap();
-    let bytes = b.finish().unwrap();
-
+    let bytes = encode_layout(&sample_layout());
     for pos in 0..bytes.len() {
-        let mut m = bytes.clone();
-        m[pos] ^= 0x80;
-        if let Ok(Some(t)) = DataLayoutTable::parse(&m) {
-            // Both index spaces, deliberately. `slot`/`shared_record` take a
-            // RECORD index and `slot_count`/`shared_slot_count` report LOGICAL
-            // slots, so driving one from the other exercises neither range
-            // properly. Overrunning each by two is the point of the test.
-            for i in 0..t.slot_record_count().saturating_add(2) {
-                let _ = t.slot(i);
-                let _ = t.slot_name(i);
+        for bit in [0x01u8, 0x80] {
+            let mut m = bytes.clone();
+            m[pos] ^= bit;
+            if let Ok(Some(t)) = DataLayoutTable::parse(&m) {
+                // Both index spaces, deliberately. `field` takes a FIELD index
+                // and `slot_count` reports LOGICAL slots, so driving one from
+                // the other exercises neither range properly.
+                for i in 0..t.field_count().saturating_add(2) {
+                    let _ = t.field(i);
+                    let _ = t.field_name(i);
+                    let _ = t.field_init_value(i);
+                }
+                for i in 0..t.slot_count().saturating_add(2) {
+                    let _ = t.field_index_at(i);
+                    let _ = t.shared_slot(i);
+                    let _ = t.private_composite(i);
+                }
+                let _ = t.shared_slot(usize::MAX);
             }
-            for i in 0..t.slot_count().saturating_add(2) {
-                let _ = t.slot(i);
-            }
-            for i in 0..t.shared_record_count().saturating_add(2) {
-                let _ = t.shared_record(i);
-            }
-            // The logical lookup is a BINARY SEARCH over runs, so a corrupt
-            // `first_slot` ordering, a zero run, or a `stride` that overflows
-            // the offset all reach it here. It must return None rather than
-            // panic or resolve to a wrong offset.
-            for i in 0..t.shared_slot_count().saturating_add(2) {
-                let _ = t.shared_slot(i);
-            }
-            for i in 0..t.private_composite_count().saturating_add(2) {
-                let _ = t.private_composite(i);
-            }
-            let _ = t.private_init_range();
+            let _ = decode_data_layout(&m);
         }
-        let _ = decode_data_layout(&m);
+    }
+}
+
+/// Rewrites every directory entry of kind `from` to kind `to`, in all three
+/// directory copies of the auxiliary body at `aux`.
+fn rename_region(aux: &mut [u8], from: u16, to: u16) -> usize {
+    let count = u16::from_le_bytes([aux[8], aux[9]]) as usize;
+    let mut renamed = 0;
+    for i in 0..3 * count {
+        let at = 48 + i * 16;
+        if u16::from_le_bytes([aux[at], aux[at + 1]]) == from {
+            aux[at..at + 2].copy_from_slice(&to.to_le_bytes());
+            renamed += 1;
+        }
+    }
+    renamed
+}
+
+/// THE SILENT-MISREAD HAZARD, CLOSED. An artifact built before Encoding F
+/// carries the retired `DATA_SLOTS` and no `DATA_FIELDS`. Region absence
+/// means "no data block", so a reader that looked only for `DATA_FIELDS`
+/// would read it as a module without data. Every retired kind is refused by
+/// the borrowed view, the owned decoder and the whole-auxiliary readers.
+#[test]
+fn an_artifact_carrying_a_retired_data_region_is_refused_not_misread() {
+    for retired in kind::RETIRED_DATA_LAYOUT {
+        let mut bytes = encode_layout(&sample_layout());
+        assert_eq!(rename_region(&mut bytes, kind::DATA_FIELDS, retired), 3);
+        assert_eq!(
+            DataLayoutTable::parse(&bytes).err(),
+            Some(SchemaError::RetiredRegion(retired))
+        );
+        assert_eq!(
+            decode_data_layout(&bytes).err(),
+            Some(SchemaError::RetiredRegion(retired))
+        );
+    }
+    // A retired region beside a live one is refused too, so an artifact
+    // cannot smuggle an old table past the reader by also carrying a new one.
+    let mut b = keleusma_wire::WireBuilder::new();
+    let old = b.region(kind::RETIRED_DATA_LAYOUT[0], 0).unwrap();
+    b.push_record(
+        old,
+        &keleusma::wire_schema::NameRef {
+            offset: 0,
+            length: 0,
+        },
+    );
+    let bytes = b.finish().unwrap();
+    assert_eq!(
+        DataLayoutTable::parse(&bytes).err(),
+        Some(SchemaError::RetiredRegion(kind::RETIRED_DATA_LAYOUT[0]))
+    );
+}
+
+/// The same refusal, end to end, on a framed module. The retired kind is
+/// written into the directory of a real compiled artifact and the trailer is
+/// resealed, so the only defect the loader can find is the retired region.
+#[cfg(feature = "compile")]
+#[test]
+fn a_framed_module_carrying_a_retired_data_region_is_refused_at_load() {
+    let src = "shared data s { a: Word, b: [Byte; 64] }\n\
+               private data p { n: Word }\n\
+               fn main() -> Word { p.n = s.a; p.n }";
+    let tokens = keleusma::lexer::tokenize(src).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let module = keleusma::compiler::compile(&program).expect("compile");
+    let good = module.to_bytes().expect("encode");
+    assert!(keleusma::bytecode::Module::from_bytes(&good).is_ok());
+
+    let aux_at = u32::from_le_bytes(good[48..52].try_into().unwrap()) as usize;
+    let aux_len = u32::from_le_bytes(good[52..56].try_into().unwrap()) as usize;
+    let total = u32::from_le_bytes(good[8..12].try_into().unwrap()) as usize;
+    for retired in kind::RETIRED_DATA_LAYOUT {
+        let mut bytes = good.clone();
+        let renamed = rename_region(
+            &mut bytes[aux_at..aux_at + aux_len],
+            kind::DATA_FIELDS,
+            retired,
+        );
+        assert_eq!(renamed, 3, "the directory carries three copies");
+        let crc = keleusma_wire::crc32(&bytes[..total - 4]);
+        bytes[total - 4..total].copy_from_slice(&crc.to_le_bytes());
+
+        assert_eq!(
+            AuxView::parse(&bytes[aux_at..aux_at + aux_len]).err(),
+            Some(SchemaError::RetiredRegion(retired))
+        );
+        assert!(
+            keleusma::bytecode::Module::from_bytes(&bytes).is_err(),
+            "kind {retired:#06x} was loaded"
+        );
+        let arena = keleusma::Arena::with_capacity(1 << 20);
+        assert!(
+            keleusma::vm::Vm::load_bytes(&bytes, &arena).is_err(),
+            "kind {retired:#06x} was loaded by the virtual machine"
+        );
     }
 }
 
@@ -2612,8 +2705,8 @@ fn the_runtime_view_serves_every_read_the_vm_makes() {
     assert_eq!(v.enum_variant(0, 1), Some((&b"B"[..], -7)));
 
     let dl = v.data_layout().expect("data layout present");
-    assert_eq!(dl.slot_count(), sample_layout().slots.len());
-    assert_eq!(dl.slot_name(0), Some(&b"buffer"[..]));
+    assert_eq!(dl.slot_count(), sample_layout().slot_count());
+    assert_eq!(dl.field_name(0), Some(&b"buffer"[..]));
 }
 
 #[test]

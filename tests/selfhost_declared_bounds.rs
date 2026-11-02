@@ -183,7 +183,7 @@ fn the_cause_distinguishes_a_refusal_from_a_proven_underflow() {
 fn the_reserved_kinds_are_claimed_unspent_and_free_of_collisions() {
     use keleusma::wire_schema::kind;
 
-    let live: [u16; 20] = [
+    let live: [u16; 17] = [
         kind::STRING_POOL,
         kind::NAMES,
         kind::CONSTS,
@@ -194,16 +194,13 @@ fn the_reserved_kinds_are_claimed_unspent_and_free_of_collisions() {
         kind::STRUCT_TEMPLATES,
         kind::ENUM_VARIANTS,
         kind::ENUM_LAYOUTS,
-        kind::DATA_SLOTS,
-        kind::SHARED_LAYOUT,
-        kind::PRIVATE_COMPOSITE,
-        kind::DATA_INIT,
         kind::PARAM_TYPES,
         kind::CHUNKS,
         kind::NATIVES,
         kind::HEADER,
         kind::DEBUG_POOL,
         kind::NATIVE_RETURNS,
+        kind::DATA_FIELDS,
     ];
 
     assert!(
@@ -228,6 +225,15 @@ fn the_reserved_kinds_are_claimed_unspent_and_free_of_collisions() {
         assert!(
             !live.contains(&plane),
             "the parity plane for reserved kind {r:#06x} collides with a live kind"
+        );
+    }
+
+    // The retired data-layout kinds are refused on read and are never reused,
+    // so none may be live again.
+    for r in kind::RETIRED_DATA_LAYOUT {
+        assert!(
+            !live.contains(&r) && !kind::RESERVED.contains(&r),
+            "retired kind {r:#06x} is live or reserved again"
         );
     }
 
