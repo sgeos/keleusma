@@ -158,7 +158,9 @@
 // `older_and_newer_private_views_both_read_after_reset`. Established by
 // diffing the names of `retcon_bytecode.rs` against 96887065. No other file's
 // names changed.
-const RECORDED_TEST_FUNCTIONS: usize = 847;
+// 847 -> 848: `text_methods_agree_with_the_vm` in
+// `text_methods_differential.rs`, 2026-11-01. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 848;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -374,7 +376,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 847;
 // 172 -> 173: `native_seeded_interp.rs` for operator question 6, none removed.
 // 173 -> 174: `native_stage_factory.rs` for operator question 19, none removed.
 // 174 -> 175: `region_supplement_formula.rs` for operator question 22, none removed.
-const RECORDED_TEST_FILES: usize = 175;
+// 175 -> 176: `text_methods_differential.rs` for upstream 701's `text`
+// methods, 2026-11-01, none removed.
+const RECORDED_TEST_FILES: usize = 176;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

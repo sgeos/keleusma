@@ -6336,12 +6336,18 @@ fn lower_chunk_body<'ctx>(
                 let k = st.kind_at(0);
                 let owned = st.owned_at(0);
                 let v = st.pop();
+                // **Both copies keep the operand's width and kind.** The plain
+                // path pushed them unlabelled, which reads as `Width::Unknown`
+                // and an `Int` kind, so a composite built from a duplicated
+                // field refused. The `text` method `concat` duplicates its
+                // length into the result tuple and was refused that way,
+                // found by `text_methods_differential.rs`.
                 if owned_bodies {
                     st.push_owned(v, w, k, owned);
                     st.push_owned(v, w, k, owned);
                 } else {
-                    st.push(v);
-                    st.push(v);
+                    st.push_k(v, w, k);
+                    st.push_k(v, w, k);
                 }
             }
             // The compiler routes most literals here rather than through
