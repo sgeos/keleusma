@@ -160,7 +160,10 @@
 // names changed.
 // 847 -> 848: `text_methods_agree_with_the_vm` in
 // `text_methods_differential.rs`, 2026-11-01. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 848;
+// 848 -> 849: `the_runtimes_route_figures_are_the_backends` in
+// `region_supplement_formula.rs`, absorption 131, 2026-11-02. No name
+// disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 849;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

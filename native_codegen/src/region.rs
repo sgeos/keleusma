@@ -967,14 +967,17 @@ pub fn region_total_bytes(
 /// This function publishes the missing figure so a host can close the gap today,
 /// with no runtime change.
 ///
-/// # THIS IS A WEAKER GUARANTEE THAN THE RUNTIME RETURNING IT
+/// # WHERE THE RUNTIME PUBLISHES IT
 ///
-/// A figure the host must remember to ADD is not the same as one the sizing
-/// function includes. **A host that calls only `auto_arena_capacity_for` is
-/// still under-provisioned for native execution**, and nothing here changes
-/// that. Whether the runtime should absorb this term is an arena-accounting
-/// question that belongs to the operator; this crate publishing what it needs
-/// does not settle it.
+/// On operator question 22 the runtime absorbed this term at absorption 127,
+/// and on the operator's later ruling that `auto_arena_capacity_for` right-size
+/// an arena it moved out again at absorption 131. The runtime now publishes it
+/// as `keleusma::native_region::native_region_supplement_bytes`, includes it
+/// once in `keleusma::vm::auto_arena_capacity_for_vm_and_native`, and returns
+/// it as the region buffer of `keleusma::native_region::native_route_buffers_for`.
+/// **A host that calls only `auto_arena_capacity_for` is under-provisioned for
+/// native execution by exactly this figure.** `region_supplement_formula.rs`
+/// checks each of those functions against this one on every corpus module.
 ///
 /// # What the figure is rooted at
 ///
