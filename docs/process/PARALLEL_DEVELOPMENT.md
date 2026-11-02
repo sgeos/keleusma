@@ -426,8 +426,14 @@ inside it, one directory at a time, when nothing is building there.
 - **Trees made elsewhere are reported, not linked.** Claude Code creates its agent
   trees under `.claude/worktrees/` with `git worktree add`, so their output stays on
   the system disk. With `SCRATCH_BASE` set, `list` names every package `target` of a
-  live tree that is a directory rather than a link, with its size, and changes
-  nothing.
+  live tree that is a directory of 1 MB or more rather than a link, with its size,
+  and changes nothing. Since 2026-11-01 an untracked
+  `.claude/worktrees/.cargo/config.toml` in the main checkout sets Cargo's
+  `build.build-dir` to `/Volumes/Scratch/keleusma/agents/{workspace-path-hash}`, which
+  sends the agent trees' intermediate output, test binaries included, to scratch and
+  leaves a few kilobytes in their `target`. Those folders are named by hash, so a
+  removed tree's folder is identified only by its age, and the path-scoped `pkill`
+  pattern does not match an agent tree's test binaries.
 - **`scratch.sh` is vendored unchanged** from `sgeos/project-template` v1.0.8, so
   that it can be compared with the template's copy. Change it there first.
 

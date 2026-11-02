@@ -70,6 +70,140 @@ the default creation, `.worktreeinclude` would no longer be read, and the subage
 cleanup path would leave scratch folders for `worktree.sh list` to report.
 (b) Keep the report only, and let the operator move or delete large agent output.
 
+## Operator ruling, 2026-11-01, second
+
+The operator ruled first-hand in this line's session later on 2026-11-01, in these
+words.
+
+> D2. Where exactly do I add `"idleCompaction": false`?
+> D3. The proofs line is now properly in a holding state.
+> D4. Take appropriate action under the circumstances.
+> O3. Investigate and advise.
+> O1. Acknowledged.
+> D5. A.
+> Minisign. I meant signing public releases. MCP Agent Mail uses minisign, as I
+> understand it.
+
+| Item | Disposition |
+|---|---|
+| D2 | Answered in the session. The key goes at the top level of the global `settings.json`, or through the "Idle compaction" row of `/config`, which the Claude Code changelog lists from version 2.1.302. On 2026-11-01 the key was absent from that file |
+| D3 | The proofs line holds, on the operator's word. Nothing remains for this line |
+| D4 | The alert stays open, with the reasons below. It is not dismissed |
+| O3 | Investigated, with the advice below |
+| D5 | (a) chosen, and paused before implementation on a finding that bears on it, below |
+| Minisign | [The release signing proposal](./2026-11-01-release-signing-proposal.md) |
+
+**D4, the action taken.** **Fact.** Upstream tracks the fix in
+`microsoft/vscode-languageserver-node` issue 1938, "Release with minimatch 11 to fix
+GHSA-g3hv-75wg-m249", and Dependabot pull request 1935 in that repository, both open
+since 2026-10-31. **Fact.** The advisory's vulnerable path is the preprocessing of a
+glob pattern, so the attacker must supply the pattern. **Fact.** `keleusma-lsp`
+registers no file watchers and declares no file operation filters, and the extension's
+document selector names a language and a scheme with no pattern. **Inference.** No
+pattern from outside the project reaches `minimatch` in this extension, so the
+exposure is low. Leaving the alert open keeps it visible and lets Dependabot propose
+the update once a compatible `vscode-languageclient` is released, which a dismissal
+would hide. When V0.2.X's pull request 707 merges, `main` moves from
+`vscode-languageclient` 8.1.0 to 11.0.0, which is still affected, so the alert stays
+until upstream releases.
+
+**O3, the investigation.** `worktree.sh list` on 2026-11-01 reported three things.
+
+- `target` in the main checkout, 182 MB, the main checkout's own
+  build output. That checkout is on `v0.2.3` and belongs to V0.2.X. *Advice.* Link it
+  with `scripts/scratch.sh link target` from inside it when nothing builds there, at
+  V0.2.X's or the operator's convenience. The saving is small.
+- `.claude/worktrees/agent-ab1f9687f23f80567`, 2.4 GB, on
+  `fix/v02-arena-capacity-inputs`. **Fact.** Its head `972c9c50` of 2026-10-30 is an
+  ancestor of `origin/v0.2.3`, merged through `8a86b7ca`. Its status is clean. Its
+  build output was last written at 13:18 on 2026-10-30 local time. Git records it as
+  locked by a Claude agent with process 83575, started on 2026-10-24. This line cannot
+  list processes inside the sandbox, so whether that process is alive is not known.
+  *Advice.* If `ps -p 83575` shows nothing, the lock is stale. Then
+  `git worktree unlock` and `git worktree remove` on that path, and deleting its local
+  branch, lose no work. That is the operator's or V0.2.X's to do.
+- `/Volumes/Scratch/keleusma/removed-worktree-tmp-20261101`, 52 MB. **Fact.** It holds
+  ten `.tgz` archives named after removed worktrees, the largest
+  `retcon-delegation-tmp.tgz` at 49 MB, all written at 20:27 local time on 2026-10-31.
+  It is a deliberate archive of temporary folders, not build output, and this line did
+  not make it. *Advice.* Keep it under a folder name that cannot match a tree, such as
+  `/Volumes/Scratch/keleusma/.archive/`, so the report stops naming it, or delete it
+  once its maker confirms it is no longer needed.
+
+Two more trees of this repository live in the blog project, at
+`tmp/keleusma-021` and `tmp/keleusma-022` of the blog's checkout, detached at the
+tags `v0.2.1` and `v0.2.2`. They hold no build output. They are the blog's to keep or
+remove.
+
+**D5, the finding that paused it.** **Fact**, from the Claude Code hooks and worktrees
+references read on 2026-11-01. A `WorktreeCreate` hook replaces Claude Code's own
+creation entirely. Claude Code then keeps every worktree the hook made for a subagent
+or a workflow agent, does not run `WorktreeRemove` for it, and states that such trees
+must be removed by hand. Without a hook, a periodic sweep removes subagent worktrees
+older than `cleanupPeriodDays`, and Claude Code holds a worktree lock while an agent
+runs. The hook would also have to reproduce the default base, the remote's default
+branch kept current through `origin/HEAD`, and the checks Claude Code makes before
+creating a tree. **Inference.** The hook trades build output on the data volume for
+whole source trees that accumulate on it, which is a regression for the purpose D5
+serves.
+
+An alternative leaves creation to Claude Code. Cargo's `build.build-dir` setting,
+available in the pinned Cargo 1.99.1, takes the template `{workspace-path-hash}`, and
+Cargo reads configuration from every parent directory of the working directory. On a
+test of 2026-11-01 with a throwaway crate, a `build-dir` set in a parent directory's
+`.cargo/config.toml` sent `deps`, the test executables, incremental data and build
+scripts to the scratch path and left 4 KB in the tree's `target`. The tracked
+`.cargo/config.toml` sets neither `build-dir` nor `target-dir`, so it would not
+override it.
+
+(c) Create one untracked file, `.claude/worktrees/.cargo/config.toml` in the main
+checkout, holding
+
+```toml
+[build]
+build-dir = "/Volumes/Scratch/keleusma/agents/{workspace-path-hash}"
+```
+
+The sandbox does not let this line write in the main checkout, so the operator creates
+it. No settings file and no hook change. Its limits are these. The folders on scratch
+are named by hash, so a swept tree leaves a folder that only its age identifies, and
+`worktree.sh list` cannot attribute it. The path-scoped `pkill` pattern, which matches
+`target/debug/deps` inside the tree, would not match an agent tree's test binaries.
+The build output of the trees under `.worktrees/` and `../keleusma-worktrees/` is
+unaffected, since they are not below `.claude/worktrees/`.
+(a) The hook pair, as chosen, with the regression above.
+(b) The report only.
+
+This line recommends (c) and asks the operator to confirm it, or to keep (a) knowing
+the regression.
+
+## Operator ruling, 2026-11-01, third
+
+The operator ruled first-hand in this line's session later on 2026-11-01, in these
+words, and pasted V0.2.X's reply to the O3 advice, which is summarized below.
+
+> D2. Nominally complete.
+> D5. C. Recommendation accepted.
+> Minisign. Recommendation accepted.
+
+| Item | Disposition |
+|---|---|
+| D2 | Applied. **Fact.** The global `settings.json` holds `"idleCompaction": false`, written at 05:42 UTC on 2026-11-01. The trial runs to about 2026-11-15, when this line reruns `context_quality.py` |
+| D5 | (c). The operator creates `.claude/worktrees/.cargo/config.toml` in the main checkout, and this line has made `/Volumes/Scratch/keleusma/agents`. `worktree.sh list` now skips a `target` under 1 MB, which is what such a tree keeps. Whether the file takes effect is checked on the next agent tree that builds |
+| Release signing | (a) with (c) of [the proposal](./2026-11-01-release-signing-proposal.md), adopted, beginning at the first release after the operator has made a key. `scripts/release_manifest.py` builds the manifest |
+
+**O3, V0.2.X's reply and a correction.** V0.2.X reports that process 83575 is alive. It
+is the long-running Claude Code process, started at 22:21 local time on 2026-10-23,
+which locks every agent worktree it creates and held the locks on three agent trees
+V0.2.X unlocked on 2026-11-01 after their agents finished. **Correction.** The test
+this line gave, whether the locking process is alive, cannot show that a lock is
+stale, because the lock names the harness and not the agent. The tree's branch is
+merged and its status is clean, which is the evidence that no work would be lost.
+V0.2.X took none of the three actions. It removes the agent tree on the operator's
+word. It names V0.3.X as the likely maker of the archive folder, because the archives
+are named after V0.3.X worktrees. It does not touch the main checkout, so linking its
+`target` needs the operator's authorization. Those three remain the operator's.
+
 ## Decisions
 
 **D1. N6, keep the pinned shard lists.** *Judgment.* Pull request 689 pins 43 self-host
