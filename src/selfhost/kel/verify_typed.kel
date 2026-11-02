@@ -23,14 +23,19 @@
 //
 // The control flow is walked by the same explicit region-frame stack `verify_yield.kel` and
 // `verify_depth.kel` use (if-else staging, fresh-scope loops), but the state carried is the live
-// operand shape stack whose height is the operand depth. Per the operator's chosen trade-off,
-// shapes are the SOUND OVER-APPROXIMATION the reference itself falls back to: precise within a
-// basic block, and reset to Top across every control-flow boundary (both if/else arms rejoin to
-// Top; a loop invalidates every local to Top and Tops the operand entries above the loop entry).
-// This never rejects a valid program -- a Top defers to the retained runtime bounds guard -- and
-// catches every within-basic-block flat violation plus the underflow and height-balance
-// obligations; it forgoes only the cross-join shape precision (loop-carried-local flat checks),
-// which defer. The host marshals, per op, the control-flow class/arg, a Trap/Return flag, the
+// operand shape stack whose height is the operand depth.
+//
+// THE JOINS, as repaired by the C5 review on 2026-11-01. Until then every control-flow boundary
+// reset every local and every operand entry to Top, and the review's mutation corpus found 41
+// modules the reference rejects and this stage accepted because of it. Now an if-else's
+// else-arm starts from the saved entry state, the operand stack and the locals at the `EndIf`
+// are the reference's per-entry join of the paths that fall through, and a loop body is checked
+// from the entry state as the reference's first iteration is. One over-approximation remains
+// against the reference, toward Top and so toward acceptance. After a loop the locals its body
+// writes are forgotten, and so is every operand entry above the loop's entry height, rather
+// than being the join of the break states. The review record names it as a residual.
+// A Top defers to the retained runtime bounds guard. The host marshals, per op, the
+// control-flow class/arg, a Trap/Return flag, the
 // operand consumption `req` (the reference `op_depth_effect`) and generic push count `prod`, and
 // the shape-transfer kind `tk` with operands `ta`/`tb`.
 require word >= 32;
@@ -134,6 +139,42 @@ private data tf {
     lt: [Word; 4],
     off: Word,
     found: Word,
+    // THE JOIN PRECISION OF THE C5 REVIEW, docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md.
+    //
+    // `wr` holds, for each `If` or `Loop` at instruction `ip`, the set of locals any `SetLocal`
+    // in its region writes, as eight 32-bit words at `ip * 8`. An if saves and joins only those
+    // locals and a loop exit forgets only those, since a local the region does not write keeps
+    // its shape on every path through it. `os`/`os_end`/`osp` are the open constructs of
+    // the pass that fills `wr`. `f_cip` is each frame's construct instruction.
+    //
+    // The pool holds operand-stack snapshots, last in first out, since frames nest. An `If`
+    // saves its entry stack at `f_pe` so that the else-arm and the skip path start from it, and
+    // an if-else saves its then-arm's end stack at `f_pt`. The join at the `EndIf` is then the
+    // reference's per-entry join, an entry kept where both paths agree and forgotten where they
+    // differ. `pp` is the next free entry.
+    wr: [Word; 65536],
+    os: [Word; 64],
+    os_end: [Word; 64],
+    osp: Word,
+    f_cip: [Word; 64],
+    pp: Word,
+    p_tag: [Word; 8192],
+    p_size: [Word; 8192],
+    p_kind: [Word; 8192],
+    p_tn: [Word; 8192],
+    p_t: [Word; 32768],
+    f_pe: [Word; 64],
+    f_pt: [Word; 64],
+    // The locals pool, the same discipline for the locals an `If`'s region writes: `f_le` holds
+    // their entry shapes and `f_lt` their then-arm end shapes, in ascending slot order.
+    qp: Word,
+    q_tag: [Word; 8192],
+    q_size: [Word; 8192],
+    q_kind: [Word; 8192],
+    q_tn: [Word; 8192],
+    q_t: [Word; 32768],
+    f_le: [Word; 64],
+    f_lt: [Word; 64],
 }
 
 // --- live operand shape stack --------------------------------------------------------------
@@ -553,8 +594,14 @@ fn apply_typed(ip: Word) -> Word {
             }
         }
         st_push_k(tv.ret_tag[ip], tv.ret_size[ip], tv.ret_kind[ip]);
+        // A native's error flag is a `Word` scalar of `ta` bytes, as the reference pushes it.
+        // It was pushed as Top until the C5 review, which let a flat construction that packs
+        // the flag escape its size check.
         if tv.prod[ip] > 1 {
-            st_push_tops(tv.prod[ip] - 1);
+            st_push(1, tv.ta[ip]);
+        }
+        if tv.prod[ip] > 2 {
+            st_push_tops(tv.prod[ip] - 2);
         }
     } else {
         // k == 14 NewComposite flat enum: pop the packed elements, cross-check the baked enum
@@ -566,14 +613,202 @@ fn apply_typed(ip: Word) -> Word {
     0
 }
 
-// Invalidate every local to Top (the sound loop over-approximation: a prior iteration may have
-// overwritten any slot).
-fn invalidate_locals() -> Word {
+
+// Forget the locals that the region of the loop at `c` writes, the over-approximation of the
+// reference's join of the break states. A local the region does not write keeps its shape, since
+// every path through the region leaves it as it was.
+fn invalidate_written(c: Word) -> Word {
     for j in 0..256 limit 256 {
-        tf.lc_tag[j] = 0;
-        tf.lc_size[j] = 0;
-        tf.lc_kind[j] = 0;
-        tf.lc_tn[j] = -1;
+        if writes(c, j) == 1 {
+            tf.lc_tag[j] = 0;
+            tf.lc_size[j] = 0;
+            tf.lc_kind[j] = 0;
+            tf.lc_tn[j] = -1;
+        }
+    }
+    0
+}
+
+// The end of the region of the construct at `ip`: an `If`'s `EndIf`, or the `EndIf` after its
+// `Else`, and a `Loop`'s exit. The structural stage has already validated these targets.
+fn region_end(ip: Word) -> Word {
+    let t = tv.arg[ip];
+    if tv.class[ip] == 1 andalso t > 0 andalso t <= tv.op_count andalso tv.class[t - 1] == 2 {
+        tv.arg[t - 1]
+    } else {
+        t
+    }
+}
+
+// Fill `wr` in one forward pass. The open constructs form a stack, since the structural stage
+// has validated their nesting, and a `SetLocal` marks its slot in every open construct. A nesting
+// deeper than the frame stack is the frame capacity, as it is for the walk itself.
+fn scan_writes() -> Word {
+    tf.osp = 0;
+    for ip in 0..8192 limit 8192 {
+        if ip < tv.op_count {
+            for q in 0..8 limit 8 { tf.wr[ip * 8 + q] = 0; }
+            for k in 0..64 limit 64 {
+                if tf.osp > 0 andalso tf.os_end[tf.osp - 1] <= ip { tf.osp = tf.osp - 1; }
+            }
+            if tv.tk[ip] == 4 andalso tv.ta[ip] >= 0 andalso tv.ta[ip] < 256 {
+                let s = tv.ta[ip];
+                for k in 0..64 limit 64 {
+                    if k < tf.osp {
+                        let w = tf.os[k] * 8 + s / 32;
+                        tf.wr[w] = tf.wr[w] bor (1 lsl (s % 32));
+                    }
+                }
+            }
+            if tv.class[ip] == 1 orelse tv.class[ip] == 4 {
+                if tf.osp > 63 {
+                    tf.over = 2;
+                } else {
+                    tf.os[tf.osp] = ip;
+                    tf.os_end[tf.osp] = region_end(ip);
+                    tf.osp = tf.osp + 1;
+                }
+            }
+        }
+    }
+    0
+}
+
+// Whether the region of the construct at `c` writes local `j`.
+fn writes(c: Word, j: Word) -> Word {
+    (tf.wr[c * 8 + j / 32] lsr (j % 32)) band 1
+}
+
+// Save the locals the region of `c` writes to the locals pool and return their base.
+fn lpool_save(c: Word) -> Word {
+    let b = tf.qp;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 {
+            if tf.qp >= 8192 {
+                tf.over = 2;
+            } else {
+                let k = tf.qp;
+                tf.q_tag[k] = tf.lc_tag[j];
+                tf.q_size[k] = tf.lc_size[j];
+                tf.q_kind[k] = tf.lc_kind[j];
+                tf.q_tn[k] = tf.lc_tn[j];
+                for q in 0..4 limit 4 { tf.q_t[k * 4 + q] = tf.lc_t[j * 4 + q]; }
+                tf.qp = k + 1;
+            }
+        }
+    }
+    b
+}
+
+// Restore the locals the region of `c` writes from the locals pool at base `b`.
+fn lpool_load(c: Word, b: Word) -> Word {
+    tf.off = b;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            let k = tf.off;
+            tf.lc_tag[j] = tf.q_tag[k];
+            tf.lc_size[j] = tf.q_size[k];
+            tf.lc_kind[j] = tf.q_kind[k];
+            tf.lc_tn[j] = tf.q_tn[k];
+            for q in 0..4 limit 4 { tf.lc_t[j * 4 + q] = tf.q_t[k * 4 + q]; }
+            tf.off = k + 1;
+        }
+    }
+    0
+}
+
+// Join the locals the region of `c` writes with the locals pool at base `b`, the reference's
+// `join_locals`, by the rule of `pool_join`.
+fn lpool_join(c: Word, b: Word) -> Word {
+    tf.off = b;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            let k = tf.off;
+            if tf.q_tag[k] == tf.lc_tag[j] andalso tf.q_size[k] == tf.lc_size[j]
+                andalso tf.q_kind[k] == tf.lc_kind[j] {
+                if tf.q_tn[k] == tf.lc_tn[j] {
+                    for q in 0..4 limit 4 {
+                        if q < tf.lc_tn[j] andalso tf.q_t[k * 4 + q] != tf.lc_t[j * 4 + q] {
+                            tf.lc_tn[j] = -1;
+                        }
+                    }
+                } else {
+                    tf.lc_tn[j] = -1;
+                }
+            } else {
+                tf.lc_tag[j] = 0;
+                tf.lc_size[j] = 0;
+                tf.lc_kind[j] = 0;
+                tf.lc_tn[j] = -1;
+            }
+            tf.off = k + 1;
+        }
+    }
+    0
+}
+
+// Save the operand entries `[0, n)` to the pool and return their base. A pool too small is the
+// frame capacity, unavailable analysis rather than a verdict.
+fn pool_save(n: Word) -> Word {
+    let b = tf.pp;
+    if b + n > 8192 orelse n > 256 {
+        tf.over = 2;
+    } else {
+        for j in 0..256 limit 256 {
+            if j < n {
+                tf.p_tag[b + j] = tf.st_tag[j];
+                tf.p_size[b + j] = tf.st_size[j];
+                tf.p_kind[b + j] = tf.st_kind[j];
+                tf.p_tn[b + j] = tf.st_tn[j];
+                for q in 0..4 limit 4 { tf.p_t[(b + j) * 4 + q] = tf.st_t[j * 4 + q]; }
+            }
+        }
+        tf.pp = b + n;
+    }
+    b
+}
+
+// Restore the operand entries `[0, n)` from the pool at base `b`, and the height to `n`.
+fn pool_load(b: Word, n: Word) -> Word {
+    if tf.over == 0 {
+        for j in 0..256 limit 256 {
+            if j < n {
+                tf.st_tag[j] = tf.p_tag[b + j];
+                tf.st_size[j] = tf.p_size[b + j];
+                tf.st_kind[j] = tf.p_kind[b + j];
+                tf.st_tn[j] = tf.p_tn[b + j];
+                for q in 0..4 limit 4 { tf.st_t[j * 4 + q] = tf.p_t[(b + j) * 4 + q]; }
+            }
+        }
+    }
+    tf.dsp = n;
+    0
+}
+
+// Join the live entries `[0, n)` with the pool entries at base `b`, the reference's
+// `AbsVal::join`. Equal shapes are kept, two flat bodies of one kind and size keep their text
+// layout only when both know the same one, and anything else is forgotten.
+fn pool_join(b: Word, n: Word) -> Word {
+    for j in 0..256 limit 256 {
+        if j < n andalso tf.over == 0 {
+            if tf.p_tag[b + j] == tf.st_tag[j] andalso tf.p_size[b + j] == tf.st_size[j]
+                andalso tf.p_kind[b + j] == tf.st_kind[j] {
+                if tf.p_tn[b + j] == tf.st_tn[j] {
+                    for q in 0..4 limit 4 {
+                        if q < tf.st_tn[j] andalso tf.p_t[(b + j) * 4 + q] != tf.st_t[j * 4 + q] {
+                            tf.st_tn[j] = -1;
+                        }
+                    }
+                } else {
+                    tf.st_tn[j] = -1;
+                }
+            } else {
+                tf.st_tag[j] = 0;
+                tf.st_size[j] = 0;
+                tf.st_kind[j] = 0;
+                tf.st_tn[j] = -1;
+            }
+        }
     }
     0
 }
@@ -665,6 +900,9 @@ fn scan_op(i: Word) -> Word {
         // If: pop the condition, spawn the then-branch (and, for an if-else, the else-branch).
         apply_typed(ip);
         let t = tv.arg[ip];
+        tf.f_cip[i] = ip;
+        tf.f_pe[i] = pool_save(tf.dsp);
+        tf.f_le[i] = lpool_save(ip);
         if t > 0 andalso t <= tv.op_count andalso tv.class[t - 1] == 2 {
             let endif = tv.arg[t - 1];
             tf.f_pk[i] = 2;
@@ -684,8 +922,11 @@ fn scan_op(i: Word) -> Word {
         }
     } else {
     if tv.class[ip] == 4 {
-        // Loop: invalidate locals (over-approximation), spawn the body as a fresh break-scope.
-        invalidate_locals();
+        // Loop: spawn the body as a fresh break-scope from the entry state, the reference's first
+        // iteration. Its later iterations start from a head that the entry state refines, and
+        // every check defers on a forgotten shape, so they refuse nothing the first does not.
+        // After the loop the locals the body writes are forgotten.
+        tf.f_cip[i] = ip;
         tf.f_pk[i] = 3;
         tf.f_esp[i] = tf.dsp;
         tf.f_resume[i] = tv.arg[ip];
@@ -717,19 +958,41 @@ fn resolve_pending(i: Word) -> Word {
     if tf.f_pk[i] == 1 {
         merge_breaks(i);
         if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
-        tf.dsp = tf.f_esp[i]; top_from(0); invalidate_locals();
+        // The skip path holds the entry state. A then-arm that falls through joins it.
+        if tf.child_fell == 1 andalso tf.dsp == tf.f_esp[i] {
+            pool_join(tf.f_pe[i], tf.dsp);
+            lpool_join(tf.f_cip[i], tf.f_le[i]);
+        } else {
+            pool_load(tf.f_pe[i], tf.f_esp[i]);
+            lpool_load(tf.f_cip[i], tf.f_le[i]);
+        }
+        tf.pp = tf.f_pe[i];
+        tf.qp = tf.f_le[i];
         tf.f_ip[i] = tf.f_resume[i]; tf.f_pa[i] = 0;
     } else { if tf.f_pk[i] == 2 {
         merge_breaks(i);
         if tf.f_ps[i] == 0 {
             tf.f_tsp[i] = tf.dsp; tf.f_tfell[i] = tf.child_fell;
-            tf.dsp = tf.f_esp[i]; top_from(0); invalidate_locals();
+            // The else-arm starts from the entry state, and the then-arm's end state is saved.
+            tf.f_pt[i] = pool_save(tf.dsp);
+            tf.f_lt[i] = lpool_save(tf.f_cip[i]);
+            pool_load(tf.f_pe[i], tf.f_esp[i]);
+            lpool_load(tf.f_cip[i], tf.f_le[i]);
             tf.f_ps[i] = 1;
             push_frame(tf.f_elstart[i], tf.f_elend[i], tf.f_esp[i]);
         } else {
-            if tf.f_tfell[i] == 1 andalso tf.child_fell == 1 { ne_bad(tf.f_tsp[i], tf.dsp); }
-            else { if tf.f_tfell[i] == 1 { tf.dsp = tf.f_tsp[i]; } }
-            top_from(0); invalidate_locals();
+            if tf.f_tfell[i] == 1 andalso tf.child_fell == 1 {
+                ne_bad(tf.f_tsp[i], tf.dsp);
+                if tf.dsp == tf.f_tsp[i] { pool_join(tf.f_pt[i], tf.dsp); } else { top_from(0); }
+                lpool_join(tf.f_cip[i], tf.f_lt[i]);
+            } else {
+                if tf.f_tfell[i] == 1 {
+                    pool_load(tf.f_pt[i], tf.f_tsp[i]);
+                    lpool_load(tf.f_cip[i], tf.f_lt[i]);
+                }
+            }
+            tf.pp = tf.f_pe[i];
+            tf.qp = tf.f_le[i];
             if tf.f_tfell[i] == 0 andalso tf.child_fell == 0 {
                 tf.f_fell[i] = 0; tf.f_ip[i] = tf.f_end[i];
             } else { tf.f_ip[i] = tf.f_resume[i]; }
@@ -739,7 +1002,7 @@ fn resolve_pending(i: Word) -> Word {
         if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
         if tf.child_hb == 1 { tf.dsp = tf.child_bmax; }
         else { if tf.child_fell == 0 { tf.dsp = tf.f_esp[i]; } }
-        top_from(tf.f_esp[i]); invalidate_locals();
+        top_from(tf.f_esp[i]); invalidate_written(tf.f_cip[i]);
         // The reference restores the neutral body exit or loop-entry state when
         // there are no break states, even if the body terminated. Keep checking
         // instructions after the loop against that fallback state.
@@ -773,7 +1036,10 @@ fn run() -> Word {
     tf.child_esp = 0;
     tf.child_hb = 0;
     tf.child_bmax = 0;
+    tf.pp = 0;
+    tf.qp = 0;
     seed_locals();
+    scan_writes();
     push_frame(0, tv.op_count, 0);
     for s in 0..32768 limit 32768 {
         if tf.fsp > 0 {
