@@ -111,6 +111,9 @@ narrow-float-32 = ["keleusma/narrow-float-32"]
 keleusma-arena = { path = "../keleusma-arena" }
 # The framing driver, `keleusma::crypto_frame`, exists only under `signatures`.
 # `native_stage_factory.rs` runs `frame.kel` natively through it, so the tests
-# enable the feature and the library itself does not.
-keleusma = { path = "..", features = ["signatures"] }
+# enable the feature and the library itself does not. The `text` methods over
+# `Text<N>` are compiler intrinsics behind `text`, and
+# `text_methods_differential.rs` drives them natively, so the tests enable it
+# too.
+keleusma = { path = "..", features = ["signatures", "text"] }
 ed25519-dalek = "3"
