@@ -38,6 +38,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
 | [FLAT_TEXT_LAYOUT_PROOF.md](./FLAT_TEXT_LAYOUT_PROOF.md) | The design of the typed pass that proves a flat Text field is written only from text, and where it cannot reach |
+| [ARENA_SIZING_ROUTES.md](./ARENA_SIZING_ROUTES.md) | Implemented 2026-11-01: `auto_arena_capacity_for` is the virtual machine's right-sized figure, `auto_arena_capacity_for_vm_and_native` the combined one, and `native_route_buffers_for` the native route's buffers, with the corpus measurements |
 | [ARRAY_WIRE_SLOT_DESIGN.md](./ARRAY_WIRE_SLOT_DESIGN.md) | Ruled 2026-10-31: encoding F, one wire record per declared field, the per-field schema hash, one logical slot per field and packed private storage, at `BYTECODE_VERSION` 2; not yet implemented |
 | [SIGNATURE_VERIFY_BOUNDS.md](./SIGNATURE_VERIFY_BOUNDS.md) | The signature verifier's panic on a short declared total, reachable from signed loading, and its repair |
 | [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
