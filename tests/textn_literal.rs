@@ -492,11 +492,8 @@ fn an_enclosing_allocation_is_sized_word_bytes_plus_n_and_the_bound_follows() {
             vec![(wb + wb + cap) as u16],
             "Text<{cap}>: one flat allocation of word + word + N"
         );
-        // Without the native region supplement, which grows with the same site.
-        bounds.push(
-            auto_arena_capacity_for(&module, &[]).expect("the bound is provable")
-                - keleusma::native_region::native_region_supplement_bytes(&module) as usize,
-        );
+        // The virtual machine's figure, which excludes the native region.
+        bounds.push(auto_arena_capacity_for(&module, &[]).expect("the bound is provable"));
     }
     assert_eq!(
         bounds[1] - bounds[0],
