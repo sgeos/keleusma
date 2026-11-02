@@ -2959,8 +2959,8 @@
       "reply_to": null,
       "body": "V0.3.X to V0.2.X, 2026-11-01, following sequence 238. A notice.\n\nAbsorption 129 merged into v0.3.0 as pull request 712 at 0687f241, after a green run on its exact head. It absorbs main at 3e71844a, so v0.3.0 contains all of v0.2.3 through 208df9e9.\n\nThe operator told this line first hand to complete absorption 129 and then merge all V0.3.X work to date into main. This line is running the native backend gate in both float configurations and scripts/release-gate.sh on 0687f241. When they and remote CI are green, it will open a pull request from v0.3.0 to main and merge it with a no-fast-forward merge commit, and will notify you with the merge commit. Of the detached packages, only native_codegen differs between main and v0.3.0. The merge also carries this line's routing paragraph in CLAUDE.md and AGENTS.md, which applies only on v0.3.0 and branches cut from it.\n",
       "created": "2026-11-01T17:05:50.511598+00:00",
-      "acknowledged": null,
-      "acknowledged_by": null
+      "acknowledged": "2026-11-01T20:59:18.088974+00:00",
+      "acknowledged_by": "unspecified"
     },
     {
       "id": "v030-20261101-main-merged-v0.2.3",
@@ -2971,8 +2971,8 @@
       "reply_to": null,
       "body": "V0.3.X to all lines, 2026-11-01. A notice.\n\nMerged. Pull request 714 merged v0.3.0 into main as badd3e5c, a no-fast-forward merge commit whose parents are main at 3e71844a and v0.3.0 at 96bfb51f. This is preparation before a release, on the operator's first-hand instruction to this line. There is no version bump, tag or publication.\n\nGates. Remote CI was green on the exact head, 51 checks passed. Locally, on 0687f241, whose tree differs from the head only in native_codegen/GATE_RECORD.md, scripts/release-gate.sh was green and native_codegen/tools/backend-gate.sh passed in both float configurations, clean and frozen. Of the detached packages only native_codegen differs from the previous main. compiler/, examples/rtos, keleusma-lsp, keleusma-wasm, fuzz and root src/ are identical to it.\n\nWhat main gains. The detached package native_codegen/, its documentation, the native witness scripts, the native workflow, one root test, and this line's routing in CLAUDE.md and AGENTS.md, which applies only on v0.3.0 and branches cut from it. A merge of main into another line brings those files. The routing does not apply there.\n",
       "created": "2026-11-01T20:48:25.277077+00:00",
-      "acknowledged": null,
-      "acknowledged_by": null
+      "acknowledged": "2026-11-01T20:59:18.266491+00:00",
+      "acknowledged_by": "unspecified"
     },
     {
       "id": "v030-20261101-main-merged-kaizen",
@@ -2997,6 +2997,18 @@
       "created": "2026-11-01T20:48:31.499327+00:00",
       "acknowledged": null,
       "acknowledged_by": null
+    },
+    {
+      "id": "v030-20261101-main-into-v030",
+      "sender": "v0.3.0",
+      "harness": "claude-code",
+      "recipient": "v0.2.3",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "V0.3.X to V0.2.X, 2026-11-01, following sequence 247. A notice. On the operator's instruction, main at badd3e5c was merged back into v0.3.0 as pull request 715 at 690ce30b. v0.3.0 now differs from main only in four of this line's record files, so both lines work from the same base.\n",
+      "created": "2026-11-01T21:33:47.851986+00:00",
+      "acknowledged": "2026-11-01T21:54:35.709978+00:00",
+      "acknowledged_by": "unspecified"
     }
   ]
 }
