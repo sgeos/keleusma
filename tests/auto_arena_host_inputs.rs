@@ -100,12 +100,10 @@ fn drive_nested(module: Module, capacity: usize, iterations: usize) -> Result<us
     Ok(resets)
 }
 
-/// The figure without the native region supplement, the part the virtual
-/// machine itself needs, which the tightness checks below measure. The
-/// supplement is slack on the virtual machine route since question 22.
+/// The virtual machine's figure, which the tightness checks below measure. It
+/// excludes the native region, which the virtual machine does not use.
 fn vm_figure(module: &keleusma::bytecode::Module) -> usize {
     auto_arena_capacity_for(module, &[]).expect("bounded")
-        - keleusma::native_region::native_region_supplement_bytes(module) as usize
 }
 #[test]
 fn the_resume_count_covers_straight_line_and_loop_yields() {
@@ -242,8 +240,7 @@ fn text_inside_a_composite_input_needs_the_host_allowance() {
     let text = "a host string longer than any slack in the figure, sixty-four bytes";
     let module = compile(TEXT_STREAM);
     let without = vm_figure(&module);
-    let with = auto_arena_capacity_with_input_text(&module, &[], text.len()).expect("bounded")
-        - keleusma::native_region::native_region_supplement_bytes(&module) as usize;
+    let with = auto_arena_capacity_with_input_text(&module, &[], text.len()).expect("bounded");
     assert!(with > without);
     drive_text(module.clone(), with, text).expect("the allowance covers the text");
     match drive_text(module, without, text) {
