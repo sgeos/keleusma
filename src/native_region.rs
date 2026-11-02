@@ -1,5 +1,17 @@
-//! The arena bytes a native compilation of a module needs beyond what the
-//! virtual machine needs, so that one sizing figure serves both routes.
+//! The buffers a native compilation of a module needs, for a host that runs
+//! native code, and the region term of the combined figure for a host that
+//! keeps one arena for either route.
+//!
+//! # Which function a host calls
+//!
+//! - A host that runs the virtual machine calls
+//!   [`crate::vm::auto_arena_capacity_for`], which excludes the native region.
+//! - A host that runs only native code calls [`native_route_buffers_for`](crate::native_region::native_route_buffers_for),
+//!   which reports the composite region, the private buffer and the shared
+//!   buffer, and none of the virtual machine's terms.
+//! - A host that keeps one arena for either route calls
+//!   [`crate::vm::auto_arena_capacity_for_vm_and_native`], which adds
+//!   [`native_region_supplement_bytes`](crate::native_region::native_region_supplement_bytes) to the virtual machine's figure.
 //!
 //! # Provenance and authority
 //!
@@ -8,8 +20,13 @@
 //! copy of the yielded value. That backend lives in the detached
 //! `native_codegen` package, which this crate cannot depend on. The operator
 //! ruled on question 22, confirmed first-hand in the V0.2.X session on
-//! 2026-10-31, that [`crate::vm::auto_arena_capacity_for`] fold this
-//! supplement in, so that its value works for native allocation.
+//! 2026-10-31, that the runtime's sizing figure include this supplement, so
+//! that its value works for native allocation. On the operator's later ruling
+//! that the sizing function right-size an arena, recorded in
+//! `docs/decisions/ARENA_SIZING_ROUTES.md`, the combined figure moved to
+//! [`crate::vm::auto_arena_capacity_for_vm_and_native`] and
+//! [`crate::vm::auto_arena_capacity_for`] became the virtual machine's figure
+//! alone.
 //!
 //! This module reimplements the formula that V0.3.X sent as data on
 //! 2026-10-31, its `NATIVE_REGION_SUPPLEMENT_FORMULA.md`, which that line
@@ -42,13 +59,23 @@
 //!    yields are disregarded, the backend copies the yielded value at the
 //!    yield. That copy adds `align(8 + size * resumes)` after the total.
 //!
-//! # Over-provisioning
+//! # The private buffer
 //!
-//! A host that runs only the virtual machine receives this supplement too, so
-//! its arena is larger than the virtual machine needs by exactly this figure.
-//! The operator accepted that in choosing one figure over two. A host that
-//! formerly added the native figure itself must stop, or it counts the
-//! supplement twice.
+//! The backend's private buffer is the virtual machine's persistent figure,
+//! [`crate::vm::required_persistent_capacity_for`], plus
+//! [`native_persistent_supplement_bytes`](crate::native_region::native_persistent_supplement_bytes), the backend's
+//! `persistent_supplement_bytes`. That supplement is one word for the resume
+//! state of each `Stream` chunk and one initialisation word for each private
+//! composite pool slot, each count rounded up to the body alignment.
+//!
+//! # What this module does not report
+//!
+//! The backend's frame slot and machine stack figures depend on its lowering
+//! and on the target, and only the backend computes them. A host linking the
+//! backend's static library reads them from the library's header. The figures
+//! here are for the 64-bit host target the backend measured, and they mean
+//! something only for a module the backend lowers. A module it refuses, such
+//! as one with a `Text` private slot, gets figures here that size nothing.
 
 use crate::bytecode::{BlockType, Chunk, ConstValue, Module, NewCompositeOperand, Op, WireShape};
 
@@ -192,8 +219,14 @@ fn yield_copy_bytes(module: &Module, entry: usize) -> Option<(u32, u32)> {
 /// The arena bytes a native compilation of `module` needs beyond the virtual
 /// machine's figure, or zero for a module without an entry.
 ///
-/// [`crate::vm::auto_arena_capacity_for`] adds this, so a host that sizes an
-/// arena from that function needs no separate native term.
+/// This is the native route's whole arena term, which
+/// [`native_route_buffers_for`] reports as its region. The virtual machine's
+/// [`crate::vm::auto_arena_capacity_for`] does not include it, and
+/// [`crate::vm::auto_arena_capacity_for_vm_and_native`] adds it once, so a host
+/// sizing from the combined function must not add it again.
+///
+/// The arithmetic saturates at `u32::MAX`, which no host allocation of a
+/// verified module reaches, so an overflow over-states rather than truncates.
 pub fn native_region_supplement_bytes(module: &Module) -> u32 {
     let Some(entry) = module.entry_point else {
         return 0;
@@ -201,5 +234,77 @@ pub fn native_region_supplement_bytes(module: &Module) -> u32 {
     match yield_copy_bytes(module, entry) {
         Some((offset, bytes)) => offset.saturating_add(bytes),
         None => total(module, entry, 0),
+    }
+}
+
+/// The persistent bytes a native compilation adds after the virtual machine's
+/// persistent figure, the backend's `persistent_supplement_bytes`.
+///
+/// One eight-byte word for the resume state of each `Stream` chunk in the
+/// module, whether or not it is the entry, and one eight-byte initialisation
+/// word for each private composite pool slot, which records whether the slot
+/// has been written. Each of the two counts is rounded up to the body
+/// alignment, and the sum saturates at `u32::MAX`.
+pub fn native_persistent_supplement_bytes(module: &Module) -> u32 {
+    let streams = module
+        .chunks
+        .iter()
+        .filter(|c| c.block_type == BlockType::Stream)
+        .count();
+    let composite_slots = module
+        .data_layout
+        .as_ref()
+        .map_or(0, |dl| dl.private_composite_layout.len());
+    let words = |n: usize| align(u32::try_from(n).unwrap_or(u32::MAX).saturating_mul(8));
+    words(streams).saturating_add(words(composite_slots))
+}
+
+/// The buffers a host that runs `module` only as native code allocates, in
+/// bytes, as [`native_route_buffers_for`] reports them.
+///
+/// Each field is one buffer the backend's entry takes, each aligned to the
+/// backend's buffer alignment. One allocation carved into these, or separate
+/// allocations, is the host's choice. None of the virtual machine's terms is
+/// here, because native code keeps its operands in machine values, holds no
+/// call frames or opaque registry in an arena, places composite bodies in the
+/// region, and reads a composite host input through the host's own pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NativeRouteBuffers {
+    /// The composite region, [`native_region_supplement_bytes`], the backend's
+    /// `host_arena_supplement_bytes` and its header's region figure.
+    pub region_bytes: usize,
+    /// The private buffer, [`crate::vm::required_persistent_capacity_for`]
+    /// plus [`native_persistent_supplement_bytes`], the header's private
+    /// figure. The backend's private initialisation image is copied into its
+    /// start.
+    pub private_bytes: usize,
+    /// The shared buffer, [`crate::vm::shared_data_bytes_for`], the same
+    /// buffer the virtual machine borrows.
+    pub shared_bytes: usize,
+}
+
+/// The buffers for a host that runs `module` only as native code.
+///
+/// This is the native route's sizing function. It is deliberately not a
+/// single arena capacity, so that it cannot be passed where
+/// [`crate::vm::auto_arena_capacity_for`] is expected. A host that runs the
+/// virtual machine calls that function instead, and a host that keeps one
+/// arena for either route calls
+/// [`crate::vm::auto_arena_capacity_for_vm_and_native`].
+///
+/// # Failure modes
+///
+/// It does not fail. Every figure is computed from the module alone, and the
+/// region and supplement arithmetic saturates. It does not check that the
+/// backend lowers the module, so the figures of a module the backend refuses
+/// size nothing. The frame slot and machine stack are not reported, as the
+/// module documentation explains. The formula is a copy of the backend's, and
+/// the backend stays the authority if the two disagree.
+pub fn native_route_buffers_for(module: &Module) -> NativeRouteBuffers {
+    NativeRouteBuffers {
+        region_bytes: native_region_supplement_bytes(module) as usize,
+        private_bytes: crate::vm::required_persistent_capacity_for(module)
+            .saturating_add(native_persistent_supplement_bytes(module) as usize),
+        shared_bytes: crate::vm::shared_data_bytes_for(module),
     }
 }
