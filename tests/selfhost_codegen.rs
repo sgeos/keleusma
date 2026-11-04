@@ -2113,8 +2113,10 @@ fn self_compile_codegen_atomic_functions() {
     // 105 since `push_refinement`, the refinement check, 2026-10-27.
     // The private struct read copy pass of 2026-10-31 adds the twelve `dc_` helpers, all
     // self-compiling (105 -> 117). The `Text<N>` literal cast adds `text_cast_base` and
-    // `push_text_cast`, both self-compiling (117 -> 119), 2026-11-02.
-    const EXPECTED_SELF_COMPILE: usize = 119;
+    // `push_text_cast`, both self-compiling (117 -> 119), 2026-11-02. The five `Text<N>`
+    // operations add `push_text_op`, `text_step` and the `tx_` helpers, all
+    // self-compiling (119 -> 139), the same day.
+    const EXPECTED_SELF_COMPILE: usize = 139;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -9264,10 +9266,11 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
         // --- the capacity-bounded text type, 2026-11-02 ------------------------------
         //
         // `Text<N>` is laid out as the tuple of a length word and `N` bytes, and a literal
-        // cast loads one pooled constant. The uses the stages do not lower, a data field, an
-        // `Option` payload and the five operations, are refused by the shipping entry before
-        // any stage runs, which this table does not exercise, so they are pinned in
-        // `capacity_bounded_text_has_its_pinned_outcomes` in `selfhost_full_language.rs`.
+        // cast loads one pooled constant. The uses the stages do not lower, a data field and
+        // an `Option` payload among them, are refused by the shipping entry before any stage
+        // runs, which this table does not exercise, so they are pinned in
+        // `capacity_bounded_text_has_its_pinned_outcomes` in `selfhost_full_language.rs`. The
+        // five operations need the `text` feature, so they are pinned in `text_ops.rs`.
         (
             "text_n/literal_cast",
             SOk,

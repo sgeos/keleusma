@@ -13035,9 +13035,11 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // took the blob to 36,604. The capacity-bounded text type of 2026-11-02 added
     // `text_cap_max`, `text_cast_base`, `text_desc`, `text_name`, `header_text_top`,
     // `header_text`, `header_text_field` and `enum_text_payload`, for 1187, and took the
-    // blob to 37,174.
-    assert_eq!(worst_names, 1187, "the worst-case name count moved");
-    assert_eq!(worst_blob, 37174, "the worst-case blob size moved");
+    // blob to 37,174. The five operations the same day added `txo` with its fields and
+    // `text_method`, `text_layout_cap`, `text_method_begin`, `text_open`, `text_comma` and
+    // `text_close`, for 1199, and took the blob to 37,772.
+    assert_eq!(worst_names, 1199, "the worst-case name count moved");
+    assert_eq!(worst_blob, 37772, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

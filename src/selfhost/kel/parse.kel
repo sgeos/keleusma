@@ -5234,6 +5234,16 @@ fn value_record(word: Word) -> Word {
     if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
     if kind == 82 { value_scalar(5); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
+    if kind == 144 {
+        // A text operation's value: a word for `len` and `capacity`, a bool for `eq`, and a
+        // text body for `concat` and `slice`, armed so an operation may follow it.
+        let op = arg % 8;
+        let a = (arg / 8) % 131072;
+        let b = (arg / 1048576) % 131072;
+        if op <= 1 { value_scalar(3); } else { if op == 3 { value_scalar(1); } else {
+            header_arm(text_desc(if op == 2 { a + b } else { a }));
+        } }
+    }
     if kind == 26 andalso arg >= text_cast_base() {
         // A literal cast is a `Text<N>` value, laid out as its flat body.
         let desc = text_desc(arg - text_cast_base());
@@ -5299,6 +5309,8 @@ fn step_closing() -> Word {
             ops.closing = 0;
             ops.expect_operand = 0;
             if empty == 1 { Node::Unit() as Word + 3 * 64 } else {
+                // A parenthesized text body, such as a literal cast, may take an operation.
+                if vl.form == 1 andalso text_layout_cap(vl.layout) > 0 { header_arm(text_desc(text_layout_cap(vl.layout))); }
                 // Tag 85 is past the packed range of 64, so it rides the two-word form.
                 if check > 0 { type_tuple_record(85, check - 1) } else { 0 }
             }
@@ -5313,6 +5325,7 @@ fn step_closing() -> Word {
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
             if call.call_chunk[call.call_sp] >= 4096 { gen_call_close(call.call_sp); }
+            if call.call_chunk[call.call_sp] >= 3072 andalso call.call_chunk[call.call_sp] < 3080 { text_close(call.call_sp) } else {
             if call.call_chunk[call.call_sp] >= 1024 {
                 // A native call, record tag 80, carrying the import row and the argument
                 // count as `row + count * 1024`. A declared enum return makes the result that
@@ -5347,7 +5360,7 @@ fn step_closing() -> Word {
                 ps.fa_phase = 1;
             }
             return_call(Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64, call.call_chunk[call.call_sp])
-            }
+            } }
         } else {
         if top == OpCode::EnumMark() as Word {
             // A `)` closing an enum payload construction: pop the mark, count the last payload
@@ -5445,6 +5458,7 @@ fn step_cdraining() -> Word {
         } else {
             gen_note_arg(call.call_sp - 1);
             call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
+            text_comma(call.call_sp - 1);
             ops.expect_operand = 1;
             0
         } } } } }
@@ -6802,10 +6816,103 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
                 104
             }
         } else {
-            ps.ta_phase = 0;
-            0
+            if k == Tok::Ident() as Word andalso text_method(v) >= 0 andalso text_layout_cap(ps.ta_tuple) > 0 {
+                text_method_begin(text_method(v), text_layout_cap(ps.ta_tuple))
+            } else {
+                ps.ta_phase = 0;
+                0
+            }
         } } }
     }
+}
+
+// THE FIVE `Text<N>` OPERATIONS, `len`, `capacity`, `concat`, `eq` and `slice`, codes 0 to 4.
+//
+// The host gives each a method-table row under the `Text` head whose chunk is the code below
+// zero, so a method of one of these names on a value laid out as a text body is lowered here
+// rather than called. The receiver is already emitted. The `(` and the arguments go through
+// the call path, with the receiver counted as the first argument, and the close emits record
+// 144 instead of a call, carrying the operation, the capacities and the hidden slots that
+// code generation needs. The slots are reserved where the reference declares its hidden
+// locals: the receiver's at the `(`, after the receiver's own, a slice's start at the comma
+// after its first argument, and the rest at the close, after the arguments' own.
+//
+// The instructions an operation emits grow with its capacities. One whose count, by the
+// formulas recorded in `docs/decisions/TEXT_CAPACITY_TYPE.md`, would pass 7000 of the code
+// generator's 8192-instruction function buffer is refused here rather than overrunning it.
+private data txo {
+    pend_op: Word, pend_cap: Word,
+    op: [Word; 9], capa: [Word; 9], s1: [Word; 9], start: [Word; 9],
+}
+fn text_method(v: Word) -> Word {
+    txo.pend_op = 0 - 1;
+    for i in 0..toks.mt_count limit 64 {
+        if toks.mt_head[i] == text_name() andalso toks.mt_name[i] == v andalso toks.mt_chunk[i] < 0 {
+            txo.pend_op = 0 - toks.mt_chunk[i] - 1;
+        }
+    }
+    if toks.text_id > 0 { txo.pend_op } else { 0 - 1 }
+}
+// The capacity of tuple layout `li` when it is a text body, a word at offset zero followed
+// by an array of bytes, else 0.
+fn text_layout_cap(li: Word) -> Word {
+    if li < 0 orelse li >= tupledefs.tup_count orelse tupledefs.tup_ecount[li] != 2 { 0 } else {
+        let e0 = tupledefs.tup_estart[li];
+        let d = tupledefs.tup_edesc[e0 + 1] - 1;
+        if d < 0 orelse tupledefs.tup_ekind[e0] != 3 orelse tupledefs.tup_eoffset[e0] != 0 orelse ht.nform[d] != 2 { 0 } else {
+            let c = ht.child[d];
+            if c < 0 orelse ht.nform[c] != 0 orelse ht.scalar[c] != 2 { 0 } else { ht.arity[d] }
+        }
+    }
+}
+fn text_method_begin(op: Word, cap: Word) -> Word {
+    ps.ta_phase = 0;
+    txo.pend_op = op; txo.pend_cap = cap;
+    call.call_pending = 3072 + op;
+    call.pipe_args = 1;
+    call.call_phase = 1;
+    0
+}
+fn text_open(sp: Word) -> Word {
+    txo.op[sp] = txo.pend_op; txo.capa[sp] = txo.pend_cap; txo.s1[sp] = 0;
+    if txo.pend_op >= 2 {
+        txo.s1[sp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+    }
+    txo.start[sp] = 0;
+    0
+}
+// The comma after a slice's first argument, where the reference declares its start local.
+fn text_comma(sp: Word) -> Word {
+    if call.call_chunk[sp] == 3076 andalso call.call_count[sp] == 2 {
+        txo.start[sp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+    }
+    0
+}
+fn text_close(sp: Word) -> Word {
+    let op = txo.op[sp];
+    let a = txo.capa[sp];
+    let arity = if op <= 1 { 1 } else { if op == 4 { 3 } else { 2 } };
+    let b = if op == 2 orelse op == 3 { if vl.form == 1 { text_layout_cap(vl.layout) } else { 0 } } else { 0 };
+    let hidden = if op == 0 { 1 } else { if op == 1 { 0 } else { if op == 2 { 5 } else { if op == 3 { 3 } else { 5 } } } };
+    let s2 = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + hidden;
+    let lesser = if a < b { a } else { b };
+    let size = if op == 2 { 27 * a + 16 * b + 47 } else { if op == 3 { 14 * lesser + 41 } else { if op == 4 { 16 * a + 61 } else { 17 } } };
+    if call.call_count[sp] != arity orelse ((op == 2 orelse op == 3) andalso b <= 0)
+        orelse a + b > text_cap_max() orelse size > 7000
+        orelse s2 + hidden > 2047 orelse txo.s1[sp] > 2047 {
+        perr(pe_method_syntax(), toks.at);
+    }
+    stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
+    ps.last_enum = 0; ps.last_byte = 0;
+    // A slice carries its start slot where a binary operation carries its argument's capacity.
+    let second = if op == 4 { txo.start[sp] } else { b };
+    ps.emit_arg = op + a * 8 + second * 1048576 + txo.s1[sp] * 137438953472 + s2 * 281474976710656;
+    144
 }
 
 // A `.N` after a let-bound value of a single-variant enum reads that variant's payload field
@@ -7321,6 +7428,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     } else {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
+            if call.call_pending >= 3072 andalso call.call_pending < 3080 { text_open(call.call_sp); }
             call.call_chunk[call.call_sp] = call.call_pending;
             // A piped operand's kind is the first argument's, as the reference rewrites a pipe
             // into a template to the call it stands for before monomorphizing it.

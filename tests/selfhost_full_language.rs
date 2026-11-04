@@ -3487,16 +3487,6 @@ fn capacity_bounded_text_has_its_pinned_outcomes() {
             "fn main() -> Text<70000> { \"x\" as Text<70000> }",
             Unsupported,
         ),
-        // An operation is refused by the shipping entry where the `text` feature lets the
-        // reference compile it, and is the reference's rejection where it does not.
-        (
-            "fn main() -> Word { let t = \"ab\" as Text<4>; t.len() }",
-            if cfg!(feature = "text") {
-                Unsupported
-            } else {
-                RefRejects
-            },
-        ),
         (
             "newtype T = Text<4>;\nfn main() -> Word { let t = T(\"a\" as Text<4>); 1 }",
             Unsupported,

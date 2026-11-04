@@ -807,21 +807,66 @@ fn the_static_cost_is_finite_and_linear_in_the_capacity() {
 
 // --- The self-hosted compiler ---
 
-/// The stages under `kel/` do not mirror the operations. A program using one
-/// necessarily names a `Text<N>`, because the literal cast is the only way to
-/// make an operand, so the shipping entry refuses it as unsupported before any
-/// stage runs. This lives here rather than in a `selfhost_*` binary because the
-/// workspace job, the only one that enables `text` together with `self-host`,
-/// does not run those binaries.
+/// The stages under `kel/` lower the five operations to the reference's
+/// instruction sequences. Each identical case is compiled through the shipping
+/// entry, which returns a module only after comparing it with the reference
+/// field by field, and its artifact is then compared byte for byte. The cases
+/// cover every operation, each receiver form the parser lays out as a text body,
+/// the hidden locals of nested and chained operations and of an argument that
+/// declares its own, a position above the immediate range, a guard, a match arm
+/// and a yield. The refusals pin the limits the stages keep, each refused
+/// rather than emitted divergently. This lives here rather than in a
+/// `selfhost_*` binary because the workspace job, the only one that enables
+/// `text` together with `self-host`, does not run those binaries.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_bundled_text_operation_is_outside_the_self_hosted_subset() {
-    let src = "fn main() -> Word { (\"ab\" as Text<2>).concat(\"c\" as Text<2>).len() }";
-    match keleusma::selfhost::self_hosted_compile(src, &keleusma::target::Target::host()) {
-        Err(keleusma::selfhost::SelfHostError::Unsupported { detail }) => {
-            assert!(detail.contains("Text<N>"), "{detail}");
+fn the_self_hosted_compiler_lowers_the_operations_byte_identically() {
+    use keleusma::selfhost::{SelfHostError, self_hosted_compile};
+    let target = keleusma::target::Target::host();
+    let identical = [
+        "fn main() -> Word { let t = \"ab\" as Text<4>; t.len() }",
+        "fn main() -> Word { (\"a\" as Text<40>).capacity() }",
+        "fn main() -> Text<6> { let a = \"ab\" as Text<4>; let b = \"c\" as Text<2>; a.concat(b) }",
+        "fn main() -> Text<24> { let a = \"ab\" as Text<20>; let b = \"c\" as Text<4>; a.concat(b) }",
+        "fn main() -> bool { (\"ab\" as Text<20>).eq(\"ab\" as Text<17>) }",
+        "fn main() -> Text<4> { (\"abcd\" as Text<4>).slice(1, 3) }",
+        "fn main() -> Word { let t = \"abcdefghijklmnopqrst\" as Text<20>; t.slice(16, 19).len() }",
+        "fn main(t: Text<4>) -> Word { t.len() * 1000 + t.concat(\"\" as Text<1>).len() * 100 + t.slice(0, 9).len() }",
+        "fn main() -> Word { (\"ab\" as Text<2>).concat(\"c\" as Text<2>).len() }",
+        "fn main() -> Text<9> { let a = \"ab\" as Text<2>; let b = \"c\" as Text<3>; a.concat(b).concat(\"de\" as Text<4>) }",
+        "fn main() -> Word { let a = \"ab\" as Text<4>; let b = \"c\" as Text<2>; let c = a.concat(b.concat(b)); c.len() }",
+        "fn main() -> Text<4> { let t = \"abcd\" as Text<4>; let u = \"ab\" as Text<4>; t.slice(u.len(), 3) }",
+        "fn main() -> Text<4> { let t = \"abcd\" as Text<4>; let u = \"ab\" as Text<4>; t.slice(1, u.len()) }",
+        "fn mk() -> Text<4> { \"ab\" as Text<4> }\nfn main() -> Word { mk().len() }",
+        "fn main() -> Word { let xs = [\"ab\" as Text<4>, \"c\" as Text<4>]; xs[1].len() }",
+        "struct S { n: Word, t: Text<5> }\nfn main() -> Word { let s = S { n: 1, t: \"abc\" as Text<5> }; s.t.len() }",
+        "enum E { A, V(Text<8>) }\nfn f(e: E) -> Word { match e { E::A => 0, E::V(t) => t.len() } }\nfn main() -> Word { f(E::V(\"a\" as Text<8>)) }",
+        "fn f(t: Text<4>) -> Word when t.len() > 1 { 1 }\nfn f(t: Text<4>) -> Word { 0 }\nfn main() -> Word { f(\"ab\" as Text<4>) }",
+        "loop main(e: Word) -> Text<4> { let n = yield (\"h\" as Text<2>).concat(\"i\" as Text<2>); n }",
+        "struct S { a: Word }\ntrait Size { fn len(s: S) -> Word; }\nimpl Size for S { fn len(s: S) -> Word { s.a + 40 } }\nfn main() -> Word { let s = S { a: 2 }; let t = \"abc\" as Text<4>; s.len() * 10 + t.len() }",
+    ];
+    let mut compared = 0usize;
+    for src in identical {
+        let ours = self_hosted_compile(src, &target)
+            .unwrap_or_else(|e| panic!("{src}\n  expected a byte-identical module, got {e:?}"));
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            compile_src(src).to_bytes().unwrap(),
+            "{src}"
+        );
+        compared += 1;
+    }
+    assert_eq!(compared, 20, "a byte comparison was skipped");
+    for src in [
+        // An instruction count past the code generator's budget.
+        "fn main() -> Text<600> { let a = \"ab\" as Text<300>; let b = \"c\" as Text<300>; a.concat(b) }",
+        // A text value passed to a generic function.
+        "fn id<T>(x: T) -> T { x }\nfn main() -> Text<5> { id((\"ab\" as Text<2>).concat(\"c\" as Text<3>)) }",
+    ] {
+        match self_hosted_compile(src, &target) {
+            Err(SelfHostError::Unsupported { .. }) => {}
+            other => panic!("{src}\n  expected an unsupported refusal, got {other:?}"),
         }
-        other => panic!("expected an unsupported refusal, got {other:?}"),
     }
 }
 

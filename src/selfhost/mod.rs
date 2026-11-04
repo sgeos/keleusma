@@ -1414,6 +1414,21 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
             methods.push((h, m, idx as i64));
         }
     }
+    // The five `Text<N>` operations resolve by the receiver type `Text`, not by a trait
+    // impl, as the reference resolves them. Each takes a row under the `Text` head whose
+    // chunk is the operation's code below zero, `-1` for `len` through `-5` for `slice`,
+    // which `parse.kel` lowers in place rather than calling. A row is added only for a
+    // name the source spells, and a trait method of the same name on `Text` cannot
+    // shadow it, because the reference reaches the operation first.
+    if let Some(text) = names.iter().position(|n| n == "Text") {
+        for (code, op) in TEXT_OPERATIONS.iter().enumerate() {
+            if let Some(m) = names.iter().position(|n| n == op) {
+                let (h, m) = (text as i64, m as i64);
+                methods.retain(|&(mh, mm, _)| !(mh == h && mm == m));
+                methods.push((h, m, -(code as i64) - 1));
+            }
+        }
+    }
     let instances = instances
         .iter()
         .zip(&instance_ids)
@@ -3367,6 +3382,10 @@ pub fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValu
 /// `Text<N>`, the capacity being the argument less this base. It matches
 /// `text_cast_base` in `parse.kel` and `codegen.kel`.
 const TEXT_CAST_BASE: i64 = 1 << 40;
+
+/// The bundled `Text<N>` operations in the order of their codes, `len` code zero.
+/// `parse.kel` and `codegen.kel` number them the same way.
+const TEXT_OPERATIONS: [&str; 5] = ["len", "capacity", "concat", "eq", "slice"];
 
 /// The largest `Text<N>` capacity the stages lower, `text_cap_max` in `parse.kel`.
 const TEXT_CAPACITY_MAX: i64 = 65527;
@@ -10904,11 +10923,10 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
 /// | an `Option` of a `Text<N>` | an `Option` of any composite payload is outside the stages |
 /// | a data field | a private data field of a tuple layout is outside the stages |
 /// | a trait, an impl or a newtype | the stages key method heads and newtypes by a type name |
-/// | the five operations | the operations are lowered in a later increment |
 ///
-/// The operations are recognised by name, `len`, `capacity`, `concat`, `eq` and `slice`,
-/// in any program that names `Text<N>`, so a method of one of those names on another
-/// receiver in such a program is refused too. That is conservative, never a divergence.
+/// The five operations are lowered by the stages on a receiver the parser stage lays out
+/// as a text body. An operation the stages cannot lower is refused by the parser stage as
+/// an unsupported method call rather than here.
 ///
 /// A source the reference parser rejects answers `None`, so the existing rejection
 /// paths classify it exactly as before.
@@ -10947,7 +10965,6 @@ fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
     struct Scan {
         named: bool,
         refused: Vec<(u32, &'static str)>,
-        methods: Vec<u32>,
     }
     impl Scan {
         fn refuse(&mut self, what: &'static str, line: u32) {
@@ -10970,14 +10987,6 @@ fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
         fn visit_expr(&mut self, e: &Expr) {
             if let Expr::Cast { target, .. } = e {
                 self.note(target);
-            }
-            if let Expr::MethodCall { method, span, .. } = e
-                && matches!(
-                    method.as_str(),
-                    "len" | "capacity" | "concat" | "eq" | "slice"
-                )
-            {
-                self.methods.push(span.line);
             }
             self.walk_expr(e);
         }
@@ -11018,7 +11027,6 @@ fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
                 scan.named = true;
                 scan.refuse(IN_TRAIT, m.span.line);
             }
-            scan.methods.extend(body.methods);
         }
     }
     for t in &program.traits {
@@ -11050,11 +11058,6 @@ fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
         if let Some(sig) = &u.signature {
             scan.note(&sig.return_type);
             sig.params.iter().for_each(|t| scan.note(t));
-        }
-    }
-    if scan.named {
-        for line in core::mem::take(&mut scan.methods) {
-            scan.refuse("a `Text<N>` operation", line);
         }
     }
     scan.refused
