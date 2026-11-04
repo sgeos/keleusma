@@ -3036,17 +3036,17 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         "fn main(a: Multiword<2>) -> Multiword<2> { a }",
         Identical,
     ),
-    // The reference admits `Text<N>` since the literal-cast increment, and the stages do
-    // not lower it, so the shipping entry refuses it as unsupported before any stage runs.
+    // The stages lower `Text<N>` and its literal cast since 2026-11-02. The positions
+    // and the refusals are in `capacity_bounded_text_has_its_pinned_outcomes`.
     (
         "TypeExpr::TextN",
         "fn main(a: Text<8>) -> Word { 1 }",
-        Unsupported,
+        Identical,
     ),
     (
         "TypeExpr::TextN::LiteralCast",
         "fn main() -> Text<8> { \"abc\" as Text<8> }",
-        Unsupported,
+        Identical,
     ),
     (
         "TypeExpr::Labelled",
@@ -3306,6 +3306,255 @@ fn builtin_generic_signatures_have_their_pinned_outcomes() {
         })
         .collect();
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The capacity-bounded text type `Text<N>` and its literal cast, 2026-11-02.
+///
+/// The lexer folds `Text<N>` into one token, the parser lays it out as the tuple of a
+/// length word and `N` bytes, which is the reference's flat body, and code generation
+/// loads a literal cast as one pooled constant, as the reference does. Every position the
+/// reference admits and the stages lower is compiled here through the shipping entry and
+/// its artifact compared byte for byte with the reference's. The refusals pin each use the
+/// stages do not lower, so a program reaching one is refused rather than emitted
+/// divergently. The rejections pin that a program the reference rejects reports that
+/// rejection.
+#[test]
+fn capacity_bounded_text_has_its_pinned_outcomes() {
+    let cases: &[(&str, Class)] = &[
+        // The literal cast and its value, including the capacity boundary, the empty
+        // literal, an interior NUL, the six escapes and a two-byte UTF-8 character.
+        ("fn main() -> Text<8> { \"abc\" as Text<8> }", Identical),
+        ("fn main() -> Text<3> { \"abc\" as Text<3> }", Identical),
+        ("fn main() -> Text<1> { \"\" as Text<1> }", Identical),
+        ("fn main() -> Text<4> { \"a\\0b\" as Text<4> }", Identical),
+        (
+            "fn main() -> Text<8> { \"a\\nb\\t\\\"\\\\\\r\" as Text<8> }",
+            Identical,
+        ),
+        ("fn main() -> Text<2> { \"\u{e9}\" as Text<2> }", Identical),
+        ("fn main() -> Text<1000> { \"x\" as Text<1000> }", Identical),
+        (
+            "fn main() -> Word { let t = \"ab\" as Text<0x4>; 1 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let t = \"ab\" as Text <4>; 1 }",
+            Identical,
+        ),
+        // One pooled constant per distinct value, as the reference deduplicates.
+        (
+            "fn main() -> Word { let a = \"ab\" as Text<4>; let b = \"ab\" as Text<4>; let c = \"ab\" as Text<8>; 1 }",
+            Identical,
+        ),
+        // Locals, annotations, parameters, returns and calls.
+        (
+            "fn main() -> Word { let t: Text<8> = \"abc\" as Text<8>; 1 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Text<4> { let t = \"ab\" as Text<4>; let u = t; u }",
+            Identical,
+        ),
+        ("fn main(a: Text<8>) -> Word { 1 }", Identical),
+        (
+            "fn id(t: Text<8>) -> Text<8> { t }\nfn main() -> Text<8> { id(\"abc\" as Text<8>) }",
+            Identical,
+        ),
+        (
+            "fn g(t: Text<4>) -> Text<4> { t }\nfn main() -> Text<4> { let t = \"ab\" as Text<4>; g(g(t)) }",
+            Identical,
+        ),
+        (
+            "fn f(t: Text<4>, n: Word) -> Word when n > 0 { n }\nfn f(t: Text<4>, n: Word) -> Word { 0 }\nfn main() -> Word { f(\"a\" as Text<4>, 3) }",
+            Identical,
+        ),
+        // Branches, a match and a loop.
+        (
+            "fn main() -> Text<4> { if true { \"a\" as Text<4> } else { \"b\" as Text<4> } }",
+            Identical,
+        ),
+        (
+            "fn f(x: Word) -> Text<4> { match x { 0 => \"zero\" as Text<4>, _ => \"many\" as Text<4> } }\nfn main() -> Text<4> { f(0) }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { for i in 0..3 { let t = \"ab\" as Text<4>; } 1 }",
+            Identical,
+        ),
+        // A yield, which a flat body may cross, and a resume value of the type.
+        (
+            "loop main(e: Word) -> Text<4> { let n = yield \"hi\" as Text<4>; n }",
+            Identical,
+        ),
+        (
+            "loop main(e: Text<4>) -> Text<4> { let n = yield e; n }",
+            Identical,
+        ),
+        // Tuples, in a value, an annotation, a parameter, a return and a destructuring.
+        (
+            "fn main() -> Text<4> { let p = (1, \"cd\" as Text<4>); p.1 }",
+            Identical,
+        ),
+        (
+            "fn main() -> (Word, Text<8>) { (1, \"abc\" as Text<8>) }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let p: (Word, Text<4>) = (1, \"ab\" as Text<4>); p.0 }",
+            Identical,
+        ),
+        (
+            "fn f(p: (Word, Text<4>)) -> Text<4> { p.1 }\nfn main() -> Text<4> { f((1, \"ab\" as Text<4>)) }",
+            Identical,
+        ),
+        (
+            "fn two() -> (Text<4>, Text<2>) { (\"ab\" as Text<4>, \"c\" as Text<2>) }\nfn main() -> Text<2> { let p = two(); p.1 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let p = (\"a\" as Text<2>, \"b\" as Text<3>, 7); let (a, b, c) = p; c }",
+            Identical,
+        ),
+        // Arrays, in a value, an annotation, a parameter, a return and an index.
+        (
+            "fn main() -> Text<4> { let xs = [\"ab\" as Text<4>, \"cd\" as Text<4>]; xs[1] }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs: [Text<4>; 2] = [\"ab\" as Text<4>, \"cd\" as Text<4>]; 1 }",
+            Identical,
+        ),
+        (
+            "fn f(xs: [Text<4>; 2]) -> Text<4> { xs[0] }\nfn main() -> Text<4> { f([\"ab\" as Text<4>, \"cd\" as Text<4>]) }",
+            Identical,
+        ),
+        (
+            "fn main() -> [Text<2>; 3] { [\"a\" as Text<2>, \"b\" as Text<2>, \"c\" as Text<2>] }",
+            Identical,
+        ),
+        (
+            "fn main() -> Text<4> { let xs = [\"ab\" as Text<4>, \"cd\" as Text<4>]; let i = 1; xs[i] }",
+            Identical,
+        ),
+        (
+            "fn main() -> Text<2> { let xs = [(\"a\" as Text<2>, 1), (\"b\" as Text<2>, 2)]; xs[1].0 }",
+            Identical,
+        ),
+        // Struct fields, whose offsets follow a text field, nested and returned.
+        (
+            "struct S { a: Word, t: Text<8> }\nfn main() -> Text<8> { let s = S { a: 1, t: \"abc\" as Text<8> }; s.t }",
+            Identical,
+        ),
+        (
+            "struct S { a: Text<2>, b: Text<3>, c: Word }\nfn main() -> Word { let s = S { c: 9, b: \"b\" as Text<3>, a: \"a\" as Text<2> }; s.c }",
+            Identical,
+        ),
+        (
+            "struct S { t: Text<4>, a: Word }\nstruct T { s: S, b: Word }\nfn main() -> Word { let t = T { s: S { t: \"ab\" as Text<4>, a: 7 }, b: 3 }; t.s.a + t.b }",
+            Identical,
+        ),
+        (
+            "struct S { a: Word, t: Text<4> }\nfn mk() -> S { S { a: 1, t: \"x\" as Text<4> } }\nfn main() -> Text<4> { let s = mk(); s.t }",
+            Identical,
+        ),
+        // Enum payloads, constructed, matched and bound.
+        (
+            "enum E { V(Text<8>) }\nfn main() -> E { E::V(\"a\" as Text<8>) }",
+            Identical,
+        ),
+        (
+            "enum E { A, V(Text<8>) }\nfn f(e: E) -> Text<8> { match e { E::A => \"none\" as Text<8>, E::V(t) => t } }\nfn main() -> Text<8> { f(E::V(\"a\" as Text<8>)) }",
+            Identical,
+        ),
+        (
+            "enum E { A(Text<2>, Word), B(Word, Text<3>) }\nfn f(e: E) -> Word { match e { E::A(t, w) => w, E::B(w, t) => w } }\nfn main() -> Word { f(E::B(4, \"xy\" as Text<3>)) }",
+            Identical,
+        ),
+        // The uses the stages do not lower, each refused before any stage runs.
+        (
+            "private data d { t: Text<8> }\nfn main() -> Text<8> { d.t = \"abc\" as Text<8>; d.t }",
+            Unsupported,
+        ),
+        (
+            "fn main() -> Option<Text<8>> { Option::Some(\"a\" as Text<8>) }",
+            Unsupported,
+        ),
+        (
+            "fn f<const n: Word>() -> Text<n> { \"ab\" as Text<n> }\nfn main() -> Text<4> { f::<4>() }",
+            Unsupported,
+        ),
+        (
+            "fn main() -> Text<70000> { \"x\" as Text<70000> }",
+            Unsupported,
+        ),
+        // An operation is refused by the shipping entry where the `text` feature lets the
+        // reference compile it, and is the reference's rejection where it does not.
+        (
+            "fn main() -> Word { let t = \"ab\" as Text<4>; t.len() }",
+            if cfg!(feature = "text") {
+                Unsupported
+            } else {
+                RefRejects
+            },
+        ),
+        (
+            "newtype T = Text<4>;\nfn main() -> Word { let t = T(\"a\" as Text<4>); 1 }",
+            Unsupported,
+        ),
+        // What the reference rejects is reported as its rejection.
+        ("fn main() -> Text<2> { \"abc\" as Text<2> }", RefRejects),
+        (
+            "fn main() -> Word { let t = \"ab\" as Text<0>; 1 }",
+            RefRejects,
+        ),
+        (
+            "fn main() -> Word { let s = \"a\"; let t = s as Text<4>; 1 }",
+            RefRejects,
+        ),
+        (
+            "fn main() -> bool { let a = \"ab\" as Text<4>; a == a }",
+            RefRejects,
+        ),
+        (
+            "fn main() -> Word { let t = \"abc\" as Text<4>; t.0 }",
+            RefRejects,
+        ),
+        (
+            "use foo::bar(Text<4>) -> Word\nfn main() -> Word { 1 }",
+            RefRejects,
+        ),
+    ];
+    let mut identical = 0usize;
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+            continue;
+        }
+        if *expected != Identical {
+            continue;
+        }
+        let target = keleusma::target::Target::host();
+        let ours = self_hosted_compile(src, &target).expect("classified Identical");
+        let reference = compile_src(src);
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{src}"
+        );
+        identical += 1;
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    // Non-vacuity. The byte comparison ran for every case expected to be identical.
+    let expected_identical = cases.iter().filter(|(_, c)| *c == Identical).count();
+    assert_eq!(
+        identical, expected_identical,
+        "a byte comparison was skipped"
+    );
+    assert_eq!(identical, 40, "the identical population moved");
 }
 
 /// A match over an `Option<T>` parameter, Order 6. The parser resolves `Option::Some` and

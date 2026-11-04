@@ -2112,8 +2112,9 @@ fn self_compile_codegen_atomic_functions() {
     // slice 5b `push_floatlit` (103 -> 104).
     // 105 since `push_refinement`, the refinement check, 2026-10-27.
     // The private struct read copy pass of 2026-10-31 adds the twelve `dc_` helpers, all
-    // self-compiling (105 -> 117).
-    const EXPECTED_SELF_COMPILE: usize = 117;
+    // self-compiling (105 -> 117). The `Text<N>` literal cast adds `text_cast_base` and
+    // `push_text_cast`, both self-compiling (117 -> 119), 2026-11-02.
+    const EXPECTED_SELF_COMPILE: usize = 119;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2339,7 +2340,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=105) => {}
+                        || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                        {}
                     _ => records.push((code, val)),
                 }
             } else if in_guard {
@@ -2432,7 +2434,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 && *k != keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                 && *k != keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                 && *k != keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                && !matches!(*k, 94..=96 | 99..=105)
+                && !matches!(*k, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG)
         })
         .collect();
     let records: &[(i64, i64)] = &records;
@@ -4175,7 +4177,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                     || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                     || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                    || matches!(c, 94..=96 | 99..=105) => {}
+                    || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                    {}
                 _ => cur.as_mut().unwrap().body.push((code, val)),
             }
         } else if in_guard {
@@ -4187,7 +4190,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                     || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                     || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                    || matches!(c, 94..=96 | 99..=105) => {}
+                    || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                    {}
                 _ => cur.as_mut().unwrap().guard.push((code, val)),
             }
         } else if in_data {
@@ -4512,6 +4516,8 @@ fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].ops = ops;
         // A tag-1 pool entry is a StaticStr: its value is the lexer intern id, resolved to the
         // string bytes through the name table. A tag-0 entry is an Int.
+        // A tag-4 entry is a `Text<N>` literal cast's flat body. The shipping driver's
+        // conversion is used for that tag, so the two cannot drift on its layout.
         module.chunks[idx].constants = pool
             .iter()
             .map(|&(v, t)| {
@@ -4522,6 +4528,8 @@ fn self_host_compile(src: &str) -> Module {
                 } else if t == 3 {
                     // A Float literal's interned text, as the shipping driver converts it.
                     ConstValue::Float(names[v as usize].parse().expect("float literal text"))
+                } else if t == 4 {
+                    keleusma::selfhost::pool_to_constants(&[(v, t)], &names).remove(0)
                 } else {
                     ConstValue::Int(v)
                 }
@@ -9253,6 +9261,63 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             Refuses,
             "fn id<T>(x: T) -> T { x }\nloop main(t: (Word, Word)) -> Word { let r = yield 1; let s = id(r); yield 0 }",
         ),
+        // --- the capacity-bounded text type, 2026-11-02 ------------------------------
+        //
+        // `Text<N>` is laid out as the tuple of a length word and `N` bytes, and a literal
+        // cast loads one pooled constant. The uses the stages do not lower, a data field, an
+        // `Option` payload and the five operations, are refused by the shipping entry before
+        // any stage runs, which this table does not exercise, so they are pinned in
+        // `capacity_bounded_text_has_its_pinned_outcomes` in `selfhost_full_language.rs`.
+        (
+            "text_n/literal_cast",
+            SOk,
+            "fn f() -> Text<8> { \"abc\" as Text<8> }",
+        ),
+        (
+            "text_n/escapes_and_utf8",
+            SOk,
+            "fn f() -> Word { let a = \"a\\0\\n\" as Text<4>; let b = \"\u{e9}\" as Text<2>; let c = \"a\\0\\n\" as Text<4>; 1 }",
+        ),
+        (
+            "text_n/annotated_let",
+            SOk,
+            "fn f() -> Word { let t: Text<8> = \"abc\" as Text<8>; 1 }",
+        ),
+        (
+            "text_n/parameter_and_call",
+            SOk,
+            "fn id(t: Text<8>) -> Text<8> { t }\nfn f() -> Text<8> { id(\"abc\" as Text<8>) }",
+        ),
+        (
+            "text_n/tuple_element",
+            SOk,
+            "fn f() -> Text<4> { let p = (1, \"cd\" as Text<4>); p.1 }",
+        ),
+        (
+            "text_n/array_element",
+            SOk,
+            "fn g(xs: [Text<4>; 2]) -> Text<4> { xs[1] }\nfn f() -> Text<4> { g([\"ab\" as Text<4>, \"cd\" as Text<4>]) }",
+        ),
+        (
+            "text_n/struct_field",
+            SOk,
+            "struct S { a: Text<2>, b: Word }\nfn f() -> Word { let s = S { b: 9, a: \"a\" as Text<2> }; s.b }",
+        ),
+        (
+            "text_n/enum_payload",
+            SOk,
+            "enum E { A, V(Text<8>) }\nfn g(e: E) -> Text<8> { match e { E::A => \"none\" as Text<8>, E::V(t) => t } }\nfn f() -> Text<8> { g(E::V(\"a\" as Text<8>)) }",
+        ),
+        (
+            "text_n/branches",
+            SOk,
+            "fn f() -> Text<4> { if true { \"a\" as Text<4> } else { \"b\" as Text<4> } }",
+        ),
+        (
+            "text_n/too_long__REJECT",
+            RefRejects,
+            "fn f() -> Text<2> { \"abc\" as Text<2> }",
+        ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (
             "removed/closure__REJECT",
@@ -9434,10 +9499,12 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // peak unchanged. Nested and variant patterns, which replaced `dq_struct` with
             // the item and frame tables and their helpers, took it to 2744 on 2026-10-31,
             // with the peak unchanged. The typed pattern annotation, `dq_type`, `dq_top` and
-            // `dq_push_typed`, took it to 2823 on 2026-11-01 with the peak unchanged.
+            // `dq_push_typed`, took it to 2823 on 2026-11-01 with the peak unchanged. The
+            // `Text<N>` fold, `tx_is_text`, `tx_take`, `tx_release` and `tx_filter`, took it
+            // to 3013 on 2026-11-02 with the peak unchanged.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2823,
+            3013,
             421,
         ),
         (

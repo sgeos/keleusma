@@ -1222,7 +1222,33 @@ fn push_refinement(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// The literal cast `"..." as Text<N>` carries `N` above this base. It loads one pooled
+// constant, tag 4, whose value packs the string literal's intern id below 65536 and the
+// capacity above it. The host builds the flat body from the two, the literal's bytes zero
+// padded to `N`, which is the reference's `ConstValue::Tuple(Int, Array)`. The operand is
+// not visited, because the reference emits nothing for it. Pool deduplication is by the
+// packed value, so two casts of one spelling to one capacity share an entry as the
+// reference's structural deduplication shares them.
+fn text_cast_base() -> Word { 1099511627776 }
+fn push_text_cast(p: Word) -> Word {
+    let operand = ast.lhs[p];
+    let n = ast.args[p] - text_cast_base();
+    let value = if ast.kinds[operand] == 38 { ast.args[operand] + n * 65536 } else { 0 - 1 };
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 4 { st.dup_idx = i; }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 4;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
 fn push_cast(p: Word) -> Word {
+    if ast.args[p] >= text_cast_base() { push_text_cast(p) } else {
     if ast.args[p] >= 2 {
         push_enum_dispatch(p, ast.args[p] - 2, 4)
     } else {
@@ -1232,7 +1258,7 @@ fn push_cast(p: Word) -> Word {
         push_emit(wire.bytetoword);
     }
     push_visit(ast.lhs[p])
-    }
+    } }
 }
 
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.

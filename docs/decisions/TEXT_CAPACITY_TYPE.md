@@ -555,6 +555,18 @@ reading one byte, and any operation into a smaller fixed capacity. The last is t
 that can overflow, and with it comes the truncation default and its optional arm following
 `CheckedArmKind`.
 
+## The self-hosted stages, updated 2026-11-02
+
+The two refusals recorded above for the self-hosted compiler are narrowed. The lexer stage
+folds `Text<N>` into one token, the parser stage lays the type out as the tuple of a length
+word and `N` bytes, and code generation loads a literal cast as one pooled constant, so the
+artifact is byte-identical with the reference in a signature, a `let`, a tuple, an array, a
+struct field and an enum payload. This was measured on forty programs through the shipping
+entry, pinned by `capacity_bounded_text_has_its_pinned_outcomes` in
+`tests/selfhost_full_language.rs`. A data field, an `Option` payload, a capacity that is not
+a literal or exceeds 65527, a trait, an impl, a newtype and the five operations remain refused
+by the shipping entry before any stage runs.
+
 ## The `ScalarKind::Text` collapse, investigated 2026-10-31 and stopped
 
 The operator authorized the collapse on 2026-10-31, with an instruction to stop and report rather

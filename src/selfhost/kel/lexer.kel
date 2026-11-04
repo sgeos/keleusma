@@ -66,11 +66,11 @@ require word >= 32;
 shared data src {
     len: Word,
     bytes: [Byte; 524288],
-    istart: [Word; 1280],
-    ilen: [Word; 1280],
+    istart: [Word; 1536],
+    ilen: [Word; 1536],
     icount: Word,
     // Token 65 indexes a full-width integer under its interned source spelling.
-    values: [Word; 1280],
+    values: [Word; 1536],
 }
 
 // The scanner's cross-iteration state. `kind` is the token being built: 0 none,
@@ -88,7 +88,7 @@ private data st {
 
 // Scratch accumulators for the interning content comparison (increment 4), which
 // cannot use immutable locals. The intern table itself (`istart`/`ilen`/`icount`)
-// lives in the shared `src` block so the host can read it back; capacity 1280
+// lives in the shared `src` block so the host can read it back; capacity 1536
 // distinct identifiers, and a source that exceeds it fails closed at the interning
 // scan's `limit` rather than aliasing.
 private data intern {
@@ -306,7 +306,7 @@ fn kw9(start: Word) -> Word {
 // unique, so the last (and only) matching index the scan records is the answer.
 fn intern_id(start: Word, len: Word) -> Word {
     intern.found = 0 - 1;
-    for i in 0..src.icount limit 1280 {
+    for i in 0..src.icount limit 1536 {
         if src.ilen[i] == len {
             intern.mism = 0;
             for j in 0..len limit 64 {
@@ -960,15 +960,76 @@ fn dq_pattern(t: Word, k: Word) -> Word {
     } else { dq_variant(k) } } } } } }
 }
 
+// THE CAPACITY-BOUNDED TEXT TYPE, `Text<N>`, FOLDED INTO ONE TOKEN.
+//
+// The four raw tokens `Text`, `<`, an integer literal and `>` become Tok 76 carrying the
+// literal, so the parser reads the type as one term in every type position rather than
+// as a type name followed by what would otherwise be a comparison. Any other sequence
+// after `Text` is released unchanged, in source order, so a program that does not write
+// this exact form reads exactly as it did. `phase` counts the tokens held, and `q` holds
+// the released tokens that still have to pass through the destructuring filter.
+private data tx {
+    phase: Word,
+    held: [Word; 3],
+    q: [Word; 4],
+    qpos: Word,
+    qlen: Word,
+}
+
+// 1 when the raw token `t` is the identifier spelled `Text`.
+fn tx_is_text(t: Word) -> Word {
+    if t % 256 != 1 { 0 } else {
+        let id = t / 256;
+        let at = src.istart[id];
+        if src.ilen[id] == 4 andalso peek_at(at) == 84 andalso peek_at(at + 1) == 101
+            andalso peek_at(at + 2) == 120 andalso peek_at(at + 3) == 116 { 1 } else { 0 }
+    }
+}
+
+fn tx_take() -> Word {
+    let t = tx.q[tx.qpos];
+    tx.qpos = tx.qpos + 1;
+    if tx.qpos >= tx.qlen { tx.qpos = 0; tx.qlen = 0; }
+    t
+}
+
+// The held tokens did not complete the form. The first is returned now and the rest, then
+// `t`, are queued in source order.
+fn tx_release(t: Word) -> Word {
+    tx.qpos = 0;
+    tx.qlen = 0;
+    for i in 1..tx.phase limit 3 {
+        tx.q[tx.qlen] = tx.held[i];
+        tx.qlen = tx.qlen + 1;
+    }
+    tx.q[tx.qlen] = t;
+    tx.qlen = tx.qlen + 1;
+    tx.phase = 0;
+    tx.held[0]
+}
+
+fn tx_filter(t: Word) -> Word {
+    if t == 63 { 63 } else {
+    if tx.phase == 0 {
+        if tx_is_text(t) == 1 { tx.held[0] = t; tx.phase = 1; 63 } else { t }
+    } else {
+    if tx.phase == 1 andalso t % 256 == 28 { tx.held[1] = t; tx.phase = 2; 63 } else {
+    if tx.phase == 2 andalso t % 256 == 12 { tx.held[2] = t; tx.phase = 3; 63 } else {
+    if tx.phase == 3 andalso t % 256 == 29 { tx.phase = 0; 76 + (tx.held[2] / 256) * 256 } else {
+        tx_release(t)
+    } } } } }
+}
+
 fn next_token() -> Word {
     if dq.len > 0 { dq_take() } else {
+    if tx.qlen > 0 { dq_filter(tx_take()) } else {
     // A shebang line at the very start of the source is skipped, as the reference lexer
     // skips it, by entering the line-comment state past the `#!`.
     if st.cursor == 0 andalso st.kind == 0 andalso peek_at(0) == 35 andalso peek_at(1) == 33 {
         st.kind = 5;
         st.cursor = 2;
         63
-    } else { dq_filter(lex_raw()) } }
+    } else { dq_filter(tx_filter(lex_raw())) } } }
 }
 
 loop main(resume: Word) -> Word {

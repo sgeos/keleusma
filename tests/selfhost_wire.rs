@@ -13032,9 +13032,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // enum-typed payloads, the resume tables `res_main`, `res_probe`, `res_count`, `res_at`,
     // `res_kind`, `yield_at`, `rf_n`, `rf_i`, `rf_at`, `rf_kind`, `op_yat`, `resume` and
     // `resumes`, and `yield_expr_record`, `resume_arg_kind` and `resume_fact`, for 1179, and
-    // took the blob to 36,604.
-    assert_eq!(worst_names, 1179, "the worst-case name count moved");
-    assert_eq!(worst_blob, 36604, "the worst-case blob size moved");
+    // took the blob to 36,604. The capacity-bounded text type of 2026-11-02 added
+    // `text_cap_max`, `text_cast_base`, `text_desc`, `text_name`, `header_text_top`,
+    // `header_text`, `header_text_field` and `enum_text_payload`, for 1187, and took the
+    // blob to 37,174.
+    assert_eq!(worst_names, 1187, "the worst-case name count moved");
+    assert_eq!(worst_blob, 37174, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
