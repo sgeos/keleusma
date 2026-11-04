@@ -25,15 +25,37 @@
 // `verify_depth.kel` use (if-else staging, fresh-scope loops), but the state carried is the live
 // operand shape stack whose height is the operand depth.
 //
-// THE JOINS, as repaired by the C5 review on 2026-11-01. Until then every control-flow boundary
-// reset every local and every operand entry to Top, and the review's mutation corpus found 41
-// modules the reference rejects and this stage accepted because of it. Now an if-else's
-// else-arm starts from the saved entry state, the operand stack and the locals at the `EndIf`
-// are the reference's per-entry join of the paths that fall through, and a loop body is checked
-// from the entry state as the reference's first iteration is. One over-approximation remains
-// against the reference, toward Top and so toward acceptance. After a loop the locals its body
-// writes are forgotten, and so is every operand entry above the loop's entry height, rather
-// than being the join of the break states. The review record names it as a residual.
+// THE JOINS, as repaired by the C5 review on 2026-11-01 and 2026-11-04. Until 2026-11-01 every
+// control-flow boundary reset every local and every operand entry to Top, and the review's
+// mutation corpus found 41 modules the reference rejects and this stage accepted because of it.
+// Now an if-else's else-arm starts from the saved entry state, and the operand stack and the
+// locals at the `EndIf` are the reference's per-entry join of the paths that fall through.
+//
+// THE LOOP FIXPOINT, repaired on 2026-11-04 as residual 1 of the review. A loop body is run from
+// a head state, first the entry state, and when it falls through the locals it writes are
+// joined into the head. While the head changes the body runs again from it, which is the
+// reference's bounded ascending fixpoint. Every break of a pass is joined into an accumulator of
+// its loop, the stack above the loop's entry height and the locals the region writes, and the
+// state after the loop is that join, or with no break the body's end state, or with neither the
+// head. This is the reference's `join_all(loop_breaks)` of its last pass, `body_end` and `head`.
+//
+// TERMINATION OF THE FIXPOINT, verifiable by inspection. A loop's pass counter `f_it` starts at
+// 0 and rises by one per widening pass. When it reaches the reference's cap, the chunk's local
+// count plus two, the head's written locals are forgotten and `f_it` becomes -1, a final pass
+// that never widens. So each loop runs at most `local_count + 4` passes per entry, and the whole
+// walk is in any case bounded by the step budget of `run`, past which the result is the
+// unfinished-work cause 3, unavailable analysis rather than a verdict.
+//
+// THE TEXT LAYOUTS, repaired on 2026-11-04 as residual 2 of the review. A flat entry's `Text`
+// field offsets, the reference's `AbsVal::Flat::text`, are a record in the layout heap `lh`:
+// the count at the record's index and the ascending offsets after it. Entries hold the record's
+// index, -1 when the layout is unknown and 0 for the shared empty layout. The heap is a
+// capacity, and a record past it is the frame capacity, cause 2, unavailable analysis rather
+// than a verdict. Records are never freed within a pass of a loop body, and a loop's restart
+// frees every record its previous pass made, since no state that survives the restart refers to
+// one. The head keeps its own record whenever a join keeps a layout, and its records predate
+// the loop.
+//
 // A Top defers to the retained runtime bounds guard. The host marshals, per op, the
 // control-flow class/arg, a Trap/Return flag, the
 // operand consumption `req` (the reference `op_depth_effect`) and generic push count `prod`, and
@@ -78,6 +100,8 @@ shared data tv {
     cp_count: [Word; 8192],
     // 1 operand capacity, 2 frame capacity, 3 unfinished work budget.
     out_cause: Word,
+    // The chunk's local count, which sets the reference's loop fixpoint cap.
+    local_count: Word,
 }
 
 // The live operand shape stack (`st_tag`/`st_size`, height `dsp`), the local frame
@@ -125,27 +149,31 @@ private data tf {
     sum: Word,
     allknown: Word,
     bad: Word,
-    // Each entry's `Text` field offsets when its body was built by the program, the reference's
-    // `AbsVal::Flat::text`: `st_tn` the count, -1 unknown, and up to four offsets at `j * 4`.
-    // A scalar entry's `st_kind` is 1 for a `Text` scalar. Locals carry the same.
-    st_tn: [Word; 256],
-    st_t: [Word; 1024],
-    lc_tn: [Word; 256],
-    lc_t: [Word; 1024],
-    pop_tn: Word,
-    pop_t: [Word; 4],
+    // Each entry's `Text` layout, an index into the layout heap `lh`, -1 when unknown. A scalar
+    // entry's `st_kind` is 1 for a `Text` scalar. Locals carry the same.
+    st_ly: [Word; 256],
+    lc_ly: [Word; 256],
+    pop_ly: Word,
+    // The layout heap. A record at index `x` holds its offset count at `lh[x]` and the ascending
+    // offsets at `lh[x + 1]` onward. Index 0 is the empty layout. `hp` is the next free word, and
+    // `lt_b`/`lt_n`/`lt_ok` describe the record being built.
+    lh: [Word; 65536],
+    hp: Word,
+    lt_b: Word,
     lt_n: Word,
     lt_ok: Word,
-    lt: [Word; 4],
     off: Word,
     found: Word,
+    cur: Word,
+    cnt: Word,
+    res: Word,
     // THE JOIN PRECISION OF THE C5 REVIEW, docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md.
     //
     // `wr` holds, for each `If` or `Loop` at instruction `ip`, the set of locals any `SetLocal`
     // in its region writes, as eight 32-bit words at `ip * 8`. An if saves and joins only those
-    // locals and a loop exit forgets only those, since a local the region does not write keeps
-    // its shape on every path through it. `os`/`os_end`/`osp` are the open constructs of
-    // the pass that fills `wr`. `f_cip` is each frame's construct instruction.
+    // locals and a loop head and its break states hold only those, since a local the region does
+    // not write keeps its shape on every path through it. `os`/`os_end`/`osp` are the open
+    // constructs of the pass that fills `wr`. `f_cip` is each frame's construct instruction.
     //
     // The pool holds operand-stack snapshots, last in first out, since frames nest. An `If`
     // saves its entry stack at `f_pe` so that the else-arm and the skip path start from it, and
@@ -161,20 +189,42 @@ private data tf {
     p_tag: [Word; 8192],
     p_size: [Word; 8192],
     p_kind: [Word; 8192],
-    p_tn: [Word; 8192],
-    p_t: [Word; 32768],
+    p_ly: [Word; 8192],
     f_pe: [Word; 64],
     f_pt: [Word; 64],
     // The locals pool, the same discipline for the locals an `If`'s region writes: `f_le` holds
-    // their entry shapes and `f_lt` their then-arm end shapes, in ascending slot order.
+    // their entry shapes and `f_lt` their then-arm end shapes, in ascending slot order. A loop
+    // holds its head's written locals at `f_le`.
     qp: Word,
     q_tag: [Word; 8192],
     q_size: [Word; 8192],
     q_kind: [Word; 8192],
-    q_tn: [Word; 8192],
-    q_t: [Word; 32768],
+    q_ly: [Word; 8192],
     f_le: [Word; 64],
     f_lt: [Word; 64],
+    // THE LOOP FIXPOINT. For a frame waiting on a loop body, `f_it` is its pass counter, -1 on
+    // the final pass, `f_bb` the base of its break accumulator in the break pool, `f_bn` the
+    // accumulator's operand entry count, -1 before the pass's first break, and `f_hm` the layout
+    // heap mark at the loop's entry. The accumulator holds the operand entries above the loop's
+    // entry height and then the written locals in ascending slot order. `f_lp` is, for every
+    // frame, the frame waiting on the innermost loop whose body holds it, -1 outside a loop.
+    // Accumulators nest as loops do, since a break belongs to the innermost loop, so the break
+    // pool is last in first out with `bpp` its next free entry.
+    f_it: [Word; 64],
+    f_bb: [Word; 64],
+    f_bn: [Word; 64],
+    f_hm: [Word; 64],
+    f_lp: [Word; 64],
+    bpp: Word,
+    b_tag: [Word; 8192],
+    b_size: [Word; 8192],
+    b_kind: [Word; 8192],
+    b_ly: [Word; 8192],
+    // The join being computed, the reference's `AbsVal::join`, see `join_with`.
+    jr_tag: Word,
+    jr_size: Word,
+    jr_kind: Word,
+    jr_ly: Word,
 }
 
 // --- live operand shape stack --------------------------------------------------------------
@@ -185,13 +235,12 @@ fn st_pop() -> Word {
         tf.pop_tag = tf.st_tag[tf.dsp];
         tf.pop_size = tf.st_size[tf.dsp];
         tf.pop_kind = tf.st_kind[tf.dsp];
-        tf.pop_tn = tf.st_tn[tf.dsp];
-        for q in 0..4 limit 4 { tf.pop_t[q] = tf.st_t[tf.dsp * 4 + q]; }
+        tf.pop_ly = tf.st_ly[tf.dsp];
     } else {
         tf.pop_tag = 0;
         tf.pop_size = 0;
         tf.pop_kind = 0;
-        tf.pop_tn = -1;
+        tf.pop_ly = -1;
     }
     0
 }
@@ -202,7 +251,7 @@ fn st_push(tag: Word, size: Word) -> Word {
         tf.st_tag[tf.dsp] = tag;
         tf.st_size[tf.dsp] = size;
         tf.st_kind[tf.dsp] = 0;
-        tf.st_tn[tf.dsp] = -1;
+        tf.st_ly[tf.dsp] = -1;
         tf.dsp = tf.dsp + 1;
     } else { tf.over = 1; }
     0
@@ -215,7 +264,7 @@ fn st_push_k(tag: Word, size: Word, kind: Word) -> Word {
         tf.st_tag[tf.dsp] = tag;
         tf.st_size[tf.dsp] = size;
         tf.st_kind[tf.dsp] = kind;
-        tf.st_tn[tf.dsp] = -1;
+        tf.st_ly[tf.dsp] = -1;
         tf.dsp = tf.dsp + 1;
     } else { tf.over = 1; }
     0
@@ -254,7 +303,7 @@ fn top_from(lo: Word) -> Word {
             tf.st_tag[j] = 0;
             tf.st_size[j] = 0;
             tf.st_kind[j] = 0;
-            tf.st_tn[j] = -1;
+            tf.st_ly[j] = -1;
         }
     }
     0
@@ -342,30 +391,73 @@ fn eb_check(size: Word) -> Word {
     }
 }
 
-// Give the top entry the layout `count`/`offsets[q]` held at `src` in the entry table.
-fn copy_top_layout_from_entry(src: Word) -> Word {
-    if tf.dsp > 0 {
-        let d = tf.dsp - 1;
-        tf.st_tn[d] = tf.st_tn[src];
-        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.st_t[src * 4 + q]; }
+// --- text layouts --------------------------------------------------------------------------
+
+// Begin a layout record at the heap top.
+fn lt_begin() -> Word {
+    tf.lt_b = tf.hp;
+    tf.lt_n = 0;
+    tf.lt_ok = 1;
+    0
+}
+
+// Append offset `x` to the record being built. Past the heap it is the frame capacity.
+fn lt_add(x: Word) -> Word {
+    if tf.lt_ok == 1 {
+        let at = tf.lt_b + 1 + tf.lt_n;
+        if at < 65536 {
+            tf.lh[at] = x;
+            tf.lt_n = tf.lt_n + 1;
+        } else {
+            tf.over = 2;
+            tf.lt_ok = 0;
+        }
     }
     0
 }
 
-// Record offset `x` in the layout being built, or mark it unknown past four offsets.
-fn lt_add(x: Word) -> Word {
-    if tf.lt_n < 4 {
-        tf.lt[tf.lt_n] = x;
-        tf.lt_n = tf.lt_n + 1;
-    } else { tf.lt_ok = 0; }
-    0
+// Finish the record being built and return its index, 0 for the empty layout and -1 when the
+// layout is unknown.
+fn lt_end() -> Word {
+    tf.res = -1;
+    if tf.lt_ok == 1 {
+        if tf.lt_n == 0 {
+            tf.res = 0;
+        } else {
+            tf.lh[tf.lt_b] = tf.lt_n;
+            tf.hp = tf.lt_b + 1 + tf.lt_n;
+            tf.res = tf.lt_b;
+        }
+    }
+    tf.res
+}
+
+// Whether layouts `x` and `y` are equal, the reference's `t1 == t2` of two `Option<Vec<u32>>`.
+fn lay_eq(x: Word, y: Word) -> Word {
+    tf.found = 0;
+    if x == y {
+        tf.found = 1;
+    } else {
+        if x >= 0 andalso y >= 0 {
+            if tf.lh[x] == tf.lh[y] {
+                tf.found = 1;
+                let n = tf.lh[x];
+                for q in 0..n limit 65536 {
+                    if tf.lh[x + 1 + q] != tf.lh[y + 1 + q] {
+                        tf.found = 0;
+                    }
+                }
+            }
+        }
+    }
+    tf.found
 }
 
 // The `Text` offsets of the body packed from the `r` entries on top of the stack, the
-// reference's `built_text_layout`, into `lt`, with `lt_ok` 0 when any element's is unknown.
+// reference's `built_text_layout`, into the record being built, with `lt_ok` 0 when any
+// element's is unknown.
 fn build_layout(r: Word) -> Word {
-    tf.lt_n = 0;
-    tf.lt_ok = 1;
+    lt_begin();
     tf.off = 0;
     if tf.dsp < r { tf.lt_ok = 0; }
     for kk in 0..256 limit 256 {
@@ -374,10 +466,10 @@ fn build_layout(r: Word) -> Word {
             if tf.st_tag[j] == 0 { tf.lt_ok = 0; }
             if tf.st_tag[j] == 1 andalso tf.st_kind[j] == 1 { lt_add(tf.off); }
             if tf.st_tag[j] == 2 {
-                if tf.st_tn[j] < 0 { tf.lt_ok = 0; } else {
-                    for q in 0..4 limit 4 {
-                        if q < tf.st_tn[j] { lt_add(tf.off + tf.st_t[j * 4 + q]); }
-                    }
+                if tf.st_ly[j] < 0 { tf.lt_ok = 0; } else {
+                    let x = tf.st_ly[j];
+                    let n = tf.lh[x];
+                    for q in 0..n limit 65536 { lt_add(tf.off + tf.lh[x + 1 + q]); }
                 }
             }
             tf.off = tf.off + tf.st_size[j];
@@ -386,68 +478,88 @@ fn build_layout(r: Word) -> Word {
     0
 }
 
-// The top entry takes local `slot`'s layout, for a `GetLocal`.
-fn top_layout_from_local(slot: Word) -> Word {
-    if tf.dsp > 0 {
-        let d = tf.dsp - 1;
-        tf.st_tn[d] = tf.lc_tn[slot];
-        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lc_t[slot * 4 + q]; }
-    }
-    0
-}
-
-// Local `slot` takes the popped entry's layout, for a `SetLocal`.
-fn local_layout_from_pop(slot: Word) -> Word {
-    tf.lc_tn[slot] = tf.pop_tn;
-    for q in 0..4 limit 4 { tf.lc_t[slot * 4 + q] = tf.pop_t[q]; }
-    0
-}
-
-// The top entry takes the layout `build_layout` produced, when it is known.
-fn top_layout_from_built() -> Word {
-    if tf.lt_ok == 1 andalso tf.dsp > 0 {
-        let d = tf.dsp - 1;
-        tf.st_tn[d] = tf.lt_n;
-        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lt[q]; }
-    }
-    0
-}
-
 // The top entry, a nested body at `[offset, offset + size)` of the popped one, takes the
-// popped layout's offsets within it.
+// popped layout's offsets within it, the reference's `nested_text_layout`.
 fn top_layout_nested(offset: Word, size: Word) -> Word {
-    if tf.pop_tn >= 0 andalso tf.dsp > 0 {
-        let d = tf.dsp - 1;
-        tf.lt_n = 0;
-        for q in 0..4 limit 4 {
-            if q < tf.pop_tn andalso tf.pop_t[q] >= offset andalso tf.pop_t[q] < offset + size {
-                tf.st_t[d * 4 + tf.lt_n] = tf.pop_t[q] - offset;
-                tf.lt_n = tf.lt_n + 1;
+    if tf.pop_ly >= 0 andalso tf.dsp > 0 {
+        let x = tf.pop_ly;
+        let n = tf.lh[x];
+        lt_begin();
+        for q in 0..n limit 65536 {
+            let o = tf.lh[x + 1 + q];
+            if o >= offset andalso o < offset + size { lt_add(o - offset); }
+        }
+        tf.st_ly[tf.dsp - 1] = lt_end();
+    }
+    0
+}
+
+// The top entry, an element of `size` bytes of the popped array, takes the layout every element
+// shares, the reference's `element_text_layout`. The offsets of a known layout are ascending,
+// since a body packs its elements in order and each element's offsets lie within it, so the
+// elements share a layout exactly when the offsets below the array's size are the first
+// element's `fc` offsets repeated once per element at its stride.
+fn top_layout_element(size: Word) -> Word {
+    if tf.pop_tag == 2 andalso tf.pop_ly >= 0 andalso size > 0 andalso tf.dsp > 0 {
+        let total = tf.pop_size;
+        if total - (total / size) * size == 0 {
+            let x = tf.pop_ly;
+            let n = tf.lh[x];
+            tf.cnt = 0;
+            for q in 0..n limit 65536 {
+                if tf.lh[x + 1 + q] < size { tf.cnt = tf.cnt + 1; }
+            }
+            let fc = tf.cnt;
+            tf.flag = 1;
+            tf.cur = 0;
+            for q in 0..n limit 65536 {
+                let o = tf.lh[x + 1 + q];
+                if o < total {
+                    if fc == 0 { tf.flag = 0; } else {
+                        let e = tf.cur / fc;
+                        if o != e * size + tf.lh[x + 1 + tf.cur - e * fc] { tf.flag = 0; }
+                    }
+                    tf.cur = tf.cur + 1;
+                }
+            }
+            if tf.cur != (total / size) * fc { tf.flag = 0; }
+            if tf.flag == 1 {
+                lt_begin();
+                for q in 0..fc limit 65536 { lt_add(tf.lh[x + 1 + q]); }
+                tf.st_ly[tf.dsp - 1] = lt_end();
             }
         }
-        tf.st_tn[d] = tf.lt_n;
     }
     0
 }
 
 // A `Text` field read of a body whose layout is known must find `Text` at its offset.
 fn check_text_field(ip: Word) -> Word {
-    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 {
+    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_ly >= 0 {
         if pop_has_text_at(tv.ta[ip]) == 0 { tf.bad = 1; }
     }
     0
 }
 
 // A `Text` element read needs `Text` at every element's offset, since the index is known only
-// at run time.
+// at run time. One walk over the ascending offsets finds each element's offset in turn.
 fn check_text_elements(ip: Word) -> Word {
-    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 andalso tv.ta[ip] > 0 {
+    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_ly >= 0 andalso tv.ta[ip] > 0 {
         let count = tf.pop_size / tv.ta[ip];
-        if count > tf.pop_tn { tf.bad = 1; } else {
-            for q in 0..4 limit 4 {
-                if q < count andalso pop_has_text_at(q * tv.ta[ip]) == 0 { tf.bad = 1; }
+        let x = tf.pop_ly;
+        let n = tf.lh[x];
+        tf.cur = 0;
+        for q in 0..n limit 65536 {
+            let o = tf.lh[x + 1 + q];
+            if tf.cur < count {
+                if o == tf.cur * tv.ta[ip] {
+                    tf.cur = tf.cur + 1;
+                } else {
+                    if o > tf.cur * tv.ta[ip] { tf.bad = 1; }
+                }
             }
         }
+        if tf.cur < count { tf.bad = 1; }
     }
     0
 }
@@ -455,8 +567,10 @@ fn check_text_elements(ip: Word) -> Word {
 // Whether the popped entry's known layout holds `Text` at `offset`, into `found`.
 fn pop_has_text_at(offset: Word) -> Word {
     tf.found = 0;
-    for q in 0..4 limit 4 {
-        if q < tf.pop_tn andalso tf.pop_t[q] == offset { tf.found = 1; }
+    let x = tf.pop_ly;
+    let n = tf.lh[x];
+    for q in 0..n limit 65536 {
+        if tf.lh[x + 1 + q] == offset { tf.found = 1; }
     }
     tf.found
 }
@@ -479,9 +593,9 @@ fn apply_typed(ip: Word) -> Word {
             let dt = tf.st_tag[tf.dsp - 1];
             let ds = tf.st_size[tf.dsp - 1];
             let dk = tf.st_kind[tf.dsp - 1];
-            let src = tf.dsp - 1;
+            let dl = tf.st_ly[tf.dsp - 1];
             st_push_k(dt, ds, dk);
-            copy_top_layout_from_entry(src);
+            if tf.over == 0 { tf.st_ly[tf.dsp - 1] = dl; }
         }
     } else {
     if k == 2 orelse k == 15 orelse k == 16 {
@@ -493,7 +607,7 @@ fn apply_typed(ip: Word) -> Word {
     } else {
     if k == 3 {
         st_push_k(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]], tf.lc_kind[tv.ta[ip]]);
-        top_layout_from_local(tv.ta[ip]);
+        if tf.over == 0 { tf.st_ly[tf.dsp - 1] = tf.lc_ly[tv.ta[ip]]; }
     } else {
     if k == 4 {
         // SetLocal: the stored value must be compatible with the slot's seed shape; the tracked
@@ -510,7 +624,7 @@ fn apply_typed(ip: Word) -> Word {
         tf.lc_tag[tv.ta[ip]] = tf.pop_tag;
         tf.lc_size[tv.ta[ip]] = tf.pop_size;
         tf.lc_kind[tv.ta[ip]] = tf.pop_kind;
-        local_layout_from_pop(tv.ta[ip]);
+        tf.lc_ly[tv.ta[ip]] = tf.pop_ly;
     } else {
     if k == 6 {
         // NewComposite non-enum flat: pop the packed elements; when every element size is known,
@@ -534,7 +648,8 @@ fn apply_typed(ip: Word) -> Word {
             }
         }
         st_push_k(2, tv.tb[ip], tv.tc[ip]);
-        top_layout_from_built();
+        let built = lt_end();
+        if tf.over == 0 { tf.st_ly[tf.dsp - 1] = built; }
     } else {
     if k == 7 {
         st_pop();
@@ -565,6 +680,7 @@ fn apply_typed(ip: Word) -> Word {
         st_pop();
         check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
         st_push_k(2, tv.ta[ip], tv.tc[ip]);
+        top_layout_element(tv.ta[ip]);
         for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); }
     } else {
     if k == 11 {
@@ -613,18 +729,19 @@ fn apply_typed(ip: Word) -> Word {
     0
 }
 
+// --- the joins ------------------------------------------------------------------------------
 
-// Forget the locals that the region of the loop at `c` writes, the over-approximation of the
-// reference's join of the break states. A local the region does not write keeps its shape, since
-// every path through the region leaves it as it was.
-fn invalidate_written(c: Word) -> Word {
-    for j in 0..256 limit 256 {
-        if writes(c, j) == 1 {
-            tf.lc_tag[j] = 0;
-            tf.lc_size[j] = 0;
-            tf.lc_kind[j] = 0;
-            tf.lc_tn[j] = -1;
-        }
+// Join `(bt, bs, bk, bl)` into the shape `jr_*`, the reference's `AbsVal::join`. Equal shapes
+// are kept, two flat bodies of one kind and size keep their text layout only when both know the
+// same one, and anything else is forgotten. A kept layout keeps `jr_ly`'s own record.
+fn join_with(bt: Word, bs: Word, bk: Word, bl: Word) -> Word {
+    if tf.jr_tag == bt andalso tf.jr_size == bs andalso tf.jr_kind == bk {
+        if lay_eq(tf.jr_ly, bl) == 0 { tf.jr_ly = -1; }
+    } else {
+        tf.jr_tag = 0;
+        tf.jr_size = 0;
+        tf.jr_kind = 0;
+        tf.jr_ly = -1;
     }
     0
 }
@@ -691,8 +808,7 @@ fn lpool_save(c: Word) -> Word {
                 tf.q_tag[k] = tf.lc_tag[j];
                 tf.q_size[k] = tf.lc_size[j];
                 tf.q_kind[k] = tf.lc_kind[j];
-                tf.q_tn[k] = tf.lc_tn[j];
-                for q in 0..4 limit 4 { tf.q_t[k * 4 + q] = tf.lc_t[j * 4 + q]; }
+                tf.q_ly[k] = tf.lc_ly[j];
                 tf.qp = k + 1;
             }
         }
@@ -709,8 +825,7 @@ fn lpool_load(c: Word, b: Word) -> Word {
             tf.lc_tag[j] = tf.q_tag[k];
             tf.lc_size[j] = tf.q_size[k];
             tf.lc_kind[j] = tf.q_kind[k];
-            tf.lc_tn[j] = tf.q_tn[k];
-            for q in 0..4 limit 4 { tf.lc_t[j * 4 + q] = tf.q_t[k * 4 + q]; }
+            tf.lc_ly[j] = tf.q_ly[k];
             tf.off = k + 1;
         }
     }
@@ -718,29 +833,21 @@ fn lpool_load(c: Word, b: Word) -> Word {
 }
 
 // Join the locals the region of `c` writes with the locals pool at base `b`, the reference's
-// `join_locals`, by the rule of `pool_join`.
+// `join_locals`.
 fn lpool_join(c: Word, b: Word) -> Word {
     tf.off = b;
     for j in 0..256 limit 256 {
         if writes(c, j) == 1 andalso tf.over == 0 {
             let k = tf.off;
-            if tf.q_tag[k] == tf.lc_tag[j] andalso tf.q_size[k] == tf.lc_size[j]
-                andalso tf.q_kind[k] == tf.lc_kind[j] {
-                if tf.q_tn[k] == tf.lc_tn[j] {
-                    for q in 0..4 limit 4 {
-                        if q < tf.lc_tn[j] andalso tf.q_t[k * 4 + q] != tf.lc_t[j * 4 + q] {
-                            tf.lc_tn[j] = -1;
-                        }
-                    }
-                } else {
-                    tf.lc_tn[j] = -1;
-                }
-            } else {
-                tf.lc_tag[j] = 0;
-                tf.lc_size[j] = 0;
-                tf.lc_kind[j] = 0;
-                tf.lc_tn[j] = -1;
-            }
+            tf.jr_tag = tf.lc_tag[j];
+            tf.jr_size = tf.lc_size[j];
+            tf.jr_kind = tf.lc_kind[j];
+            tf.jr_ly = tf.lc_ly[j];
+            join_with(tf.q_tag[k], tf.q_size[k], tf.q_kind[k], tf.q_ly[k]);
+            tf.lc_tag[j] = tf.jr_tag;
+            tf.lc_size[j] = tf.jr_size;
+            tf.lc_kind[j] = tf.jr_kind;
+            tf.lc_ly[j] = tf.jr_ly;
             tf.off = k + 1;
         }
     }
@@ -759,8 +866,7 @@ fn pool_save(n: Word) -> Word {
                 tf.p_tag[b + j] = tf.st_tag[j];
                 tf.p_size[b + j] = tf.st_size[j];
                 tf.p_kind[b + j] = tf.st_kind[j];
-                tf.p_tn[b + j] = tf.st_tn[j];
-                for q in 0..4 limit 4 { tf.p_t[(b + j) * 4 + q] = tf.st_t[j * 4 + q]; }
+                tf.p_ly[b + j] = tf.st_ly[j];
             }
         }
         tf.pp = b + n;
@@ -776,8 +882,7 @@ fn pool_load(b: Word, n: Word) -> Word {
                 tf.st_tag[j] = tf.p_tag[b + j];
                 tf.st_size[j] = tf.p_size[b + j];
                 tf.st_kind[j] = tf.p_kind[b + j];
-                tf.st_tn[j] = tf.p_tn[b + j];
-                for q in 0..4 limit 4 { tf.st_t[j * 4 + q] = tf.p_t[(b + j) * 4 + q]; }
+                tf.st_ly[j] = tf.p_ly[b + j];
             }
         }
     }
@@ -786,30 +891,222 @@ fn pool_load(b: Word, n: Word) -> Word {
 }
 
 // Join the live entries `[0, n)` with the pool entries at base `b`, the reference's
-// `AbsVal::join`. Equal shapes are kept, two flat bodies of one kind and size keep their text
-// layout only when both know the same one, and anything else is forgotten.
+// `AbsVal::join` entry by entry.
 fn pool_join(b: Word, n: Word) -> Word {
     for j in 0..256 limit 256 {
         if j < n andalso tf.over == 0 {
-            if tf.p_tag[b + j] == tf.st_tag[j] andalso tf.p_size[b + j] == tf.st_size[j]
-                andalso tf.p_kind[b + j] == tf.st_kind[j] {
-                if tf.p_tn[b + j] == tf.st_tn[j] {
-                    for q in 0..4 limit 4 {
-                        if q < tf.st_tn[j] andalso tf.p_t[(b + j) * 4 + q] != tf.st_t[j * 4 + q] {
-                            tf.st_tn[j] = -1;
-                        }
-                    }
-                } else {
-                    tf.st_tn[j] = -1;
-                }
-            } else {
-                tf.st_tag[j] = 0;
-                tf.st_size[j] = 0;
-                tf.st_kind[j] = 0;
-                tf.st_tn[j] = -1;
+            tf.jr_tag = tf.st_tag[j];
+            tf.jr_size = tf.st_size[j];
+            tf.jr_kind = tf.st_kind[j];
+            tf.jr_ly = tf.st_ly[j];
+            join_with(tf.p_tag[b + j], tf.p_size[b + j], tf.p_kind[b + j], tf.p_ly[b + j]);
+            tf.st_tag[j] = tf.jr_tag;
+            tf.st_size[j] = tf.jr_size;
+            tf.st_kind[j] = tf.jr_kind;
+            tf.st_ly[j] = tf.jr_ly;
+        }
+    }
+    0
+}
+
+// --- the loop fixpoint ----------------------------------------------------------------------
+
+// Join the live written locals of the loop at `c` into its head at base `b` of the locals pool,
+// the reference's `join_locals(head, body_end)`. With `write` 0 only report, into `flag`,
+// whether the head would change, the reference's `widened != head`. With `write` 1 store it.
+fn head_join(c: Word, b: Word, write: Word) -> Word {
+    tf.flag = 0;
+    tf.off = b;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            let k = tf.off;
+            tf.jr_tag = tf.q_tag[k];
+            tf.jr_size = tf.q_size[k];
+            tf.jr_kind = tf.q_kind[k];
+            tf.jr_ly = tf.q_ly[k];
+            join_with(tf.lc_tag[j], tf.lc_size[j], tf.lc_kind[j], tf.lc_ly[j]);
+            if tf.jr_tag != tf.q_tag[k] orelse tf.jr_size != tf.q_size[k]
+                orelse tf.jr_kind != tf.q_kind[k] orelse tf.jr_ly != tf.q_ly[k] {
+                tf.flag = 1;
+            }
+            if write == 1 {
+                tf.q_tag[k] = tf.jr_tag;
+                tf.q_size[k] = tf.jr_size;
+                tf.q_kind[k] = tf.jr_kind;
+                tf.q_ly[k] = tf.jr_ly;
+            }
+            tf.off = k + 1;
+        }
+    }
+    tf.flag
+}
+
+// Forget the written locals of the head at base `b`, the reference's defensive convergence at
+// its cap, `invalidate_written_locals`.
+fn head_forget(c: Word, b: Word) -> Word {
+    tf.off = b;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            let k = tf.off;
+            tf.q_tag[k] = 0;
+            tf.q_size[k] = 0;
+            tf.q_kind[k] = 0;
+            tf.q_ly[k] = -1;
+            tf.off = k + 1;
+        }
+    }
+    0
+}
+
+// Store the break state of frame `i` as the first of its loop's pass, at the break pool's top.
+// The pool is last in first out, so its top is the accumulator's base unless the pool is in an
+// inconsistent state, which is reported as the frame capacity rather than trusted.
+fn break_save(l: Word, c: Word, fl: Word, n: Word) -> Word {
+    if tf.bpp != tf.f_bb[l] { tf.over = 2; }
+    tf.off = tf.bpp;
+    for j in 0..256 limit 256 {
+        if j < n andalso tf.over == 0 {
+            if tf.off >= 8192 { tf.over = 2; } else {
+                let k = tf.off;
+                tf.b_tag[k] = tf.st_tag[fl + j];
+                tf.b_size[k] = tf.st_size[fl + j];
+                tf.b_kind[k] = tf.st_kind[fl + j];
+                tf.b_ly[k] = tf.st_ly[fl + j];
+                tf.off = k + 1;
             }
         }
     }
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            if tf.off >= 8192 { tf.over = 2; } else {
+                let k = tf.off;
+                tf.b_tag[k] = tf.lc_tag[j];
+                tf.b_size[k] = tf.lc_size[j];
+                tf.b_kind[k] = tf.lc_kind[j];
+                tf.b_ly[k] = tf.lc_ly[j];
+                tf.off = k + 1;
+            }
+        }
+    }
+    if tf.over == 0 {
+        tf.f_bn[l] = n;
+        tf.bpp = tf.off;
+    }
+    0
+}
+
+// Join a later break state of frame `i` into its loop's accumulator. Break heights that differ
+// are a height-balance violation latched by `record_break` and `merge_breaks`, and only the
+// common entries are joined.
+fn break_merge(l: Word, c: Word, fl: Word, n: Word) -> Word {
+    let b = tf.f_bb[l];
+    let m = tf.f_bn[l];
+    for j in 0..256 limit 256 {
+        if j < n andalso j < m andalso tf.over == 0 {
+            tf.jr_tag = tf.b_tag[b + j];
+            tf.jr_size = tf.b_size[b + j];
+            tf.jr_kind = tf.b_kind[b + j];
+            tf.jr_ly = tf.b_ly[b + j];
+            join_with(tf.st_tag[fl + j], tf.st_size[fl + j], tf.st_kind[fl + j], tf.st_ly[fl + j]);
+            tf.b_tag[b + j] = tf.jr_tag;
+            tf.b_size[b + j] = tf.jr_size;
+            tf.b_kind[b + j] = tf.jr_kind;
+            tf.b_ly[b + j] = tf.jr_ly;
+        }
+    }
+    tf.off = b + m;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            let k = tf.off;
+            tf.jr_tag = tf.b_tag[k];
+            tf.jr_size = tf.b_size[k];
+            tf.jr_kind = tf.b_kind[k];
+            tf.jr_ly = tf.b_ly[k];
+            join_with(tf.lc_tag[j], tf.lc_size[j], tf.lc_kind[j], tf.lc_ly[j]);
+            tf.b_tag[k] = tf.jr_tag;
+            tf.b_size[k] = tf.jr_size;
+            tf.b_kind[k] = tf.jr_kind;
+            tf.b_ly[k] = tf.jr_ly;
+            tf.off = k + 1;
+        }
+    }
+    0
+}
+
+// Join the break state of frame `i` into the accumulator of the innermost loop holding it, the
+// reference's `breaks.push(state)`. The entries below the loop's entry height are its entry
+// entries on every path, since the floor keeps the body from consuming them, and are not stored.
+fn break_join(i: Word) -> Word {
+    let l = tf.f_lp[i];
+    if l >= 0 andalso tf.over == 0 {
+        let fl = tf.f_floor[i];
+        let n = if tf.dsp > fl { tf.dsp - fl } else { 0 };
+        let c = tf.f_cip[l];
+        if tf.f_bn[l] < 0 {
+            break_save(l, c, fl, n);
+        } else {
+            break_merge(l, c, fl, n);
+        }
+    }
+    0
+}
+
+// The state after the loop of frame `i` is the join of its last pass's breaks.
+fn break_load(i: Word) -> Word {
+    let fl = tf.f_esp[i];
+    let b = tf.f_bb[i];
+    let m = tf.f_bn[i];
+    let c = tf.f_cip[i];
+    for j in 0..256 limit 256 {
+        if j < m andalso fl + j < 256 {
+            tf.st_tag[fl + j] = tf.b_tag[b + j];
+            tf.st_size[fl + j] = tf.b_size[b + j];
+            tf.st_kind[fl + j] = tf.b_kind[b + j];
+            tf.st_ly[fl + j] = tf.b_ly[b + j];
+        }
+    }
+    tf.dsp = if fl + m > 256 { 256 } else { fl + m };
+    tf.off = b + m;
+    for j in 0..256 limit 256 {
+        if writes(c, j) == 1 andalso tf.over == 0 {
+            let k = tf.off;
+            tf.lc_tag[j] = tf.b_tag[k];
+            tf.lc_size[j] = tf.b_size[k];
+            tf.lc_kind[j] = tf.b_kind[k];
+            tf.lc_ly[j] = tf.b_ly[k];
+            tf.off = k + 1;
+        }
+    }
+    0
+}
+
+// Run one pass of the body of the loop frame `i` waits on, from the live state.
+fn spawn_body(i: Word) -> Word {
+    let ip = tf.f_cip[i];
+    let previous_depth = tf.fsp;
+    push_frame(ip + 1, tv.arg[ip] - 1, tf.dsp);
+    if tf.fsp > previous_depth {
+        tf.f_floor[tf.fsp - 1] = tf.dsp;
+        tf.f_lp[tf.fsp - 1] = i;
+    }
+    0
+}
+
+// Leave the loop frame `i` waits on, with the reference's state after it, and free its head, its
+// accumulator and nothing else.
+fn loop_exit(i: Word) -> Word {
+    if tf.f_bn[i] >= 0 {
+        break_load(i);
+    } else {
+        if tf.child_fell == 0 {
+            tf.dsp = tf.f_esp[i];
+            lpool_load(tf.f_cip[i], tf.f_le[i]);
+        }
+    }
+    tf.bpp = tf.f_bb[i];
+    tf.qp = tf.f_le[i];
+    tf.f_ip[i] = tf.f_resume[i];
+    tf.f_pa[i] = 0;
     0
 }
 
@@ -820,7 +1117,7 @@ fn seed_locals() -> Word {
         tf.lc_tag[j] = tv.seed_tag[j];
         tf.lc_size[j] = tv.seed_size[j];
         tf.lc_kind[j] = tv.seed_kind[j];
-        tf.lc_tn[j] = -1;
+        tf.lc_ly[j] = -1;
     }
     0
 }
@@ -840,6 +1137,7 @@ fn push_frame(ip: Word, end: Word, esp: Word) -> Word {
         }
         tf.f_esp[j] = esp;
         tf.f_floor[j] = if j == 0 { 0 } else { tf.f_floor[j - 1] };
+        tf.f_lp[j] = if j == 0 { -1 } else { tf.f_lp[j - 1] };
         tf.f_fell[j] = 1;
         tf.f_hb[j] = 0;
         tf.f_bmax[j] = 0;
@@ -865,6 +1163,7 @@ fn record_break(i: Word) -> Word {
     } else {
         ne_bad(tf.dsp, tf.f_bmax[i]);
     }
+    break_join(i);
     0
 }
 
@@ -922,18 +1221,20 @@ fn scan_op(i: Word) -> Word {
         }
     } else {
     if tv.class[ip] == 4 {
-        // Loop: spawn the body as a fresh break-scope from the entry state, the reference's first
-        // iteration. Its later iterations start from a head that the entry state refines, and
-        // every check defers on a forgotten shape, so they refuse nothing the first does not.
-        // After the loop the locals the body writes are forgotten.
+        // Loop: save the entry state's written locals as the head, open an empty break
+        // accumulator, mark the layout heap, and run the first pass of the body as a fresh
+        // break scope from the entry state.
         tf.f_cip[i] = ip;
         tf.f_pk[i] = 3;
         tf.f_esp[i] = tf.dsp;
         tf.f_resume[i] = tv.arg[ip];
         tf.f_pa[i] = 1;
-        let previous_depth = tf.fsp;
-        push_frame(ip + 1, tv.arg[ip] - 1, tf.dsp);
-        if tf.fsp > previous_depth { tf.f_floor[tf.fsp - 1] = tf.dsp; }
+        tf.f_le[i] = lpool_save(ip);
+        tf.f_it[i] = 0;
+        tf.f_bb[i] = tf.bpp;
+        tf.f_bn[i] = -1;
+        tf.f_hm[i] = tf.hp;
+        spawn_body(i);
     } else {
     if tv.class[ip] == 2 orelse tv.class[ip] == 3 orelse tv.class[ip] == 5 {
         // Else/EndIf/EndLoop: structural markers, stepped over.
@@ -954,6 +1255,37 @@ fn merge_breaks(i: Word) -> Word {
     }
     0
 }
+
+// A loop body's pass has ended. When it falls through and the head would change, widen the head,
+// or past the cap forget its written locals, and run the body again from it with a fresh break
+// accumulator and the heap freed to the loop's mark. Otherwise leave the loop.
+fn resolve_loop(i: Word) -> Word {
+    let c = tf.f_cip[i];
+    if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
+    tf.flag = 0;
+    if tf.child_fell == 1 andalso tf.f_it[i] >= 0 {
+        head_join(c, tf.f_le[i], 0);
+    }
+    if tf.flag == 1 {
+        if tf.f_it[i] >= tv.local_count + 2 {
+            head_forget(c, tf.f_le[i]);
+            tf.f_it[i] = -1;
+        } else {
+            head_join(c, tf.f_le[i], 1);
+            tf.f_it[i] = tf.f_it[i] + 1;
+        }
+        tf.bpp = tf.f_bb[i];
+        tf.f_bn[i] = -1;
+        tf.hp = tf.f_hm[i];
+        tf.dsp = tf.f_esp[i];
+        lpool_load(c, tf.f_le[i]);
+        spawn_body(i);
+    } else {
+        loop_exit(i);
+    }
+    0
+}
+
 fn resolve_pending(i: Word) -> Word {
     if tf.f_pk[i] == 1 {
         merge_breaks(i);
@@ -999,15 +1331,7 @@ fn resolve_pending(i: Word) -> Word {
             tf.f_pa[i] = 0;
         }
     } else {
-        if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
-        if tf.child_hb == 1 { tf.dsp = tf.child_bmax; }
-        else { if tf.child_fell == 0 { tf.dsp = tf.f_esp[i]; } }
-        top_from(tf.f_esp[i]); invalidate_written(tf.f_cip[i]);
-        // The reference restores the neutral body exit or loop-entry state when
-        // there are no break states, even if the body terminated. Keep checking
-        // instructions after the loop against that fallback state.
-        tf.f_ip[i] = tf.f_resume[i];
-        tf.f_pa[i] = 0;
+        resolve_loop(i);
     } }
     0
 }
@@ -1038,6 +1362,9 @@ fn run() -> Word {
     tf.child_bmax = 0;
     tf.pp = 0;
     tf.qp = 0;
+    tf.bpp = 0;
+    tf.lh[0] = 0;
+    tf.hp = 1;
     seed_locals();
     scan_writes();
     push_frame(0, tv.op_count, 0);
