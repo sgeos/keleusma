@@ -6631,9 +6631,10 @@ fn typed_desc(
         Op::GetLocal(i) => (3, *i as i64, 0, 0),
         Op::SetLocal(i) => (4, *i as i64, 0, 0),
         Op::Yield => (11, 0, 0, 0),
-        Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => {
-            (12, 0, 0, 0)
-        }
+        // A native carries the word width in `ta`, the size of the error flag a reified call
+        // pushes above its value.
+        Op::Call(_, _) => (12, 0, 0, 0),
+        Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => (12, wb as i64, 0, 0),
         // `tc` 1 marks a static string, which the reference types as a `Text` scalar, so the
         // stage can record where a body holds text.
         Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb, ab) {
