@@ -134,18 +134,19 @@ fn main() {
         // rather than by trusting the generator. Names that repeat are suffixed
         // with the element index; names that do not are left alone, so the
         // common case stays readable.
+        let shared_names = keleusma_native::data_view::shared_slot_names(Some(dl));
         let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-        for sl in dl.slots.iter().take(dl.shared_layout.len()) {
-            *counts.entry(sl.name.as_str()).or_default() += 1;
+        for name in &shared_names {
+            *counts.entry(name).or_default() += 1;
         }
         let mut seen: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-        for (i, e) in dl.shared_layout.iter().enumerate() {
+        for (i, e) in dl.shared_slots().iter().enumerate() {
             // **THE SLOT'S OWN NAME, NOT ITS INDEX.** A header of numbered
             // offsets is a table; a header of named offsets is a contract, and
             // the name is what a host programmer writes against. Sanitised for
             // C, since a Keleusma path like `io.zone_temp[0]` is not an
             // identifier.
-            let raw = dl.slots.get(i).map(|s| s.name.as_str()).unwrap_or("slot");
+            let raw = shared_names.get(i).copied().unwrap_or("slot");
             let mut name: String = raw
                 .chars()
                 .map(|c| {

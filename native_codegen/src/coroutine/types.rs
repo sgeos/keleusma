@@ -366,7 +366,7 @@ fn slot(m: &Module, index: u32, private_kinds: &[u16]) -> u16 {
     let Some(d) = &m.data_layout else {
         return UNKNOWN;
     };
-    if let Some(s) = d.shared_layout.get(index as usize) {
+    if let Some(s) = d.shared_slot(index as usize) {
         return if s.kind < 8 {
             scalar(s.kind)
         } else {
@@ -393,22 +393,11 @@ fn data_width(m: &Module, slot_index: u32, float_bytes: u32, private_kinds: &[u1
     let Some(layout) = &m.data_layout else {
         return Width::Unknown;
     };
-    if let Some(field) = layout
-        .private_composite_layout
-        .iter()
-        .find(|f| u32::from(f.slot) == slot_index)
+    if let Some((offset, end)) =
+        crate::data_view::private_pool_span(layout, slot_index, m.persistent_composite_bytes)
     {
         // The emitter validates the pool partition before using this extent.
-        let end = layout
-            .private_composite_layout
-            .iter()
-            .map(|f| f.offset)
-            .filter(|offset| *offset > field.offset)
-            .min()
-            .unwrap_or(m.persistent_composite_bytes);
-        return end
-            .checked_sub(field.offset)
-            .map_or(Width::Unknown, Width::Body);
+        return end.checked_sub(offset).map_or(Width::Unknown, Width::Body);
     }
     scalar_width(slot(m, slot_index, private_kinds), float_bytes)
 }
@@ -522,15 +511,12 @@ pub(super) fn check(
     // consumer requiring a body traps. Infer all writes, including other slots and
     // calls. This is a finite ascending lattice. It does not assume source types
     // which the bytecode data layout does not record.
-    let slot_count = m
-        .data_layout
-        .as_ref()
-        .map_or(0, |layout| layout.slots.len());
+    let slot_count = crate::data_view::slot_count(m.data_layout.as_ref());
     analysis.private_bodies.resize(slot_count, Flow::default());
     let mut private_kinds = vec![0; slot_count];
     if let Some(layout) = &m.data_layout {
-        let shared = layout.shared_layout.len();
-        for (index, value) in layout.private_init.iter().enumerate() {
+        let shared = layout.shared_slot_count();
+        for (index, value) in layout.private_init_values().iter().enumerate() {
             let slot = private_kinds.get_mut(shared + index).ok_or_else(|| {
                 LowerError::UnsupportedShape("private initializer exceeds slot table".into())
             })?;
@@ -830,17 +816,13 @@ fn analyze(
                         _ => 1,
                     };
                     let end = i.checked_add(count).ok_or_else(fail)?;
-                    if end as usize > m.data_layout.as_ref().map_or(0, |d| d.slots.len()) {
+                    if end as usize > crate::data_view::slot_count(m.data_layout.as_ref()) {
                         return Err(fail());
                     }
                     let layout = m.data_layout.as_ref().unwrap();
-                    let is_body = |slot| {
-                        layout
-                            .private_composite_layout
-                            .iter()
-                            .any(|field| u32::from(field.slot) == slot)
-                    };
-                    if *i as usize >= layout.shared_layout.len()
+                    let is_body =
+                        |slot: u32| layout.private_composite_offset(slot as usize).is_some();
+                    if *i as usize >= layout.shared_slot_count()
                         && !is_body(*i)
                         && (*i..end).any(is_body)
                     {
@@ -880,12 +862,9 @@ fn analyze(
                     } else if matches!(op, Op::SetData(..) | Op::SetDataIndexed(..)) {
                         out.fill(WORD);
                         for slot_index in *i..end {
-                            if m.data_layout
-                                .as_ref()
-                                .unwrap()
-                                .private_composite_layout
-                                .iter()
-                                .any(|field| u32::from(field.slot) == slot_index)
+                            if layout
+                                .private_composite_offset(slot_index as usize)
+                                .is_some()
                             {
                                 require_arg(0, UNIT | BOOL | BYTE | WORD | FIXED | FLOAT | BODY)?;
                                 writes[slot_index as usize] |= args[0];
@@ -897,9 +876,7 @@ fn analyze(
                                     analysis.changed |=
                                         analysis.private_bodies[slot_index as usize].join(flow);
                                 }
-                            } else if slot_index as usize
-                                >= m.data_layout.as_ref().unwrap().shared_layout.len()
-                            {
+                            } else if slot_index as usize >= layout.shared_slot_count() {
                                 // A private scalar slot stores the actual value. Its
                                 // initializer does not impose a runtime kind check.
                                 require_arg(0, UNIT | BOOL | BYTE | WORD | FIXED | FLOAT)?;
@@ -1116,10 +1093,7 @@ fn analyze(
             }
             .filter(|(index, _)| {
                 m.data_layout.as_ref().is_some_and(|layout| {
-                    layout
-                        .private_composite_layout
-                        .iter()
-                        .any(|field| u32::from(field.slot) == *index)
+                    layout.private_composite_offset(*index as usize).is_some()
                 })
             });
             let private_flow = private_read.map(|(index, count)| {

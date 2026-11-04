@@ -118,8 +118,7 @@ fn shared_layout_of(src: &str) -> Vec<SharedSlotLayout> {
         .data_layout
         .as_ref()
         .expect("a module declaring shared data must carry a data layout")
-        .shared_layout
-        .clone()
+        .shared_slots()
 }
 
 /// **FACT 1 AND FACT 2.** The surface admits the slot, and the descriptor that

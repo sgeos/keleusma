@@ -28,7 +28,7 @@
 //! from the wrong slot would pass on the triple alone.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
-use keleusma::bytecode::{Module, SlotVisibility, TupleBody, Value};
+use keleusma::bytecode::{Module, TupleBody, Value};
 use keleusma::flat_value::read_i64;
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
@@ -130,12 +130,7 @@ fn run_native(m: &Module) -> (Vec<[i64; 3]>, Vec<u8>) {
     let n_priv = m
         .data_layout
         .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Private)
-                .count()
-        })
+        .map(|dl| dl.private_slot_count())
         .unwrap_or(0);
     // **Transitive**, not the per-chunk sum. Each call site now receives a
     // disjoint block of the caller's region, so the entry needs everything it
