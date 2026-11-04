@@ -165,7 +165,12 @@ fn a_shared_composite_slot_agrees_in_the_value_and_in_the_hosts_bytes() {
     // The body must actually be in the buffer at the stated offset, or both
     // sides could agree by both being wrong.
     let m = common::build(SUBJECT);
-    let e = m.data_layout.as_ref().expect("layout").shared_layout[0];
+    let e = m
+        .data_layout
+        .as_ref()
+        .expect("layout")
+        .shared_slot(0)
+        .expect("shared slot 0");
     let off = e.offset as usize;
     let a = i64::from_le_bytes(nat_buf[off..off + 8].try_into().unwrap());
     assert_eq!(
@@ -251,7 +256,7 @@ fn an_indexed_shared_composite_agrees_and_lands_at_the_stated_offsets() {
     let (_, buf) = native_run(ARRAY, 5, 0, &seed);
     let dl = m.data_layout.as_ref().expect("layout");
     for (i, expect) in [(0usize, 5i64), (2, 50)] {
-        let off = dl.shared_layout[i].offset as usize;
+        let off = dl.shared_slot(i).expect("shared slot").offset as usize;
         let a = i64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
         assert_eq!(a, expect, "element {i}'s first field at its stated offset");
     }

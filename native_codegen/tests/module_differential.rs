@@ -38,7 +38,7 @@
 //! across the family — chunk 0 for only two of the ten. Use `m.entry_point`.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
-use keleusma::bytecode::{Module, SlotVisibility, Value};
+use keleusma::bytecode::{Module, Value};
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
@@ -211,12 +211,7 @@ fn arena_for(m: &Module) -> keleusma_arena::Arena {
 fn private_slot_count(m: &Module) -> usize {
     m.data_layout
         .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Private)
-                .count()
-        })
+        .map(|dl| dl.private_slot_count())
         .unwrap_or(0)
 }
 

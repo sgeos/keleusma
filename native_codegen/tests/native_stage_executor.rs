@@ -27,7 +27,7 @@
 //! mutation. The lexer and parser test checks the turn rule, one native call
 //! per turn against a virtual machine resumed again after a `Reset`, and two
 //! native calls per turn fail it, also checked by mutation.
-use keleusma::bytecode::{Module, SlotVisibility, Value};
+use keleusma::bytecode::{Module, Value};
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::stage::{HostNative, NativeStage};
@@ -141,16 +141,11 @@ fn shared_offset(m: &Module, suffix: &str) -> usize {
     let dl = m.data_layout.as_ref().expect("a data layout");
     let scalar = format!(".{suffix}");
     let element0 = format!(".{suffix}[0]");
-    let shared = dl
-        .slots
-        .iter()
-        .filter(|s| s.visibility == SlotVisibility::Shared);
-    for (index, s) in shared.enumerate() {
-        if s.name == suffix || s.name.ends_with(&scalar) || s.name.ends_with(&element0) {
-            return dl.shared_layout[index].offset as usize;
-        }
-    }
-    panic!("no shared slot `{suffix}`")
+    keleusma_native::data_view::shared_field_offset(dl, |name| {
+        name == suffix || name.ends_with(&scalar) || name.ends_with(&element0)
+    })
+    .map(|offset| offset as usize)
+    .unwrap_or_else(|| panic!("no shared slot `{suffix}`"))
 }
 
 /// Write a length word and an array of `width`-byte elements.

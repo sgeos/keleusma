@@ -21,7 +21,7 @@
 //! statement that unexecuted lowering is acceptable for the module in hand.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
-use keleusma::bytecode::{Module, SlotVisibility, Value};
+use keleusma::bytecode::{Module, Value};
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
@@ -121,12 +121,7 @@ fn run_native(m: &Module) -> Vec<i64> {
     let n_priv = m
         .data_layout
         .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Private)
-                .count()
-        })
+        .map(|dl| dl.private_slot_count())
         .unwrap_or(0);
     let n_region = keleusma_native::region::region_total_bytes(m, entry, 0) as usize;
 

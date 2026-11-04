@@ -27,7 +27,7 @@ use inkwell::context::Context;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
-use keleusma::bytecode::{Module, SlotVisibility, Value};
+use keleusma::bytecode::{Module, Value};
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma_native::coroutine::{self, HostContracts};
 use keleusma_native::linkage::{self, LinkageError, TrapExport};
@@ -171,13 +171,8 @@ fn lexer_library() -> Option<&'static (PathBuf, Emitted)> {
 /// library, so the reference does not share the generator's arithmetic.
 fn shared_offset(program: &Module, name: &str) -> usize {
     let layout = program.data_layout.as_ref().unwrap();
-    let index = layout
-        .slots
-        .iter()
-        .filter(|s| s.visibility == SlotVisibility::Shared)
-        .position(|s| s.name == name)
-        .unwrap_or_else(|| panic!("no shared slot `{name}`"));
-    layout.shared_layout[index].offset as usize
+    keleusma_native::data_view::shared_field_offset(layout, |field| field == name)
+        .unwrap_or_else(|| panic!("no shared slot `{name}`")) as usize
 }
 
 /// The virtual machine's yields and final shared buffer for one source.

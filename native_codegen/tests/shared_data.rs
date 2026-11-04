@@ -89,12 +89,7 @@ fn native_shared(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
     let n_priv = m
         .data_layout
         .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Private)
-                .count()
-        })
+        .map(|dl| dl.private_slot_count())
         .unwrap_or(0);
     // Exactly `n_priv` words, plus ONE CANARY word the lowering must never
     // touch. A uniform offset error in private addressing is value-invariant --
@@ -247,11 +242,53 @@ fn a_non_contiguous_shared_array_is_refused() {
     let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let dl = m.data_layout.as_mut().expect("shared layout");
     assert!(
-        dl.shared_layout.len() >= 4,
+        dl.shared_slot_count() >= 4,
         "this test is vacuous unless the array really occupies four shared slots"
     );
     // Push element 2 one byte past where a uniform stride predicts.
-    dl.shared_layout[2].offset += 1;
+    //
+    // Since Encoding F a field states one offset and one stride for all of its
+    // elements, so a single element cannot be moved by editing the field. The
+    // same per-slot table is produced by splitting the field into three, the
+    // elements before slot 2, slot 2 alone one byte late, and the elements
+    // after it at their original offsets. Every other slot keeps its offset.
+    let index = dl.field_index_at(2).expect("slot 2 lies in a field");
+    let original = dl.fields.remove(index);
+    let k = 2 - original.first_slot;
+    let at = |element: u32| original.element_offset(element).expect("in range");
+    let mut pieces = Vec::new();
+    if k > 0 {
+        let mut before = original.clone();
+        before.count = k;
+        pieces.push(before);
+    }
+    let mut moved = original.clone();
+    moved.first_slot = original.first_slot + k;
+    moved.count = 1;
+    moved.offset = Some(at(k) + 1);
+    moved.stride = 0;
+    pieces.push(moved);
+    if k + 1 < original.count {
+        let mut after = original.clone();
+        after.first_slot = original.first_slot + k + 1;
+        after.count = original.count - k - 1;
+        after.offset = Some(at(k + 1));
+        if after.count == 1 {
+            after.stride = 0;
+        }
+        pieces.push(after);
+    }
+    dl.fields.splice(index..index, pieces);
+    assert_eq!(
+        dl.shared_slot(2).map(|s| s.offset),
+        Some(at(2) + 1),
+        "the corruption must move element 2 by exactly one byte"
+    );
+    assert_eq!(
+        dl.shared_slot(3).map(|s| s.offset),
+        Some(at(3)),
+        "the corruption must leave element 3 where it was"
+    );
 
     let ctx = Context::create();
     let lm = ctx.create_module("kel");

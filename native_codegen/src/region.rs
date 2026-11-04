@@ -372,11 +372,7 @@ pub fn stream_state_supplement_bytes(module: &keleusma::bytecode::Module) -> u32
 /// Fixed size, fixed offset, and statically bounded, so the worst-case memory
 /// figure moves by a known constant and nothing dynamic is introduced.
 pub fn composite_init_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
-    let slots = module
-        .data_layout
-        .as_ref()
-        .map(|dl| dl.private_composite_layout.len())
-        .unwrap_or(0);
+    let slots = crate::data_view::private_composite_layout(module.data_layout.as_ref()).len();
     align_up((slots as u32).saturating_mul(8))
 }
 
@@ -1158,16 +1154,13 @@ pub fn plan_call_site_regions(
 /// place at a stated width. A packed guess would be a wrong value in persistent
 /// state, which is the failure mode the whole increment is about.
 pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>> {
-    use keleusma::bytecode::{ConstValue, SlotVisibility};
+    use keleusma::bytecode::ConstValue;
 
     let dl = module.data_layout.as_ref()?;
-    let private_slots = dl
-        .slots
-        .iter()
-        .filter(|s| s.visibility == SlotVisibility::Private)
-        .count();
-    let shared_slots = dl.slots.len() - private_slots;
-    let composites = &dl.private_composite_layout;
+    let private_slots = dl.private_slot_count();
+    let shared_slots = dl.shared_slot_count();
+    let composites = &crate::data_view::private_composite_layout(Some(dl));
+    let private_init = crate::data_view::private_init(Some(dl));
     let pool_base = private_slots * crate::PRIVATE_SLOT_BYTES as usize;
     let init_base = keleusma::vm::required_persistent_capacity_for(module)
         + stream_state_supplement_bytes(module) as usize;
@@ -1178,13 +1171,13 @@ pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>
     };
     let mut out = vec![0u8; image_len];
 
-    for (i, v) in dl.private_init.iter().enumerate() {
+    for (i, v) in private_init.iter().enumerate() {
         if i >= private_slots {
             break;
         }
         let composite = composites
             .iter()
-            .position(|c| usize::from(c.slot) == shared_slots + i);
+            .position(|c| c.slot as usize == shared_slots + i);
         if let Some(index) = composite {
             // A composite slot's body lives in the pool, and its slot word is
             // not read. `Unit` keeps the slot unwritten.

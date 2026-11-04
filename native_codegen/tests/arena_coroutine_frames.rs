@@ -369,7 +369,7 @@ fn every_admitted_stage_source_has_a_static_frame_bound() {
 /// the virtual machine, yields and shared writes both.
 #[test]
 fn pooled_lexer_instances_agree_with_the_vm_on_different_sources() {
-    use keleusma::bytecode::{SlotVisibility, Value};
+    use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
     const TEXTS: &[&[u8]] = &[
         b"fn add(x: Word, y: Word) -> Word { x + y }",
@@ -381,17 +381,12 @@ fn pooled_lexer_instances_agree_with_the_vm_on_different_sources() {
     let program = common::build(&std::fs::read_to_string("../src/selfhost/kel/lexer.kel").unwrap());
     let layout = program.data_layout.as_ref().unwrap();
     let offset = |suffix: &str| {
-        let index = layout
-            .slots
-            .iter()
-            .filter(|s| s.visibility == SlotVisibility::Shared)
-            .position(|s| {
-                s.name.ends_with(&format!(".{suffix}"))
-                    || s.name.ends_with(&format!(".{suffix}[0]"))
-                    || s.name == suffix
-            })
-            .unwrap();
-        layout.shared_layout[index].offset as usize
+        keleusma_native::data_view::shared_field_offset(layout, |name| {
+            name.ends_with(&format!(".{suffix}"))
+                || name.ends_with(&format!(".{suffix}[0]"))
+                || name == suffix
+        })
+        .unwrap() as usize
     };
     let shared_len = program.shared_data_bytes as usize;
     let seed = |text: &[u8]| {

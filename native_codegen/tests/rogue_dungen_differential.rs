@@ -33,7 +33,7 @@
 //! sees an ordinary native either way.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
-use keleusma::bytecode::{Module, SlotVisibility, Value};
+use keleusma::bytecode::{Module, Value};
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
@@ -181,12 +181,7 @@ fn run_native(m: &Module, floor: i64) -> (i64, Vec<String>, Vec<u8>) {
     let n_priv = m
         .data_layout
         .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Private)
-                .count()
-        })
+        .map(|dl| dl.private_slot_count())
         .unwrap_or(0);
     // **Transitive**, not the per-chunk sum. Each call site now receives a
     // disjoint block of the caller's region, so the entry needs everything it
