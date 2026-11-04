@@ -508,10 +508,17 @@ library entry. Capacity and protocol failures remain distinct from invalid-sourc
 The command-line tests assert independent rejection without an output artifact and valid artifact
 execution returning seven. These results do not complete Keleusma wire serialization or final gates.
 
-## Current construct-support boundary, 2026-10-31
+## Current construct-support boundary, 2026-11-01
 
-The executable table in `tests/selfhost_codegen.rs` contains 127 cases with
-121 SOk / 2 Refuses / 2 Diverges / 2 RefRejects. The operator's ruling of 2026-10-31 on
+The executable table in `tests/selfhost_codegen.rs` contains 138 cases with
+130 SOk / 4 Refuses / 2 Diverges / 2 RefRejects. The coverage residuals of 2026-11-01 moved
+the typed destructuring pattern from Refuses to SOk and added eleven cases. Eight are SOk, a
+typed nested pattern, a typed struct pattern, two matches on an enum-typed payload field, a
+destructuring `let` through an enum-typed payload, a tuple holding a range induction variable,
+and two generic calls on a resume value, one typed by a later annotated `let` and one by the
+`loop main` parameter. Three Refuse, a payload enum declared after the enum that holds it, an
+equality of enums whose payload is an enum, and a generic call on a resume value of a tuple
+type. The operator's ruling of 2026-10-31 on
 `let` patterns moved the nested destructuring `let` from Refuses to SOk and added four cases
 that are SOk, a nested struct pattern, a struct pattern inside a tuple pattern, a tuple pattern
 inside a struct pattern and a single-variant enum pattern, with a typed destructuring pattern,

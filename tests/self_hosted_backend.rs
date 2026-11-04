@@ -81,13 +81,13 @@ fn non_host_target_is_refused() {
 /// retry hint.
 #[test]
 fn out_of_subset_program_is_rejected_loudly() {
-    // A typed destructuring `let`, which the reference compiles and the self-hosted
-    // destructuring filter refuses. It replaced a nested destructuring `let`, which both
-    // compilers compile byte-identically since the operator's ruling of 2026-10-31. That one
-    // replaced a pipe into a generic template, which both compilers instantiate
-    // byte-identically since 2026-10-31, and that one a newtype, which compiles since Order 6
-    // erased newtypes.
-    let src = "fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }";
+    // A match binding a payload whose enum is declared after the enum holding it, which the
+    // reference compiles and the self-hosted parser refuses. It replaced a typed
+    // destructuring `let`, which both compilers compile byte-identically since 2026-11-01.
+    // That one replaced a nested destructuring `let`, byte-identical since the operator's
+    // ruling of 2026-10-31, which replaced a pipe into a generic template, byte-identical
+    // since 2026-10-31, and that one a newtype, which compiles since Order 6 erased newtypes.
+    let src = "enum W { A(V, Word) }\nenum V { B(Word), C }\nfn main(w: W) -> Word { match w { W::A(v, y) => y } }";
     match self_hosted_compile(src, &Target::host()) {
         Err(e @ SelfHostError::Unsupported { .. }) => {
             // An out-of-subset limitation: retrying with the Rust backend helps.

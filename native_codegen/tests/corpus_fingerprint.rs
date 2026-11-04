@@ -346,6 +346,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // changed `codegen.kel`, `lexer.kel` and `parse.kel`. Nothing was added or
 // removed, and the derived figures the guard names passed unchanged in the
 // same run.
+//
+// **RE-PINNED 2026-11-02, absorption 132.** Upstream pull request 723,
+// self-host coverage residuals including typed let patterns, changed
+// `codegen.kel`, `lexer.kel` and `parse.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -554,12 +558,12 @@ const PINNED: &[(&str, u64)] = &[
     ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     // Absorption 116 omits the unreachable default of checked arithmetic.
-    ("src/selfhost/kel/codegen.kel", 0x7e6fcccc7be5dcec),
-    ("src/selfhost/kel/lexer.kel", 0x3014c193d7044f02),
+    ("src/selfhost/kel/codegen.kel", 0x2f8c8fb8f73ee919),
+    ("src/selfhost/kel/lexer.kel", 0xc0141bf600a7be4d),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
     // Absorption 116 lowers a cast to the operand's own type as identity.
-    ("src/selfhost/kel/parse.kel", 0xe01bbd954c317ed2),
+    ("src/selfhost/kel/parse.kel", 0xf856e068ad8f8597),
     ("src/selfhost/kel/reconstruct.kel", 0x5a5314dbf0987c1c),
     // Absorption 119 adds the template header scan as the fifteenth stage.
     ("src/selfhost/kel/template_scan.kel", 0x2389d34aaba8c2c7),
