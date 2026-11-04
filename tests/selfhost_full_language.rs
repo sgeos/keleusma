@@ -795,11 +795,11 @@ fn destructuring_and_wildcard_lets_compile_and_stale_equality_flags_are_cleared(
             "fn f() -> ((Word, Word), Word) { ((1, 2), 3) }\nfn main() -> Word { let ((a, b), c) = f(); a }",
             Identical,
         ),
-        // Refused: an annotated wildcard and a typed pattern.
+        // Refused: an annotated wildcard. A typed pattern compiles since 2026-11-01.
         ("fn main() -> Word { let _: Word = 3; 2 }", Unsupported),
         (
             "fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
-            Unsupported,
+            Identical,
         ),
         // Stale whole-value flags.
         ("fn main() -> bool { let a = [1, 2]; 1 == a[0] }", Identical),
@@ -1610,16 +1610,77 @@ fn pipes_into_generic_functions_compile_byte_identically() {
             ),
             Identical,
         ),
-        // A residual of the self-hosted compiler. It specializes this call as
-        // `id__Word` where the later use fixes `Byte`, so it does not infer the type
-        // from the later use but takes `Word`. The reference's `id__Byte` is the
-        // annotated form's module. The shipping cross-check refuses the divergence,
-        // so no wrong module is returned.
+        // A later annotated use fixes `Byte`, which the parser reports in a probe round and
+        // the next round reads, so it specializes `id__Byte` as the reference does. It
+        // specialized `id__Word` and was refused by the cross-check until 2026-11-01.
         (
             format!(
                 "{ID}loop main() -> Word {{ let r = yield 1; let s = r |> id(); let u: Byte = r; yield 0 }}"
             ),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}loop main() -> Word {{ let r = yield 1; let s = id(r); let u: Byte = r; yield 0 }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}loop main() -> Word {{ let r = yield 1; let s = id(r); let u: bool = r; yield 0 }}"
+            ),
+            Identical,
+        ),
+        // Through a copy of the resume binding, and in a `yield` function.
+        (
+            format!(
+                "{ID}loop main() -> Word {{ let r = yield 1; let q = r; let s = id(q); let u: Byte = r; yield 0 }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}yield g() -> Word {{ let r = yield 1; let s = id(r); let u: Byte = r; 0 }}\nloop main() -> Word {{ let a = g(); yield a }}"
+            ),
+            Identical,
+        ),
+        // Two resume values fixed to two kinds, with a plain instantiation alongside.
+        (
+            format!(
+                "{ID}loop main() -> Word {{ let r = yield 1; let r2 = yield 2; let s = id(r); let t = id(r2); let u: Byte = r; let w: bool = r2; let v: Word = id(5); yield 0 }}"
+            ),
+            Identical,
+        ),
+        // `loop main`'s first parameter types every resume value, in `main` and in a
+        // `yield` function, as the reference types it. Each specialized `id__Word` from
+        // the yielded value before 2026-11-01.
+        (
+            format!("{ID}loop main(t: Byte) -> Word {{ let r = yield 1; let s = id(r); yield 0 }}"),
+            Identical,
+        ),
+        (
+            format!("{ID}loop main(t: bool) -> Word {{ let s = id(yield 1); yield 0 }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}yield g() -> Word {{ let r = yield 1; let s = r |> id(); 0 }}\nloop main(t: Byte) -> Word {{ let a = g(); yield a }}"
+            ),
+            Identical,
+        ),
+        // A resume type the parser does not model is refused, not specialized as `Word`.
+        (
+            format!(
+                "{ID}loop main(t: (Word, Word)) -> Word {{ let r = yield 1; let s = id(r); yield 0 }}"
+            ),
             Unsupported,
+        ),
+        // Such a resume value piped into a function that is not a template is unaffected.
+        (
+            String::from(
+                "fn e(x: (Word, Word)) -> Word { x.0 }\nloop main(t: (Word, Word)) -> Word { let r = yield 1; let s = r |> e(); yield 0 }",
+            ),
+            Identical,
         ),
         (
             format!(
@@ -1662,6 +1723,193 @@ fn pipes_into_generic_functions_compile_byte_identically() {
         );
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The coverage residuals closed on 2026-11-01, through the shipping entry.
+///
+/// An enum-typed payload field of an enum declared earlier is laid out at the payload
+/// enum's size and read whole, a typed destructuring pattern annotates the binding that
+/// stores the value, and a range induction variable is a `Word` value. Each `Identical`
+/// case is compared byte for byte against the reference here, in addition to the
+/// comparison the shipping entry makes. The `Unsupported` cases are the refusals that keep
+/// a construct the stages do not lower from being emitted divergently. Before these
+/// increments the enum-payload cases diverged, the typed patterns were refused, and the
+/// tuple cases had no type verdict.
+#[test]
+fn coverage_residuals_compile_byte_identically_or_are_refused() {
+    const V: &str = "enum V { B(Word), C }\nenum W { A(V, Word), D }\n";
+    let cases: Vec<(String, Class)> = vec![
+        // Item 2, a match binding an enum-typed payload field.
+        (
+            format!("{V}fn f(w: W) -> Word {{ match w {{ W::A(v, y) => y, W::D => 0 }} }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{V}fn f(w: W) -> Word {{ match w {{ W::A(v, y) => match v {{ V::B(x) => x + y, V::C => y }}, W::D => 0 }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{V}fn g(v: V) -> Word {{ match v {{ V::B(x) => x, V::C => 0 }} }}\nfn f(w: W) -> Word {{ match w {{ W::A(v, y) => g(v) + y, W::D => 0 }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{V}fn f() -> Word {{ let w = W::A(V::B(3), 4); match w {{ W::A(v, y) => y, W::D => 0 }} }}"
+            ),
+            Identical,
+        ),
+        // A unit-variant payload enum, the payload after a scalar, and two levels.
+        (
+            String::from(
+                "enum V { B, C }\nenum W { A(Word, V), D }\nfn f(w: W) -> Word { match w { W::A(y, v) => match v { V::B => y, V::C => 0 }, W::D => 1 } }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "enum U { P(Word) }\nenum V { B(U), C }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { match w { W::A(v, y) => match v { V::B(u) => match u { U::P(z) => z + y }, V::C => y } } }",
+            ),
+            Identical,
+        ),
+        // Item 3, a `let` pattern through an enum-typed payload.
+        (
+            String::from(
+                "enum V { B(Word) }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { let W::A(V::B(x), y) = w; x + y }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "enum V { B(Word) }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { let W::A(v, y) = w; y }",
+            ),
+            Identical,
+        ),
+        // The payload enum declared after the enum that holds it, and a struct likewise,
+        // have no layout when the payload is laid out, and are refused.
+        (
+            String::from(
+                "enum W { A(V, Word) }\nenum V { B(Word), C }\nfn f(w: W) -> Word { match w { W::A(v, y) => y } }",
+            ),
+            Unsupported,
+        ),
+        (
+            String::from(
+                "enum W { A(S, Word) }\nstruct S { a: Word }\nfn f(w: W) -> Word { match w { W::A(s, y) => s.a + y } }",
+            ),
+            Unsupported,
+        ),
+        // An equality of enums whose payload is an enum is refused, not compared whole.
+        (
+            format!("{V}fn f(a: W, b: W) -> bool {{ a == b }}"),
+            Unsupported,
+        ),
+        // Item 4, typed destructuring patterns.
+        (
+            String::from("fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }"),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn f() -> Word { let (a, (b, c)): (Word, (Word, Word)) = (1, (2, 3)); a + b + c }",
+            ),
+            Identical,
+        ),
+        (
+            String::from("fn f() -> Word { let (a, _): (Word, Word) = (1, 2); a }"),
+            Identical,
+        ),
+        (
+            String::from("fn f() -> Word { let (a): Word = 4; a }"),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn f() -> Word { let (a, b): ([Word; 2], Word) = ([1, 2], 3); a[0] + b }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { x, y: b }: P = p; x + b }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "enum W { A(Word, Word) }\nfn f(w: W) -> Word { let W::A(x, y): W = w; x * 10 + y }",
+            ),
+            Identical,
+        ),
+        // An annotated wildcard, which `let _: T` is refused as too.
+        (
+            String::from("fn f() -> Word { let (_): Word = 4; 1 }"),
+            Unsupported,
+        ),
+        // The reference rejects an annotation the value does not have.
+        (
+            String::from("fn f() -> Byte { let (a, b): (Byte, Byte) = (1, 2); a + b }"),
+            PipelineRejects,
+        ),
+        // Item 5, a tuple holding a range induction variable.
+        (
+            String::from("fn f() -> Word { for i in 0..3 { let t = (i, 2); } 0 }"),
+            Identical,
+        ),
+        (
+            String::from("fn f() -> Word { for i in 0..3 limit 4 { let t = (i, 2); } 0 }"),
+            Identical,
+        ),
+        (
+            String::from("fn f() -> Word { for i in 0..3 { let (a, b) = (i, 2); } 0 }"),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn f() -> Word { for i in 0..3 { for j in 0..2 { let t = (i, j); } } 0 }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn g(t: (Word, Word)) -> Word { t.0 }\nfn f() -> Word { for i in 0..3 { let s = g((i, 2)); } 0 }",
+            ),
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    let mut compared = 0usize;
+    for (src, expected) in &cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+            continue;
+        }
+        if *expected != Identical {
+            continue;
+        }
+        let target = keleusma::target::Target::host();
+        let ours = self_hosted_compile(src, &target).expect("classified Identical");
+        let tokens = keleusma::lexer::tokenize(src).expect("lex");
+        let program = keleusma::parser::parse(&tokens).expect("parse");
+        let reference = keleusma::compiler::compile(&program).expect("reference");
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{src}"
+        );
+        compared += 1;
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    assert_eq!(
+        compared, 20,
+        "every Identical case was compared byte for byte"
+    );
 }
 
 /// The delegation and name-resolution rulings of 2026-10-31, through the shipping entry.
@@ -2160,16 +2408,17 @@ fn let_patterns_nest_and_bind_variants_byte_identically() {
             ),
             Unsupported,
         ),
-        // Still refused, and never compiled to different bytes.
+        // Refused until the coverage residuals of 2026-11-01, and never compiled to
+        // different bytes.
         (
             String::from("fn main() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }"),
-            Unsupported,
+            Identical,
         ),
         (
             String::from(
                 "enum V { B(Word) }\nenum W { A(V, Word) }\nfn main(w: W) -> Word { let W::A(V::B(x), y) = w; x + y }",
             ),
-            Unsupported,
+            Identical,
         ),
         // Reference rejections, which the pipeline reports as such.
         (

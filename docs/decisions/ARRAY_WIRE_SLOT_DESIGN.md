@@ -712,16 +712,15 @@ stays at 32 and that a private array of composites occupies its pool bodies alon
 
 ### Residuals found while implementing
 
-- **Load-time seeding of a large private composite array exceeds the automatic arena bound.**
-  Measured on 2026-11-02, constructing a virtual machine for `private data d { a: [P; 70000] }`
-  with `P` two words exhausted a working region of 3,425,536 bytes, the size
-  `auto_arena_capacity_for` reports with the default added, while persisting each element's
-  zero. The element zeros are materialised in the working region before they are persisted,
-  which is an inference from the error and from `persist_seeded_private_composites`, and that
-  load-time work is not in the bound. Before Encoding F the same module was refused at compile
-  time, and `[P; 65536]` was admitted but no test constructed a machine for it, so whether this
-  predates Encoding F was not verified. The test sizes its region explicitly and the gap is
-  open.
+- **Load-time seeding of a large private composite array, closed.** Measured on 2026-11-02
+  before the merge of `v0.2.3` at `066fdd6a`, constructing a virtual machine for
+  `private data d { a: [P; 70000] }` with `P` two words exhausted a working region of 3,425,536
+  bytes while persisting each element's zero, because the automatic bound did not count that
+  load-time work. Pull request 719 on `v0.2.3` added the seeding terms to the bound, and the
+  merge ported them to the field layout. The bound for that module is now 1,120,440 bytes,
+  the module runs across a `Reset` in an arena of that size, and one byte less fails with
+  `OutOfArena`, pinned by `tests/private_composite_slot_cap.rs`. The coordinator relayed the
+  answer A to the question of including that work in `auto_arena_capacity_for`.
 - **The native backend consumes the changed types.** `native_codegen/`, which belongs to the
   V0.3.X line, reads `DataLayout::slots`, `shared_layout`, `private_composite_layout` and
   `private_init` in about forty files and does not build against this branch. It was left

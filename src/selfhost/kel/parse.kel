@@ -166,6 +166,18 @@ shared data toks {
     nt_end: [Word; 16],
     // Per newtype, the chunk index of its refinement predicate, else -1.
     nt_pred: [Word; 16],
+    // The resume value's type for generic specialization, Order 6, APPENDED. `res_main` is
+    // the scalar kind of `loop main`'s first parameter, 1 `bool`, 2 `Byte` or 3 `Word`, -1
+    // for a parameter of any other type and 0 for none, from the host's syntactic scan. The
+    // reference types every `yield` by that parameter when there is one. Without one, row r
+    // of `res_at`/`res_kind` holds the kind the first annotated `let` fixed for the `yield`
+    // at token position `res_at[r]`, reported in an earlier round. `res_probe` is 1 in a
+    // probe round, the only round that reports a newly fixed kind.
+    res_main: Word,
+    res_probe: Word,
+    res_count: Word,
+    res_at: [Word; 16],
+    res_kind: [Word; 16],
 }
 
 // The instantiation state, Order 6. `active` is the row plus one being parsed, `next` the
@@ -201,6 +213,14 @@ private data gn {
     // order, after a pipe placeholder has moved the piped operand into its position.
     akind: Word,
     acount: Word,
+    // The token position plus one of the `yield` whose expression record was just emitted.
+    yield_at: Word,
+    // The resume kinds this round fixed, per `yield` token position, reported at end of
+    // input as tag 142, the position times sixteen plus the kind.
+    rf_n: Word,
+    rf_i: Word,
+    rf_at: [Word; 16],
+    rf_kind: [Word; 16],
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -725,6 +745,8 @@ private data ops {
     op_larray_tuple: [Word; 65],
     // Parallel to `op_larray`: the LEFT operand's packed array-of-array marker (0 otherwise).
     op_larray_arr: [Word; 65],
+    // Parallel to `opstack`: the token position of a pending `yield` marker.
+    op_yat: [Word; 65],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -1749,6 +1771,9 @@ private data enums {
     // bound variable's type and `t.N`/`a[j]` resolves.
     evftuple: [Word; 513],
     evfarrkind: [Word; 513],
+    // Per payload field, the enum's name id plus one for an ENUM payload, else 0, so a `match
+    // E::A(v)` binding of an enum payload is a value of that enum and `match v` resolves.
+    evfenum: [Word; 513],
     evfcursor: Word,
     enum_count: Word,
     cur_enum: Word,
@@ -1904,10 +1929,14 @@ private data vl {
     params: [Word; 33], locals: [Word; 257], returns: [Word; 1024], local_desc: [Word; 257],
     first: [Word; 8], last: [Word; 8], sizes: [Word; 8],
     scope_active: Word, base_nodes: Word, base_layouts: Word, base_members: Word,
+    // The `yield` token position plus one when the value just recorded is a resume value,
+    // a `yield` expression or a read of a `let` bound to one, else 0, and per `let`, the
+    // position its unannotated value was a resume value of.
+    resume: Word, resumes: [Word; 257],
 }
 
 fn clear_let_shape(at: Word) -> Word {
-    vl.local_desc[at] = 0; vl.locals[at] = 0;
+    vl.local_desc[at] = 0; vl.locals[at] = 0; vl.resumes[at] = 0;
     stmt.let_tuple[at] = 0;
     stmt.let_struct[at] = 0;
     stmt.let_array[at] = 0;
@@ -2410,6 +2439,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             enums.evfstruct[fi] = 0;
             enums.evftuple[fi] = 0;
             enums.evfarrkind[fi] = 0;
+            enums.evfenum[fi] = 0;
             ps.epf = 1;
             ps.epf_layout = tupledefs.tup_count + 1;
             nl.tdecl[tupledefs.tup_count] = 1;
@@ -2426,6 +2456,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             enums.evfstruct[fi] = 0;
             enums.evftuple[fi] = 0;
             enums.evfarrkind[fi] = 0;
+            enums.evfenum[fi] = 0;
             ps.epf = 2;
             0
         } else {
@@ -2436,6 +2467,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             enums.evfstruct[fi] = 0;
             enums.evftuple[fi] = 0;
             enums.evfarrkind[fi] = 0;
+            enums.evfenum[fi] = 0;
             for i in 0..structdefs.sd_count limit 64 {
                 if structdefs.sd_name[i] == v {
                     ps.found_flag = 1;
@@ -2447,7 +2479,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
                 enums.evfkind[fi] = scalar_kind_of(v);
             }
             enums.evfcount[vi] = enums.evfcount[vi] + 1;
-            enums.epayload[vi] = enums.epayload[vi] + type_byte_size(v);
+            enums.epayload[vi] = enums.epayload[vi] + enum_payload_size(fi, v);
             6 + v * 64
         } else {
         if k == Tok::RParen() as Word {
@@ -2463,6 +2495,28 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
 // The flat body size of an enum: eight bytes for the discriminant plus the largest payload
 // across the enum's variants. A construction of any variant carries this same size, matching
 // the reference (every variant of an enum shares the enum's flat footprint).
+// The byte size of a scalar or struct payload field named `v`, or of an ENUM payload field.
+// An enum declared earlier whose own layout is known takes the sentinel kind `50000 + size`
+// and records its name, so a match binding or a destructuring read extracts it whole as the
+// reference's `GetEnumField(FlatNested{offset, size, Enum})`. An enum of unknown layout keeps
+// the unknown kind 0, which marks this enum's layout unknown in turn. A size the packed kind
+// cannot carry is refused.
+fn enum_payload_size(fi: Word, v: Word) -> Word {
+    if ps.found_flag == 1 orelse enums.evfkind[fi] != 0 { type_byte_size(v) } else {
+        enums.esz_scratch = 0;
+        for i in 0..enums.enum_count limit 256 {
+            if enums.edata[i] == v andalso enums.edata[i] != enums.cur_enum { enums.esz_scratch = 1; }
+        }
+        if enums.esz_scratch == 1 andalso nominal_enum_known(v) == 1 {
+            let size = enum_bytesize(v);
+            if size >= 15000 { perr(pe_value_layout(), toks.at); }
+            enums.evfkind[fi] = 50000 + size;
+            enums.evfenum[fi] = v + 1;
+            size
+        } else { 0 }
+    }
+}
+
 fn enum_bytesize(name: Word) -> Word {
     enums.emax_scratch = 0;
     for i in 0..enums.enum_count limit 256 {
@@ -2700,7 +2754,7 @@ fn option_pattern(v: Word) -> Word {
     let f = option_some_field();
     enums.evfstart[option_some_row()] = f; enums.evfcount[option_some_row()] = 1;
     enums.evfoff[f] = 8; enums.evfkind[f] = kind;
-    enums.evfstruct[f] = 0; enums.evftuple[f] = 0; enums.evfarrkind[f] = 0;
+    enums.evfstruct[f] = 0; enums.evftuple[f] = 0; enums.evfarrkind[f] = 0; enums.evfenum[f] = 0;
     if none == 1 { mat.enum_disc = 0; mat.mpat_vrow = option_none_row(); ps.found_flag = 1; }
     if some == 1 { mat.enum_disc = 1; mat.mpat_vrow = option_some_row(); ps.found_flag = 1; }
     0
@@ -2793,6 +2847,9 @@ fn step_mpat(k: Word, v: Word) -> Word {
             // let binding so the arm result resolves it, look up the field's flat offset and kind
             // from the variant layout, and emit an EnumBind marker.
             let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_fpos;
+            // A payload field of unknown layout, the kind 0 of a type declared after its enum, is
+            // refused rather than read as a unit field.
+            if enums.evfkind[fi] == 0 { perr(pe_unresolved_syntax(), v); }
             let slot = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
             clear_let_shape(stmt.let_count);
@@ -2806,7 +2863,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.let_struct[stmt.let_count] = enums.evfstruct[fi];
             stmt.let_array[stmt.let_count] = enums.evfarrkind[fi];
             stmt.let_array_struct[stmt.let_count] = 0;
-            stmt.let_enum[stmt.let_count] = 0;
+            stmt.let_enum[stmt.let_count] = enums.evfenum[fi];
             stmt.let_count = let_push(stmt.let_count);
             // The record retains source coordinates independently of flat byte offsets.
             ps.emit_arg = payload_coordinates();
@@ -4698,6 +4755,13 @@ fn division_record(op: Word) -> Word {
     Node::BinOp() as Word + (op + offset) * 64
 }
 
+// The record of a completed `yield` expression, noting its token position so the value it
+// resumes with can be typed for generic specialization.
+fn yield_expr_record() -> Word {
+    gn.yield_at = ops.op_yat[ops.opsp] + 1;
+    Node::YieldExpr() as Word
+}
+
 fn emit_op(op: Word) -> Word {
     // Any operator applied to a `let` value's operand means the value's root is not a bare
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
@@ -4743,6 +4807,11 @@ fn emit_op(op: Word) -> Word {
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported_wide(ops.op_lenum[ops.opsp] - 1) == 1 {
         enum_eq_start(op)
+    } else {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 {
+        // An enum whose payload the field-wise loop cannot compare. The reference compares it
+        // field by field, so the scalar `CmpEq` the ordinary path would emit is refused.
+        perr(pe_unresolved_syntax(), toks.at)
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 andalso struct_eq_kind(ops.op_lstruct[ops.opsp] - 1) > 0 {
         // `struct_eq_kind` set `stmt.sq_found` = 1 for the nested case (a nested-struct field).
@@ -4793,7 +4862,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::Or() => andor_record(1),
             OpCode::Andalso() => Node::Andalso() as Word,
             OpCode::Orelse() => Node::Orelse() as Word,
-            OpCode::YieldMark() => Node::YieldExpr() as Word,
+            OpCode::YieldMark() => yield_expr_record(),
             // Preserve xor's operand restriction for type extraction. Code generation maps
             // its operator tag to the same CmpNe instruction as inequality.
             OpCode::Xor() => Node::BinOp() as Word + op * 64,
@@ -4801,7 +4870,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::Mod() => division_record(op),
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } } } } } } } } }
+    } } } } } } } } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -5031,7 +5100,7 @@ fn value_local(slot: Word) -> Word {
     value_scalar(0 - 1);
     if slot < ps.pcount { value_scalar(vl.params[slot] - 1); }
     for i in 0..stmt.let_count limit 256 {
-        if stmt.scope_slot[i] == slot { value_scalar(vl.locals[i] - 1); }
+        if stmt.scope_slot[i] == slot { value_scalar(vl.locals[i] - 1); vl.resume = vl.resumes[i]; }
     }
     // An untyped hidden binding arms the postfix with no layout, so its value stays unknown.
     if ps.ta_phase == 1 andalso ps.ta_tuple >= 0 {
@@ -5078,6 +5147,10 @@ fn value_record(word: Word) -> Word {
     if kind == 13 andalso (arg / 281474976710656 == 2 orelse arg / 281474976710656 == 3) {
         checked.root = 13; checked.scalar = arg / 281474976710656;
     }
+    // A resume value is noted by its `yield` record and by a read of a `let` bound to one.
+    // Any other record ends it, including the read of another local, which `value_local`
+    // sets afresh.
+    if kind == 24 { vl.resume = gn.yield_at; } else { if kind != 0 { vl.resume = 0; } }
     if kind == 125 { value_scalar(arg / 65536); }
     if kind == 1 orelse kind == 116 orelse kind == 128 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
@@ -5541,6 +5614,7 @@ fn step_op(k: Word) -> Word {
         // `yield` is a loosest-binding prefix: push its marker (precedence 0) so no
         // operator pops across it and the whole following expression becomes its operand.
         ops.opstack[ops.opsp] = OpCode::YieldMark() as Word;
+        ops.op_yat[ops.opsp] = toks.at;
         ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
@@ -6073,6 +6147,9 @@ fn step_forheader(k: Word, v: Word) -> Word {
             stmt.let_names[stmt.let_count] = forst.for_var[fp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[fp];
             stmt.let_scalar[stmt.let_count] = 1;
+            // A range induction variable is a Word, as the reference types it, so its value
+            // has a known layout as a tuple member or call argument.
+            vl.locals[stmt.let_count] = 4;
             stmt.let_count = let_push(stmt.let_count);
             forst.for_phase[fp] = 7;
             forst.for_stmt_start[fp] = stmt.stmt_count;
@@ -6743,14 +6820,16 @@ fn enum_payload_read(v: Word) -> Word {
         let fi = enums.evfstart[row] + v;
         let off = enums.evfoff[fi];
         let kind = enums.evfkind[fi];
+        if kind == 0 { perr(pe_unresolved_syntax(), v); }
         ep.fi = fi;
         ps.ta_phase = 0;
         ops.expect_operand = 0;
-        let operand = if kind >= 40000 { off + (kind - 40000) * 65536 + 9 * 4294967296 } else {
+        let operand = if kind >= 50000 { off + (kind - 50000) * 65536 + 11 * 4294967296 } else {
+            if kind >= 40000 { off + (kind - 40000) * 65536 + 9 * 4294967296 } else {
             if kind >= 30000 { off + (kind - 30000) * 65536 + 8 * 4294967296 } else {
             if kind >= 100 { off + (kind - 100) * 65536 + 10 * 4294967296 } else {
                 off + kind * 65536 + 6 * 4294967296
-            } } };
+            } } } };
         ps.field_record = Node::TupleField() as Word + operand * 64;
         ps.emit_arg = 1099511627776 + row * 1024 + v;
         104
@@ -6770,9 +6849,15 @@ fn enum_payload_value(arg: Word) -> Word {
         value_scalar(0 - 1);
         vl.form = 3; vl.decl = enums.evfstruct[fi]; vl.bytes = (arg / 65536) % 65536;
     } else {
+    if variant == 11 {
+        // An enum payload, so a binding of it is a value of that enum.
+        value_scalar(0 - 1);
+        vl.form = 4; vl.decl = enums.evfenum[fi]; vl.bytes = (arg / 65536) % 65536;
+        stmt.pending_copt = 0; stmt.pending_cenum = enums.evfenum[fi];
+    } else {
         value_scalar(enums.evfarrkind[fi] - 1);
         if vl.bytes <= 0 { perr(pe_value_layout(), toks.at); } else { value_array(((arg / 65536) % 65536) / vl.bytes); }
-    } } }
+    } } } }
     0
 }
 
@@ -7690,7 +7775,7 @@ fn step_draining() -> Word {
             ops.draining = 0;
             if ops.drain_reason == 21 { for_array_open() } else {
             if ops.drain_reason == 20 {
-                call.pipe_args = 1; call.pipe_kind = option_kind(vl.scalar); ops.expect_operand = 1;
+                call.pipe_args = 1; call.pipe_kind = resume_arg_kind(); ops.expect_operand = 1;
             } else { checked.emit = 1; }
             0 }
         } else {
@@ -7725,6 +7810,9 @@ fn step_draining() -> Word {
                     stmt.let_nt[stmt.let_count] = gn.nt_value;
                     stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.scope_slot[stmt.let_count] = slot;
+                    // An unannotated binding of a resume value is one too. An annotated one
+                    // fixes the resume value's type.
+                    if stmt.pstmt_type[stmt.pstmt_sp] == 0 { vl.resumes[stmt.let_count] = vl.resume; } else { resume_fact(stmt.pstmt_type[stmt.pstmt_sp]); }
                     stmt.let_scalar[stmt.let_count] = stmt.pstmt_scalar[stmt.pstmt_sp];
                     value_bind_root();
                     // A hidden destructuring binding over a value of unknown layout reads its
@@ -7949,6 +8037,9 @@ fn step_draining() -> Word {
             stmt.let_names[stmt.let_count] = forst.for_var[bfp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[bfp];
             stmt.let_scalar[stmt.let_count] = 1;
+            // A range induction variable is a Word, as the reference types it, so its value
+            // has a known layout as a tuple member or call argument.
+            vl.locals[stmt.let_count] = 4;
             stmt.let_count = let_push(stmt.let_count);
             forst.for_phase[bfp] = 7;
             forst.for_stmt_start[bfp] = stmt.stmt_count;
@@ -10184,6 +10275,12 @@ fn gen_instance_done() -> Word {
 // request without knowing the context it arrived in.
 fn gen_end_of_input() -> Word {
     gn.active = 0;
+    if gn.rf_i < gn.rf_n {
+        // A resume kind this round fixed, tag 142, which no other record uses either.
+        ps.emit_arg = gn.rf_at[gn.rf_i] * 16 + gn.rf_kind[gn.rf_i];
+        gn.rf_i = gn.rf_i + 1;
+        142
+    } else {
     if gn.req_i < gn.req_n {
         ps.emit_arg = gn.req_gen[gn.req_i] + gn.req_key[gn.req_i] * 16;
         gn.req_i = gn.req_i + 1;
@@ -10193,7 +10290,7 @@ fn gen_end_of_input() -> Word {
         gn.active = gn.next + 1;
         gn.next = gn.next + 1;
         gen_seek(toks.gen_fn[toks.spec_gen[gn.active - 1]])
-    } else { 15 } }
+    } else { 15 } } }
 }
 // A read token with an instantiation's substitutions applied. The template's name becomes
 // the instantiation's, and each type parameter's name becomes its argument's type name.
@@ -10235,7 +10332,39 @@ fn gen_template_of(v: Word) -> Word {
 fn gen_note_arg(sp: Word) -> Word {
     let i = call.call_count[sp];
     if call.call_chunk[sp] >= 4096 andalso i < 8 {
-        call.call_akind[sp] = call.call_akind[sp] + option_kind(vl.scalar) * gen_place(i);
+        call.call_akind[sp] = call.call_akind[sp] + resume_arg_kind() * gen_place(i);
+    }
+    0
+}
+// The kind of a template call's argument. A resume value takes the reference's type for it,
+// `loop main`'s first parameter when there is one, else the kind an annotated `let` fixed in
+// an earlier round, else the kind of the value it is bound from. A resume value whose type
+// is a parameter of a type not modelled here has kind 0, which a template call refuses and
+// any other call ignores.
+fn resume_arg_kind() -> Word {
+    if vl.resume == 0 { option_kind(vl.scalar) } else {
+    if toks.res_main > 0 { toks.res_main } else {
+    if toks.res_main < 0 { 0 } else {
+        gn.tmp = option_kind(vl.scalar);
+        for r in 0..toks.res_count limit 16 { if toks.res_at[r] == vl.resume - 1 { gn.tmp = toks.res_kind[r]; } }
+        gn.tmp
+    } } }
+}
+// A `let` annotated with type name `t` whose value is a resume value fixes that value's
+// type, as the reference's unification does, when no `loop main` parameter declares it.
+// The first annotation of a `yield` in source order is kept, in this round and across
+// rounds, since a seeded position is not reported again.
+fn resume_fact(t: Word) -> Word {
+    if toks.res_probe == 1 andalso toks.res_main == 0 andalso vl.resume > 0 andalso gn.active == 0 andalso t > 0 {
+        let kind = option_kind(scalar_kind_of(t - 1));
+        gn.tmp = 0;
+        for r in 0..toks.res_count limit 16 { if toks.res_at[r] == vl.resume - 1 { gn.tmp = 1; } }
+        for r in 0..gn.rf_n limit 16 { if gn.rf_at[r] == vl.resume - 1 { gn.tmp = 1; } }
+        if kind > 0 andalso gn.tmp == 0 andalso gn.rf_n < 16 {
+            gn.rf_at[gn.rf_n] = vl.resume - 1;
+            gn.rf_kind[gn.rf_n] = kind;
+            gn.rf_n = gn.rf_n + 1;
+        }
     }
     0
 }

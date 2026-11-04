@@ -25,7 +25,7 @@
 use keleusma::Arena;
 use keleusma::bytecode::Value;
 use keleusma::vm::{
-    DEFAULT_ARENA_CAPACITY, Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for,
+    Vm, VmError, VmState, auto_arena_capacity_for, required_persistent_capacity_for,
 };
 
 fn compile(src: &str) -> Result<keleusma::bytecode::Module, String> {
@@ -60,48 +60,73 @@ fn the_former_boundary_compiles_with_one_field_record() {
     }
 }
 
-#[test]
-fn an_element_above_slot_65535_survives_reset_at_its_own_offset() {
-    let src = "struct P { x: Word, y: Word }\n\
-               private data d { a: [P; 70000] }\n\
-               loop main(seed: Word) -> Word { \
-                   if seed == 0 { \
-                       d.a[69999] = P { x: 3, y: 4 }; \
-                       d.a[65536] = P { x: 5, y: 6 }; \
-                   }; \
-                   let _ = yield d.a[69999].x + d.a[69999].y + d.a[65536].x + d.a[65536].y; \
-                   0 \
-               }";
-    let m = compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let need = required_persistent_capacity_for(&m);
-    // Loading materialises each element's zero in the working region before
-    // persisting it, and `auto_arena_capacity_for` does not count that
-    // load-time work, measured on 2026-11-02 to exhaust 3,425,536 bytes for
-    // seventy thousand two-word composites. The region is therefore sized here
-    // with room for every element. That gap is recorded as a residual in the
-    // array wire-slot design record rather than closed by this test.
-    let working = auto_arena_capacity_for(&m, &[])
-        .expect("arena bound")
-        .max(DEFAULT_ARENA_CAPACITY)
-        + 70_000 * 128;
-    let mut arena = Arena::with_capacity(working + need);
+const ABOVE_THE_CAP: &str = "struct P { x: Word, y: Word }\n\
+    private data d { a: [P; 70000] }\n\
+    loop main(seed: Word) -> Word { \
+        if seed == 0 { \
+            d.a[69999] = P { x: 3, y: 4 }; \
+            d.a[65536] = P { x: 5, y: 6 }; \
+        }; \
+        let _ = yield d.a[69999].x + d.a[69999].y + d.a[65536].x + d.a[65536].y; \
+        0 \
+    }";
+
+/// Construct, run two iterations across a RESET, and return the sum each read.
+/// `ephemeral` is the working region after the persistent one.
+fn run_twice(m: &keleusma::bytecode::Module, ephemeral: usize) -> Result<(i64, i64), VmError> {
+    let need = required_persistent_capacity_for(m);
+    let mut arena = Arena::with_capacity(ephemeral + need);
     arena.resize_persistent(need).expect("resize_persistent");
-    let mut vm = Vm::new(m, &arena).expect("verify");
-    let want = 3 + 4 + 5 + 6;
-    match vm.call(&[Value::Int(0)]).expect("call") {
-        VmState::Yielded(Value::Int(n)) => assert_eq!(n, want),
-        other => panic!("iteration 1 expected Yielded({want}), got {other:?}"),
-    }
-    match vm.resume(Value::Int(1)).expect("resume") {
+    let mut vm = Vm::new(m.clone(), &arena)?;
+    let first = match vm.call(&[Value::Int(0)])? {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("iteration 1 yielded {other:?}"),
+    };
+    match vm.resume(Value::Int(1))? {
         VmState::Reset => {}
         other => panic!("expected Reset at the loop body end, got {other:?}"),
     }
     // No rewrite on this iteration, so the reads observe the bodies that
     // survived the RESET in the persistent pool.
-    match vm.resume(Value::Int(1)).expect("resume") {
-        VmState::Yielded(Value::Int(n)) => {
-            assert_eq!(n, want, "elements above slot 65,535 must survive RESET")
-        }
-        other => panic!("iteration 2 expected Yielded({want}), got {other:?}"),
+    let second = match vm.resume(Value::Int(1))? {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("iteration 2 yielded {other:?}"),
+    };
+    Ok((first, second))
+}
+
+#[test]
+fn an_element_above_slot_65535_survives_reset_at_its_own_offset() {
+    let m = compile(ABOVE_THE_CAP).unwrap_or_else(|e| panic!("{e}"));
+    let want = 3 + 4 + 5 + 6;
+    // Sized by the module's own bound, which counts the load-time seeding of
+    // every element's zero.
+    let figure = auto_arena_capacity_for(&m, &[]).expect("arena bound");
+    assert_eq!(
+        run_twice(&m, figure).expect("the bound suffices"),
+        (want, want),
+        "elements above slot 65,535 must survive RESET"
+    );
+}
+
+/// The bound is tight: one byte less runs out of arena. Measured the way
+/// `tests/native_region_supplement.rs` measures, by the smallest region that
+/// runs and the region one byte smaller.
+#[test]
+fn the_bound_for_seventy_thousand_seeded_composites_is_tight() {
+    let m = compile(ABOVE_THE_CAP).unwrap_or_else(|e| panic!("{e}"));
+    let figure = auto_arena_capacity_for(&m, &[]).expect("arena bound");
+    let terms = keleusma::vm::vm_arena_terms_for(&m, &[], 0).expect("arena bound");
+    assert_eq!(
+        terms.seeded_private_bytes,
+        70_000 * 16,
+        "one 16-byte body per element"
+    );
+    // Measured on 2026-11-02, 1,120,000 bytes of seeded bodies and 440 of the
+    // other terms. The figure runs and one byte less does not.
+    assert_eq!(figure, 1_120_440);
+    match run_twice(&m, figure - 1) {
+        Err(VmError::OutOfArena(_)) => {}
+        other => panic!("one byte below the bound must run out, got {other:?}"),
     }
 }

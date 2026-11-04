@@ -12647,8 +12647,13 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // Nested and variant `let` patterns, the operator's ruling of 2026-10-31, added the
     // `ep` block with `count`, `row` and `fi`, and `enum_payload_arm`, `enum_payload_read`
     // and `enum_payload_value`, for 1161, and took the blob to 36,148 against 49,152.
-    assert_eq!(worst_names, 1161, "the worst-case name count moved");
-    assert_eq!(worst_blob, 36148, "the worst-case blob size moved");
+    // The coverage residuals of 2026-11-01 added `evfenum` and `enum_payload_size` for
+    // enum-typed payloads, the resume tables `res_main`, `res_probe`, `res_count`, `res_at`,
+    // `res_kind`, `yield_at`, `rf_n`, `rf_i`, `rf_at`, `rf_kind`, `op_yat`, `resume` and
+    // `resumes`, and `yield_expr_record`, `resume_arg_kind` and `resume_fact`, for 1179, and
+    // took the blob to 36,604.
+    assert_eq!(worst_names, 1179, "the worst-case name count moved");
+    assert_eq!(worst_blob, 36604, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
