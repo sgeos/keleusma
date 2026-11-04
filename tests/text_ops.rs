@@ -48,6 +48,30 @@ fn word_bytes() -> usize {
     keleusma::target::Target::host().word_bits() as usize / 8
 }
 
+/// The most negative and most positive signed word of this build. A literal or
+/// a result outside this range wraps under a narrow-word selector, so every
+/// extreme an expectation uses is derived from here rather than written as an
+/// `i64` constant.
+fn word_range() -> (i64, i64) {
+    let bits = (word_bytes() * 8) as u32;
+    if bits >= 64 {
+        (i64::MIN, i64::MAX)
+    } else {
+        (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1)
+    }
+}
+
+/// Slice bounds covering one above the most negative word, the small
+/// boundary values and the most positive word, all representable in a word
+/// of this build. `extra` adds values that are representable at every width.
+fn slice_bounds(extra: &[i64]) -> Vec<i64> {
+    let (min, max) = word_range();
+    let mut v = vec![min + 1, -1, 0, 1, 2, 3, 4, 5];
+    v.extend_from_slice(extra);
+    v.push(max);
+    v
+}
+
 /// The flat body of a `Text<cap>` holding `bytes`, built from the
 /// specification and not from compiler output. It always satisfies the
 /// invariant, so a result compared against it is checked for the invariant as
@@ -298,12 +322,12 @@ fn slice_model(s: &[u8], start: i64, end: i64) -> Vec<u8> {
 
 #[test]
 fn slice_matches_the_clamped_model() {
-    let bounds: &[i64] = &[i64::MIN + 1, -1, 0, 1, 2, 3, 4, 5, 100, i64::MAX];
+    let bounds = slice_bounds(&[100]);
     let mut reached = 0usize;
     for s in ["", "abcd", "a\0b"] {
         let cap = s.len() + 2;
-        for &start in bounds {
-            for &end in bounds {
+        for &start in &bounds {
+            for &end in &bounds {
                 let src = format!(
                     "fn main() -> Text<{cap}> {{ ({} as Text<{cap}>).slice({start}, {end}) }}",
                     lit(s)
@@ -350,17 +374,7 @@ impl Raw {
 /// past it, and the most positive word. Each is representable in a word of
 /// this build, because the extremes are derived from the word width.
 fn bad_lengths(cap: usize) -> Vec<i64> {
-    let bits = (word_bytes() * 8) as u32;
-    let min = if bits >= 64 {
-        i64::MIN
-    } else {
-        -(1i64 << (bits - 1))
-    };
-    let max = if bits >= 64 {
-        i64::MAX
-    } else {
-        (1i64 << (bits - 1)) - 1
-    };
+    let (min, max) = word_range();
     let cap = cap as i64;
     vec![min, -1, 0, 1, cap - 1, cap, cap + 1, max]
 }
@@ -492,12 +506,12 @@ fn eq_of_malformed_texts_compares_their_contents() {
 
 #[test]
 fn slice_of_a_malformed_text_slices_its_content() {
-    let bounds: &[i64] = &[i64::MIN + 1, -1, 0, 1, 2, 3, 4, 5, i64::MAX];
+    let bounds = slice_bounds(&[]);
     let mut reached = 0usize;
     for len in bad_lengths(FOUR.len()) {
         let t = Raw { len, bytes: FOUR };
-        for &start in bounds {
-            for &end in bounds {
+        for &start in &bounds {
+            for &end in &bounds {
                 let got = run_with(
                     &format!("fn main() -> Text<4> {{ (\"1\" as Text<4>).slice({start}, {end}) }}"),
                     &[t],
@@ -514,10 +528,12 @@ fn slice_of_a_malformed_text_slices_its_content() {
 #[test]
 fn a_malformed_host_argument_reads_as_its_effective_content() {
     // The same rule holds for a body a host builds and passes to an entry,
-    // which is the path the design record names for a malformed value.
+    // which is the path the design record names for a malformed value. The
+    // three lengths are digits in base five, since each lies in `0..=4`, so the
+    // largest result, 124, still fits an 8-bit word.
     let module = compile_src(
         "fn main(t: Text<4>) -> Word { \
-         t.len() * 1000 + t.concat(\"\" as Text<1>).len() * 100 + t.slice(0, 9).len() }",
+         t.len() * 25 + t.concat(\"\" as Text<1>).len() * 5 + t.slice(0, 9).len() }",
     );
     keleusma::verify::verify(&module).expect("verify");
     let wb = word_bytes();
@@ -540,7 +556,7 @@ fn a_malformed_host_argument_reads_as_its_effective_content() {
             .unwrap_or_else(|e| panic!("length {len}: {e:?}"));
         let l = Raw { len, bytes: FOUR }.content().len() as i64;
         match got {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, l * 1101, "length {len}"),
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, l * 31, "length {len}"),
             other => panic!("length {len}: {other:?}"),
         }
         reached += 1;
@@ -597,15 +613,17 @@ fn labels_flow_through_an_operation() {
 #[test]
 fn a_user_type_keeps_its_own_method_of_the_same_name() {
     // The operations are resolved by receiver type, so a trait method named
-    // `len` or `eq` on a struct still resolves to the impl.
+    // `len` or `eq` on a struct still resolves to the impl. The struct's `len`
+    // gives 42 and the text's gives 3, combined so the result, 72, fits an
+    // 8-bit word.
     let src = "struct S { a: Word }\n\
                trait Size { fn len(s: S) -> Word; fn eq(s: S, o: S) -> bool; }\n\
                impl Size for S { fn len(s: S) -> Word { s.a + 40 } \
                fn eq(s: S, o: S) -> bool { s.a != o.a } }\n\
                fn main() -> Word { let s = S { a: 2 }; \
                let t = \"abc\" as Text<4>; \
-               if s.eq(S { a: 2 }) { 0 } else { s.len() * 10 + t.len() } }";
-    assert_eq!(run_word(src), 423);
+               if s.eq(S { a: 2 }) { 0 } else { s.len() + t.len() * 10 } }";
+    assert_eq!(run_word(src), 72);
 }
 
 #[test]

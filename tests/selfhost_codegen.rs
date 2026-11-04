@@ -9324,10 +9324,13 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Re-measured 2026-10-30 after the flat Text layout proof, with its
             // transfers moved into helpers so `apply_typed` stays the largest
             // group: 1551 and 505 became 2142 and 557.
+            // Re-measured 2026-11-01 after the C5 review's join repair, which added the
+            // region write sets, the two snapshot pools and the native flag's scalar push:
+            // 2142 and 557 became 3066 and 570.
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            2142,
-            557,
+            3066,
+            570,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {
