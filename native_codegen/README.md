@@ -91,17 +91,21 @@ LLVM is absent.
 
 ## Continuous integration
 
-The dedicated [native workflow](../.github/workflows/native.yml) runs on pull requests
-and pushes targeting `v0.3.0` and `main` whenever an input the native suite reads
-changes. Two ARM64 macOS jobs, one per float configuration, run ShellCheck, the
+The `native` and `native-linux` jobs of the [root workflow](../.github/workflows/ci.yml)
+run on pull requests and pushes for `main` and every version branch whenever an
+input the native suite reads changes, as `NATIVE_PATTERNS` in
+`scripts/ci_classify.py` decides. They are under `CI result`, so a red native gate
+fails the required check. Until 2026-11-04 they were a separate workflow that ran
+only for `main` and `v0.3.0`, and the operator then ruled that all continuous
+integration is unified. Two ARM64 macOS jobs, one per float configuration, run ShellCheck, the
 documentation build with warnings denied, and `tools/backend-gate.sh` itself, which
 is formatting, all-target Clippy, the suite outside the corpus, the corpus
 differential, and the suite outside the corpus again under the middle end. Both
 install LLVM 22.1, fetch full history for provenance checks, and fail rather than
 skip where a test needs `llc` and `llvm-readobj`. A hosted run writes
 `GATE_RECORD.md` inside the runner and prints it. The committed record names the
-last local run. The path filter is checked against `tools/gate-status.sh` by
-`tests/native_workflow.rs`.
+last local run. The path filter is checked against `tools/gate-status.sh`, and the job layout
+against `CI result`, by `tests/native_workflow.rs`.
 
 ## Requirements
 

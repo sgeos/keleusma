@@ -402,7 +402,7 @@ fn the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus() {
             })
         }),
         ("data slot out of range", |m| {
-            let n = m.data_layout.as_ref().map_or(0, |d| d.slots.len());
+            let n = m.data_layout.as_ref().map_or(0, |d| d.slot_count());
             first(m, |op, _, _, _, _| match op {
                 Op::GetData(i) | Op::SetData(i) => {
                     *i = (n + 9) as u32;

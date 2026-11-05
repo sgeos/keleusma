@@ -3,16 +3,25 @@
 > **Navigation** [Decisions](./README.md) | [Order 2 audit](./ORDER2_COMPLETION_AUDIT.md) | [V0.2.X roadmap](../roadmap/V0_2_X_ROADMAP.md)
 
 Reviewed on 2026-11-01 and 2026-11-02 on `docs/v02-c5-validator-review`, cut from `v0.2.3` at
-`7c76d771`.
+`7c76d771`. The two open soundness residuals were repaired on 2026-11-04 on
+`fix/v02-c5-residuals`, cut from `v0.2.3` at `ff48e35c`, and the verdict below was revised
+then.
 
 ## Verdict
 
-**C5 is not met.** Two soundness residuals remain open, each pinned by a test that asserts
-the present disagreement, and each listed below with an estimate. Three soundness defects
-were found and repaired in this pass. Over the mutation corpus of 10,703 corrupted modules
-the self-hosted validator now accepts none that the reference rejects, where before the
-repair it accepted 41. That is a measured result about that corpus and is not a proof for
-arbitrary bytecode. The shipping reference gate is unchanged and remains necessary.
+**C5 is met for the corpus scope.** The criterion is that the self-hosted validator never
+accepts a module the reference `verify` or admission rejects. Over the enlarged mutation corpus
+of 13,307 corrupted modules it accepts none that the reference rejects, and it rejects none
+that the reference accepts. Both counts are measured. **The scope is the corpus and nothing
+wider.** Agreement over these mutants is evidence about these mutants and is not a proof for
+arbitrary bytecode, and the residuals listed under "Other residuals" stay open, among them the
+common-mode transport tables that no differential can see. The shipping reference gate is
+unchanged and remains necessary.
+
+The first pass, on 2026-11-02, recorded "C5 is not met". It found and repaired three soundness
+defects, which took the corpus of that day from 41 unsound mutants to none, and it left two
+soundness residuals open. The second pass, on 2026-11-04, repaired both residuals and a third
+gap of the same layout family, and is recorded under "The residual repair" below.
 
 ## What C5 is
 
@@ -92,11 +101,11 @@ a row names one.
 | `ArrayStrideMismatch` | `check_flat_array_stride` | `check_stride` | Mapped |
 | `NewCompositeSizeMismatch` | `apply_op` | `apply_typed` kind 6 | Mapped, precision repaired, see defect 3 |
 | `EnumBodySizeMismatch` | `apply_op` | `eb_check` | Mapped |
-| `TextFieldMismatch` | `check_text_field`, `check_text_elements` | same names | Mapped, at most four offsets, see residual 2 |
+| `TextFieldMismatch` | `check_text_field`, `check_text_elements` | same names | Mapped. Repaired on 2026-11-04 with variable-length layouts, see residual 2 |
 | `BranchHeightMismatch` | `join_stacks` | `resolve_pending` | Mapped |
-| `LoopNotNeutral` | `interp_region` | `resolve_pending` | Mapped by height. Inferred equivalent, since the floor keeps every entry below the loop's entry height |
+| `LoopNotNeutral` | `interp_region` | `resolve_loop` | Mapped by height. Inferred equivalent, since the floor keeps every entry below the loop's entry height |
 | `LocalTypeMismatch`, `CallArgMismatch` | `apply_op` | `shapes_compat` | Mapped |
-| Shape joins at `EndIf` and after a loop | `join_ends`, `join_all`, the loop-head fixpoint | `resolve_pending` | Repaired at `EndIf`, partial after a loop, see residual 1 |
+| Shape joins at `EndIf` and after a loop | `join_ends`, `join_all`, the loop-head fixpoint | `resolve_pending`, `resolve_loop` | Repaired at `EndIf` on 2026-11-01 and after a loop on 2026-11-04, see residual 1 |
 | Call graph acyclic | `topological_call_order` | `call_graph.rs` with `analyze.kel` | Mapped |
 | Region nesting within the walk depth | `wcmu_region_at` | `analyze.kel` | Mapped |
 | Loop iteration bound extractable | `extract_loop_iteration_bound` | `analyze.kel` | Mapped |
@@ -105,7 +114,8 @@ a row names one.
 
 ## Mutation results
 
-All counts are measured, in release builds with an empty `RUSTC_WRAPPER`, by
+These are the first pass's counts, over its 13 compiled bases. The counts of the residual
+repair, over all 18 bases, are under "The residual repair" below. All counts are measured, in release builds with an empty `RUSTC_WRAPPER`, by
 `cargo test --release -p keleusma --features self-host --test selfhost_validator -- --include-ignored`.
 
 | Measure | Before the repair, at `7c76d771` | After the repair |
@@ -140,6 +150,15 @@ The per-family counts after the repair are these.
 | enum layout | 17 | 4 | 4 |
 | native shape | 7 | 1 | 1 |
 | data layout | 53 | 24 | 24 |
+
+The data-layout row was measured against the slot, shared-layout and private-placement tables.
+Encoding F replaced those tables with one record per declared field, and the data-layout
+mutations were ported to it. Each field's visibility is flipped and each field is removed, each
+shared field's offset and kind are rewritten, and each pooled private field's first slot and
+offset are rewritten, at the boundary values the tables used. Measured on the merged tree in a
+release build with the family alone, the ported family generates 51 mutants, the reference
+rejects 25 at `verify` and 25 at admission, and none is unsound, over-rejected or unavailable.
+The other rows were not re-measured after the port.
 
 The whole corpus costs more than a test can spend in a continuous-integration shard, so it is
 `#[ignore]`d as `c5_the_whole_mutation_corpus` and is the review's instrument. The test that
@@ -177,27 +196,89 @@ A cross-join witness that `keleusma-cli/tests/validator.rs` pinned as a disagree
 Order 2 audit is now refused by both validators, and the test now pins residual 1's witness in
 its place, so the command's disagreement path keeps its control.
 
+## The residual repair
+
+Made on 2026-11-04 in `src/selfhost/kel/verify_typed.kel`, with one transport change in
+`seed_typed_shared` in `src/selfhost/mod.rs`, which now passes the chunk's local count.
+
+1. **The loop fixpoint, residual 1.** A loop body now runs from a head state, first the entry
+   state. When a pass falls through, the locals the region writes are joined into the head, and
+   while the head changes the body runs again from it. The pass counter stops at the reference's
+   cap of the local count plus two, past which the head's written locals are forgotten and one
+   final pass runs, as `invalidate_written_locals` does in the reference. Every break of a pass
+   is joined into an accumulator of its loop, holding the operand entries above the loop's entry
+   height and the written locals, in a break pool that is last in first out as loops nest. The
+   state after the loop is that join of the last pass, or with no break the body's end state, or
+   with neither the head, which is the reference's `join_all(loop_breaks)`, `body_end` and
+   `head`. Termination is verifiable by inspection, since each loop runs at most `local_count + 4`
+   passes per entry and the whole walk is bounded by the stage's step budget of 32,768, past
+   which the result is unavailable analysis. The step budget was not raised, and no chunk of the
+   self-host tier exhausted it, measured.
+2. **Variable-length text layouts, residual 2.** An entry's `Text` offsets are now a record in a
+   layout heap of 65,536 words, a count and the ascending offsets, and entries hold the record's
+   index. A loop's restart frees every record its previous pass made, since a join keeps the
+   older record whenever it keeps a layout, so no state that survives the restart refers to a
+   freed record. A record past the heap is the frame capacity, cause 2, which is unavailable
+   analysis and never a verdict, pinned by
+   `c5_a_layout_heap_past_its_capacity_is_unavailable_analysis`.
+3. **The element layout, a gap of the same family that the first pass did not list.** An element
+   read from an array of flat bodies pushed an unknown layout, where the reference's
+   `element_text_layout` gives the layout every element shares. A `Text` read of such an
+   element's `Word` field was refused by the reference and accepted by the stage, measured on
+   `ff48e35c`. The stage now computes the shared layout. It relies on a known layout's offsets
+   being ascending, which holds by construction since a body packs its elements in order and
+   each element's offsets lie within it. That invariant is argued from the code and is not
+   checked at run time.
+
+The corpus gained five bases for these gaps. `text_fields` holds six `Text` fields and
+`text_array` an array of bodies with text. The language binds each name once, so no compiled
+program reaches a local a loop writes that is read after it, and three hand-built bases,
+`loop_local`, `loop_widening` and `loop_operand`, are built by `loop_module` in the corpus file.
+They take the corpus from 10,703 mutants to 13,307.
+
+The two witness tests now assert agreement. They are
+`c5_a_local_written_in_a_loop_keeps_the_join_of_its_break_states` and
+`c5_text_layouts_of_any_width_agree_with_the_reference`, the latter at 1, 4, 5, 16 and 40
+fields. `c5_a_loop_exit_agrees_with_the_reference_fixpoint` adds the widening case, in which a
+join of the first pass's breaks alone would refuse a read the reference defers. It is a check
+that the fixpoint and not one pass was implemented. `c5_an_array_element_keeps_the_layout_its_elements_share`
+pins the element layout. Every one of these was measured to fail on `ff48e35c` before the
+repair. The 20 corpus mutants the stage accepted before the repair are kept as failing-first
+controls in `REPAIRED_RESIDUALS`. 18 are of the loop bases and 2 are of the text bases.
+
+`reference_disagreement_prevents_successful_admission` in `keleusma-cli/tests/validator.rs`
+pinned residual 1's witness as its disagreement control. Both validators now refuse that
+module, and the test now drives residual 6 in its place, a `Bool` and a `Byte` joined at an
+`EndIf`, which the reference accepts and the stage refuses. The command's disagreement path
+therefore keeps a control.
+
+| Measure, whole corpus | Before the repair, on `ff48e35c` | After the repair |
+|---|---|---|
+| Mutants | 13,307 | 13,307 |
+| Rejected by the reference `verify` | 10,794 | 10,794 |
+| Rejected by reference admission | 11,160 | 11,160 |
+| Accepted by the self-hosted validator and rejected by the reference | 20 | 0 |
+| Rejected by the self-hosted validator and accepted by the reference | 0 | 0 |
+| Unavailable self-hosted analysis | 21 | 21 |
+| Panics in either validator | 0 | 0 |
+| Wall time | 4,544 s | 2,739 s, with five other tests, on a machine shared with other builds |
+
+The 20 unsound mutants before the repair were 10 operand rewrites, 4 access-kind rewrites, 5
+substitutions and 1 transposition. The 21 unavailable analyses are the chunks given 300 locals,
+one per chunk of the 18 bases, past the typed stage's capacity of 256. The 13 bases of the
+first pass account for the 10,703 of the earlier table and still give 0 unsound mutants. The
+sampled gate judged 875 mutants before the repair, with 2 unsound, and 893 after it, with none
+unsound, none over-rejected and none unavailable. It reaches more after the repair because it
+also takes every mutant `REPAIRED_RESIDUALS` names.
+
 ## Residual gaps
 
-### Open soundness residuals
+### Closed soundness residuals
 
-1. **After a loop the typed stage forgets the locals the body writes and every operand entry
-   above the loop's entry height.** The reference sets them to the join of the break states
-   of its loop-head fixpoint, which can keep a shape. Witness
-   `c5_residual_a_local_written_in_a_loop_is_forgotten_after_it` in
-   `tests/selfhost_validator.rs`, measured. Joining the first iteration's break states would
-   be more precise than the reference, so the repair is the reference's fixpoint itself,
-   rerunning a loop body until its head locals are stable with the break states accumulated
-   in the pools. Estimate, inferred, two to four working days including measuring the stage's
-   new cost on the fifteen-stage corpus, since a nested loop then costs a product of
-   iteration counts.
-2. **The typed stage records at most four `Text` offsets of a body's layout.** A body with
-   five or more `Text` fields has an unknown layout in the stage and a known one in the
-   reference, so a `Text` read at an offset holding no text is refused by the reference and
-   deferred by the stage. Witness
-   `c5_residual_a_body_with_more_than_four_text_fields_defers_its_text_reads`, measured with
-   four fields agreeing and five disagreeing. Repair is variable-length layout storage in the
-   stage's entry, local and pool tables. Estimate, inferred, one working day.
+1. **After a loop the typed stage forgot the locals the body writes and every operand entry
+   above the loop's entry height.** Closed on 2026-11-04, see "The residual repair".
+2. **The typed stage recorded at most four `Text` offsets of a body's layout.** Closed on
+   2026-11-04, with the element layout of the same family, see "The residual repair".
 
 ### Other residuals
 
@@ -212,22 +293,50 @@ its place, so the command's disagreement path keeps its control.
    configuration is ever made to build.
 5. **Capacities are narrower than the reference.** A chunk past 8,192 operations, a typed
    chunk past 256 locals, a nesting past 32 levels in the depth stage or 64 in the typed
-   stage, and a pool past 8,192 entries are unavailable analysis. They narrow the admitted
-   set and are not unsound. The corpus measured 16 such cases.
+   stage, a pool past 8,192 entries, a layout heap past 65,536 words and a walk past 32,768
+   steps are unavailable analysis. They narrow the admitted set and are not unsound. The
+   corpus measured 21 such cases, all of them the 256-local capacity.
 6. **The typed stage does not distinguish scalar kinds of one size.** It records a scalar's
    size and whether it is `Text`, so a join of a `Bool` and a `Byte`, or of an `Int` and a
    `Fixed`, keeps a scalar where the reference forgets it. The stage could then refuse a field
-   read the reference defers. This is an inferred over-rejection, not observed in the corpus,
-   and is not a soundness gap.
+   read the reference defers. This is an over-rejection, not a soundness gap. It is not
+   observed in the corpus, and it is observed in the hand-built module that
+   `keleusma-cli/tests/validator.rs` now uses as its disagreement control. Its loop analogue
+   could also move the fixpoint's pass count away from the reference's, which would change
+   precision and not soundness. That is inferred and not measured.
 7. **The corpus is small programs.** Agreement over these mutants is evidence about these
    mutants. The stage corpus and the repository sources are covered by the existing
    agreement tests of `tests/selfhost_full_language.rs`, `tests/selfhost_admission.rs` and
-   `tests/selfhost_resource_admission.rs`, which this review reran and did not extend.
+   `tests/selfhost_resource_admission.rs`, which both passes reran and did not extend.
+8. **The fixpoint's cap path is not exercised by a test.** The stage copies the reference's cap,
+   the local count plus two widening passes, and its forgetting final pass. No module in the
+   corpus or the tests reaches the cap. It is inferred, and not proven, that no module reaches
+   it, since a slot's shape changes at most twice and a change travels one local per pass, so a
+   head stabilizes within about as many passes as the loop writes locals. If the stage and the
+   reference ever disagreed there, a cap reached by only one of them would change precision and
+   not soundness, since a later pass starts from a head that the earlier one refines.
 
 ## Verification
 
-Measured in this pass, with an empty `RUSTC_WRAPPER`, on the tree this record is committed
-with.
+Measured in the residual repair, on 2026-11-04, with an empty `RUSTC_WRAPPER`, on the tree this
+record is committed with unless a row says otherwise.
+
+| Command | Result |
+|---|---|
+| The `selfhost_validator` release binary with `--include-ignored c5_`, built from the stage at `ff48e35c` with this pass's tests and corpus | Before. 5 of the new residual tests failed at their self-hosted assertions, the whole corpus failed with 20 unsound mutants and the sampled gate failed with 2 |
+| The same binary built from this tree, which is `cargo test --release -p keleusma --features self-host --test selfhost_validator c5_ -- --include-ignored` | After. 8 passed, the whole corpus in 2,739 s |
+| `cargo test --release -p keleusma --features self-host --test selfhost_validator -- --skip c5_the` | 12 passed, 3 filtered |
+| `cargo nextest run --workspace --release -E 'binary(~selfhost)'` | 1,024 run, 1,023 passed, 3 skipped. The one failure was the residency pin of `verify_typed.kel` in `the_fused_compile_holds_one_group_not_the_program`, which moved from 3,066 records and a peak of 570 to 3,844 and 604, was re-pinned, and then passed alone. The byte-identical self-compile of `verify_typed.kel` passed in that run |
+| `cargo nextest run --workspace --profile quick` | 2,916 run, 2,916 passed, 1 skipped |
+| `cargo test --release -p keleusma-cli --test validator reference_disagreement` | 1 passed |
+| `cargo clippy --tests --features signatures,shell,self-host -- -D warnings`, with `-p keleusma-cli --tests` and `--no-default-features -p keleusma --tests` | Passed, each checking `keleusma` |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, `cargo fmt --check` and `python3 scripts/changelog_fragments.py check` | Passed |
+
+The cost of the sampled gate in the debug profile of a continuous-integration shard is not
+measured. Remote continuous integration and every configuration other than the default
+features with `self-host` are not verified here.
+
+The first pass measured the following on 2026-11-02, on the tree it was committed with.
 
 | Command | Result |
 |---|---|
@@ -236,7 +345,3 @@ with.
 | `cargo nextest run --workspace --profile quick` | 2,902 run, 2,902 passed, 1 skipped |
 | `cargo clippy --tests --features signatures,shell,self-host -- -D warnings`, with `-p keleusma-cli --tests` and `--no-default-features -p keleusma --tests` | Passed, each checking `keleusma` |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` and `cargo fmt --check` | Passed |
-
-The sampled gate took 97 s in the release self-host tier. Its cost in the debug profile of a
-continuous-integration shard is not measured. Remote continuous integration and every
-configuration other than the default features with `self-host` are not verified here.

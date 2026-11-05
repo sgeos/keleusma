@@ -118,8 +118,7 @@ fn sites_stored_into_slots(m: &Module) -> (usize, usize) {
                 let vis = m
                     .data_layout
                     .as_ref()
-                    .and_then(|dl| dl.slots.get(*slot as usize))
-                    .map(|s| s.visibility);
+                    .and_then(|dl| dl.slot_visibility(*slot as usize));
                 match vis {
                     Some(SlotVisibility::Private) => private += 1,
                     _ => shared += 1,
@@ -145,10 +144,9 @@ fn sites_stored_into_slots(m: &Module) -> (usize, usize) {
 
 /// METHOD 2 — what the module's own descriptors say.
 fn descriptors_say_slot_homed(m: &Module) -> bool {
-    let baked = m
-        .data_layout
-        .as_ref()
-        .is_some_and(|dl| !dl.private_composite_layout.is_empty());
+    let baked = m.data_layout.as_ref().is_some_and(|dl| {
+        !keleusma_native::data_view::private_composite_layout(Some(dl)).is_empty()
+    });
     baked || m.persistent_composite_bytes > 0
 }
 

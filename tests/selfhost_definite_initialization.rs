@@ -25,7 +25,7 @@
 //! the reference by a different iteration, which is the argument for agreement in
 //! general, and these cases are evidence for it, not a proof.
 #![cfg(feature = "self-host")]
-use keleusma::bytecode::{ConstValue, Module, Op};
+use keleusma::bytecode::{Module, Op};
 use keleusma::selfhost::{
     VerificationVerdict, compile_src, initialization_rejects_via_kel, verify_module_via_kel,
 };
@@ -258,9 +258,13 @@ fn unit_initializers(module: &mut Module) -> usize {
         return 0;
     };
     let mut changed = 0;
-    for value in &mut layout.private_init {
-        if *value != ConstValue::Unit {
-            *value = ConstValue::Unit;
+    for f in layout
+        .fields
+        .iter_mut()
+        .filter(|f| f.visibility == keleusma::bytecode::SlotVisibility::Private)
+    {
+        if f.init != keleusma::bytecode::DataInit::Unit {
+            f.init = keleusma::bytecode::DataInit::Unit;
             changed += 1;
         }
     }
@@ -405,14 +409,18 @@ fn private_data_mutations_agree() {
             m.chunks[c].ops[ip] = Op::PopN(1);
             variants.push(m);
         }
-        let inits = base
-            .data_layout
-            .as_ref()
-            .map_or(0, |d| d.private_init.len());
-        for k in 0..inits {
+        let privates: Vec<usize> = base.data_layout.as_ref().map_or(Vec::new(), |d| {
+            d.fields
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.visibility == keleusma::bytecode::SlotVisibility::Private)
+                .map(|(i, _)| i)
+                .collect()
+        });
+        for &k in &privates {
             for &(c, ip) in &writes {
                 let mut m = base.clone();
-                m.data_layout.as_mut().unwrap().private_init[k] = ConstValue::Unit;
+                m.data_layout.as_mut().unwrap().fields[k].init = keleusma::bytecode::DataInit::Unit;
                 m.chunks[c].ops[ip] = Op::PopN(1);
                 variants.push(m);
             }

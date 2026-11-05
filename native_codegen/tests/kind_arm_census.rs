@@ -130,7 +130,7 @@ fn corpus_reach() -> (BTreeMap<(&'static str, &'static str), usize>, usize, usiz
             }
         }
         if let Some(dl) = m.data_layout.as_ref() {
-            for e in &dl.shared_layout {
+            for e in &dl.shared_slots() {
                 if let Some(k) = tag_to_kind(e.kind) {
                     *tally.entry(("shared slot", kind_name(k))).or_default() += 1;
                 }

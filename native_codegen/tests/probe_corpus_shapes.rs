@@ -2,7 +2,7 @@
 //!
 //! 57 of 58 lower; 14 are executed. This asks what the other 43 require, so the
 //! generic harness is built against measured shapes rather than assumed ones.
-use keleusma::bytecode::{Op, SlotVisibility};
+use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeMap;
 
@@ -80,12 +80,7 @@ fn probe_what_the_untested_modules_need() {
         let privs = m
             .data_layout
             .as_ref()
-            .map(|d| {
-                d.slots
-                    .iter()
-                    .filter(|s| s.visibility == SlotVisibility::Private)
-                    .count()
-            })
+            .map(|d| d.private_slot_count())
             .unwrap_or(0);
         let region: usize = m
             .chunks

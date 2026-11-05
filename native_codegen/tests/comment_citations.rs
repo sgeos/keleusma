@@ -620,30 +620,29 @@ fn resolvable_universe() -> BTreeSet<String> {
     universe
 }
 
-/// The directory prefixes under the native workflow's pull request path filter.
+/// The directory prefixes under the native jobs' path filter.
 ///
-/// Read from `native.yml` itself, so the universe and the trigger cannot drift
-/// apart. Only `dir/**` entries become prefixes. A single-file entry holds no Rust
-/// or Keleusma source.
+/// Read from `NATIVE_PATTERNS` in `scripts/ci_classify.py` itself, which selects
+/// the native jobs of `ci.yml` since 2026-11-04, so the universe and the trigger
+/// cannot drift apart. Only `dir/**` entries become prefixes. A single-file entry
+/// holds no Rust or Keleusma source.
 fn watched_prefixes() -> Vec<String> {
-    let text = std::fs::read_to_string(repo_root().join(".github/workflows/native.yml"))
-        .expect("the native workflow is readable");
-    let paths = text
-        .split("pull_request:")
+    let text = std::fs::read_to_string(repo_root().join("scripts/ci_classify.py"))
+        .expect("the change classifier is readable");
+    let patterns = text
+        .split("\nNATIVE_PATTERNS = (\n")
         .nth(1)
-        .and_then(|t| t.split("paths:").nth(1))
-        .expect("the native workflow filters pull requests by path");
-    let prefixes: Vec<String> = paths
+        .and_then(|t| t.split("\n)").next())
+        .expect("the change classifier declares NATIVE_PATTERNS");
+    let prefixes: Vec<String> = patterns
         .lines()
-        .map(str::trim)
-        .skip_while(|l| l.is_empty())
-        .map_while(|l| l.strip_prefix("- "))
-        .filter_map(|l| l.trim_matches('\'').strip_suffix("**").map(str::to_string))
+        .map(|l| l.trim().trim_end_matches(',').trim_matches('\''))
+        .filter_map(|l| l.strip_suffix("**").map(str::to_string))
         .collect();
     assert!(
         prefixes.iter().any(|p| p == "native_codegen/") && prefixes.iter().any(|p| p == "src/"),
-        "the native workflow's path filter parsed as {prefixes:?}, which omits this \
-         package or root `src/`. The parse is broken, not the filter."
+        "the native path filter parsed as {prefixes:?}, which omits this package or \
+         root `src/`. The parse is broken, not the filter."
     );
     prefixes
 }

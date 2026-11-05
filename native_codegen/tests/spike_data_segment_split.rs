@@ -17,7 +17,7 @@
 //! their encoding is part of the wire format.
 //!
 //! Reports rather than asserts, except for a guard against measuring nothing.
-use keleusma::bytecode::{Op, SlotVisibility};
+use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeMap;
 
@@ -59,12 +59,8 @@ fn spike_report_data_segment_split() {
         let Some(dl) = m.data_layout.as_ref() else {
             continue;
         };
-        let n_shared = dl
-            .slots
-            .iter()
-            .filter(|s| s.visibility == SlotVisibility::Shared)
-            .count();
-        if !dl.slots.is_empty() {
+        let n_shared = dl.shared_slot_count();
+        if dl.slot_count() != 0 {
             modules_with_data += 1;
         }
         for c in &m.chunks {
@@ -81,7 +77,7 @@ fn spike_report_data_segment_split() {
                     if s < n_shared {
                         shared += 1;
                         e.0 += 1;
-                    } else if s < dl.slots.len() {
+                    } else if s < dl.slot_count() {
                         private += 1;
                         e.1 += 1;
                     } else {
@@ -164,12 +160,7 @@ fn spike_report_data_segment_split() {
         let n_shared = m
             .data_layout
             .as_ref()
-            .map(|dl| {
-                dl.slots
-                    .iter()
-                    .filter(|s| s.visibility == SlotVisibility::Shared)
-                    .count()
-            })
+            .map(|dl| dl.shared_slot_count())
             .unwrap_or(0);
         for c in &m.chunks {
             if c.ops.iter().all(&lowered) {

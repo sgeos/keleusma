@@ -106,9 +106,14 @@ fn poke_every_reader(bytes: &[u8]) {
         let _ = v.word_bits_log2();
         let _ = v.schema_hash();
         if let Some(dl) = v.data_layout() {
+            for i in 0..dl.field_count().saturating_add(2) {
+                let _ = dl.field(i);
+                let _ = dl.field_name(i);
+                let _ = dl.field_init_value(i);
+            }
             for i in 0..dl.slot_count().saturating_add(2) {
-                let _ = dl.slot(i);
-                let _ = dl.slot_name(i);
+                let _ = dl.shared_slot(i);
+                let _ = dl.private_composite(i);
             }
         }
     }

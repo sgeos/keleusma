@@ -25,6 +25,7 @@ fn rejected(module: &Module, expected: fn(&TypedError) -> bool) {
         TypedError::SharedSlotOutOfBounds { .. }
             | TypedError::PrivateCompositeLayoutInvalid { .. }
             | TypedError::SharedLayoutCountMismatch { .. }
+            | TypedError::DataFieldInvalid { .. }
     ) {
         assert!(keleusma::selfhost::dl_reject_module_via_kel(module));
     } else {
@@ -177,20 +178,38 @@ fn layout_reconciliation_checks_prefix_count_and_private_order() {
         "struct P { n: Word } shared data s { a: Word, b: Word } private data p { a: P, b: P } fn main() -> Word { p.a = P { n: 1 }; p.b = P { n: 2 }; 7 }",
     );
     accepted(&m);
-    let mut count = m.clone();
-    count.data_layout.as_mut().unwrap().shared_layout.pop();
-    rejected(&count, |e| {
-        matches!(e, TypedError::SharedLayoutCountMismatch { .. })
+    // The fields must tile the slot space, which the field layout states in
+    // place of the per-slot table's count reconciliation.
+    let mut tiling = m.clone();
+    tiling.data_layout.as_mut().unwrap().fields[1].first_slot += 1;
+    rejected(&tiling, |e| {
+        matches!(e, TypedError::DataFieldInvalid { field: 1, .. })
     });
+    // A shared field after a private one breaks the shared prefix.
     let mut prefix = m.clone();
-    prefix.data_layout.as_mut().unwrap().slots[0].visibility = SlotVisibility::Private;
+    {
+        let first = &mut prefix.data_layout.as_mut().unwrap().fields[0];
+        first.visibility = SlotVisibility::Private;
+        first.offset = None;
+    }
     rejected(&prefix, |e| {
         matches!(e, TypedError::SharedLayoutCountMismatch { .. })
     });
+    // Two private composite fields whose placements are swapped overlap.
     let mut order = m.clone();
-    let private = &mut order.data_layout.as_mut().unwrap().private_composite_layout;
-    assert!(private.len() >= 2);
-    private.swap(0, 1);
+    {
+        let fields = &mut order.data_layout.as_mut().unwrap().fields;
+        let pooled: Vec<usize> = (0..fields.len())
+            .filter(|&i| {
+                fields[i].offset.is_some() && fields[i].visibility == SlotVisibility::Private
+            })
+            .collect();
+        assert!(pooled.len() >= 2);
+        let (a, b) = (pooled[0], pooled[1]);
+        let (oa, ob) = (fields[a].offset, fields[b].offset);
+        fields[a].offset = ob;
+        fields[b].offset = oa;
+    }
     rejected(&order, |e| {
         matches!(e, TypedError::PrivateCompositeLayoutInvalid { .. })
     });

@@ -346,6 +346,23 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // changed `codegen.kel`, `lexer.kel` and `parse.kel`. Nothing was added or
 // removed, and the derived figures the guard names passed unchanged in the
 // same run.
+//
+// **RE-PINNED 2026-11-04, on the `v0.2.3` line**, when the native gate began
+// running there. Upstream pull request 723, the self-hosted coverage residuals,
+// changed `codegen.kel`, `lexer.kel` and `parse.kel`, and upstream pull request
+// 725, the validator review, changed `verify_typed.kel`. Nothing was added or
+// removed. The derived figures the guard names were re-run by
+// `tools/backend-gate.sh` in both float configurations on the re-pinned tree.
+//
+// **RE-PINNED 2026-11-04 again, on the `v0.2.3` line.** Upstream pull request
+// 727, the C5 residuals, changed `verify_typed.kel`. Nothing was added or
+// removed. The derived figures the guard names were re-run by
+// `tools/backend-gate.sh` in both float configurations on the re-pinned tree.
+//
+// **RE-PINNED 2026-11-04, Encoding F.** V0.2.X's `feat/v02-array-encoding-f`
+// encodes the data layout as one record per declared field, which changed
+// `verify_datalayout.kel`, `wire.kel` and `wire_schema.kel`. Nothing was added
+// or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -554,26 +571,26 @@ const PINNED: &[(&str, u64)] = &[
     ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     // Absorption 116 omits the unreachable default of checked arithmetic.
-    ("src/selfhost/kel/codegen.kel", 0x7e6fcccc7be5dcec),
-    ("src/selfhost/kel/lexer.kel", 0x3014c193d7044f02),
+    ("src/selfhost/kel/codegen.kel", 0x2f8c8fb8f73ee919),
+    ("src/selfhost/kel/lexer.kel", 0xc0141bf600a7be4d),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
     // Absorption 116 lowers a cast to the operand's own type as identity.
-    ("src/selfhost/kel/parse.kel", 0xe01bbd954c317ed2),
+    ("src/selfhost/kel/parse.kel", 0xf856e068ad8f8597),
     ("src/selfhost/kel/reconstruct.kel", 0x5a5314dbf0987c1c),
     // Absorption 119 adds the template header scan as the fifteenth stage.
     ("src/selfhost/kel/template_scan.kel", 0x2389d34aaba8c2c7),
-    ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
+    ("src/selfhost/kel/verify_datalayout.kel", 0xe20a0b1cb2ef8962),
     ("src/selfhost/kel/verify_depth.kel", 0x925cd38d9f5c04ed),
     // Absorption 116 rejects a native index past the native table.
     ("src/selfhost/kel/verify_structural.kel", 0x3c716a472f94e1c3),
     // Absorption 119 adds the flat Text layout proof to the typed stage.
-    ("src/selfhost/kel/verify_typed.kel", 0x486783acf626b02d),
+    ("src/selfhost/kel/verify_typed.kel", 0xb9293fbb84a87968),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x12e9047be52a0423),
-    ("src/selfhost/kel/wire.kel", 0x9ce66ccc1eb03277),
+    ("src/selfhost/kel/wire.kel", 0xaf3024b3559a5f2f),
     ("src/selfhost/kel/wire_debug.kel", 0xa98ddf75d7e9f7e8),
-    ("src/selfhost/kel/wire_schema.kel", 0x6f32806acb4b4763),
+    ("src/selfhost/kel/wire_schema.kel", 0x8eaa8c0cc92918ea),
 ];
 
 /// **WHY TWO CENSUSES OVER DIFFERENT POPULATIONS REPORT THE SAME TOTAL.**

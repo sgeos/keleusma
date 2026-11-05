@@ -28,14 +28,8 @@ pub enum WireSchemaRecord {
     EnumVariantRecord(schema::EnumVariantRecord),
     /// Decoded `ENUM_LAYOUTS` record.
     EnumLayoutRecord(schema::EnumLayoutRecord),
-    /// Decoded `DATA_SLOTS` record.
-    DataSlotRecord(schema::DataSlotRecord),
-    /// Decoded `SHARED_LAYOUT` record.
-    SharedSlotRecord(schema::SharedSlotRecord),
-    /// Decoded `PRIVATE_COMPOSITE` record.
-    PrivateCompositeRecord(schema::PrivateCompositeRecord),
-    /// Decoded `DATA_INIT` record.
-    DataInitRecord(schema::DataInitRecord),
+    /// Decoded `DATA_FIELDS` record.
+    DataFieldRecord(schema::DataFieldRecord),
     /// Decoded `CHUNKS` record.
     ChunkRecord(schema::ChunkRecord),
     /// Decoded `NATIVES` record.
@@ -59,10 +53,7 @@ impl WireSchemaRecord {
             Self::StructTemplateRecord(_) => schema::kind::STRUCT_TEMPLATES,
             Self::EnumVariantRecord(_) => schema::kind::ENUM_VARIANTS,
             Self::EnumLayoutRecord(_) => schema::kind::ENUM_LAYOUTS,
-            Self::DataSlotRecord(_) => schema::kind::DATA_SLOTS,
-            Self::SharedSlotRecord(_) => schema::kind::SHARED_LAYOUT,
-            Self::PrivateCompositeRecord(_) => schema::kind::PRIVATE_COMPOSITE,
-            Self::DataInitRecord(_) => schema::kind::DATA_INIT,
+            Self::DataFieldRecord(_) => schema::kind::DATA_FIELDS,
             Self::ChunkRecord(_) => schema::kind::CHUNKS,
             Self::NativeRecord(_) => schema::kind::NATIVES,
             Self::HeaderRecord(_) => schema::kind::HEADER,
@@ -155,38 +146,36 @@ fn materialize(kind: u16, fields: &[i64]) -> Result<WireSchemaRecord, SelfHostEr
                 min_payload: word(*min_payload)?,
             })
         }
-        (schema::kind::DATA_SLOTS, [name, visibility, reserved, run]) => {
-            WireSchemaRecord::DataSlotRecord(schema::DataSlotRecord {
-                name: word(*name)?,
-                visibility: byte(*visibility)?,
-                reserved: byte(*reserved)?,
-                run: short(*run)?,
-            })
-        }
-        (schema::kind::SHARED_LAYOUT, [offset, kind, reserved, len, first_slot, run, stride]) => {
-            WireSchemaRecord::SharedSlotRecord(schema::SharedSlotRecord {
-                offset: word(*offset)?,
-                kind: byte(*kind)?,
-                reserved: byte(*reserved)?,
-                len: short(*len)?,
-                first_slot: word(*first_slot)?,
-                run: short(*run)?,
-                stride: short(*stride)?,
-            })
-        }
-        (schema::kind::PRIVATE_COMPOSITE, [slot, reserved, offset]) => {
-            WireSchemaRecord::PrivateCompositeRecord(schema::PrivateCompositeRecord {
-                slot: short(*slot)?,
-                reserved: short(*reserved)?,
-                offset: word(*offset)?,
-            })
-        }
-        (schema::kind::DATA_INIT, [first, count]) => {
-            WireSchemaRecord::DataInitRecord(schema::DataInitRecord {
-                first: word(*first)?,
-                count: word(*count)?,
-            })
-        }
+        (
+            schema::kind::DATA_FIELDS,
+            [
+                name,
+                first_slot,
+                count,
+                offset,
+                stride,
+                elem_len,
+                kind,
+                visibility,
+                init,
+                reserved0,
+                reserved1,
+                init_const,
+            ],
+        ) => WireSchemaRecord::DataFieldRecord(schema::DataFieldRecord {
+            name: word(*name)?,
+            first_slot: word(*first_slot)?,
+            count: word(*count)?,
+            offset: word(*offset)?,
+            stride: word(*stride)?,
+            elem_len: short(*elem_len)?,
+            kind: byte(*kind)?,
+            visibility: byte(*visibility)?,
+            init: byte(*init)?,
+            reserved0: byte(*reserved0)?,
+            reserved1: short(*reserved1)?,
+            init_const: word(*init_const)?,
+        }),
         (
             schema::kind::CHUNKS,
             [
@@ -368,17 +357,8 @@ mod tests {
             schema::kind::ENUM_LAYOUTS => {
                 WireSchemaRecord::EnumLayoutRecord(schema::EnumLayoutRecord::read_record(bytes)?)
             }
-            schema::kind::DATA_SLOTS => {
-                WireSchemaRecord::DataSlotRecord(schema::DataSlotRecord::read_record(bytes)?)
-            }
-            schema::kind::SHARED_LAYOUT => {
-                WireSchemaRecord::SharedSlotRecord(schema::SharedSlotRecord::read_record(bytes)?)
-            }
-            schema::kind::PRIVATE_COMPOSITE => WireSchemaRecord::PrivateCompositeRecord(
-                schema::PrivateCompositeRecord::read_record(bytes)?,
-            ),
-            schema::kind::DATA_INIT => {
-                WireSchemaRecord::DataInitRecord(schema::DataInitRecord::read_record(bytes)?)
+            schema::kind::DATA_FIELDS => {
+                WireSchemaRecord::DataFieldRecord(schema::DataFieldRecord::read_record(bytes)?)
             }
             schema::kind::CHUNKS => {
                 WireSchemaRecord::ChunkRecord(schema::ChunkRecord::read_record(bytes)?)
@@ -407,10 +387,7 @@ mod tests {
             schema::kind::STRUCT_TEMPLATES => schema::StructTemplateRecord::STRIDE,
             schema::kind::ENUM_VARIANTS => schema::EnumVariantRecord::STRIDE,
             schema::kind::ENUM_LAYOUTS => schema::EnumLayoutRecord::STRIDE,
-            schema::kind::DATA_SLOTS => schema::DataSlotRecord::STRIDE,
-            schema::kind::SHARED_LAYOUT => schema::SharedSlotRecord::STRIDE,
-            schema::kind::PRIVATE_COMPOSITE => schema::PrivateCompositeRecord::STRIDE,
-            schema::kind::DATA_INIT => schema::DataInitRecord::STRIDE,
+            schema::kind::DATA_FIELDS => schema::DataFieldRecord::STRIDE,
             schema::kind::CHUNKS => schema::ChunkRecord::STRIDE,
             schema::kind::NATIVES => schema::NativeRecord::STRIDE,
             schema::kind::HEADER => schema::HeaderRecord::STRIDE,
@@ -420,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn all_u16_identifiers_obey_the_seventeen_record_kind_contract() {
+    fn all_u16_identifiers_obey_the_fourteen_record_kind_contract() {
         with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
             let mut accepted = 0;
             for kind in 0..=u16::MAX {
@@ -437,7 +414,8 @@ mod tests {
                     (a, b) => panic!("kind {kind}: {a:?} versus {b:?}"),
                 }
             }
-            assert_eq!(accepted, 17);
+            // Fourteen since Encoding F replaced four data-layout kinds with one.
+            assert_eq!(accepted, 14);
             Ok(())
         })
         .unwrap();
@@ -447,7 +425,7 @@ mod tests {
     fn every_record_field_matches_derived_reader_for_full_width_patterns() {
         with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
             let mut compared = 0;
-            for kind in 0x10..=0x23 {
+            for kind in 0x10..=0x27 {
                 let Some(width) = stride(kind) else { continue };
                 let mut bytes = Vec::new();
                 for seed in 0..=255u8 {
@@ -473,7 +451,7 @@ mod tests {
                     assert!(decode_records(vm, shared, kind, &bytes[..len]).is_err());
                 }
             }
-            assert_eq!(compared, 17 * 258);
+            assert_eq!(compared, 14 * 258);
             std::eprintln!("compared {compared} fixed schema records");
             Ok(())
         })

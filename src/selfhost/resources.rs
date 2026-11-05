@@ -124,10 +124,7 @@ fn chunk_bounds(
     ] {
         worker.set(field, value)?;
     }
-    let layout = module
-        .data_layout
-        .as_ref()
-        .map_or(&[][..], |d| &d.shared_layout);
+    let layout = module.data_layout.as_ref();
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         let (opk, slot, cval, cint) = analyze_opk(op, chunk);

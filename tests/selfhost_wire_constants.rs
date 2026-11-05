@@ -2,7 +2,7 @@
 #![cfg(feature = "self-host")]
 
 use keleusma::bytecode::{
-    ConstValue, DataLayout, DataSlot, Module, SlotVisibility, StructTemplate,
+    ConstValue, DataField, DataInit, DataLayout, Module, SHARED_SLOT_COMPOSITE_FLAG, StructTemplate,
 };
 use keleusma::selfhost::wire_module_artifact_via_kel;
 
@@ -86,16 +86,16 @@ fn initializer_roots_share_the_same_forest_with_chunk_roots() {
         "child".into(),
     )])];
     module.data_layout = Some(DataLayout {
-        slots: vec![DataSlot {
-            name: "d.value".into(),
-            visibility: SlotVisibility::Private,
-        }],
-        shared_layout: vec![],
-        private_composite_layout: vec![],
-        private_init: vec![ConstValue::Array(vec![
-            ConstValue::Int(4),
-            ConstValue::StaticStr("initializer".into()),
-        ])],
+        fields: vec![DataField::private(
+            "d.value",
+            0,
+            1,
+            SHARED_SLOT_COMPOSITE_FLAG | 1,
+            DataInit::Const(ConstValue::Array(vec![
+                ConstValue::Int(4),
+                ConstValue::StaticStr("initializer".into()),
+            ])),
+        )],
     });
     module.private_data_bytes = 32;
     let bytes = compare(&module);
@@ -104,7 +104,8 @@ fn initializer_roots_share_the_same_forest_with_chunk_roots() {
     let layout = keleusma::wire_schema::DataLayoutTable::parse(&bytes[at..at + len])
         .unwrap()
         .unwrap();
-    assert_eq!(layout.private_init_range(), (1, 1));
+    // The initialiser root follows the one chunk root.
+    assert_eq!(layout.field(0).unwrap().init_const, 1);
     module.chunks.clear();
     module.signatures.clear();
     module.entry_point = None;

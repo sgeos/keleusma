@@ -34,7 +34,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md) | Current first-pass self-hosting requirements, evidence and remaining integration work |
 | [ORDER2_COMPLETION_PLAN.md](./ORDER2_COMPLETION_PLAN.md) | Full first-pass validator requirements and implementation evidence |
 | [ORDER2_COMPLETION_AUDIT.md](./ORDER2_COMPLETION_AUDIT.md) | Validator completion evidence, verification receipts and retained reference boundary |
-| [C5_SELFHOSTED_VALIDATOR_REVIEW.md](./C5_SELFHOSTED_VALIDATOR_REVIEW.md) | Condition C5, the review of the self-hosted validator against the reference verifier: check inventory, mutation results, three typed-stage defects repaired, two open soundness residuals, verdict not met |
+| [C5_SELFHOSTED_VALIDATOR_REVIEW.md](./C5_SELFHOSTED_VALIDATOR_REVIEW.md) | Condition C5, the review of the self-hosted validator against the reference verifier: check inventory, mutation results, three typed-stage defects and both soundness residuals repaired, verdict met for the corpus scope |
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
 | [FLAT_TEXT_LAYOUT_PROOF.md](./FLAT_TEXT_LAYOUT_PROOF.md) | The design of the typed pass that proves a flat Text field is written only from text, and where it cannot reach |
@@ -49,6 +49,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER4_COMPLETION_AUDIT.md](./ORDER4_COMPLETION_AUDIT.md) | Hosted-runtime completion evidence, bound composition, residual limits and receipts |
 | [ORDER4_HOSTED_RUNTIME_PLAN.md](./ORDER4_HOSTED_RUNTIME_PLAN.md) | Order 4 rulings, design, bound composition and slice record for the hosted runtime |
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
+| [NESTED_LOOP_ARENAS.md](./NESTED_LOOP_ARENAS.md) | **Open, awaiting answers**: what an inner `loop` Reset does to the arena and to hot reload when a `loop` calls a `loop`, measured sound today, with per-loop arena designs and seven lettered questions |
 | [STREAM_SPILL_LAYOUT.md](./STREAM_SPILL_LAYOUT.md) | **Open, framed not taken**: the two remaining resumable-stream refusals are one question — operand entries live in SSA values and do not survive a return — needing a statically sized ephemeral slice; the multi-parameter refusal is separated out, because that shape FAULTS on the reference |
 | [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |
 | [IS_STRUCT_DISPOSITION.md](./IS_STRUCT_DISPOSITION.md) | `Op::IsStruct` intent, producers, and disposition: **keep it** — specified, retained, no source-level producer as of 2026-08-24, and still reachable in bytecode |

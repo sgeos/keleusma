@@ -53,8 +53,8 @@ impl<T: WireRecord> StrideBytes for T {
 }
 
 use crate::bytecode::{
-    BlockType, ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, TypeTag,
-    WireShape,
+    BlockType, ChunkSignature, ConstValue, DataInit, DataLayout, EnumLayout, StructTemplate,
+    TypeTag, WireShape,
 };
 
 /// Region kinds. Assigned explicitly rather than by declaration order, so
@@ -80,16 +80,19 @@ pub mod kind {
     pub const ENUM_VARIANTS: u16 = 0x0018;
     /// Per-enum-type layout descriptors.
     pub const ENUM_LAYOUTS: u16 = 0x0019;
-    /// Data-segment slots. **Presence of this region is what distinguishes a
-    /// module with a data layout from one without**, so an absent region means
-    /// `None` while an empty one means `Some` with no slots.
-    pub const DATA_SLOTS: u16 = 0x001A;
-    /// Per-shared-slot byte layout in the host buffer.
-    pub const SHARED_LAYOUT: u16 = 0x001B;
-    /// Persistent-pool placement of private composite slots.
-    pub const PRIVATE_COMPOSITE: u16 = 0x001C;
-    /// The private-slot initialiser range into the constant table.
-    pub const DATA_INIT: u16 = 0x001D;
+    /// **Retired, and refused on read.** The four regions that carried the data
+    /// layout before Encoding F, `0x001A` the per-run slot names, `0x001B` the
+    /// per-run shared layout, `0x001C` the per-element private composite
+    /// placements and `0x001D` the private initialiser range. The operator
+    /// replaced them with [`DATA_FIELDS`] on 2026-10-31.
+    ///
+    /// A kind number that has meant one thing cannot later mean another
+    /// without a version break, so these four are never reused. A reader that
+    /// finds any of them refuses the artifact with
+    /// [`super::SchemaError::RetiredRegion`] rather than reading it as a module
+    /// with no data layout, which is what their absence from the new reader
+    /// would otherwise make it.
+    pub const RETIRED_DATA_LAYOUT: [u16; 4] = [0x001A, 0x001B, 0x001C, 0x001D];
     /// Flat bytes: every chunk's parameter type tags, concatenated.
     ///
     /// A byte pool rather than a record table because a type tag is one byte and
@@ -113,6 +116,15 @@ pub mod kind {
     /// with two shapes and no names caught it. Independent regions carry both
     /// lengths, which is what fidelity requires.
     pub const NATIVE_RETURNS: u16 = 0x0023;
+    /// One [`super::DataFieldRecord`] per declared data field. **Presence of
+    /// this region is what distinguishes a module with a data layout from one
+    /// without**, so an absent region means `None` while an empty one means
+    /// `Some` with no fields.
+    ///
+    /// Numbered after the reserved authenticity kinds rather than in the place
+    /// of the four regions it replaced, which [`RETIRED_DATA_LAYOUT`] keeps out
+    /// of use.
+    pub const DATA_FIELDS: u16 = 0x0027;
 
     // --- RESERVED, AND DELIBERATELY NOT EMITTED -------------------------------
     //
@@ -959,6 +971,18 @@ pub enum SchemaError {
     /// Refused rather than ignored, so that a future additive change is
     /// detected by an older reader instead of silently dropped.
     UnknownHeaderFlags(u8),
+    /// The artifact carries a region of a kind this format has retired, which
+    /// [`kind::RETIRED_DATA_LAYOUT`] lists. Carries the kind.
+    ///
+    /// Refused rather than skipped, because skipping the retired data-layout
+    /// regions would read a module that has a data block as one that has none.
+    RetiredRegion(u16),
+    /// A data field record breaks an invariant of the layout: a zero count, a
+    /// `first_slot` that is not the running sum of the counts before it, a
+    /// shared field after a private one, a non-zero reserved byte, an
+    /// initialiser form its visibility or kind does not admit, or an offset
+    /// whose last element is not representable.
+    BadDataField,
 }
 
 impl From<WireError> for SchemaError {
@@ -1958,94 +1982,85 @@ pub fn encode_layouts(
 // Data layout (stage 2b, increment 4)
 // ---------------------------------------------------------------------------
 
-/// One named data slot. A single word.
-#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DataSlotRecord {
-    /// Name index of the slot name.
-    pub name: u32,
-    /// See [`visibility_tag`].
-    pub visibility: u8,
-    /// Reserved.
-    pub reserved: u8,
-    /// RUN LENGTH: how many consecutive slots this record stands for, all
-    /// sharing this name and visibility. Never zero.
-    ///
-    /// An array declares one slot per element and every element carries the
-    /// ARRAY's name, so an array is exactly such a run. Emitting one record per
-    /// element made this table scale with the element count -- 3,166,272 bytes
-    /// for `lexer`. A `u16` caps a single record at 65,535 elements; a longer
-    /// array simply emits another record, which is why the field needs no
-    /// escape value.
-    ///
-    /// This is an ENCODING detail. `slot_count` still reports logical slots and
-    /// `Op::GetData`/`SetData` operands are still logical slot indices; nothing
-    /// about addressing changes.
-    pub run: u16,
-}
-
-/// A RUN of consecutive shared slots sharing a kind and a length, whose byte
-/// offsets advance by a constant stride. Two words.
+/// One declared data field. Four words.
 ///
-/// # Why a run and not a slot
+/// # Encoding F
 ///
-/// An array declares one shared slot per element, all with the same kind and
-/// length and evenly spaced, so an array is exactly such a run. Emitting one
-/// record per element made this table scale with the ELEMENT COUNT. Measured
-/// across all eleven stage sources: 643,276 slots collapse to 18 runs, and the
-/// table goes from 5,146,208 bytes to 400.
-///
-/// The trade is not free and was measured rather than assumed. This record is
-/// TWICE the width of the per-slot record it replaces, so the encoding is a
-/// PESSIMISATION below a mean run of two. The measured mean is 35,738.
-/// [`tests/shared_layout_runs.rs`](../../tests/shared_layout_runs.rs) pins that
-/// property, because it is a fact about how stages DECLARE shared data rather
-/// than about this encoder, and a future stage declaring many small distinct
-/// shared slots would silently turn the encoding into a size regression.
+/// The operator chose this encoding on 2026-10-31, recorded in
+/// `docs/decisions/ARRAY_WIRE_SLOT_DESIGN.md`. It replaced four regions, the
+/// per-run `DATA_SLOTS` and `SHARED_LAYOUT` tables, the per-element
+/// `PRIVATE_COMPOSITE` table and the `DATA_INIT` range, with this one record per
+/// declared field. Every data-layout cost on the wire, and every decode cost,
+/// is therefore a function of the FIELD count for every element kind and
+/// visibility, where before a private `Byte` array cost sixteen bytes and a
+/// private array of composites twenty-four bytes per element.
 ///
 /// # Why `first_slot` is stored rather than derived
 ///
 /// [`DataLayoutTable::shared_slot`] resolves a LOGICAL slot index on the
-/// `get_shared`/`set_shared` path, which runs on every host access to a shared
-/// slot. Deriving each run's first index would mean a prefix sum, so a lookup
-/// would scan. Storing it makes the lookup a binary search whose bound is
-/// `log2(records)` and, crucially, is STATIC rather than data-dependent. With
-/// one to six records per stage a scan would in fact be fast today; a
-/// data-dependent bound is the thing this project does not sell.
+/// `get_shared`/`set_shared` path. Deriving each field's first slot would mean
+/// a prefix sum, so a lookup would scan. Storing it makes the lookup a binary
+/// search whose bound is the logarithm of the field count and is static rather
+/// than data-dependent. The decoder refuses a table whose `first_slot` values
+/// are not exactly the running sum of the counts, so the redundancy cannot
+/// disagree with itself.
 ///
 /// # Why `stride` is stored rather than derived
 ///
-/// A scalar run advances by the kind's size and a composite run by `len`.
-/// Deriving it would put a kind-to-size table on BOTH the Rust and the
-/// Keleusma side, and cross-language duplication of exactly that shape produced
-/// three separate defects on 2026-08-12.
+/// A scalar element advances by the kind's size and a composite element by
+/// `elem_len`. Deriving it would put a kind-to-size table on BOTH the Rust and
+/// the Keleusma side, and cross-language duplication of exactly that shape
+/// produced three separate defects on 2026-08-12.
 #[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SharedSlotRecord {
-    /// Byte offset of the run's FIRST slot within the host buffer.
-    pub offset: u32,
-    /// Scalar or composite kind tag; the high bit marks a composite.
-    pub kind: u8,
-    /// Reserved; keeps `len` at a fixed offset.
-    pub reserved: u8,
-    /// Flat composite body length; zero for a scalar slot.
-    pub len: u16,
-    /// Logical slot index of the run's first slot. Runs are emitted in
-    /// ascending slot order and are contiguous, so this is what makes a lookup
-    /// a binary search.
+pub struct DataFieldRecord {
+    /// Name index of `block.field`.
+    pub name: u32,
+    /// Logical slot index of element zero.
     pub first_slot: u32,
-    /// How many consecutive slots this record stands for. Never zero. A `u16`
-    /// caps a record at 65,535 slots; a longer run simply emits another record,
-    /// exactly as [`DataSlotRecord::run`] does, which is why the field needs no
-    /// escape value. `lexer`'s largest run is 393,216 and chunks into seven.
-    pub run: u16,
-    /// Byte delta between consecutive slots in the run. Zero when `run` is 1,
-    /// where it is unused. A run is only formed when the delta fits a `u16`.
-    pub stride: u16,
+    /// Element count. Never zero, and `first_slot + count` is at most
+    /// [`crate::bytecode::MAX_DATA_ADDR`].
+    pub count: u32,
+    /// Byte offset of element zero in the shared host buffer or the persistent
+    /// composite pool, or [`ABSENT`] for a private field with no pool home.
+    pub offset: u32,
+    /// Byte distance between consecutive elements. Zero when `count` is one or
+    /// when `offset` is [`ABSENT`].
+    pub stride: u32,
+    /// Flat composite body length of one element, zero for a scalar element.
+    pub elem_len: u16,
+    /// Scalar or composite kind tag of one element; the high bit marks a
+    /// composite, as [`crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG`] states.
+    pub kind: u8,
+    /// See [`visibility_tag`].
+    pub visibility: u8,
+    /// See [`init_form`].
+    pub init: u8,
+    /// Reserved, zero, refused otherwise.
+    pub reserved0: u8,
+    /// Reserved, zero, refused otherwise.
+    pub reserved1: u16,
+    /// `CONSTS` index of the initialiser when `init` is
+    /// [`init_form::CONST`], [`ABSENT`] otherwise.
+    pub init_const: u32,
 }
 
-/// One shared slot's byte layout, resolved from the run that contains it.
+/// The `init` byte of a [`DataFieldRecord`].
+pub mod init_form {
+    /// For a private field, every element starts as the zero of its scalar
+    /// kind, which must be `Bool`, `Byte`, `Int`, `Fixed` or `Float`. For a
+    /// shared field, the host initialises it, and this is the only form a
+    /// shared field may carry.
+    pub const ZERO: u8 = 0;
+    /// Every element starts as `Unit`, under the write-before-read contract.
+    pub const UNIT: u8 = 1;
+    /// Every element starts as the constant at `init_const`.
+    pub const CONST: u8 = 2;
+}
+
+/// One shared slot's byte layout, resolved from the field that contains it.
 ///
 /// This is what a LOGICAL slot lookup returns. It is deliberately a distinct
-/// type from [`SharedSlotRecord`]: the record is run-space and the resolved
+/// type from [`DataFieldRecord`]: the record is field-space and the resolved
 /// entry is slot-space, and letting one type serve both is how a logical index
 /// gets passed where a record index belongs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2058,48 +2073,14 @@ pub struct SharedSlotEntry {
     pub len: u16,
 }
 
-/// One private composite slot's placement in the persistent pool. A single word.
-#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrivateCompositeRecord {
-    /// Unified data-slot index.
-    pub slot: u16,
-    /// Reserved; keeps `offset` at a fixed offset.
-    pub reserved: u16,
-    /// Byte offset within the persistent composite pool.
-    pub offset: u32,
-}
-
-/// The private-slot initialiser range into the shared constant table.
-#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DataInitRecord {
-    /// First constant index.
-    pub first: u32,
-    /// Number of initialisers.
-    pub count: u32,
-}
-
-/// Whether a data layout's private-slot initialisers are elided from the
-/// constant table.
-///
-/// # Why this is one predicate rather than the same condition written twice
-///
-/// [`SchemaBuilder::add_data_layout`] decides the elision and
-/// [`constant_roots`] has to predict it. Those two disagreeing is not a state
-/// anything would notice: a model that counts an elided pool over-counts the
-/// region by the whole data segment, which on a pipeline stage is most of the
-/// constants the module carries. Sharing the predicate makes the disagreement
-/// impossible instead of testable.
-///
-/// Only the WHOLLY default case is elided. An empty pool is deliberately not
-/// reported as elided: it contributes nothing either way, and folding it in
-/// would make the [`ABSENT`] sentinel stand for two different situations.
-#[must_use]
-pub fn private_init_is_elided(layout: &DataLayout) -> bool {
-    !layout.private_init.is_empty()
-        && layout
-            .private_init
-            .iter()
-            .all(|v| matches!(v, ConstValue::Int(0)))
+/// The constant roots the data layout contributes to the shared table, in the
+/// order [`SchemaBuilder::add_data_layout`] contributes them: one per field
+/// whose initialiser is an explicit constant, in field order.
+pub fn data_init_roots(layout: &DataLayout) -> impl Iterator<Item = &ConstValue> + Clone {
+    layout.fields.iter().filter_map(|f| match &f.init {
+        DataInit::Const(v) => Some(v),
+        DataInit::Zero | DataInit::Unit => None,
+    })
 }
 
 /// The constant roots [`encode_aux_body`] contributes to the shared table, in
@@ -2114,9 +2095,10 @@ pub fn private_init_is_elided(layout: &DataLayout) -> bool {
 ///
 /// # The order is part of the contract
 ///
-/// Every chunk's constants in chunk order, then the data layout's private-slot
-/// initialisers. Roots occupy the shared table's prefix in contribution order
-/// (see [`SchemaBuilder::add_constant_pool`]), so this order is what indexes a
+/// Every chunk's constants in chunk order, then each data field's explicit
+/// initialiser in field order, which is [`data_init_roots`]. Roots occupy the
+/// shared table's prefix in contribution order (see
+/// [`SchemaBuilder::add_constant_pool`]), so this order is what indexes a
 /// record, not merely what fills the table.
 ///
 /// # What it does NOT tell you
@@ -2140,10 +2122,8 @@ pub fn constant_roots(aux: &crate::wire_format::WireAuxBody) -> Vec<ConstValue> 
 ///
 /// A caller with a `Module` would otherwise build a `WireAuxBody` to ask this
 /// question, and that build is a SECOND CONSTRUCTION of the encoder's input —
-/// sixteen fields, of which two matter here. This tree already carries one such
-/// approximation in its tests and has recorded it as worth removing. Both entry
-/// points share one body, so the ORDER and the elision are stated once however
-/// the caller arrives.
+/// sixteen fields, of which two matter here. Both entry points share one body,
+/// so the ORDER is stated once however the caller arrives.
 ///
 /// `constant_roots_of_module(m)` and `constant_roots(&aux_of(m))` agree by
 /// construction, and a test asserts it anyway, because "by construction" has been
@@ -2165,21 +2145,19 @@ fn constant_roots_from<'a>(
     for pool in chunk_pools {
         roots.extend_from_slice(pool);
     }
-    if let Some(dl) = layout
-        && !private_init_is_elided(dl)
-    {
-        roots.extend_from_slice(&dl.private_init);
+    if let Some(dl) = layout {
+        roots.extend(data_init_roots(dl).cloned());
     }
     roots
 }
 
 impl SchemaBuilder {
-    /// Adds the data-segment layout.
+    /// Adds the data-segment layout as one `DATA_FIELDS` record per field.
     ///
-    /// `private_init` is a forest of constant trees, so it goes through
-    /// [`Self::add_constant_pool`] and is referenced by range — the same shared
-    /// table a chunk's constants use, rather than a parallel copy of the
-    /// flattening machinery.
+    /// Each explicit initialiser goes through [`Self::add_constant_pool`] as a
+    /// single-root pool, in field order, before any record is written, so the
+    /// constant indices the records carry are the ones [`constant_roots`]
+    /// predicts.
     ///
     /// # Errors
     ///
@@ -2187,144 +2165,142 @@ impl SchemaBuilder {
     pub fn add_data_layout(&mut self, layout: &DataLayout) -> Result<(), WireError> {
         use crate::bytecode::SlotVisibility;
 
-        // THE ALL-DEFAULT CASE CARRIES NO INFORMATION AND IS ELIDED.
-        //
-        // A private slot with no explicit initialiser is zero, and the compiler
-        // materialises that as one `ConstValue::Int(0)` per slot WORD. Those
-        // reach the constant pool as one sixteen-byte record each, and they
-        // dominate the artifact: measured across the eleven pipeline stages,
-        // 38,087 of the 40,332 constants are private-slot initialisers and every
-        // one of them is zero, which is roughly 85% of the whole auxiliary body
-        // spent encoding a value the decoder can supply for nothing.
-        //
-        // `first` is set to [`ABSENT`] rather than to a real index, so the
-        // elision is a SENTINEL the decoder must recognise rather than an
-        // absence it has to infer. A reader that does not handle it fails on the
-        // range instead of quietly producing a wrong pool, which is why
-        // `decode_constant_pools` rejects the sentinel explicitly.
-        //
-        // Only the wholly-default case is elided. A layout with any non-default
-        // initialiser is stored in full, as before. That is the shape the corpus
-        // has; a mostly-default layout with a few set values would want a sparse
-        // encoding, and none exists to measure.
-        let count = layout.private_init.len() as u32;
-        let (first, count) = if private_init_is_elided(layout) {
-            (ABSENT, count)
-        } else {
-            self.add_constant_pool(&layout.private_init)
-        };
-
-        let slots = self.b.region(kind::DATA_SLOTS, 0)?;
-        let shared = self.b.region(kind::SHARED_LAYOUT, 0)?;
-        let privcomp = self.b.region(kind::PRIVATE_COMPOSITE, 0)?;
-        let init = self.b.region(kind::DATA_INIT, 0)?;
-
-        // Consecutive slots sharing a name and visibility collapse into one
-        // record with a run length. Grouping is on the ENCODED pair, so two
-        // adjacent arrays that happen to share a name and visibility merge into
-        // one run -- which is correct, because the expansion is identical.
-        let mut i = 0usize;
-        while i < layout.slots.len() {
-            let s = &layout.slots[i];
-            let vis = match s.visibility {
-                SlotVisibility::Shared => visibility_tag::SHARED,
-                SlotVisibility::Private => visibility_tag::PRIVATE,
-            };
-            let mut n = 1usize;
-            while i + n < layout.slots.len()
-                && layout.slots[i + n].name == s.name
-                && layout.slots[i + n].visibility == s.visibility
-            {
-                n += 1;
-            }
-            let name = self.names.intern(&s.name);
-            // Chunked at `u16::MAX` rather than rejected: a longer array is
-            // legal and simply needs a second record.
-            let mut left = n;
-            while left > 0 {
-                let take = left.min(u16::MAX as usize);
-                self.b.push_record(
-                    slots,
-                    &DataSlotRecord {
-                        name,
-                        visibility: vis,
-                        reserved: 0,
-                        run: take as u16,
-                    },
-                );
-                left -= take;
-            }
-            i += n;
+        let mut init_consts = Vec::with_capacity(layout.fields.len());
+        for f in &layout.fields {
+            init_consts.push(match &f.init {
+                DataInit::Const(v) => self.add_constant_pool(core::slice::from_ref(v)).0,
+                DataInit::Zero | DataInit::Unit => ABSENT,
+            });
         }
-        // Group consecutive shared slots into runs. A run is entries sharing
-        // `kind` and `len` whose `offset` advances by a CONSTANT stride, which
-        // is exactly the shape an array of uniform elements produces and the
-        // only shape a `(first_slot, run, stride)` record can reproduce.
-        let sl = &layout.shared_layout;
-        let mut i = 0usize;
-        while i < sl.len() {
-            let a = &sl[i];
-            let mut n = 1usize;
-            let mut stride: u32 = 0;
-            if i + 1 < sl.len() {
-                let b = &sl[i + 1];
-                if b.kind == a.kind && b.len == a.len {
-                    let d = b.offset.wrapping_sub(a.offset);
-                    // A run is only formed when the stride fits the field. A
-                    // wider delta falls back to single-slot records rather
-                    // than truncating, which would place every later slot in
-                    // the run at a wrong offset.
-                    if d <= u32::from(u16::MAX) {
-                        stride = d;
-                        n = 2;
-                        while i + n < sl.len() {
-                            let c = &sl[i + n];
-                            let p = &sl[i + n - 1];
-                            if c.kind != a.kind
-                                || c.len != a.len
-                                || c.offset.wrapping_sub(p.offset) != d
-                            {
-                                break;
-                            }
-                            n += 1;
-                        }
-                    }
-                }
-            }
-            // Chunked at `u16::MAX` rather than rejected, as `DataSlotRecord`
-            // is: `lexer`'s largest run is 393,216 and needs seven records.
-            let mut done = 0usize;
-            while done < n {
-                let take = (n - done).min(u16::MAX as usize);
-                self.b.push_record(
-                    shared,
-                    &SharedSlotRecord {
-                        offset: a.offset + (done as u32) * stride,
-                        kind: a.kind,
-                        reserved: 0,
-                        len: a.len,
-                        first_slot: (i + done) as u32,
-                        run: take as u16,
-                        stride: stride as u16,
-                    },
-                );
-                done += take;
-            }
-            i += n;
-        }
-        for p in &layout.private_composite_layout {
+
+        let fields = self.b.region(kind::DATA_FIELDS, 0)?;
+        for (f, init_const) in layout.fields.iter().zip(init_consts) {
+            let name = self.names.intern(&f.name);
             self.b.push_record(
-                privcomp,
-                &PrivateCompositeRecord {
-                    slot: p.slot,
-                    reserved: 0,
-                    offset: p.offset,
+                fields,
+                &DataFieldRecord {
+                    name,
+                    first_slot: f.first_slot,
+                    count: f.count,
+                    offset: f.offset.unwrap_or(ABSENT),
+                    stride: f.stride,
+                    elem_len: f.elem_len,
+                    kind: f.kind,
+                    visibility: match f.visibility {
+                        SlotVisibility::Shared => visibility_tag::SHARED,
+                        SlotVisibility::Private => visibility_tag::PRIVATE,
+                    },
+                    init: match f.init {
+                        DataInit::Zero => init_form::ZERO,
+                        DataInit::Unit => init_form::UNIT,
+                        DataInit::Const(_) => init_form::CONST,
+                    },
+                    reserved0: 0,
+                    reserved1: 0,
+                    init_const,
                 },
             );
         }
-        self.b.push_record(init, &DataInitRecord { first, count });
         Ok(())
     }
+}
+
+/// Whether `kind` is a kind tag this build can represent.
+fn data_kind_known(kind: u8) -> bool {
+    use crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG;
+    use crate::value_layout::{CompositeKind, ScalarKind};
+    if kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+        CompositeKind::from_tag(kind & !SHARED_SLOT_COMPOSITE_FLAG).is_some()
+    } else {
+        ScalarKind::from_tag(kind).is_some()
+    }
+}
+
+/// Validates one field record against the field before it.
+///
+/// `next_slot` is the running slot total and `seen_private` whether a private
+/// field has been seen. `const_len` is the length of the shared constant
+/// table, zero when the artifact carries none.
+fn validate_field_record(
+    r: &DataFieldRecord,
+    names_len: usize,
+    const_len: usize,
+    next_slot: &mut u32,
+    seen_private: &mut bool,
+) -> Result<(), SchemaError> {
+    use crate::bytecode::{MAX_DATA_ADDR, SHARED_SLOT_COMPOSITE_FLAG, data_kind_zero};
+    if r.name as usize >= names_len {
+        return Err(SchemaError::BadIndex);
+    }
+    let shared = match r.visibility {
+        visibility_tag::SHARED => true,
+        visibility_tag::PRIVATE => false,
+        other => return Err(SchemaError::UnknownTag(u16::from(other))),
+    };
+    // Every shared field precedes every private field, which is what lets the
+    // shared slot count be a prefix and a shared slot index be checked by one
+    // comparison.
+    if shared && *seen_private {
+        return Err(SchemaError::BadDataField);
+    }
+    *seen_private |= !shared;
+    if r.reserved0 != 0 || r.reserved1 != 0 {
+        return Err(SchemaError::BadDataField);
+    }
+    // A zero count would make the field describe no slot while still taking a
+    // record, and `first_slot` is checked against the running sum so the
+    // fields are contiguous, ascending and non-overlapping.
+    if r.count == 0 || r.first_slot != *next_slot {
+        return Err(SchemaError::BadDataField);
+    }
+    *next_slot = r
+        .first_slot
+        .checked_add(r.count)
+        .filter(|&end| end <= MAX_DATA_ADDR)
+        .ok_or(SchemaError::BadDataField)?;
+    if !data_kind_known(r.kind) {
+        return Err(SchemaError::UnknownTag(u16::from(r.kind)));
+    }
+    if r.kind & SHARED_SLOT_COMPOSITE_FLAG == 0 && r.elem_len != 0 {
+        return Err(SchemaError::BadDataField);
+    }
+    if r.offset == ABSENT {
+        if shared || r.stride != 0 {
+            return Err(SchemaError::BadDataField);
+        }
+    } else {
+        if r.count == 1 && r.stride != 0 {
+            return Err(SchemaError::BadDataField);
+        }
+        // The last element's offset must be representable, or a lookup of it
+        // would wrap to a wrong address.
+        (r.count - 1)
+            .checked_mul(r.stride)
+            .and_then(|span| r.offset.checked_add(span))
+            .ok_or(SchemaError::BadDataField)?;
+    }
+    match r.init {
+        init_form::ZERO => {
+            if r.init_const != ABSENT || (!shared && data_kind_zero(r.kind).is_none()) {
+                return Err(SchemaError::BadDataField);
+            }
+        }
+        init_form::UNIT => {
+            if shared || r.init_const != ABSENT {
+                return Err(SchemaError::BadDataField);
+            }
+        }
+        init_form::CONST => {
+            if shared {
+                return Err(SchemaError::BadDataField);
+            }
+            if r.init_const as usize >= const_len {
+                return Err(SchemaError::BadIndex);
+            }
+        }
+        other => return Err(SchemaError::UnknownTag(u16::from(other))),
+    }
+    Ok(())
 }
 
 /// A **borrowed, allocation-free** view over the data-segment layout.
@@ -2332,272 +2308,261 @@ impl SchemaBuilder {
 pub struct DataLayoutTable<'a> {
     pool: Pool<'a>,
     names: RecordTable<'a>,
-    slots: RecordTable<'a>,
-    shared: RecordTable<'a>,
-    private_composite: RecordTable<'a>,
-    init: DataInitRecord,
+    fields: RecordTable<'a>,
+    consts: Option<ConstTable<'a>>,
 }
 
 impl<'a> DataLayoutTable<'a> {
     /// Parses the data layout, or reports it absent.
     ///
     /// Returns `Ok(None)` when the artifact carries no data layout, which is a
-    /// module with no `data` block — distinct from a layout with zero slots.
+    /// module with no `data` block, distinct from a layout with zero fields.
+    ///
+    /// # The retired regions are refused, not ignored
+    ///
+    /// An artifact built before Encoding F carries `DATA_SLOTS` and no
+    /// `DATA_FIELDS`. Since region absence means "no data block", a reader that
+    /// looked only for `DATA_FIELDS` would read such an artifact as a module
+    /// with no data and run it against a wrong segment. The fingerprint does
+    /// not tell the two apart within one release cycle, by the operator's
+    /// ruling of 2026-10-31, so the refusal is structural and lives here,
+    /// where every reader of the layout passes.
     ///
     /// # Errors
     ///
-    /// [`SchemaError`] for a malformed artifact. Never panics.
+    /// [`SchemaError::RetiredRegion`] for an artifact carrying any region of
+    /// [`kind::RETIRED_DATA_LAYOUT`], and another [`SchemaError`] for a
+    /// malformed artifact. Never panics.
     pub fn parse(bytes: &'a [u8]) -> Result<Option<Self>, SchemaError> {
         let view = WireView::parse(bytes)?;
-        let Some(slots_region) = view.find_region(kind::DATA_SLOTS) else {
+        for retired in kind::RETIRED_DATA_LAYOUT {
+            if view.find_region(retired).is_some() {
+                return Err(SchemaError::RetiredRegion(retired));
+            }
+        }
+        let Some(fields_region) = view.find_region(kind::DATA_FIELDS) else {
             return Ok(None);
         };
         let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
-
-        let init_table = view.typed_records::<DataInitRecord>(&region(kind::DATA_INIT)?)?;
-        let init = init_table
-            .get_as::<DataInitRecord>(0)
-            .ok_or(SchemaError::BadIndex)?;
-
+        let consts = match ConstTable::parse(bytes) {
+            Ok(t) => Some(t),
+            Err(SchemaError::MissingRegion(_)) => None,
+            Err(e) => return Err(e),
+        };
         let t = Self {
             pool: view.pool(&region(kind::STRING_POOL)?)?,
             names: view.typed_records::<NameRef>(&region(kind::NAMES)?)?,
-            slots: view.typed_records::<DataSlotRecord>(&slots_region)?,
-            shared: view.typed_records::<SharedSlotRecord>(&region(kind::SHARED_LAYOUT)?)?,
-            private_composite: view
-                .typed_records::<PrivateCompositeRecord>(&region(kind::PRIVATE_COMPOSITE)?)?,
-            init,
+            fields: view.typed_records::<DataFieldRecord>(&fields_region)?,
+            consts,
         };
-
-        for i in 0..t.slot_record_count() {
-            let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
-            if r.name as usize >= t.names.len() {
-                return Err(SchemaError::BadIndex);
-            }
-            if r.visibility != visibility_tag::SHARED && r.visibility != visibility_tag::PRIVATE {
-                return Err(SchemaError::UnknownTag(r.visibility as u16));
-            }
-            // A zero run would make the table describe fewer slots than it has
-            // records, so every logical index past it would be off by one with
-            // nothing else detecting it.
-            if r.run == 0 {
-                return Err(SchemaError::UnknownTag(0));
-            }
-        }
+        t.validate()?;
         Ok(Some(t))
     }
 
-    /// Number of LOGICAL slots, expanding run lengths.
-    ///
-    /// A slot index in a `GetData`/`SetData` operand counts logical slots, so
-    /// this is the number those operands are bounded by. It is NOT the number of
-    /// records in the table -- use [`Self::slot_record_count`] for that. The two
-    /// were the same before slot runs, and code that conflates them will index a
-    /// record with a logical index.
-    #[inline]
-    pub fn slot_count(&self) -> usize {
-        (0..self.slots.len())
-            .filter_map(|i| self.slots.get_as::<DataSlotRecord>(i))
-            .map(|r| r.run as usize)
-            .sum()
+    /// Rebuilds a view from already-located tables, **without** validating.
+    /// Only [`AuxView::from_offsets`] calls this, on offsets that
+    /// [`AuxOffsets::resolve`] validated.
+    fn from_parts(
+        pool: Pool<'a>,
+        names: RecordTable<'a>,
+        fields: RecordTable<'a>,
+        consts: Option<ConstTable<'a>>,
+    ) -> Self {
+        Self {
+            pool,
+            names,
+            fields,
+            consts,
+        }
     }
 
-    /// Number of RECORDS in the slot table, each standing for `run` slots.
-    #[inline]
-    pub fn slot_record_count(&self) -> usize {
-        self.slots.len()
+    fn validate(&self) -> Result<(), SchemaError> {
+        let const_len = self.consts.as_ref().map_or(0, ConstTable::len);
+        let mut next_slot = 0u32;
+        let mut seen_private = false;
+        for i in 0..self.field_count() {
+            let r = self.field(i).ok_or(SchemaError::BadIndex)?;
+            validate_field_record(
+                &r,
+                self.names.len(),
+                const_len,
+                &mut next_slot,
+                &mut seen_private,
+            )?;
+        }
+        Ok(())
     }
 
-    /// The slot record at `index`, indexed by RECORD rather than logical slot.
+    /// Number of field records.
     #[inline]
-    pub fn slot(&self, index: usize) -> Option<DataSlotRecord> {
-        self.slots.get_as::<DataSlotRecord>(index)
+    pub fn field_count(&self) -> usize {
+        self.fields.len()
     }
 
-    /// Slot `index`'s name, as bytes aliasing the artifact.
+    /// The field record at `index`, indexed by FIELD rather than logical slot.
     #[inline]
-    pub fn slot_name(&self, index: usize) -> Option<&'a [u8]> {
-        let r = self.slot(index)?;
+    pub fn field(&self, index: usize) -> Option<DataFieldRecord> {
+        self.fields.get_as::<DataFieldRecord>(index)
+    }
+
+    /// Field `index`'s name, as bytes aliasing the artifact.
+    #[inline]
+    pub fn field_name(&self, index: usize) -> Option<&'a [u8]> {
+        let r = self.field(index)?;
         let n = self.names.get_as::<NameRef>(r.name as usize)?;
         self.pool.slice(n.offset, n.length)
     }
 
-    /// The shared-slot RUN record at `index`, indexed by RECORD.
+    /// Number of LOGICAL slots, the bound of a `GetData`/`SetData` operand.
     ///
-    /// Pair this with [`Self::shared_record_count`]. Pairing it with
-    /// [`Self::shared_slot_count`] mixes a logical count with a record index,
-    /// which is the exact defect the `DataSlotRecord` split produced when
-    /// `slot()` stayed record-indexed beside a logical `slot_count()`.
+    /// Constant time, since validation established that the fields are
+    /// contiguous from slot zero.
     #[inline]
-    pub fn shared_record(&self, index: usize) -> Option<SharedSlotRecord> {
-        self.shared.get_as::<SharedSlotRecord>(index)
+    pub fn slot_count(&self) -> usize {
+        match self.fields.len().checked_sub(1).and_then(|i| self.field(i)) {
+            Some(r) => r.first_slot as usize + r.count as usize,
+            None => 0,
+        }
     }
 
-    /// Number of RECORDS in the shared-slot table, each standing for `run`
-    /// slots.
-    #[inline]
-    pub fn shared_record_count(&self) -> usize {
-        self.shared.len()
-    }
-
-    /// Number of LOGICAL shared slots, summing the runs.
-    ///
-    /// Renamed from `shared_count` when the table became run-length encoded.
-    /// The rename is deliberate: leaving the old name in place would have
-    /// changed its meaning silently, and every caller had to be reconsidered.
+    /// Number of LOGICAL slots in shared fields, a prefix of the slot space.
     pub fn shared_slot_count(&self) -> usize {
-        (0..self.shared.len())
-            .filter_map(|i| self.shared.get_as::<SharedSlotRecord>(i))
-            .map(|r| r.run as usize)
+        (0..self.fields.len())
+            .filter_map(|i| self.field(i))
+            .filter(|r| r.visibility == visibility_tag::SHARED)
+            .map(|r| r.count as usize)
             .sum()
+    }
+
+    /// Number of LOGICAL slots in private fields.
+    pub fn private_slot_count(&self) -> usize {
+        self.slot_count() - self.shared_slot_count()
+    }
+
+    /// Index of the field containing logical `slot`, by binary search on
+    /// `first_slot`, whose bound is the logarithm of the field count and does
+    /// not depend on the data.
+    pub fn field_index_at(&self, slot: usize) -> Option<usize> {
+        let slot = u32::try_from(slot).ok()?;
+        let n = self.fields.len();
+        let (mut lo, mut hi) = (0usize, n);
+        // Invariant: every record below `lo` starts at or before `slot`, and
+        // every record at or above `hi` starts after it. Each step halves the
+        // interval, so the loop runs at most `log2(n) + 1` times.
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.field(mid)?.first_slot <= slot {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let at = lo.checked_sub(1)?;
+        let r = self.field(at)?;
+        (slot - r.first_slot < r.count).then_some(at)
+    }
+
+    /// The field record containing logical `slot` and the element index.
+    #[inline]
+    pub fn field_at(&self, slot: usize) -> Option<(DataFieldRecord, u32)> {
+        let r = self.field(self.field_index_at(slot)?)?;
+        let k = u32::try_from(slot).ok()?.checked_sub(r.first_slot)?;
+        Some((r, k))
     }
 
     /// Resolve a LOGICAL shared-slot index to its byte layout.
     ///
-    /// This is the `get_shared`/`set_shared` hot path. Runs are emitted in
-    /// ascending slot order and are contiguous, so the containing record is
-    /// found by binary search on `first_slot`, giving a `log2(records)` bound
-    /// that does not depend on the data.
+    /// This is the `get_shared`/`set_shared` hot path. `None` when the slot is
+    /// out of range or private.
     pub fn shared_slot(&self, slot: usize) -> Option<SharedSlotEntry> {
-        let n = self.shared.len();
-        if n == 0 {
-            return None;
-        }
-        let slot = u32::try_from(slot).ok()?;
-        // Largest record whose `first_slot` is <= `slot`.
-        let (mut lo, mut hi) = (0usize, n - 1);
-        let mut found: Option<SharedSlotRecord> = None;
-        while lo <= hi {
-            let mid = lo + (hi - lo) / 2;
-            let r = self.shared.get_as::<SharedSlotRecord>(mid)?;
-            if r.first_slot <= slot {
-                found = Some(r);
-                lo = mid + 1;
-            } else if mid == 0 {
-                break;
-            } else {
-                hi = mid - 1;
-            }
-        }
-        let r = found?;
-        // A corrupt table can carry a zero run or a `slot` past the run's end;
-        // both are rejected rather than resolved to a wrong offset. Validation
-        // refuses a zero run at load, so this is defence in depth.
-        let within = slot.checked_sub(r.first_slot)?;
-        if r.run == 0 || within >= u32::from(r.run) {
+        let (r, k) = self.field_at(slot)?;
+        if r.visibility != visibility_tag::SHARED || r.offset == ABSENT {
             return None;
         }
         Some(SharedSlotEntry {
-            offset: r
-                .offset
-                .checked_add(within.checked_mul(u32::from(r.stride))?)?,
+            offset: r.offset.checked_add(k.checked_mul(r.stride)?)?,
             kind: r.kind,
-            len: r.len,
+            len: r.elem_len,
         })
     }
 
-    /// The private-composite placement at `index`.
-    #[inline]
-    pub fn private_composite(&self, index: usize) -> Option<PrivateCompositeRecord> {
-        self.private_composite
-            .get_as::<PrivateCompositeRecord>(index)
+    /// The persistent composite pool placement of private logical `slot`, as
+    /// `(offset, elem_len)`, or `None` when the slot is not private or has no
+    /// pool home.
+    pub fn private_composite(&self, slot: usize) -> Option<(u32, u16)> {
+        let (r, k) = self.field_at(slot)?;
+        if r.visibility != visibility_tag::PRIVATE || r.offset == ABSENT {
+            return None;
+        }
+        Some((r.offset.checked_add(k.checked_mul(r.stride)?)?, r.elem_len))
     }
 
-    /// Number of private-composite placements.
-    #[inline]
-    pub fn private_composite_count(&self) -> usize {
-        self.private_composite.len()
-    }
-
-    /// The constant range holding the private-slot initialisers.
-    #[inline]
-    pub fn private_init_range(&self) -> ConstRange {
-        (self.init.first, self.init.count)
+    /// The value every element of field `index` starts as.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError::BadIndex`] for an index past the table, and the
+    /// constant table's error when the initialiser constant is malformed.
+    pub fn field_init_value(&self, index: usize) -> Result<ConstValue, SchemaError> {
+        let r = self.field(index).ok_or(SchemaError::BadIndex)?;
+        match r.init {
+            init_form::ZERO => {
+                crate::bytecode::data_kind_zero(r.kind).ok_or(SchemaError::BadDataField)
+            }
+            init_form::UNIT => Ok(ConstValue::Unit),
+            init_form::CONST => self
+                .consts
+                .as_ref()
+                .ok_or(SchemaError::MissingRegion(kind::CONSTS))?
+                .value(r.init_const as usize),
+            other => Err(SchemaError::UnknownTag(u16::from(other))),
+        }
     }
 }
 
 /// Decodes the data layout into an owned value, or `None` if absent.
 ///
+/// One [`crate::bytecode::DataField`] per record, so the decode heap is a
+/// function of the field count and not of the element count.
+///
 /// # Errors
 ///
-/// [`SchemaError`] for any malformed artifact.
+/// [`SchemaError`] for any malformed artifact, including
+/// [`SchemaError::RetiredRegion`] for one built under the retired encoding.
 pub fn decode_data_layout(bytes: &[u8]) -> Result<Option<DataLayout>, SchemaError> {
-    use crate::bytecode::{DataSlot, PrivateCompositeSlot, SharedSlotLayout, SlotVisibility};
+    use crate::bytecode::{DataField, SlotVisibility};
 
     let Some(t) = DataLayoutTable::parse(bytes)? else {
         return Ok(None);
     };
-
-    // Iterates RECORDS and expands each run. Iterating logical indices would
-    // rescan the run table per slot, which is quadratic on the tables this
-    // encoding exists to shrink.
-    let mut slots = Vec::with_capacity(t.slot_count());
-    for i in 0..t.slot_record_count() {
-        let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
-        let name = core::str::from_utf8(t.slot_name(i).ok_or(SchemaError::BadName)?)
+    let mut fields = Vec::with_capacity(t.field_count());
+    for i in 0..t.field_count() {
+        let r = t.field(i).ok_or(SchemaError::BadIndex)?;
+        let name = core::str::from_utf8(t.field_name(i).ok_or(SchemaError::BadName)?)
             .map(String::from)
             .map_err(|_| SchemaError::BadName)?;
-        let visibility = if r.visibility == visibility_tag::SHARED {
-            SlotVisibility::Shared
-        } else {
-            SlotVisibility::Private
+        let init = match r.init {
+            init_form::ZERO => DataInit::Zero,
+            init_form::UNIT => DataInit::Unit,
+            _ => DataInit::Const(t.field_init_value(i)?),
         };
-        for _ in 0..r.run {
-            slots.push(DataSlot {
-                name: name.clone(),
-                visibility,
-            });
-        }
-    }
-
-    // Expand runs by iterating RECORDS, not by resolving each logical slot.
-    // Both produce the same vector; this one is linear where a per-slot lookup
-    // would pay the binary search 395,778 times on `lexer`.
-    let mut shared_layout = Vec::with_capacity(t.shared_slot_count());
-    for i in 0..t.shared_record_count() {
-        let r = t.shared_record(i).ok_or(SchemaError::BadIndex)?;
-        if r.run == 0 {
-            return Err(SchemaError::BadIndex);
-        }
-        for k in 0..u32::from(r.run) {
-            shared_layout.push(SharedSlotLayout {
-                offset: r
-                    .offset
-                    .checked_add(
-                        k.checked_mul(u32::from(r.stride))
-                            .ok_or(SchemaError::BadIndex)?,
-                    )
-                    .ok_or(SchemaError::BadIndex)?,
-                kind: r.kind,
-                len: r.len,
-            });
-        }
-    }
-
-    let mut private_composite_layout = Vec::with_capacity(t.private_composite_count());
-    for i in 0..t.private_composite_count() {
-        let r = t.private_composite(i).ok_or(SchemaError::BadIndex)?;
-        private_composite_layout.push(PrivateCompositeSlot {
-            slot: r.slot,
-            offset: r.offset,
+        fields.push(DataField {
+            name,
+            visibility: if r.visibility == visibility_tag::SHARED {
+                SlotVisibility::Shared
+            } else {
+                SlotVisibility::Private
+            },
+            first_slot: r.first_slot,
+            count: r.count,
+            kind: r.kind,
+            elem_len: r.elem_len,
+            offset: (r.offset != ABSENT).then_some(r.offset),
+            stride: r.stride,
+            init,
         });
     }
-
-    // The elided all-default pool, reconstructed rather than read. See the
-    // sentinel's justification in `SchemaBuilder::add_data_layout`.
-    let (init_first, init_count) = t.private_init_range();
-    let private_init = if init_first == ABSENT {
-        alloc::vec![ConstValue::Int(0); init_count as usize]
-    } else {
-        decode_constant_pool(bytes, (init_first, init_count))?
-    };
-
-    Ok(Some(DataLayout {
-        slots,
-        shared_layout,
-        private_composite_layout,
-        private_init,
-    }))
+    Ok(Some(DataLayout { fields }))
 }
 
 /// A **borrowed** view over the parameter-type byte pool.
@@ -3625,10 +3590,7 @@ pub struct AuxOffsets {
     header: Option<(usize, usize)>,
     debug: Option<(usize, usize)>,
     native_returns: Option<(usize, usize)>,
-    data_slots: Option<(usize, usize)>,
-    shared_layout: Option<(usize, usize)>,
-    private_composite: Option<(usize, usize)>,
-    data_init: Option<(usize, usize)>,
+    data_fields: Option<(usize, usize)>,
     param_types: Option<(usize, usize)>,
 }
 
@@ -3672,10 +3634,7 @@ impl AuxOffsets {
             header: region_span(&view, kind::HEADER)?,
             debug: region_span(&view, kind::DEBUG_POOL)?,
             native_returns: region_span(&view, kind::NATIVE_RETURNS)?,
-            data_slots: region_span(&view, kind::DATA_SLOTS)?,
-            shared_layout: region_span(&view, kind::SHARED_LAYOUT)?,
-            private_composite: region_span(&view, kind::PRIVATE_COMPOSITE)?,
-            data_init: region_span(&view, kind::DATA_INIT)?,
+            data_fields: region_span(&view, kind::DATA_FIELDS)?,
             param_types: region_span(&view, kind::PARAM_TYPES)?,
         })
     }
@@ -3758,29 +3717,17 @@ impl<'a> AuxView<'a> {
         };
 
         // The data layout is present only when the module declares one; region
-        // presence is what carries that distinction, so all four spans travel
-        // together exactly as `add_data_layout` emits them.
-        let data = match (
-            opt_span(offsets.data_slots)?,
-            opt_span(offsets.shared_layout)?,
-            opt_span(offsets.private_composite)?,
-            opt_span(offsets.data_init)?,
-        ) {
-            (Some(slots), Some(shared), Some(pc), Some(init_b)) => {
-                let init_table = RecordTable::from_bytes(init_b, DataInitRecord::STRIDE_BYTES)?;
-                Some(DataLayoutTable {
-                    pool,
-                    names,
-                    slots: RecordTable::from_bytes(slots, DataSlotRecord::STRIDE_BYTES)?,
-                    shared: RecordTable::from_bytes(shared, SharedSlotRecord::STRIDE_BYTES)?,
-                    private_composite: RecordTable::from_bytes(
-                        pc,
-                        PrivateCompositeRecord::STRIDE_BYTES,
-                    )?,
-                    init: init_table.get_as::<DataInitRecord>(0)?,
-                })
-            }
-            _ => None,
+        // presence is what carries that distinction. `resolve` validated the
+        // field table and refused any retired region before these offsets
+        // existed, so the view is rebuilt without validating again.
+        let data = match opt_span(offsets.data_fields)? {
+            Some(f) => Some(DataLayoutTable::from_parts(
+                pool,
+                names,
+                RecordTable::from_bytes(f, DataFieldRecord::STRIDE_BYTES)?,
+                consts,
+            )),
+            None => None,
         };
 
         Some(Self {

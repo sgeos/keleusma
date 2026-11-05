@@ -196,7 +196,12 @@ fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
         .expect("compile program")
         .data_layout
         .as_ref()
-        .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+        .map(|dl| {
+            dl.fields
+                .iter()
+                .flat_map(|f| (0..f.count).map(move |_| f.name.clone()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -3112,7 +3117,9 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
-    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // 538 after Encoding F replaced the four per-slot data-layout tables with one
+    // field table, a net twenty-three fewer reader, emitter and offset functions (-23).
+    // Previously 561 after a metadata-only name preparation function and scan bound (+2),
     // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
     // removed to keep the stage inside the type stage's 640-row name channel.
     // Previously 562 after separating the module-forest and raw-node capacities.
@@ -3135,7 +3142,7 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        561,
+        538,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",

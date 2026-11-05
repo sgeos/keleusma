@@ -210,16 +210,13 @@ fn the_host_boundary_rows_have_a_published_way_to_be_satisfied() {
     // zero. The resume-state word between them must stay zero, since zero means
     // the loop top for a fresh instance.
     let dl = m.data_layout.as_ref().expect("the subject declares data");
-    let private_slots = dl
-        .slots
-        .iter()
-        .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Private)
-        .count();
+    let private_slots = dl.private_slot_count();
+    let composite_layout = keleusma_native::data_view::private_composite_layout(Some(dl));
     let resume = keleusma::vm::required_persistent_capacity_for(&m);
     let init = resume + region::stream_state_supplement_bytes(&m) as usize;
     assert_eq!(
         image.len(),
-        init + dl.private_composite_layout.len() * 8,
+        init + composite_layout.len() * 8,
         "the image must reach the end of the initialisation words and no further"
     );
     assert!(
@@ -235,7 +232,7 @@ fn the_host_boundary_rows_have_a_published_way_to_be_satisfied() {
         "the composite slot starts with its type's zero, so its initialisation word \
          must say written, as a write of a sixteen-byte struct says it"
     );
-    let entry = &dl.private_composite_layout[0];
+    let entry = &composite_layout[0];
     let body = private_slots * 8 + entry.offset as usize;
     assert!(
         image[body..body + 16].iter().all(|b| *b == 0),

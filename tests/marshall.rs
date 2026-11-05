@@ -976,15 +976,15 @@ fn d1_shared_composite_over_length_write_faults() {
     {
         let dl = m.data_layout.as_mut().expect("data layout");
         let entry = dl
-            .shared_layout
+            .fields
             .iter_mut()
             .find(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
-            .expect("a composite shared slot");
+            .expect("a composite shared field");
         assert!(
-            entry.len > 0,
+            entry.elem_len > 0,
             "the Point composite body should be non-empty"
         );
-        entry.len -= 1; // one byte shorter than the resolved body
+        entry.elem_len -= 1; // one byte shorter than the resolved body
     }
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(m, &arena).expect("verify");
