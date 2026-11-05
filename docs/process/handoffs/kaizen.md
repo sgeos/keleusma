@@ -70,8 +70,8 @@ run.
   confirmed `v0.3.0`.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
-- **Jev selection cohort.** The three cases were evaluated and labelled blind. The
-  comparison opens when each task is finished.
+- **Jev selection cohort.** Closed on 2026-11-05. All three tasks finished, the
+  comparison was read, and the result is in the open decisions of 2026-11-04.
 
 ## Operator positions, stated first-hand in this line's session on 2026-10-25
 
@@ -93,9 +93,7 @@ authority, so the startup-file positions reach them first-hand.
 2. Run `context_quality.py` again on about 2026-11-15 and compare with the trial report.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. Measure branch-run cost again once changelog fragments are in use.
-6. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
+4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
 
 ## Open with the operator
 
@@ -124,7 +122,7 @@ Pilot judgments never change gates.
 | Checkpoint | SHA-256 |
 |---|---|
 | [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
-| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
+| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `8efbc7acda0987da71408c436dd77413f4db812eccd174aba02b3f6860aee580`, 3 samples evaluated and labelled and 3 task outcomes, exported on 2026-11-05, restored into a fresh store and re-exported byte-identical |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
 ## Environment

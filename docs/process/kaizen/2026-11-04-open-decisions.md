@@ -146,6 +146,32 @@ that arose.
   release line was asked to cite this where the release procedure describes the local
   gate, since that document changes through it.
 
+- **Branch-run cost after changelog fragments**, next increment 6 of the state file.
+  Fragments were adopted at `90432638`, late on 2026-10-29 local time. The comparison
+  takes every CI run from 18:00 UTC on 2026-10-20 to 12:00 UTC on 2026-10-30, against
+  every run from then to 05:03 UTC on 2026-11-05, and every pull request merged into
+  `v0.2.3` in each window. A run of 15 minutes or more from start to last update is
+  counted as long, which separates full runs from light, draft and certified ones.
+
+  | Window | Merged PRs | PR runs per merged PR, mean | Long PR runs per merge | Long push runs per day |
+  |---|---|---|---|---|
+  | Before | 88 | 1.31 | 1.74 | 10.9 |
+  | After | 56 | 1.43 | 1.18 | 9.8 |
+
+  **Inference.** Fragments did not lower the number of pull-request runs per merged
+  pull request, which was already near one, so the resolution pushes they were meant
+  to remove were not a large share. Long pull-request runs per merge fell by about a
+  third, but draft pull requests began deferring the self-host tier, item K5, on the
+  same day, so the fall cannot be attributed to fragments. Branch runs stayed at one
+  per merge, as the ruling to keep them uncancelled expects.
+- **The Jev selection cohort**, next increment 4. All three tasks have outcomes, and
+  the cohort's checkpoint is exported. Over 42 section questions in three cases,
+  labelled by a blind reviewer marked independent, the baseline answered 37 correctly
+  and Jev 34. Jev selected 19,638 of the 34,775 bytes the tasks needed and missed
+  15,137. It corrected the baseline twice and regressed it five times. Three cases are
+  too few for a conclusion, and the result is advisory only, so it changes no gate and
+  no practice.
+
 **E4. The interline checkpoint carries other projects' messages.** *Judgment.*
 **Fact.** The shared store under `secret/interline/` now registers the lines
 `pydromon`, `pykeleusma` and `radiate` beside Keleusma's, and on 2026-11-05 it holds
