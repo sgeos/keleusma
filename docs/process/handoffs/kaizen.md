@@ -55,7 +55,8 @@ run.
 - **Scratch volume.** This worktree's `target` links to
   `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
-  target` after any `cargo clean`. On 2026-11-05 the volume had 12 GiB free, E1.
+  target` after any `cargo clean`. On 2026-11-05 the volume had 40 GiB free after the
+  E1 removals.
 - **Fuzz.** The nightly run passes and starts six to ten hours after its 10:17 UTC
   cron time. No target has crashed, so the crash path is untested.
 - **Idle compaction.** False from 05:42 UTC on 2026-11-01, D2 of 2026-11-01.
@@ -86,7 +87,8 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Carry out the rulings on E1 to E3 of 2026-11-04.
+1. Supply the release manifest when V0.2.X cuts V0.2.3, once the operator has made
+   the signing key, E3 of 2026-11-04.
 2. Run `context_quality.py` again on about 2026-11-15 and compare with the trial report.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
@@ -97,9 +99,8 @@ authority, so the startup-file positions reach them first-hand.
 ## Open with the operator
 
 [The open decisions of 2026-11-04](../kaizen/2026-11-04-open-decisions.md) hold the
-list. E1 is the full scratch volume, E2 whether to withdraw the D5 `build-dir` file,
-and E3 whether V0.2.3 is the first signed release. The K-series checks K6, K9, K10 and
-K11 remain, and K14 is held.
+list and the operator's ruling of that day. The signing key is the operator's to make,
+and V0.2.3's publication waits for it. The K-series checks are deferred.
 
 ## Concerns
 

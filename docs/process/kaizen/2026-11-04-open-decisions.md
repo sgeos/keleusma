@@ -35,6 +35,54 @@ This line sent sequence 285 to V0.2.X about E1 below.
 | O1 | **Fact.** The fuzz schedule runs. The runs of 2026-11-01 to 2026-11-04 all passed, starting at 16:49, 20:24, 17:52 and 18:02 UTC against a cron time of 10:17, so GitHub starts them six to ten hours late |
 | Release signing | Adopted. `scripts/release_manifest.py` merged in pull request 710. No public key is committed on any branch yet |
 
+## Operator ruling, 2026-11-04
+
+The operator ruled first-hand in this line's session on 2026-11-04, in these words.
+
+> Re: Decisions.
+>
+> - E1. Everything stale should be removed. I think Rust updates cause build bloat.
+> - E2. A.
+> - E3. A. Key creation will happen later.
+> - K-series. Defer.
+> - O-series. Accept.
+>
+> Re: Other line's questions. Will follow up directly.
+
+Shortly after, the operator added, "Note that I updated the toolchain shortly after
+issuing my response to you."
+
+| Item | Disposition |
+|---|---|
+| E1 | Carried out for what this line may remove, below. Applied to other lines' live trees only by their owners, who were told in sequences 286 to 289 as a relay |
+| E2 | (a). D5 (c) is withdrawn. The `agents` exception left `worktree.sh`, and `/Volumes/Scratch/keleusma/agents`, empty, was deleted |
+| E3 | (a). V0.2.3 is the first signed release, and its publication waits for the operator's key. V0.2.X was told |
+| K-series | Deferred |
+| O6 to O11 | Adopted. O6 and O10 merged in pull request 731 |
+| Other lines' questions | The operator follows up with those lines directly |
+
+**E1, what was removed.** At about 03:00 UTC on 2026-11-05, each of the seven folders
+was rechecked with `worktree.sh list` as used by no live tree, and every file in them
+that was not build output, 82 MB of logs, diffs, `before`, `after`, `base` and
+`base.tar`, was first copied to
+`/Volumes/Scratch/keleusma/.archive/agent-scratch-20261105/`. The seven folders, 25.8 GB,
+were then deleted, and so was this line's own scratch `target`, 3.4 GiB, which was
+rebuilt. The scratch volume went from 12 GiB free to 40 GiB free. Nothing of another
+line's live tree was touched.
+
+**E1, the hypothesis.** **Fact.** Before the removals, by file modification time
+against the stable toolchain's installation at 10:24 local time on 2026-10-28, 11.7 of
+the 120.3 GiB in the live scratch folders predated that update, 3.2 of it this line's
+own. `arena-composites` held 47.7 GiB and `v0.2.x` 21.3 GiB. **Fact.** The update the
+operator made on 2026-11-04 rewrote only the nightly toolchain's manifest, at 02:52 UTC
+on 2026-11-05. Stable is still rustc 1.99.1, and no scratch folder holds Miri output.
+**Inference.** A toolchain update does leave the old build output in place beside the
+new, because Cargo names artifacts by compiler, so the hypothesis is right in kind. On
+this measurement, though, most of the space is each tree building its own full output,
+several profiles and feature sets each, and a stable update adds about a tenth.
+Modification time is a proxy. A file older than the update may still be current if a
+pinned or nightly toolchain built it.
+
 ## Decisions
 
 **E1. The scratch volume is nearly full.** *Obvious, but deletion is the operator's.*
