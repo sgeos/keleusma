@@ -330,3 +330,197 @@ fn a_delegated_yield_parameter_is_the_argument_for_the_whole_call() {
                loop main(t: Word) -> Word { child(t) }";
     assert_eq!(drive(src, 6), [5, 5, 7, 7, 7, 7]);
 }
+
+// -- The arena across a delegated reset ---------------------------------------
+//
+// Measurements behind `docs/decisions/NESTED_LOOP_ARENAS.md`, taken on
+// 2026-11-04. The operator ruled on that day that a `loop` may call a `loop`
+// and asked whether nested loops need their own arena. These cases record what
+// the virtual machine does today when the inner loop resets while the outer
+// frame sits beneath it. They pin present behaviour, not a ruled design, so a
+// change made under that record is expected to update them deliberately.
+
+/// The outer loop builds a sixteen-element array, 128 bytes of flat body in the
+/// top region, and passes one element to the inner loop, which builds a
+/// four-element array of 32 bytes every iteration.
+const OUTER_HOLDS_ARRAY: &str = "loop child(a: Word) -> Word { let s = [a, a, a, a]; yield s[1] } \
+     loop main(t: Word) -> Word { \
+       let b = [t, t, t, t, t, t, t, t, t, t, t, t, t, t, t, t]; child(b[3]) }";
+
+/// One observation per host-visible suspension.
+#[derive(Debug, PartialEq, Eq)]
+struct Snapshot {
+    state: String,
+    top_used: usize,
+    bottom_used: usize,
+    epoch: u64,
+}
+
+fn snapshots(src: &str, count: usize) -> (Vec<Snapshot>, usize) {
+    let module = compile(src);
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(ARENA + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verifies");
+    let mut out = Vec::with_capacity(count);
+    let mut state = vm.call(&[Value::Int(FIRST)]).expect("call");
+    for _ in 0..count {
+        let a = vm.arena();
+        out.push(Snapshot {
+            state: format!("{state:?}"),
+            top_used: a.top_used(),
+            bottom_used: a.bottom_used(),
+            epoch: a.epoch(),
+        });
+        state = vm.resume(Value::Int(REPLY)).expect("resume");
+    }
+    (out, vm.arena().top_peak())
+}
+
+#[test]
+fn an_inner_reset_reclaims_the_outer_frames_top_region_bodies() {
+    let (snaps, top_peak) = snapshots(OUTER_HOLDS_ARRAY, 4);
+    // The first yield holds both bodies, 128 bytes for the outer array and 32
+    // for the inner one. The inner reset reclaims the whole top region, the
+    // outer array included, while the outer frame's local still names it.
+    assert_eq!(snaps[0].state, "Yielded(Int(5))");
+    assert_eq!(snaps[0].top_used, 160);
+    assert_eq!(snaps[1].state, "Reset");
+    assert_eq!(snaps[1].top_used, 0);
+    // From then on only the inner array occupies the top region.
+    assert_eq!(snaps[2].state, "Yielded(Int(7))");
+    assert_eq!(snaps[2].top_used, 32);
+    assert_eq!(top_peak, 160);
+    // The outer frame is retained beneath the inner one. The bottom region
+    // does not move across the reset, so the frame stack is not quiescent at
+    // an inner reset, and each inner reset advances the single epoch.
+    assert!(snaps.iter().all(|s| s.bottom_used == snaps[0].bottom_used));
+    assert_eq!(snaps[1].epoch, snaps[0].epoch + 1);
+    assert_eq!(snaps[3].epoch, snaps[1].epoch + 1);
+}
+
+#[test]
+fn the_inner_loop_alone_has_a_smaller_resident_bottom_region() {
+    // The control for the retained outer frame. The same inner body as the
+    // entry loop holds one frame, so its bottom region is smaller.
+    let (alone, _) = snapshots(
+        "loop main(a: Word) -> Word { let s = [a, a, a, a]; yield s[1] }",
+        2,
+    );
+    let (nested, _) = snapshots(OUTER_HOLDS_ARRAY, 2);
+    assert_eq!(alone[0].top_used, 32);
+    assert!(
+        nested[0].bottom_used > alone[0].bottom_used,
+        "nested {} alone {}",
+        nested[0].bottom_used,
+        alone[0].bottom_used
+    );
+}
+
+#[test]
+fn the_composed_outer_wcmu_covers_the_measured_top_peak() {
+    // `module_wcmu` charges a call site its callee's figure, so the outer
+    // stream chunk's heap term is its own 128 bytes plus the inner 32, which
+    // is the measured peak. The inner chunk's own figure is only 32. The
+    // declared header figure is per chunk and shallow, so it does not carry
+    // the composition, which is why the load-time check uses `module_wcmu`.
+    let module = compile(OUTER_HOLDS_ARRAY);
+    let wcmu = keleusma::verify::module_wcmu(&module, &[]).expect("bounded");
+    let child = module
+        .chunks
+        .iter()
+        .position(|c| c.name == "child")
+        .unwrap();
+    let main = module.chunks.iter().position(|c| c.name == "main").unwrap();
+    assert_eq!(wcmu[child].1, 32);
+    assert_eq!(wcmu[main].1, 160);
+    assert!(wcmu[main].0 >= wcmu[child].0);
+    let (_, top_peak) = snapshots(OUTER_HOLDS_ARRAY, 6);
+    assert!(wcmu[main].1 as usize >= top_peak);
+}
+
+#[test]
+fn the_nested_program_runs_in_its_auto_sized_arena() {
+    let module = compile(OUTER_HOLDS_ARRAY);
+    let capacity = keleusma::vm::auto_arena_capacity_for(&module, &[]).expect("sized");
+    let arena = Arena::with_capacity(capacity);
+    let mut vm = Vm::new(module, &arena).expect("verifies");
+    let mut out = Vec::new();
+    let mut state = vm.call(&[Value::Int(FIRST)]).expect("call");
+    for _ in 0..8 {
+        if let VmState::Yielded(Value::Int(v)) = state {
+            out.push(v);
+        }
+        state = vm.resume(Value::Int(REPLY)).expect("resume");
+    }
+    assert_eq!(out, [5, 7, 7, 7]);
+}
+
+#[test]
+fn private_data_written_by_the_outer_prologue_survives_inner_resets() {
+    // The persistent region is not reclaimed by any reset, so a composite the
+    // outer loop writes into private data before delegating stays readable.
+    let src = "private data st { v: (Word, Word) } \
+               loop child(a: Word) -> Word { yield st.v.0 + a } \
+               loop main(t: Word) -> Word { st.v = (t, t); child(t) }";
+    assert_eq!(drive(src, 4), [10, 12, 12, 12]);
+}
+
+#[test]
+fn a_second_loop_parameter_is_refused_because_reset_clears_it() {
+    // `Op::Reset` clears every local of the resetting frame and a resume
+    // rebinds only slot 0, so a second parameter would read `Unit` after the
+    // first reset. The definite-initialization verifier refuses the read for
+    // the entry loop and for a delegated one alike, so no outer-built value can
+    // reach an inner loop except through slot 0 or private data.
+    for src in [
+        "loop main(a: Word, k: Word) -> Word { yield a + k }",
+        "loop child(a: Word, k: Word) -> Word { yield a + k } \
+         loop main(t: Word) -> Word { child(t, 100) }",
+        "loop child(a: Word, p: (Word, Word)) -> Word { yield a + p.1 } \
+         loop main(t: Word) -> Word { child(t, (t, 40)) }",
+        "loop leaf(c: Word, d: Word) -> Word { yield c + d } \
+         loop mid(b: Word, e: Word) -> Word { leaf(b, e + 1) } \
+         loop main(t: Word) -> Word { mid(t, 10) }",
+    ] {
+        let tokens = keleusma::lexer::tokenize(src).expect("lex");
+        let program = keleusma::parser::parse(&tokens).expect("parse");
+        let err = keleusma::compiler::compile(&program).expect_err(src);
+        assert!(
+            err.message.contains("definite-initialization"),
+            "{src}: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn a_swap_at_an_inner_reset_restarts_the_outer_prologue() {
+    // The outer loop yields once before delegating. Its own `Reset` is never
+    // reached, so every reset the host sees is the inner one. A swap there
+    // clears every frame, and the next `call` runs the outer prologue again,
+    // so the host sees the prologue's yield a second time. Without nesting the
+    // same swap restarts the only loop at its own iteration start.
+    let src = "loop child(a: Word) -> Word { yield a + 1000 } \
+               loop main(t: Word) -> Word { let s = (t, 2); let r = yield s.0 + s.1; child(r) }";
+    let arena = Arena::with_capacity(ARENA);
+    let mut vm = Vm::new(compile(src), &arena).expect("verifies");
+    let mut log = Vec::new();
+    log.push(format!(
+        "{:?}",
+        vm.call(&[Value::Int(FIRST)]).expect("call")
+    ));
+    for _ in 0..2 {
+        log.push(format!(
+            "{:?}",
+            vm.resume(Value::Int(REPLY)).expect("resume")
+        ));
+    }
+    assert_eq!(log, ["Yielded(Int(7))", "Yielded(Int(1007))", "Reset"]);
+    vm.replace_module(compile(src), Vec::new()).expect("swap");
+    let after = vm.call(&[Value::Int(FIRST)]).expect("call");
+    assert!(
+        matches!(after, VmState::Yielded(Value::Int(7))),
+        "the prologue yield recurs, got {after:?}"
+    );
+}
