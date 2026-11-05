@@ -34,7 +34,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md) | Current first-pass self-hosting requirements, evidence and remaining integration work |
 | [ORDER2_COMPLETION_PLAN.md](./ORDER2_COMPLETION_PLAN.md) | Full first-pass validator requirements and implementation evidence |
 | [ORDER2_COMPLETION_AUDIT.md](./ORDER2_COMPLETION_AUDIT.md) | Validator completion evidence, verification receipts and retained reference boundary |
-| [C5_SELFHOSTED_VALIDATOR_REVIEW.md](./C5_SELFHOSTED_VALIDATOR_REVIEW.md) | Condition C5, the review of the self-hosted validator against the reference verifier: check inventory, mutation results, three typed-stage defects repaired, two open soundness residuals, verdict not met |
+| [C5_SELFHOSTED_VALIDATOR_REVIEW.md](./C5_SELFHOSTED_VALIDATOR_REVIEW.md) | Condition C5, the review of the self-hosted validator against the reference verifier: check inventory, mutation results, three typed-stage defects and both soundness residuals repaired, verdict met for the corpus scope |
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
 | [FLAT_TEXT_LAYOUT_PROOF.md](./FLAT_TEXT_LAYOUT_PROOF.md) | The design of the typed pass that proves a flat Text field is written only from text, and where it cannot reach |

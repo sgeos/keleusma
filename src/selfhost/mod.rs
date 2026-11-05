@@ -6482,6 +6482,9 @@ const TV_OUT_REJECT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 
 const TV_CP_FIRST: usize = TV_OUT_REJECT + 1;
 const TV_CP_COUNT: usize = TV_CP_FIRST + crate::selfhost_host::VERIFY_OP_CAP;
 const TV_CP_CAPACITY: usize = 12288;
+/// The chunk's local count, after `out_cause`, which sets the stage's copy of the reference's
+/// loop fixpoint cap, `local_count + 2` passes.
+const TV_LOCAL_COUNT: usize = TV_CP_COUNT + crate::selfhost_host::VERIFY_OP_CAP + 1;
 
 /// The compiled `verify_typed.kel` stage module, cached after the first build.
 ///
@@ -6739,6 +6742,12 @@ fn seed_typed_shared(
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
+    set(
+        vm,
+        &mut shared,
+        TV_LOCAL_COUNT,
+        i64::from(chunk.local_count),
+    );
     // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
     if let Some(sig) = sig {
         for (i, param) in sig.params.iter().enumerate().take(256) {

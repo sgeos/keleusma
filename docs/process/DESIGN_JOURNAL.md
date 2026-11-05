@@ -19065,7 +19065,7 @@ header. A reader checking whether a signature region is reserved will find that 
 Recorded next to the ruling so the next session does not.
 
 **WHAT THIS INCREMENT ACTUALLY CHANGES** is four documents and nothing executable: the ruling record,
-the corrected ECC status, the scrubbed probe-controller example, and the changelog push order. The
+the corrected ECC status, the scrubbed roadmap example, and the changelog push order. The
 implementations the rulings authorise -- the file operand, the declared nesting cap of 32, the
 region reservations, and the `-255` negative test -- are separate increments and are named as not
 implemented so a reader cannot mistake the record for the work.
