@@ -6417,6 +6417,21 @@ fn delegated_loop_resets_rebind_the_innermost_parameter_like_the_vm() {
         "loop leaf(c: Word) -> Word { let s = (c, 3); yield s.0 + s.1 } loop mid(b: Word) -> Word { leaf(b + 100) } loop main(t: Word) -> Word { mid(t) }".into(),
         vec![108, 10, 10, 10, 10],
     ));
+    // The measurements of `NESTED_LOOP_ARENAS.md`, upstream 730, run natively
+    // as well. An outer loop that holds a composite, writes private data, or
+    // yields once before it delegates, each beneath the inner loop's Reset.
+    cases.push((
+        "loop child(a: Word) -> Word { let s = [a, a, a, a]; yield s[1] } loop main(t: Word) -> Word { let b = [t, t, t, t, t, t, t, t, t, t, t, t, t, t, t, t]; child(b[3]) }".into(),
+        vec![5, 7, 7, 7],
+    ));
+    cases.push((
+        "private data st { v: (Word, Word) } loop child(a: Word) -> Word { yield st.v.0 + a } loop main(t: Word) -> Word { st.v = (t, t); child(t) }".into(),
+        vec![10, 12, 12, 12],
+    ));
+    cases.push((
+        "loop child(a: Word) -> Word { yield a + 1000 } loop main(t: Word) -> Word { let s = (t, 2); let r = yield s.0 + s.1; child(r) }".into(),
+        vec![7, 1007, 1007, 1007],
+    ));
     // A `yield` callee's parameter is an argument, which no resume rebinds.
     cases.push((
         delegated("", "yield", "yield a; yield a"),
