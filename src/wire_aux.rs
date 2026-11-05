@@ -34,8 +34,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::bytecode::{
-    BlockType, ChunkSignature, ConstValue, DataLayout, DataSlot, EnumLayout, EnumVariantDisc,
-    PrivateCompositeSlot, SharedSlotLayout, SlotVisibility, StructTemplate, TypeTag, WireShape,
+    BlockType, ChunkSignature, ConstValue, DataField, DataInit, DataLayout, EnumLayout,
+    EnumVariantDisc, SlotVisibility, StructTemplate, TypeTag, WireShape,
 };
 use crate::wire_format::{WireAuxBody, WireChunk};
 
@@ -579,80 +579,100 @@ fn get_struct_template(b: &[u8], at: usize) -> Result<(StructTemplate, usize), F
 // than offset-tabled.
 // --------------------------------------------------------------------------
 
-fn put_data_slot(out: &mut Vec<u8>, v: &DataSlot) {
+fn put_data_field(out: &mut Vec<u8>, v: &DataField) {
     put_str(out, &v.name);
     put_slot_visibility(out, v.visibility);
+    put_u32(out, v.first_slot);
+    put_u32(out, v.count);
+    put_u8(out, v.kind);
+    put_u16(out, v.elem_len);
+    match v.offset {
+        Some(o) => {
+            put_u8(out, 1);
+            put_u32(out, o);
+        }
+        None => put_u8(out, 0),
+    }
+    put_u32(out, v.stride);
+    match &v.init {
+        DataInit::Zero => put_u8(out, 0),
+        DataInit::Unit => put_u8(out, 1),
+        DataInit::Const(c) => {
+            put_u8(out, 2);
+            put_const_value(out, c);
+        }
+    }
 }
 
-fn get_data_slot(b: &[u8], at: usize) -> Result<(DataSlot, usize), FlatAuxError> {
+fn get_data_field(b: &[u8], at: usize) -> Result<(DataField, usize), FlatAuxError> {
     let (name, at) = get_str(b, at)?;
     let (visibility, at) = get_slot_visibility(b, at)?;
-    Ok((DataSlot { name, visibility }, at))
+    let (first_slot, at) = get_u32(b, at)?;
+    let (count, at) = get_u32(b, at)?;
+    let (kind, at) = get_u8(b, at)?;
+    let (elem_len, at) = get_u16(b, at)?;
+    let (has_offset, at) = get_u8(b, at)?;
+    let (offset, at) = match has_offset {
+        0 => (None, at),
+        1 => {
+            let (o, at) = get_u32(b, at)?;
+            (Some(o), at)
+        }
+        found => {
+            return Err(FlatAuxError::BadTag {
+                what: "DataField offset presence",
+                tag: found,
+            });
+        }
+    };
+    let (stride, at) = get_u32(b, at)?;
+    let (init_tag, at) = get_u8(b, at)?;
+    let (init, at) = match init_tag {
+        0 => (DataInit::Zero, at),
+        1 => (DataInit::Unit, at),
+        2 => {
+            let (c, at) = get_const_value(b, at)?;
+            (DataInit::Const(c), at)
+        }
+        found => {
+            return Err(FlatAuxError::BadTag {
+                what: "DataInit",
+                tag: found,
+            });
+        }
+    };
+    Ok((
+        DataField {
+            name,
+            visibility,
+            first_slot,
+            count,
+            kind,
+            elem_len,
+            offset,
+            stride,
+            init,
+        },
+        at,
+    ))
 }
 
 fn put_data_layout(out: &mut Vec<u8>, v: &DataLayout) {
-    put_u32(out, v.slots.len() as u32);
-    for s in &v.slots {
-        put_data_slot(out, s);
-    }
-    put_u32(out, v.shared_layout.len() as u32);
-    for s in &v.shared_layout {
-        put_u32(out, s.offset);
-        put_u8(out, s.kind);
-        put_u16(out, s.len);
-    }
-    put_u32(out, v.private_composite_layout.len() as u32);
-    for s in &v.private_composite_layout {
-        put_u16(out, s.slot);
-        put_u32(out, s.offset);
-    }
-    put_u32(out, v.private_init.len() as u32);
-    for c in &v.private_init {
-        put_const_value(out, c);
+    put_u32(out, v.fields.len() as u32);
+    for f in &v.fields {
+        put_data_field(out, f);
     }
 }
 
 fn get_data_layout(b: &[u8], at: usize) -> Result<(DataLayout, usize), FlatAuxError> {
     let (n, mut at) = get_u32(b, at)?;
-    let mut slots = Vec::with_capacity(n as usize);
+    let mut fields = Vec::new();
     for _ in 0..n {
-        let (s, next) = get_data_slot(b, at)?;
-        slots.push(s);
+        let (f, next) = get_data_field(b, at)?;
+        fields.push(f);
         at = next;
     }
-    let (n, mut at) = get_u32(b, at)?;
-    let mut shared_layout = Vec::with_capacity(n as usize);
-    for _ in 0..n {
-        let (offset, next) = get_u32(b, at)?;
-        let (kind, next) = get_u8(b, next)?;
-        let (len, next) = get_u16(b, next)?;
-        shared_layout.push(SharedSlotLayout { offset, kind, len });
-        at = next;
-    }
-    let (n, mut at) = get_u32(b, at)?;
-    let mut private_composite_layout = Vec::with_capacity(n as usize);
-    for _ in 0..n {
-        let (slot, next) = get_u16(b, at)?;
-        let (offset, next) = get_u32(b, next)?;
-        private_composite_layout.push(PrivateCompositeSlot { slot, offset });
-        at = next;
-    }
-    let (n, mut at) = get_u32(b, at)?;
-    let mut private_init = Vec::with_capacity(n as usize);
-    for _ in 0..n {
-        let (c, next) = get_const_value(b, at)?;
-        private_init.push(c);
-        at = next;
-    }
-    Ok((
-        DataLayout {
-            slots,
-            shared_layout,
-            private_composite_layout,
-            private_init,
-        },
-        at,
-    ))
+    Ok((DataLayout { fields }, at))
 }
 
 fn put_enum_layout(out: &mut Vec<u8>, v: &EnumLayout) {
@@ -1295,17 +1315,15 @@ mod tests {
             native_names: alloc::vec![String::from("println")],
             entry_point: Some(3),
             data_layout: Some(DataLayout {
-                slots: alloc::vec![DataSlot {
-                    name: String::from("d"),
-                    visibility: SlotVisibility::Private,
-                }],
-                shared_layout: alloc::vec![SharedSlotLayout {
-                    offset: 8,
-                    kind: 3,
-                    len: 4,
-                }],
-                private_composite_layout: alloc::vec![PrivateCompositeSlot { slot: 1, offset: 2 }],
-                private_init: alloc::vec![ConstValue::Byte(5)],
+                fields: alloc::vec![
+                    DataField::shared("s", 0, 2, 3, 0, 8, 8),
+                    DataField {
+                        offset: Some(2),
+                        elem_len: 4,
+                        stride: 4,
+                        ..DataField::private("d", 2, 3, 0x82, DataInit::Const(ConstValue::Byte(5)))
+                    },
+                ],
             }),
             word_bits_log2: 6,
             addr_bits_log2: 5,
@@ -1357,11 +1375,12 @@ mod tests {
         assert_eq!(got.native_names, alloc::vec![String::from("println")]);
         assert_eq!(got.entry_point, Some(3));
         let dl = got.data_layout.expect("data layout");
-        assert_eq!(dl.slots[0].name, "d");
-        assert_eq!(dl.slots[0].visibility, SlotVisibility::Private);
-        assert_eq!(dl.shared_layout[0].offset, 8);
-        assert_eq!(dl.private_composite_layout[0].slot, 1);
-        assert_eq!(dl.private_init[0], ConstValue::Byte(5));
+        assert_eq!(Some(&dl), aux.data_layout.as_ref());
+        assert_eq!(dl.fields[1].name, "d");
+        assert_eq!(dl.fields[1].visibility, SlotVisibility::Private);
+        assert_eq!(dl.fields[0].offset, Some(8));
+        assert_eq!(dl.fields[1].offset, Some(2));
+        assert_eq!(dl.fields[1].init, DataInit::Const(ConstValue::Byte(5)));
         assert_eq!(
             (got.word_bits_log2, got.addr_bits_log2, got.float_bits_log2),
             (6, 5, 6)

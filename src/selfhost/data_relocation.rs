@@ -136,13 +136,7 @@ impl<'a> Machine<'a> {
             .data_layout
             .as_ref()
             .ok_or_else(|| error("missing stage layout"))?;
-        let find = |name: &str| {
-            layout
-                .slots
-                .iter()
-                .position(|s| s.name == name)
-                .ok_or_else(|| error(name))
-        };
+        let find = |name: &str| layout.slot_of(name).ok_or_else(|| error(name));
         let slots = [
             find("ast.relocate_mode")?,
             find("ast.relocate_count")?,

@@ -208,16 +208,11 @@ fn unit_private_slots(module: &Module) -> Vec<u32> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    let mut private = 0usize;
-    for (slot, s) in layout.slots.iter().enumerate() {
-        if s.visibility == SlotVisibility::Private {
-            if matches!(
-                layout.private_init.get(private),
-                None | Some(ConstValue::Unit)
-            ) {
-                out.push(slot as u32);
-            }
-            private += 1;
+    for f in &layout.fields {
+        if f.visibility == SlotVisibility::Private
+            && matches!(f.init.value(f.kind), None | Some(ConstValue::Unit))
+        {
+            out.extend(f.first_slot..f.first_slot.saturating_add(f.count));
         }
     }
     out

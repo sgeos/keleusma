@@ -215,7 +215,7 @@ fn the_published_supplement_covers_every_byte_the_backend_writes() {
     let slots = m
         .data_layout
         .as_ref()
-        .map(|dl| dl.private_composite_layout.len())
+        .map(|dl| keleusma_native::data_view::private_composite_layout(Some(dl)).len())
         .unwrap_or(0);
     assert!(
         slots > 0,

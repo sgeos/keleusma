@@ -3452,21 +3452,7 @@ impl Default for ChunkSignature {
     }
 }
 
-/// A named slot in the data segment.
-#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
-pub struct DataSlot {
-    /// Slot name (for host initialization and debugging).
-    pub name: String,
-    /// Slot visibility to the host. Shared slots live in the borrowed
-    /// host-owned buffer and are read and written through
-    /// `Vm::get_shared`/`Vm::set_shared` (B28 item 2); private slots
-    /// live in the arena and are script-only. Both persist across
-    /// resets. Source declaration uses the `shared` (default) and
-    /// `private` modifiers on `data` blocks.
-    pub visibility: SlotVisibility,
-}
-
-/// Slot visibility flag carried in [`DataSlot::visibility`].
+/// Slot visibility flag carried in [`DataField::visibility`].
 ///
 /// Mirrors `ast::DataVisibility` at the bytecode layer so the
 /// runtime can enforce the host-API boundary without reading
@@ -3481,26 +3467,24 @@ pub enum SlotVisibility {
     Private,
 }
 
-/// Per-shared-slot byte layout in the borrowed host buffer (B28 item 2
-/// shared-data re-architecture).
+/// One shared slot's byte layout in the borrowed host buffer, resolved from
+/// the [`DataField`] that contains it (B28 item 2 shared-data
+/// re-architecture).
 ///
-/// One entry per shared slot index, in the same order as the shared prefix of
-/// [`DataLayout::slots`]. An array field expands to one entry per element slot,
-/// so `Op::GetDataIndexed` resolves an element slot and the runtime reads its
-/// entry. For a shared slot the runtime reads or writes the host buffer at
-/// `offset` according to `kind`: a `crate::value_layout::ScalarKind::to_tag`
-/// for a scalar slot, or, when the [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is
-/// set, a `CompositeKind::to_tag` in the low bits for a flat composite slot
-/// whose body is `len` bytes. The instruction set is unchanged; this table is
-/// how the existing
+/// This is what [`DataLayout::shared_slot`] returns for a logical slot index.
+/// It is a distinct type from [`DataField`] because a field is field-space and
+/// this entry is slot-space, and one type serving both is how a logical index
+/// gets passed where a field index belongs. For a shared slot the runtime reads
+/// or writes the host buffer at `offset` according to `kind`: a
+/// `crate::value_layout::ScalarKind::to_tag` for a scalar slot, or, when the
+/// [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is set, a `CompositeKind::to_tag` in
+/// the low bits for a flat composite slot whose body is `len` bytes. The
+/// instruction set is unchanged; this resolution is how the existing
 /// `GetData`/`SetData` reach the buffer without a new opcode, the rad-hard
 /// minimal-ISA choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedSlotLayout {
-    /// Byte offset of this slot within the host buffer. A `u32` (validated
-    /// `< 1 << 24` at compile) so the shared segment is not bounded to 64 KB;
-    /// the on-wire operand and the `PrivateCompositeSlot::offset` precedent are
-    /// the same twenty-four-bit width.
+    /// Byte offset of this slot within the host buffer, below `1 << 24`.
     pub offset: u32,
     /// Slot kind. When the [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is clear,
     /// this is a `crate::value_layout::ScalarKind::to_tag` (`0..=7`) for a
@@ -3514,74 +3498,411 @@ pub struct SharedSlotLayout {
     pub len: u16,
 }
 
-/// High bit of [`SharedSlotLayout::kind`] marking a flat composite slot. When
-/// set, the low seven bits carry the composite's `CompositeKind::to_tag`
-/// (`0..=3`); when clear, `kind` is a `ScalarKind::to_tag` (`0..=7`). The two
+/// High bit of a data field's `kind` marking a flat composite. When set, the
+/// low seven bits carry the composite's `CompositeKind::to_tag` (`0..=3`);
+/// when clear, `kind` is a `ScalarKind::to_tag` (`0..=7`). The two
 /// scalar/composite tag spaces overlap, so this flag is the discriminator.
 pub const SHARED_SLOT_COMPOSITE_FLAG: u8 = 0x80;
 
-/// Persistent-pool placement of one private composite data slot (B28 item 2
-/// step 6A).
+/// How every element of a [`DataField`] is initialised when the module loads.
 ///
-/// One entry per private slot that holds a flat composite body, single
-/// composite fields and every element slot of an array-of-composite field
-/// alike. The `offset` is the body's byte offset within the persistent
-/// composite pool that follows the private-slot `Value` array in the arena
-/// persistent region. At a flat-composite private write the runtime copies the
-/// body into that fixed location and stores a region-aware handle that survives
-/// RESET in place, so no private composite write needs a global-heap owned
-/// body. This is the linker-style fixed-address placement of program state, the
-/// 6502/NES and real-time control-loop model: every composite slot, including
-/// array elements, has a statically baked address. Entries are sorted ascending
-/// by `slot` so the runtime resolves a slot by binary search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
-pub struct PrivateCompositeSlot {
-    /// Unified data-slot index (shared slots precede private slots).
-    pub slot: u16,
-    /// Byte offset of this slot's flat composite body within the persistent
-    /// composite pool. A `u32` rather than a `u16` so the pool is not bounded
-    /// to 64 KB; the access ops carry no offset, the runtime reads it here.
-    pub offset: u32,
+/// # Why one initialiser per field rather than one per element
+///
+/// Every element of a field starts with the same value, because the language
+/// admits an explicit `= literal` only on a scalar field and gives every other
+/// element its type's zero. Carrying one value per element made the artifact
+/// grow sixteen bytes per element of a private `Byte`, `bool`, `Fixed`, `Float`
+/// or composite array, which the array wire-slot design record measured. One
+/// initialiser per field removes that growth for every element kind.
+///
+/// # Why the zero of a scalar kind is its own form
+///
+/// A wholly-zero scalar field needs no constant at all, since the kind already
+/// names its zero. Writing it as [`Self::Const`] would cost a sixteen-byte
+/// constant record per field for a value the decoder can supply. Use
+/// [`DataInit::canonical`] to choose the form, so that the reference compiler
+/// and the self-hosted driver, which cannot tell `x: Word = 0` from `x: Word`,
+/// always agree on it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DataInit {
+    /// The zero of the field's scalar kind. Valid only for the `Bool`, `Byte`,
+    /// `Int`, `Fixed` and `Float` scalar kinds. Every shared field carries this
+    /// form, because its host, and not the module, initialises it.
+    Zero,
+    /// [`ConstValue::Unit`], under the write-before-read contract the verifier
+    /// enforces for such a field.
+    Unit,
+    /// Every element of the field starts as this constant.
+    Const(ConstValue),
 }
 
-/// Data segment layout declaration.
+impl DataInit {
+    /// The canonical form of initialising every element of a field of `kind`
+    /// to `value`.
+    ///
+    /// [`ConstValue::Unit`] becomes [`Self::Unit`]. A value equal to the zero of
+    /// a scalar `kind`, compared by bit pattern for a float so that negative
+    /// zero is kept, becomes [`Self::Zero`]. Anything else is [`Self::Const`].
+    #[must_use]
+    pub fn canonical(kind: u8, value: ConstValue) -> Self {
+        if matches!(value, ConstValue::Unit) {
+            return Self::Unit;
+        }
+        match data_kind_zero(kind) {
+            Some(zero) if const_bits_equal(&zero, &value) => Self::Zero,
+            _ => Self::Const(value),
+        }
+    }
+
+    /// The value every element of a field of `kind` starts as, or `None` when
+    /// the form is [`Self::Zero`] and `kind` names no zeroable scalar, which a
+    /// validated layout never carries.
+    #[must_use]
+    pub fn value(&self, kind: u8) -> Option<ConstValue> {
+        match self {
+            Self::Zero => data_kind_zero(kind),
+            Self::Unit => Some(ConstValue::Unit),
+            Self::Const(v) => Some(v.clone()),
+        }
+    }
+}
+
+/// The zero of a data field's scalar `kind`, or `None` when the kind is a
+/// composite, `Unit`, `Text`, an opaque type, or `Float` in a build without the
+/// `floats` feature.
 ///
-/// Defines the fixed-size, fixed-layout set of persistent values that
-/// survive across RESET boundaries. `shared` slots are host-initialized
-/// before execution begins and are read and written by index across the
-/// host boundary. `private` slots are invisible to the host and are
-/// initialized at load from [`Self::private_init`], the `.data`-section
-/// model; scripts read and write them by index.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+/// This is the one table from a kind tag to a value, and the wire decoder uses
+/// it to rebuild a [`DataInit::Zero`] field. Every kind it omits must carry an
+/// explicit initialiser instead.
+#[must_use]
+pub fn data_kind_zero(kind: u8) -> Option<ConstValue> {
+    use crate::value_layout::ScalarKind;
+    if kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+        return None;
+    }
+    Some(match ScalarKind::from_tag(kind)? {
+        ScalarKind::Bool => ConstValue::Bool(false),
+        ScalarKind::Byte => ConstValue::Byte(0),
+        ScalarKind::Int => ConstValue::Int(0),
+        ScalarKind::Fixed => ConstValue::Fixed(0),
+        #[cfg(feature = "floats")]
+        ScalarKind::Float => ConstValue::Float(0.0),
+        ScalarKind::Unit | ScalarKind::Text | ScalarKind::Opaque => return None,
+    })
+}
+
+/// Equality that distinguishes a negative float zero from a positive one.
+///
+/// [`ConstValue`]'s `PartialEq` compares floats by value, under which `-0.0`
+/// equals `0.0`. Folding `-0.0` into [`DataInit::Zero`] would then load it as
+/// `+0.0`, which is a silent change of value.
+fn const_bits_equal(a: &ConstValue, b: &ConstValue) -> bool {
+    match (a, b) {
+        #[cfg(feature = "floats")]
+        (ConstValue::Float(x), ConstValue::Float(y)) => x.to_bits() == y.to_bits(),
+        _ => a == b,
+    }
+}
+
+/// One declared data field, the unit the data layout is made of.
+///
+/// A scalar field has a `count` of one. An array field, however many
+/// dimensions it has, is one field whose `count` is the product of its
+/// dimensions. Each element still occupies one logical data slot, so a
+/// `GetData`/`SetData` operand counts elements, and the field's slots are
+/// `first_slot..first_slot + count`.
+///
+/// # Why the stride is stored rather than derived
+///
+/// A scalar element advances by its kind's size and a composite element by its
+/// body length. Deriving the stride would put a kind-to-size table on both the
+/// Rust and the Keleusma side, and duplication of exactly that shape produced
+/// three separate defects on 2026-08-12.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataField {
+    /// The field's name, `block.field`, for host initialization and debugging.
+    pub name: String,
+    /// The field's visibility to the host. Shared fields live in the borrowed
+    /// host-owned buffer and are read and written through
+    /// `Vm::get_shared`/`Vm::set_shared` (B28 item 2); private fields live in
+    /// the arena and are script-only. Both persist across resets.
+    pub visibility: SlotVisibility,
+    /// Logical slot index of element zero. Fields are contiguous and
+    /// ascending, so this equals the sum of the counts of the fields before it.
+    pub first_slot: u32,
+    /// Element count. Never zero.
+    pub count: u32,
+    /// Scalar or composite kind tag of one element, in the space
+    /// [`SharedSlotLayout::kind`] uses.
+    pub kind: u8,
+    /// Flat composite body length of one element in bytes, zero for a scalar
+    /// element or for a composite that has no flat body.
+    pub elem_len: u16,
+    /// Byte offset of element zero. For a shared field, the offset in the host
+    /// buffer, always present. For a private field, the offset in the
+    /// persistent composite pool when its elements have a pool home, and
+    /// `None` otherwise.
+    pub offset: Option<u32>,
+    /// Byte distance between consecutive elements. Zero when `count` is one or
+    /// when `offset` is `None`.
+    pub stride: u32,
+    /// How every element starts. Always [`DataInit::Zero`] for a shared field.
+    pub init: DataInit,
+}
+
+impl DataField {
+    /// A shared field of `count` elements of `kind`, element zero at `offset`
+    /// in the host buffer and consecutive elements `stride` bytes apart.
+    #[must_use]
+    pub fn shared(
+        name: impl Into<String>,
+        first_slot: u32,
+        count: u32,
+        kind: u8,
+        elem_len: u16,
+        offset: u32,
+        stride: u32,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            visibility: SlotVisibility::Shared,
+            first_slot,
+            count,
+            kind,
+            elem_len,
+            offset: Some(offset),
+            stride,
+            init: DataInit::Zero,
+        }
+    }
+
+    /// A private field of `count` elements of `kind` with no persistent pool
+    /// home, every element starting as `init`.
+    #[must_use]
+    pub fn private(
+        name: impl Into<String>,
+        first_slot: u32,
+        count: u32,
+        kind: u8,
+        init: DataInit,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            visibility: SlotVisibility::Private,
+            first_slot,
+            count,
+            kind,
+            elem_len: 0,
+            offset: None,
+            stride: 0,
+            init,
+        }
+    }
+
+    /// The element of this field at logical `slot`, or `None` when the slot
+    /// lies outside it.
+    #[inline]
+    #[must_use]
+    pub fn element_of(&self, slot: usize) -> Option<u32> {
+        let slot = u32::try_from(slot).ok()?;
+        let within = slot.checked_sub(self.first_slot)?;
+        (within < self.count).then_some(within)
+    }
+
+    /// Byte offset of element `element`, or `None` when the field has no
+    /// offset, the element is out of range, or the arithmetic overflows.
+    #[inline]
+    #[must_use]
+    pub fn element_offset(&self, element: u32) -> Option<u32> {
+        if element >= self.count {
+            return None;
+        }
+        self.offset?.checked_add(element.checked_mul(self.stride)?)
+    }
+}
+
+/// Data segment layout declaration, one [`DataField`] per declared field.
+///
+/// Defines the fixed-size, fixed-layout set of persistent values that survive
+/// across RESET boundaries. `shared` fields are host-initialized before
+/// execution begins and are read and written by slot index across the host
+/// boundary. `private` fields are invisible to the host and are initialized at
+/// load from each field's [`DataField::init`], the `.data`-section model;
+/// scripts read and write them by slot index.
+///
+/// # Invariants a validated layout holds
+///
+/// Fields are contiguous and ascending in slot space, each field's
+/// `first_slot` is the sum of the counts before it, no count is zero, and every
+/// shared field precedes every private field. `validate_data_layout` in the
+/// typed verifier and the wire decoder each check these, so a slot lookup may
+/// binary-search on `first_slot`.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DataLayout {
-    /// Named slots in declaration order. Slot index corresponds to
-    /// the `GetData`/`SetData` operand.
-    pub slots: Vec<DataSlot>,
-    /// Per-shared-slot byte layout in the host buffer, one entry per shared
-    /// slot in declaration order (B28 item 2). Empty when there are no shared
-    /// slots; the private slots that follow the shared prefix carry no entries.
-    pub shared_layout: Vec<SharedSlotLayout>,
-    /// Persistent-pool placement of each private slot that holds a flat
-    /// composite body, single composite fields and array-of-composite element
-    /// slots alike (B28 item 2 step 6A). Sorted ascending by slot. Empty for a
-    /// module with no private composite slots, so the wire form is unchanged
-    /// for such modules. The runtime persists a flat-composite private write
-    /// into the pool at the entry's offset; a private composite slot absent
-    /// from this table is an empty (zero-byte) composite that needs no pool
-    /// home.
-    pub private_composite_layout: Vec<PrivateCompositeSlot>,
-    /// Load-time initial value of each private slot, in private-slot order
-    /// (parallel to the private-slot suffix of `slots`, so entry `i`
-    /// initializes the `i`-th private slot). A scalar slot (`Word`, `Byte`,
-    /// `Bool`, `Fixed`, `Float`) carries its declared `= literal` initializer
-    /// or the type's zero; a composite or `Text` slot carries
-    /// [`ConstValue::Unit`], preserving the write-before-read contract for
-    /// those. Empty when the module has no private data, so the wire form is
-    /// unchanged for such modules. Unlike shared data, private data is
-    /// invisible to the host and initialized here, at load, exactly like an
-    /// assembler `.data` section; the values persist across RESET and are not
-    /// re-applied.
-    pub private_init: Vec<ConstValue>,
+    /// The declared fields in slot order, shared fields first.
+    pub fields: Vec<DataField>,
+}
+
+impl DataLayout {
+    /// Number of logical slots, the bound of a `GetData`/`SetData` operand.
+    #[must_use]
+    pub fn slot_count(&self) -> usize {
+        self.fields.iter().map(|f| f.count as usize).sum()
+    }
+
+    /// Number of logical slots in shared fields.
+    #[must_use]
+    pub fn shared_slot_count(&self) -> usize {
+        self.fields
+            .iter()
+            .filter(|f| f.visibility == SlotVisibility::Shared)
+            .map(|f| f.count as usize)
+            .sum()
+    }
+
+    /// Number of logical slots in private fields.
+    #[must_use]
+    pub fn private_slot_count(&self) -> usize {
+        self.fields
+            .iter()
+            .filter(|f| f.visibility == SlotVisibility::Private)
+            .map(|f| f.count as usize)
+            .sum()
+    }
+
+    /// Index of the field containing logical `slot`, by binary search on
+    /// `first_slot`, whose bound is the logarithm of the field count.
+    ///
+    /// `None` when the slot lies past every field. On a layout that breaks the
+    /// contiguity invariant the search may miss, which also yields `None`
+    /// rather than a wrong field, because the containing field is re-checked.
+    #[must_use]
+    pub fn field_index_at(&self, slot: usize) -> Option<usize> {
+        let slot32 = u32::try_from(slot).ok()?;
+        let at = self
+            .fields
+            .partition_point(|f| f.first_slot <= slot32)
+            .checked_sub(1)?;
+        self.fields.get(at)?.element_of(slot)?;
+        Some(at)
+    }
+
+    /// The field containing logical `slot` and the element index within it.
+    #[must_use]
+    pub fn field_at(&self, slot: usize) -> Option<(&DataField, u32)> {
+        let f = self.fields.get(self.field_index_at(slot)?)?;
+        Some((f, f.element_of(slot)?))
+    }
+
+    /// The first logical slot of the field named `name`, or `None` when no
+    /// field has that name. A linear scan, for host-side lookups that run once
+    /// per stage, never on an execution path.
+    #[must_use]
+    pub fn slot_of(&self, name: &str) -> Option<usize> {
+        self.fields
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| f.first_slot as usize)
+    }
+
+    /// The visibility of logical `slot`.
+    #[must_use]
+    pub fn slot_visibility(&self, slot: usize) -> Option<SlotVisibility> {
+        Some(self.field_at(slot)?.0.visibility)
+    }
+
+    /// The resolved host-buffer layout of shared logical `slot`, or `None`
+    /// when the slot is not shared or is out of range.
+    #[must_use]
+    pub fn shared_slot(&self, slot: usize) -> Option<SharedSlotLayout> {
+        let (f, k) = self.field_at(slot)?;
+        if f.visibility != SlotVisibility::Shared {
+            return None;
+        }
+        Some(SharedSlotLayout {
+            offset: f.element_offset(k)?,
+            kind: f.kind,
+            len: f.elem_len,
+        })
+    }
+
+    /// Every shared slot's resolved layout, in slot order.
+    ///
+    /// This expands fields to elements and therefore allocates in proportion
+    /// to the shared element count. Prefer [`Self::shared_slot`] on any path
+    /// that does not need every entry.
+    #[must_use]
+    pub fn shared_slots(&self) -> Vec<SharedSlotLayout> {
+        let mut out = Vec::new();
+        for f in &self.fields {
+            if f.visibility != SlotVisibility::Shared {
+                continue;
+            }
+            for k in 0..f.count {
+                if let Some(offset) = f.element_offset(k) {
+                    out.push(SharedSlotLayout {
+                        offset,
+                        kind: f.kind,
+                        len: f.elem_len,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The largest flat composite body length among the shared fields that the
+    /// slot range `base..base + len` overlaps, zero when it overlaps none.
+    ///
+    /// Visits each overlapping FIELD once, after one binary search, since every
+    /// element of a field shares its kind and body length.
+    #[must_use]
+    pub fn shared_composite_max_len(&self, base: usize, len: usize) -> u32 {
+        let Some(first) = self.field_index_at(base) else {
+            return 0;
+        };
+        let end = base.saturating_add(len);
+        self.fields[first..]
+            .iter()
+            .take_while(|f| (f.first_slot as usize) < end)
+            .filter(|f| {
+                f.visibility == SlotVisibility::Shared && f.kind & SHARED_SLOT_COMPOSITE_FLAG != 0
+            })
+            .map(|f| u32::from(f.elem_len))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The persistent composite pool offset of private logical `slot`, or
+    /// `None` when the slot is not private or has no pool home.
+    #[must_use]
+    pub fn private_composite_offset(&self, slot: usize) -> Option<u32> {
+        let (f, k) = self.field_at(slot)?;
+        if f.visibility != SlotVisibility::Private {
+            return None;
+        }
+        f.element_offset(k)
+    }
+
+    /// The load-time value of every private slot, in private-slot order.
+    ///
+    /// Allocates one value per private element. A field whose initialiser
+    /// cannot be resolved contributes `Unit`, which a validated layout never
+    /// produces.
+    #[must_use]
+    pub fn private_init_values(&self) -> Vec<ConstValue> {
+        let mut out = Vec::new();
+        for f in &self.fields {
+            if f.visibility != SlotVisibility::Private {
+                continue;
+            }
+            let v = f.init.value(f.kind).unwrap_or(ConstValue::Unit);
+            for _ in 0..f.count {
+                out.push(v.clone());
+            }
+        }
+        out
+    }
 }
 
 /// A compiled function.
@@ -4124,57 +4445,67 @@ pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
         Some(l) => l,
         None => return 0,
     };
-    if layout.slots.is_empty() {
+    if layout.slot_count() == 0 {
         return 0;
     }
     let mut buf: Vec<u8> = Vec::new();
-    for slot in &layout.slots {
-        buf.extend_from_slice(slot.name.as_bytes());
-        buf.push(0x00);
-        let vis_tag = match slot.visibility {
-            SlotVisibility::Shared => b'S',
-            SlotVisibility::Private => b'P',
-        };
-        buf.push(vis_tag);
-        buf.push(b'\n');
+    for field in &layout.fields {
+        for _ in 0..field.count {
+            buf.extend_from_slice(field.name.as_bytes());
+            buf.push(0x00);
+            let vis_tag = match field.visibility {
+                SlotVisibility::Shared => b'S',
+                SlotVisibility::Private => b'P',
+            };
+            buf.push(vis_tag);
+            buf.push(b'\n');
+        }
     }
     crc32(&buf)
 }
 
-/// CRC-32 of the data-segment layout with each slot's declared type, the schema hash a module
+/// CRC-32 of the data-segment layout with each field's declared type, the schema hash a module
 /// carries.
 ///
-/// The canonical form extends [`compute_schema_hash`]'s. Each slot emits its name, a null byte,
-/// its visibility tag, a unit-separator byte `0x1F`, its type token from `slot_types`, which is
-/// parallel to `layout.slots`, and a newline. A missing token is empty. The operator ruled on
-/// 2026-10-28 that the hot-swap schema hash cover slot types, so two modules whose slots share
-/// names but not types, a reordered struct for example, no longer hash alike.
+/// # The canonical form, H2
 ///
-/// The type token is the slot's element type after every outer array level is removed, since an
-/// array field takes one slot per element. A scalar renders as its name, such as `Word`, `Byte`,
-/// `bool`, `Text`, `Float` or `Fixed`, the last without its fraction-bit count, which does not
-/// change the layout. A struct renders as `Name{field:token,...}` in
-/// declaration order, an array inside one as `[token;N]`, a tuple as `(token,...)` and any other
-/// named type as its name. The reference compiler and the self-hosted driver both build these
-/// tokens, from the declared types and from the parser's records, and must agree byte for byte.
-pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, slot_types: &[String]) -> u32 {
+/// One line per FIELD, in layout order. Each emits the field's name, a null byte, its
+/// visibility tag (`0x53` `'S'` shared, `0x50` `'P'` private), a unit-separator byte `0x1F`,
+/// its type token from `field_types`, which is parallel to `layout.fields`, and a newline. A
+/// missing token is empty. The operator ruled on 2026-10-28 that the hot-swap schema hash cover
+/// the declared types, and on 2026-10-31 chose this per-field form, H2, over streaming the
+/// earlier per-slot form. Every hash of a module with an array changed with that choice.
+///
+/// A scalar renders as its name, such as `Word`, `Byte`, `bool`, `Text`, `Float` or `Fixed`,
+/// the last without its fraction-bit count, which does not change the layout. A struct renders
+/// as `Name{field:token,...}` in declaration order, an array inside one as `[token;N]`, a tuple
+/// as `(token,...)` and any other named type as its name. **An array FIELD renders as
+/// `[leaf;count]`**, where `leaf` is the token of its innermost element and `count` the product
+/// of its dimensions, the element count. So resizing, retyping or reordering an array each
+/// changes the hash. Two shapes of the same element count, `[[Word;3];4]` and `[Word;12]`,
+/// render alike, since they occupy the same slots, and because parse.kel's array record carries
+/// only the element count, which is what the self-hosted driver can reproduce. The reference
+/// compiler and the self-hosted driver both build these tokens and must agree byte for byte.
+///
+/// The work is a function of the field count, not of the element count.
+pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, field_types: &[String]) -> u32 {
     let layout = match layout {
         Some(l) => l,
         None => return 0,
     };
-    if layout.slots.is_empty() {
+    if layout.slot_count() == 0 {
         return 0;
     }
     let mut buf: Vec<u8> = Vec::new();
-    for (i, slot) in layout.slots.iter().enumerate() {
-        buf.extend_from_slice(slot.name.as_bytes());
+    for (field, i) in layout.fields.iter().zip(0usize..) {
+        buf.extend_from_slice(field.name.as_bytes());
         buf.push(0x00);
-        buf.push(match slot.visibility {
+        buf.push(match field.visibility {
             SlotVisibility::Shared => b'S',
             SlotVisibility::Private => b'P',
         });
         buf.push(0x1F);
-        if let Some(token) = slot_types.get(i) {
+        if let Some(token) = field_types.get(i) {
             buf.extend_from_slice(token.as_bytes());
         }
         buf.push(b'\n');

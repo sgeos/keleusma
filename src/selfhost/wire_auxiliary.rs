@@ -11,21 +11,16 @@ fn error(detail: &str) -> SelfHostError {
     }
 }
 
-struct InitializerPlan {
-    elided: bool,
-    record: Vec<u8>,
-}
-
-// The stage receives chunk root counts and typed scalar initializers. It owns
-// both the constant-table position and the exact all-Int(0) elision decision.
-fn initializer_plan(stage: &Module, module: &Module) -> Result<InitializerPlan, SelfHostError> {
+// The stage receives chunk root counts and each data field's initialiser form.
+// It owns the constant-table position of every explicit initialiser, which it
+// returns as each field's `init_const`.
+fn initializer_plan(stage: &Module, module: &Module) -> Result<Vec<i64>, SelfHostError> {
     let layout = module
         .data_layout
         .as_ref()
         .ok_or_else(|| error("missing data layout"))?;
     let chunks = u32::try_from(module.chunks.len()).map_err(|_| error("chunk count overflow"))?;
-    let count = u32::try_from(layout.private_init.len())
-        .map_err(|_| error("initializer count overflow"))?;
+    let count = u32::try_from(layout.fields.len()).map_err(|_| error("field count overflow"))?;
     with_compiled_wire(stage.clone(), |vm, shared| {
         set_word(vm, shared, wire_slots::WARG, i64::from(chunks))?;
         set_word(vm, shared, wire_slots::WARG + 1, i64::from(count))?;
@@ -40,39 +35,49 @@ fn initializer_plan(stage: &Module, module: &Module) -> Result<InitializerPlan, 
                 return Err(error("unexpected root-count result"));
             }
         }
-        for batch in layout.private_init.chunks(512) {
-            for (i, value) in batch.iter().enumerate() {
-                let (tag, payload) = const_tag_and_name(value);
-                set_word(vm, shared, wire_slots::FIN + i * 2, i64::from(tag))?;
-                set_word(vm, shared, wire_slots::FIN + i * 2 + 1, payload)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(layout.fields.len())
+            .map_err(|_| error("initializer allocation failed"))?;
+        for batch in layout.fields.chunks(512) {
+            for (i, f) in batch.iter().enumerate() {
+                let form = super::wire_stream_auxiliary::init_form_of(&f.init);
+                set_word(vm, shared, wire_slots::FIN + i, form)?;
             }
             set_word(vm, shared, wire_slots::WARG, batch.len() as i64)?;
             if command(vm, shared, 211)? != 0 {
                 return Err(error("unexpected initializer scan"));
             }
+            for i in 0..batch.len() {
+                match vm
+                    .get_shared(shared, wire_slots::FIN + i)
+                    .map_err(|_| error("initializer response read failed"))?
+                {
+                    Value::Int(v) => out.push(v),
+                    _ => return Err(error("invalid initializer response")),
+                }
+            }
         }
-        if command(vm, shared, 212)? != 8 {
-            return Err(error("unexpected initializer record length"));
+        if command(vm, shared, 212)? != layout.fields.len() {
+            return Err(error("unexpected initializer count"));
         }
-        let elided = match vm
-            .get_shared(shared, wire_slots::FIN)
-            .map_err(|_| error("elision response read failed"))?
-        {
-            Value::Int(0) => false,
-            Value::Int(1) => true,
-            _ => return Err(error("invalid elision response")),
-        };
-        let mut record = vec![0; 8];
-        read_window(vm, shared, &mut record)?;
-        Ok(InitializerPlan { elided, record })
+        Ok(out)
     })
+}
+
+/// The constant roots the data layout contributes, every field's explicit initialiser in
+/// field order.
+fn init_roots(module: &Module) -> impl Iterator<Item = &ConstValue> + Clone {
+    module
+        .data_layout
+        .iter()
+        .flat_map(crate::wire_schema::data_init_roots)
 }
 
 fn scalar_node_fields(
     module: &Module,
     include_initializers: bool,
 ) -> Result<Vec<i64>, SelfHostError> {
-    let initializers = module.data_layout.iter().flat_map(|d| &d.private_init);
+    let initializers = init_roots(module);
     let constants = module.chunks.iter().flat_map(|c| &c.constants);
     let roots =
         constants.chain(initializers.take(if include_initializers { usize::MAX } else { 0 }));
@@ -141,19 +146,11 @@ fn validate_input(module: &Module) -> Result<usize, SelfHostError> {
             .ok_or_else(|| error("name count overflow"))?;
     }
     if let Some(layout) = &module.data_layout {
-        if layout.slots.iter().any(|s| !fits_name(&s.name)) {
-            return Err(error("slot name exceeds the stage name capacity"));
+        if layout.fields.iter().any(|f| !fits_name(&f.name)) {
+            return Err(error("field name exceeds the stage name capacity"));
         }
-        let runs = usize::from(!layout.slots.is_empty())
-            + layout
-                .slots
-                .windows(2)
-                .filter(|pair| {
-                    pair[0].name != pair[1].name || pair[0].visibility != pair[1].visibility
-                })
-                .count();
         events = events
-            .checked_add(runs)
+            .checked_add(layout.fields.len())
             .ok_or_else(|| error("name count overflow"))?;
     }
     if events > 1024 {
@@ -169,13 +166,11 @@ fn forest_input(
     include_initializers: bool,
     prefix_events: usize,
 ) -> Result<(Vec<u8>, usize), SelfHostError> {
-    let roots = module.chunks.iter().flat_map(|c| &c.constants).chain(
-        module
-            .data_layout
-            .iter()
-            .flat_map(|d| &d.private_init)
-            .take(if include_initializers { usize::MAX } else { 0 }),
-    );
+    let roots = module
+        .chunks
+        .iter()
+        .flat_map(|c| &c.constants)
+        .chain(init_roots(module).take(if include_initializers { usize::MAX } else { 0 }));
     let root_count = roots.clone().count();
     if root_count > 1365 {
         return Err(error("constant forest exceeds 1365 nodes"));
@@ -390,18 +385,12 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
     } else {
         None
     };
-    let include_initializers = init.as_ref().is_some_and(|plan| !plan.elided);
+    let include_initializers = init_roots(module).next().is_some();
     let scalar = module
         .chunks
         .iter()
         .flat_map(|c| &c.constants)
-        .chain(
-            module
-                .data_layout
-                .iter()
-                .flat_map(|d| &d.private_init)
-                .take(if include_initializers { usize::MAX } else { 0 }),
-        )
+        .chain(init_roots(module))
         .all(constant_is_scalar);
     let constant_fields = if scalar {
         scalar_node_fields(module, include_initializers)?
@@ -575,43 +564,21 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         ),
         (kind::NATIVE_RETURNS, native_returns),
     ];
-    if let Some(init) = init {
-        regions.extend([
-            (
-                kind::DATA_SLOTS,
-                emitter.stream(&slot_run_fields(module), 4, Some(182), 183, None)?,
-            ),
-            (
-                kind::SHARED_LAYOUT,
-                emitter.stream(
-                    &shared_slot_fields(module),
-                    7,
-                    None,
-                    164,
-                    Some(kind::SHARED_LAYOUT),
-                )?,
-            ),
-            (kind::PRIVATE_COMPOSITE, {
-                let placements = &module
-                    .data_layout
-                    .as_ref()
-                    .unwrap()
-                    .private_composite_layout;
-                let count = placements
-                    .len()
-                    .checked_mul(3)
-                    .ok_or_else(|| error("placement field count overflow"))?;
-                let mut fields = Vec::new();
-                fields
-                    .try_reserve_exact(count)
-                    .map_err(|_| error("placement allocation failed"))?;
-                for p in placements {
-                    fields.extend_from_slice(&[i64::from(p.slot), 0, i64::from(p.offset)]);
-                }
-                emitter.stream(&fields, 3, None, 164, Some(kind::PRIVATE_COMPOSITE))?
-            }),
-            (kind::DATA_INIT, init.record),
-        ]);
+    if let (Some(init_consts), Some(layout)) = (init, module.data_layout.as_ref()) {
+        // The field index stands where the record takes its name, so the stage
+        // takes the name from its own interner, as the slot stream did.
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(layout.fields.len().saturating_mul(12))
+            .map_err(|_| error("field row allocation failed"))?;
+        for (i, (f, init_const)) in layout.fields.iter().zip(init_consts).enumerate() {
+            rows.extend_from_slice(&super::wire_stream_auxiliary::data_field_row(
+                i as i64, f, init_const,
+            ));
+        }
+        regions.push((
+            kind::DATA_FIELDS,
+            emitter.stream(&rows, 12, Some(182), 183, None)?,
+        ));
     }
     regions.push((kind::HEADER, emitter.single(172)?));
     let wants_constants = !module.chunks.is_empty() || include_initializers;
@@ -717,6 +684,7 @@ mod tests {
 
     #[test]
     fn initializer_protocol_checks_counts_order_and_atomic_batches() {
+        let absent = i64::from(crate::wire_schema::ABSENT);
         with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
             for cmd in 210..=212 {
                 assert!(command(vm, shared, cmd).is_err());
@@ -726,10 +694,14 @@ mod tests {
                 set_word(vm, shared, wire_slots::WARG + 1, count)?;
                 assert!(command(vm, shared, 209).is_err());
             }
+            // Two chunks of three and four roots, then three fields.
             set_word(vm, shared, wire_slots::WARG, 2)?;
-            set_word(vm, shared, wire_slots::WARG + 1, 2)?;
+            set_word(vm, shared, wire_slots::WARG + 1, 3)?;
             command(vm, shared, 209)?;
-            assert!(command(vm, shared, 211).is_err());
+            assert!(
+                command(vm, shared, 211).is_err(),
+                "fields before the chunks"
+            );
             assert!(command(vm, shared, 212).is_err());
             set_word(vm, shared, wire_slots::WARG, -1)?;
             assert!(command(vm, shared, 210).is_err());
@@ -737,33 +709,44 @@ mod tests {
                 set_word(vm, shared, wire_slots::WARG, count)?;
                 command(vm, shared, 210)?;
             }
-            assert!(command(vm, shared, 210).is_err());
-            for count in [-1, 0, 3, 513] {
+            assert!(command(vm, shared, 210).is_err(), "a third chunk");
+            for count in [-1, 0, 4, 513] {
                 set_word(vm, shared, wire_slots::WARG, count)?;
                 assert!(command(vm, shared, 211).is_err());
             }
-            // A valid nonzero value followed by an invalid tag must not partly
-            // change the elision decision or consume any initializer rows.
+            // An unknown form refuses the whole batch and numbers nothing.
             set_word(vm, shared, wire_slots::WARG, 2)?;
-            for (i, value) in [3, 9, 13, 0].into_iter().enumerate() {
+            for (i, value) in [2, 3].into_iter().enumerate() {
                 set_word(vm, shared, wire_slots::FIN + i, value)?;
             }
             assert!(command(vm, shared, 211).is_err());
+            assert!(matches!(
+                vm.get_shared(shared, wire_slots::FIN).unwrap(),
+                Value::Int(2)
+            ));
             assert!(command(vm, shared, 212).is_err());
-            for (i, value) in [3, 0, 3, 0].into_iter().enumerate() {
+            // The constants follow the seven chunk roots, in field order.
+            for (i, value) in [2, 0].into_iter().enumerate() {
                 set_word(vm, shared, wire_slots::FIN + i, value)?;
             }
             command(vm, shared, 211)?;
-            assert_eq!(command(vm, shared, 212)?, 8);
-            let mut bytes = [0; 8];
-            read_window(vm, shared, &mut bytes)?;
-            assert_eq!(bytes, [255, 255, 255, 255, 2, 0, 0, 0]);
-            assert!(matches!(
-                vm.get_shared(shared, wire_slots::FIN).unwrap(),
-                Value::Int(1)
-            ));
-            assert!(command(vm, shared, 212).is_err());
-            // Exact root-index arithmetic and its immediate overflow neighbor.
+            let read = |vm: &mut dyn StageExecutor, shared: &mut [u8], i: usize| match vm
+                .get_shared(shared, wire_slots::FIN + i)
+                .unwrap()
+            {
+                Value::Int(v) => v,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(read(vm, shared, 0), 7);
+            assert_eq!(read(vm, shared, 1), absent);
+            set_word(vm, shared, wire_slots::WARG, 1)?;
+            set_word(vm, shared, wire_slots::FIN, 2)?;
+            command(vm, shared, 211)?;
+            assert_eq!(read(vm, shared, 0), 8);
+            assert_eq!(command(vm, shared, 212)?, 3);
+            assert!(command(vm, shared, 212).is_err(), "finished twice");
+            // Exact root-index arithmetic and its immediate overflow neighbour:
+            // the last index a constant may take is one below `ABSENT`.
             for first in [0xFFFF_FFFD, 0xFFFF_FFFE] {
                 set_word(vm, shared, wire_slots::WARG, 1)?;
                 set_word(vm, shared, wire_slots::WARG + 1, 2)?;
@@ -771,12 +754,12 @@ mod tests {
                 set_word(vm, shared, wire_slots::WARG, first)?;
                 command(vm, shared, 210)?;
                 set_word(vm, shared, wire_slots::WARG, 2)?;
-                for (i, value) in [3, 1, 3, 0].into_iter().enumerate() {
+                for (i, value) in [2, 2].into_iter().enumerate() {
                     set_word(vm, shared, wire_slots::FIN + i, value)?;
                 }
                 command(vm, shared, 211)?;
                 if first == 0xFFFF_FFFD {
-                    assert_eq!(command(vm, shared, 212)?, 8);
+                    assert_eq!(command(vm, shared, 212)?, 2);
                 } else {
                     assert!(command(vm, shared, 212).is_err());
                 }

@@ -29,7 +29,7 @@ mod common;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
-use keleusma::bytecode::{BlockType, Module, NOMINAL_COST_MODEL, SlotVisibility, Value};
+use keleusma::bytecode::{BlockType, Module, NOMINAL_COST_MODEL, Value};
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma_native::coroutine::{self, HostContracts};
 use keleusma_native::region;
@@ -246,13 +246,7 @@ fn step_cost(program: &Module, counts: &[u64]) -> u64 {
 
 fn shared_offset(program: &Module, name: &str) -> usize {
     let layout = program.data_layout.as_ref().unwrap();
-    let index = layout
-        .slots
-        .iter()
-        .filter(|s| s.visibility == SlotVisibility::Shared)
-        .position(|s| s.name == name)
-        .unwrap();
-    layout.shared_layout[index].offset as usize
+    keleusma_native::data_view::shared_field_offset(layout, |field| field == name).unwrap() as usize
 }
 
 fn lexer_run(text: &[u8], turns: i64) -> Run<'static> {

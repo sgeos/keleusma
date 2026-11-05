@@ -316,7 +316,7 @@ fn forest<'a>(
         module
             .data_layout
             .iter()
-            .flat_map(|d| &d.private_init)
+            .flat_map(crate::wire_schema::data_init_roots)
             .take(if include_initializers { usize::MAX } else { 0 }),
     );
     let count = roots.clone().count();
@@ -386,47 +386,46 @@ fn forest<'a>(
     }
     Err(error("node queue exceeds wire index range"))
 }
-struct Initializer {
-    elided: bool,
-    record: Vec<u8>,
+/// The wire form of a field's initialiser, `crate::wire_schema::init_form`.
+pub(super) fn init_form_of(init: &crate::bytecode::DataInit) -> i64 {
+    use crate::bytecode::DataInit;
+    use crate::wire_schema::init_form;
+    i64::from(match init {
+        DataInit::Zero => init_form::ZERO,
+        DataInit::Unit => init_form::UNIT,
+        DataInit::Const(_) => init_form::CONST,
+    })
 }
-fn initializer(
-    codec: &mut Machine<'_>,
-    module: &Module,
-) -> Result<Option<Initializer>, SelfHostError> {
+
+/// Each data field's `init_const`, numbered by the stage. The host reports the chunk pool sizes
+/// and each field's initialiser form; the stage places every explicit initialiser after the
+/// chunk pools, in field order, which is where the reference encoder's constant table puts it.
+fn initializer(codec: &mut Machine<'_>, module: &Module) -> Result<Vec<i64>, SelfHostError> {
     let Some(layout) = &module.data_layout else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    codec.args(&[size(module.chunks.len())?, size(layout.private_init.len())?])?;
+    codec.args(&[size(module.chunks.len())?, size(layout.fields.len())?])?;
     codec.accept(209)?;
     for chunk in &module.chunks {
         codec.args(&[size(chunk.constants.len())?])?;
         codec.accept(210)?;
     }
-    // Eight scalar facts fit the generic sixteen-word transport wrapper.
-    for batch in layout.private_init.chunks(8) {
-        let fields: Vec<_> = batch
-            .iter()
-            .flat_map(|v| {
-                let (t, p) = const_tag_and_name(v);
-                [i64::from(t), p]
-            })
-            .collect();
-        codec.fields(&fields)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(layout.fields.len())
+        .map_err(|_| error("initializer allocation failed"))?;
+    // Sixteen forms fit the generic sixteen-word transport wrapper.
+    for batch in layout.fields.chunks(16) {
+        let forms: Vec<i64> = batch.iter().map(|f| init_form_of(&f.init)).collect();
+        codec.fields(&forms)?;
         codec.args(&[size(batch.len())?])?;
         codec.accept(211)?;
+        let numbered = codec.output::<16>()?;
+        out.extend_from_slice(&numbered[..batch.len()]);
     }
-    if codec.command(212)? != 8 {
-        return Err(error("initializer record length disagrees"));
+    if codec.command(212)? != layout.fields.len() {
+        return Err(error("initializer count disagrees"));
     }
-    let elided = match codec.output::<1>()?[0] {
-        0 => false,
-        1 => true,
-        _ => return Err(error("invalid initializer decision")),
-    };
-    let mut record = Vec::new();
-    codec.read(8, &mut record)?;
-    Ok(Some(Initializer { elided, record }))
+    Ok(out)
 }
 fn parameter_code(value: crate::bytecode::TypeTag) -> i64 {
     use crate::bytecode::TypeTag::*;
@@ -442,14 +441,41 @@ fn parameter_code(value: crate::bytecode::TypeTag) -> i64 {
     }
 }
 
+/// The twelve `DATA_FIELDS` record fields of `f`, in record order, with its interned `name`
+/// and its stage-numbered `init_const`.
+pub(super) fn data_field_row(
+    name: i64,
+    f: &crate::bytecode::DataField,
+    init_const: i64,
+) -> [i64; 12] {
+    use crate::wire_schema::{ABSENT, visibility_tag};
+    [
+        name,
+        i64::from(f.first_slot),
+        i64::from(f.count),
+        i64::from(f.offset.unwrap_or(ABSENT)),
+        i64::from(f.stride),
+        i64::from(f.elem_len),
+        i64::from(f.kind),
+        i64::from(match f.visibility {
+            crate::bytecode::SlotVisibility::Shared => visibility_tag::SHARED,
+            crate::bytecode::SlotVisibility::Private => visibility_tag::PRIVATE,
+        }),
+        init_form_of(&f.init),
+        0,
+        0,
+        init_const,
+    ]
+}
+
 /// Emit the complete auxiliary body without corpus-sized resident name or forest tables.
 ///
 /// Keleusma owns contributor order, hash keys and collision equality, fresh/share decisions, name
 /// offsets and indices, breadth-first node scheduling, child ranges, auxiliary
 /// numbering, template ranges, chunk ranges and parameter-tag encoding. The host
 /// retains typed values and indexed storage and transports bounded windows.
-/// Data-slot groups, shared strides and record splitting are stage-derived from
-/// logical slot facts through bounded metadata and byte-comparison batches.
+/// Each data field becomes one `DATA_FIELDS` record, whose name the stage interns and whose
+/// initialiser constant index the stage numbers.
 ///
 /// # Errors
 /// Refuses values outside wire field widths, allocation failures and invalid
@@ -479,19 +505,12 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
                         window: 1024,
                     };
                     schema.accept(64)?;
-                    let init = initializer(&mut codec, module)?;
-                    let include_initializers = init.as_ref().is_some_and(|i| !i.elided);
-                    let (runs, shared_rows) = if let Some(layout) = &module.data_layout {
-                        (
-                            super::wire_run_encode::slot_runs(&mut schema, &layout.slots)?,
-                            super::wire_run_encode::shared_runs(
-                                &mut schema,
-                                &layout.shared_layout,
-                            )?,
-                        )
-                    } else {
-                        (Vec::new(), Vec::new())
-                    };
+                    let init_consts = initializer(&mut codec, module)?;
+                    let include_initializers = module
+                        .data_layout
+                        .as_ref()
+                        .is_some_and(|d| crate::wire_schema::data_init_roots(d).next().is_some());
+                    let field_count = module.data_layout.as_ref().map_or(0, |d| d.fields.len());
                     let template_count = module
                         .chunks
                         .iter()
@@ -502,7 +521,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
                         size(module.chunks.len())?,
                         size(module.enum_layouts.len())?,
                         size(module.native_names.len())?,
-                        size(runs.len())?,
+                        size(field_count)?,
                         size(template_count)?,
                         i64::from(include_initializers),
                     ])?;
@@ -565,51 +584,20 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
                         (kind::NATIVE_RETURNS, signature.1),
                     ];
                     if let Some(layout) = &module.data_layout {
-                        let mut slots = Vec::new();
-                        for (i, run) in runs.iter().enumerate() {
-                            let name = names.prefix(
-                                &mut schema,
-                                &mut codec,
-                                &layout
-                                    .slots
-                                    .get(run.first)
-                                    .ok_or_else(|| error("stage selected invalid slot name"))?
-                                    .name,
-                                (4, i, 0),
-                                0,
-                            )?;
-                            for &take in &run.pieces {
-                                codec.record(
-                                    kind::DATA_SLOTS,
-                                    &[name.0, run.visibility, 0, take],
-                                    &mut slots,
-                                )?;
-                            }
-                        }
-                        let mut shared = Vec::new();
-                        for row in &shared_rows {
-                            codec.record(kind::SHARED_LAYOUT, row, &mut shared)?;
-                        }
-                        let mut placements = Vec::new();
-                        for p in &layout.private_composite_layout {
+                        let mut records = Vec::new();
+                        for (i, f) in layout.fields.iter().enumerate() {
+                            let name =
+                                names.prefix(&mut schema, &mut codec, &f.name, (4, i, 0), 0)?;
+                            let init_const = *init_consts
+                                .get(i)
+                                .ok_or_else(|| error("initializer plan absent"))?;
                             codec.record(
-                                kind::PRIVATE_COMPOSITE,
-                                &[p.slot.into(), 0, p.offset.into()],
-                                &mut placements,
+                                kind::DATA_FIELDS,
+                                &data_field_row(name.0, f, init_const),
+                                &mut records,
                             )?;
                         }
-                        regions.extend([
-                            (kind::DATA_SLOTS, slots),
-                            (kind::SHARED_LAYOUT, shared),
-                            (kind::PRIVATE_COMPOSITE, placements),
-                            (
-                                kind::DATA_INIT,
-                                init.as_ref()
-                                    .ok_or_else(|| error("initializer plan absent"))?
-                                    .record
-                                    .clone(),
-                            ),
-                        ]);
+                        regions.push((kind::DATA_FIELDS, records));
                     }
                     schema.accept(86)?;
                     schema.fields(&[
@@ -733,95 +721,6 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn data_run_protocol_refuses_partial_replies_and_preserves_earliest_boundary() {
-        with_compiled_wire(
-            compile_src(&read_stage("kel/wire_schema.kel")),
-            |vm, shared| {
-                let mut s = Machine {
-                    vm,
-                    shared,
-                    arg: ARG,
-                    fin: FIN,
-                    bytes: BYTES,
-                    window: 1024,
-                };
-                s.args(&[3])?;
-                assert_eq!(s.command(89)?, 1);
-                assert!(s.command(64).is_err());
-                assert!(s.command(94).is_err());
-                s.args(&[1, 0])?;
-                assert_eq!(s.command(90)?, 2);
-                assert_eq!(s.output::<2>()?, [1, 2]);
-                s.fields(&[1, 0, 1, 2])?;
-                s.args(&[2])?;
-                assert!(s.command(91).is_err());
-                s.fields(&[1, 0, 1, 0])?;
-                assert_eq!(s.command(91)?, 3);
-                assert_eq!(s.output::<5>()?, [0, 1, 2, 0, 1]);
-                s.write(0, b"a")?;
-                s.write(64, b"a")?;
-                s.write(128, b"b")?;
-                s.args(&[2])?;
-                assert!(s.command(92).is_err());
-                s.args(&[1])?;
-                assert_eq!(s.command(92)?, 4);
-                assert_eq!(s.output::<4>()?, [0, 2, 1, 0]);
-                assert_eq!(s.command(93)?, 5);
-                assert_eq!(s.output::<1>()?, [2]);
-                assert_eq!(s.command(93)?, 1);
-                assert_eq!(s.output::<1>()?, [2]);
-                s.args(&[1, 0])?;
-                assert_eq!(s.command(90)?, 4);
-                assert_eq!(s.output::<4>()?, [2, 1, 1, 1]);
-                assert_eq!(s.command(93)?, 5);
-                assert_eq!(s.output::<1>()?, [1]);
-                assert_eq!(s.command(93)?, 0);
-                assert_eq!(s.output::<1>()?, [2]);
-                assert!(s.command(93).is_err());
-                Ok(())
-            },
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn shared_run_protocol_refuses_bad_batches_without_consuming_rows() {
-        with_compiled_wire(
-            compile_src(&read_stage("kel/wire_schema.kel")),
-            |vm, shared| {
-                let mut s = Machine {
-                    vm,
-                    shared,
-                    arg: ARG,
-                    fin: FIN,
-                    bytes: BYTES,
-                    window: 1024,
-                };
-                s.args(&[3])?;
-                assert_eq!(s.command(94)?, 1);
-                assert!(s.command(89).is_err());
-                s.args(&[0, 3, 0])?;
-                assert_eq!(s.command(95)?, 2);
-                assert_eq!(s.output::<2>()?, [1, 2]);
-                s.fields(&[8, 3, 0, 0x1_0000_0000, 3, 0])?;
-                s.args(&[2])?;
-                assert!(s.command(96).is_err());
-                s.fields(&[8, 3, 0, 16, 3, 0])?;
-                s.args(&[1])?;
-                assert!(s.command(96).is_err());
-                s.args(&[2])?;
-                assert_eq!(s.command(96)?, 3);
-                assert_eq!(s.output::<7>()?, [0, 3, 0, 0, 0, 3, 8]);
-                assert!(s.command(96).is_err());
-                assert_eq!(s.command(97)?, 0);
-                assert!(s.command(97).is_err());
-                Ok(())
-            },
-        )
-        .unwrap();
-    }
-
     #[test]
     fn equal_length_hash_collisions_and_last_fresh_names_remain_distinct() {
         let long = "λ".repeat(40000);

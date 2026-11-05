@@ -169,8 +169,8 @@ fn the_float_shared_slot_route_has_no_corpus_witness() {
         let Some(dl) = m.data_layout.as_ref() else {
             continue;
         };
-        shared_slots += dl.shared_layout.len();
-        if dl.shared_layout.iter().any(|e| e.kind == FLOAT_TAG) {
+        shared_slots += dl.shared_slot_count();
+        if dl.shared_slots().iter().any(|e| e.kind == FLOAT_TAG) {
             with_float_slot.push(p.file_name().unwrap().to_string_lossy().to_string());
         }
     }

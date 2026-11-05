@@ -1,13 +1,15 @@
 //! Data-layout codec checks are distinct from later verifier invariants.
+//!
+//! Every case decodes one artifact through the self-hosted decoder and the reference
+//! decoder and requires the two to agree, on the decoded layout when both accept and on the
+//! refusal when either refuses. Encoding F, chosen by the operator on 2026-10-31, gives the
+//! decoders one `DATA_FIELDS` record per declared field to validate.
 #![cfg(feature = "self-host")]
 use keleusma::bytecode::{
-    ConstValue, DataLayout, DataSlot, PrivateCompositeSlot, SharedSlotLayout, SlotVisibility,
+    ConstValue, DataField, DataInit, DataLayout, MAX_DATA_ADDR, SHARED_SLOT_COMPOSITE_FLAG,
 };
 use keleusma::selfhost::wire_decode_data_layout_via_kel;
-use keleusma::wire_schema::{
-    self as schema, DataInitRecord, DataSlotRecord, NameRef, PrivateCompositeRecord,
-    SharedSlotRecord, kind,
-};
+use keleusma::wire_schema::{self as schema, ABSENT, DataFieldRecord, NameRef, init_form, kind};
 use keleusma_wire::{WireBuilder, WireRecord};
 
 fn bytes<T: WireRecord>(values: &[T]) -> Vec<u8> {
@@ -17,13 +19,8 @@ fn bytes<T: WireRecord>(values: &[T]) -> Vec<u8> {
     }
     result
 }
-fn raw(
-    slots: Option<&[u8]>,
-    shared: Option<&[u8]>,
-    placements: Option<&[u8]>,
-    init: Option<&[u8]>,
-    text: &[u8],
-) -> Vec<u8> {
+/// An artifact of one name, `text`, an optional field table and an optional retired region.
+fn raw(fields: Option<&[u8]>, retired: Option<u16>, text: &[u8]) -> Vec<u8> {
     let mut b = WireBuilder::new();
     let r = b.region(kind::NAMES, 0).unwrap();
     b.push_record(
@@ -35,27 +32,27 @@ fn raw(
     );
     let r = b.region(kind::STRING_POOL, 0).unwrap();
     b.push(r, text);
-    for (kind, data) in [
-        (kind::DATA_SLOTS, slots),
-        (kind::SHARED_LAYOUT, shared),
-        (kind::PRIVATE_COMPOSITE, placements),
-        (kind::DATA_INIT, init),
-    ] {
-        if let Some(data) = data {
-            let r = b.region(kind, 0).unwrap();
-            b.push(r, data);
-        }
+    if let Some(data) = fields {
+        let r = b.region(kind::DATA_FIELDS, 0).unwrap();
+        b.push(r, data);
+    }
+    if let Some(k) = retired {
+        let r = b.region(k, 0).unwrap();
+        b.push(r, &[0; 8]);
     }
     b.finish().unwrap()
 }
 fn equal(a: &DataLayout, b: &DataLayout) {
-    assert_eq!(a.slots, b.slots);
-    assert_eq!(a.shared_layout, b.shared_layout);
-    assert_eq!(a.private_composite_layout, b.private_composite_layout);
-    assert_eq!(
-        schema::encode_constants(&a.private_init).unwrap(),
-        schema::encode_constants(&b.private_init).unwrap()
-    );
+    assert_eq!(a, b);
+    // `ConstValue`'s equality skips an enum discriminant; the encoded form does not.
+    for (x, y) in a.fields.iter().zip(&b.fields) {
+        if let (DataInit::Const(p), DataInit::Const(q)) = (&x.init, &y.init) {
+            assert_eq!(
+                schema::encode_constants(core::slice::from_ref(p)).unwrap(),
+                schema::encode_constants(core::slice::from_ref(q)).unwrap()
+            );
+        }
+    }
 }
 fn compare(data: &[u8]) -> bool {
     match (
@@ -71,31 +68,52 @@ fn compare(data: &[u8]) -> bool {
         (a, b) => panic!("data layout mismatch {a:?} versus {b:?}"),
     }
 }
+/// A shared scalar field record both decoders accept: name 0, two elements eight bytes apart.
+fn base() -> DataFieldRecord {
+    DataFieldRecord {
+        name: 0,
+        first_slot: 0,
+        count: 2,
+        offset: 0,
+        stride: 8,
+        elem_len: 0,
+        kind: 3,
+        visibility: 1,
+        init: init_form::ZERO,
+        reserved0: 0,
+        reserved1: 0,
+        init_const: ABSENT,
+    }
+}
 
 #[test]
-fn named_runs_and_nondefault_initializer_forests_match_reference() {
+fn fields_and_initializer_forests_match_reference() {
     let layout = DataLayout {
-        slots: (0..31)
-            .map(|_| DataSlot {
-                name: "λ".into(),
-                visibility: SlotVisibility::Shared,
-            })
-            .collect(),
-        shared_layout: (0..31)
-            .map(|i| SharedSlotLayout {
-                offset: i * 9,
-                kind: 255,
-                len: 7,
-            })
-            .collect(),
-        private_composite_layout: vec![PrivateCompositeSlot {
-            slot: 65535,
-            offset: u32::MAX,
-        }],
-        private_init: vec![ConstValue::Tuple(vec![
-            ConstValue::StaticStr("init".into()),
-            ConstValue::Byte(7),
-        ])],
+        fields: vec![
+            DataField::shared("λ", 0, 31, SHARED_SLOT_COMPOSITE_FLAG | 2, 7, 0, 9),
+            DataField::private(
+                "p.init",
+                31,
+                4,
+                SHARED_SLOT_COMPOSITE_FLAG,
+                DataInit::Const(ConstValue::Tuple(vec![
+                    ConstValue::StaticStr("init".into()),
+                    ConstValue::Byte(7),
+                ])),
+            ),
+            DataField {
+                offset: Some(u32::MAX - 16),
+                elem_len: 16,
+                ..DataField::private(
+                    "p.pool",
+                    35,
+                    1,
+                    SHARED_SLOT_COMPOSITE_FLAG | 2,
+                    DataInit::Unit,
+                )
+            },
+            DataField::private("p.zero", 36, 9, 2, DataInit::Zero),
+        ],
     };
     let mut b = schema::SchemaBuilder::new();
     b.add_data_layout(&layout).unwrap();
@@ -111,121 +129,183 @@ fn named_runs_and_nondefault_initializer_forests_match_reference() {
 }
 
 #[test]
-fn absent_empty_and_elided_initializers_preserve_scope() {
-    let zero = bytes(&[
-        DataInitRecord {
-            first: u32::MAX,
-            count: 4,
-        },
-        DataInitRecord {
-            first: 0,
-            count: u32::MAX,
-        },
-    ]);
-    let data = raw(None, Some(&[0; 8]), None, None, b"x");
+fn absent_empty_and_retired_regions_preserve_scope() {
+    let data = raw(None, None, b"x");
     assert!(compare(&data));
     assert!(wire_decode_data_layout_via_kel(&data).unwrap().is_none());
-    let data = raw(Some(&[]), Some(&[]), Some(&[]), Some(&zero), b"x");
+    let data = raw(Some(&[]), None, b"x");
     assert!(compare(&data));
-    assert_eq!(
+    assert!(
         wire_decode_data_layout_via_kel(&data)
             .unwrap()
             .unwrap()
-            .private_init,
-        vec![ConstValue::Int(0); 4]
+            .fields
+            .is_empty()
     );
-    for init in [None, Some(&[][..])] {
-        assert!(!compare(&raw(Some(&[]), Some(&[]), Some(&[]), init, b"x")));
+    // A retired region is refused beside an absent field table and beside a present one,
+    // because its absence from the new reader would otherwise read a module that has a data
+    // block as one without.
+    let good = bytes(&[base()]);
+    for retired in kind::RETIRED_DATA_LAYOUT {
+        assert!(!compare(&raw(None, Some(retired), b"x")), "{retired:#06x}");
+        assert!(
+            !compare(&raw(Some(&good), Some(retired), b"x")),
+            "{retired:#06x}"
+        );
     }
-    let stored = bytes(&[DataInitRecord { first: 0, count: 0 }]);
-    assert!(!compare(&raw(
-        Some(&[]),
-        Some(&[]),
-        Some(&[]),
-        Some(&stored),
-        b"x"
-    )));
 }
 
 #[test]
-fn run_validation_and_overflow_match_without_extra_kind_or_slot_rules() {
-    let init = bytes(&[DataInitRecord {
-        first: u32::MAX,
-        count: 0,
-    }]);
-    let slot = DataSlotRecord {
-        name: 0,
-        visibility: 1,
-        reserved: 255,
-        run: 3,
+fn field_validation_matches_reference() {
+    let b = base();
+    let private = DataFieldRecord {
+        visibility: 2,
+        offset: ABSENT,
+        stride: 0,
+        ..b
     };
-    let shared = SharedSlotRecord {
-        offset: 10,
-        kind: 255,
-        reserved: 255,
-        len: 65535,
-        first_slot: u32::MAX,
-        run: 3,
-        stride: 2,
-    };
-    let placement = bytes(&[PrivateCompositeRecord {
-        slot: 65535,
-        reserved: 65535,
-        offset: u32::MAX,
-    }]);
-    for (s, r, text, accepts) in [
-        (slot, shared, &b"x"[..], true),
-        (DataSlotRecord { run: 0, ..slot }, shared, &b"x"[..], false),
+    for (record, text, accepts) in [
+        (b, &b"x"[..], true),
+        (private, &b"x"[..], true),
         (
-            DataSlotRecord {
-                visibility: 3,
-                ..slot
-            },
-            shared,
-            &b"x"[..],
-            false,
-        ),
-        (DataSlotRecord { name: 1, ..slot }, shared, &b"x"[..], false),
-        (
-            slot,
-            SharedSlotRecord { run: 0, ..shared },
-            &b"x"[..],
-            false,
-        ),
-        (
-            slot,
-            SharedSlotRecord {
-                offset: u32::MAX,
-                run: 2,
-                stride: 1,
-                ..shared
-            },
-            &b"x"[..],
-            false,
-        ),
-        (
-            slot,
-            SharedSlotRecord {
-                offset: u32::MAX,
-                run: 1,
-                stride: 65535,
-                ..shared
+            DataFieldRecord {
+                init: init_form::UNIT,
+                ..private
             },
             &b"x"[..],
             true,
         ),
-        (slot, shared, &b"\xff"[..], false),
+        (DataFieldRecord { count: 0, ..b }, &b"x"[..], false),
+        (DataFieldRecord { visibility: 0, ..b }, &b"x"[..], false),
+        (DataFieldRecord { visibility: 3, ..b }, &b"x"[..], false),
+        (DataFieldRecord { name: 1, ..b }, &b"x"[..], false),
+        (DataFieldRecord { reserved0: 1, ..b }, &b"x"[..], false),
+        (DataFieldRecord { reserved1: 1, ..b }, &b"x"[..], false),
+        (DataFieldRecord { first_slot: 1, ..b }, &b"x"[..], false),
+        (
+            DataFieldRecord {
+                count: MAX_DATA_ADDR,
+                ..b
+            },
+            &b"x"[..],
+            true,
+        ),
+        (
+            DataFieldRecord {
+                count: MAX_DATA_ADDR + 1,
+                ..b
+            },
+            &b"x"[..],
+            false,
+        ),
+        (
+            DataFieldRecord {
+                offset: ABSENT,
+                ..b
+            },
+            &b"x"[..],
+            false,
+        ),
+        (
+            DataFieldRecord {
+                count: 1,
+                stride: 8,
+                ..b
+            },
+            &b"x"[..],
+            false,
+        ),
+        (
+            DataFieldRecord {
+                offset: u32::MAX - 8,
+                ..b
+            },
+            &b"x"[..],
+            true,
+        ),
+        (
+            DataFieldRecord {
+                offset: u32::MAX - 7,
+                ..b
+            },
+            &b"x"[..],
+            false,
+        ),
+        (DataFieldRecord { elem_len: 4, ..b }, &b"x"[..], false),
+        (
+            DataFieldRecord {
+                kind: SHARED_SLOT_COMPOSITE_FLAG | 2,
+                elem_len: 4,
+                ..b
+            },
+            &b"x"[..],
+            true,
+        ),
+        (
+            DataFieldRecord {
+                kind: SHARED_SLOT_COMPOSITE_FLAG | 4,
+                ..b
+            },
+            &b"x"[..],
+            false,
+        ),
+        (DataFieldRecord { kind: 8, ..b }, &b"x"[..], false),
+        (
+            DataFieldRecord {
+                init: init_form::UNIT,
+                ..b
+            },
+            &b"x"[..],
+            false,
+        ),
+        (DataFieldRecord { init: 3, ..private }, &b"x"[..], false),
+        (DataFieldRecord { kind: 6, ..private }, &b"x"[..], false),
+        (
+            DataFieldRecord {
+                init_const: 0,
+                ..private
+            },
+            &b"x"[..],
+            false,
+        ),
+        (
+            DataFieldRecord {
+                init: init_form::CONST,
+                init_const: 0,
+                ..private
+            },
+            &b"x"[..],
+            false,
+        ),
+        (
+            DataFieldRecord {
+                stride: 8,
+                ..private
+            },
+            &b"x"[..],
+            false,
+        ),
+        (b, &b"\xff"[..], false),
     ] {
-        let data = raw(
-            Some(&bytes(&[s])),
-            Some(&bytes(&[r])),
-            Some(&placement),
-            Some(&init),
-            text,
-        );
-        assert_eq!(compare(&data), accepts);
+        let data = raw(Some(&bytes(&[record])), None, text);
+        assert_eq!(compare(&data), accepts, "{record:?}");
     }
+    // A shared field after a private one breaks the prefix.
+    let after = DataFieldRecord { first_slot: 2, ..b };
+    assert!(!compare(&raw(Some(&bytes(&[private, after])), None, b"x")));
+    assert!(compare(&raw(
+        Some(&bytes(&[
+            b,
+            DataFieldRecord {
+                first_slot: 2,
+                ..private
+            }
+        ])),
+        None,
+        b"x"
+    )));
 }
+
 #[test]
 fn decoded_layout_drives_shared_access_and_persistent_initialization() {
     use keleusma::bytecode::Value;
@@ -255,49 +335,44 @@ fn decoded_layout_drives_shared_access_and_persistent_initialization() {
 }
 
 #[test]
-fn maximal_slot_runs_cross_batch_and_record_boundaries() {
-    let slots = bytes(&[
-        DataSlotRecord {
-            name: 0,
-            visibility: 1,
-            reserved: 0,
-            run: 65535,
-        },
-        DataSlotRecord {
-            name: 0,
-            visibility: 1,
-            reserved: 0,
-            run: 1,
-        },
-    ]);
-    let shared = bytes(&[
-        SharedSlotRecord {
-            offset: 0,
-            kind: 0,
-            reserved: 0,
-            len: 0,
-            first_slot: 0,
-            run: 65535,
-            stride: 8,
-        },
-        SharedSlotRecord {
-            offset: 65535 * 8,
-            kind: 0,
-            reserved: 0,
-            len: 0,
-            first_slot: 65535,
-            run: 1,
-            stride: 65535,
-        },
-    ]);
-    let init = bytes(&[DataInitRecord {
-        first: u32::MAX,
-        count: 0,
-    }]);
-    let data = raw(Some(&slots), Some(&shared), Some(&[]), Some(&init), b"x");
+fn maximal_counts_and_many_fields_decode_alike() {
+    // One field spanning the whole slot space, and three hundred one-element fields, which
+    // cross the stage's transport batches.
+    let wide = DataFieldRecord {
+        count: MAX_DATA_ADDR,
+        stride: 1,
+        kind: 2,
+        ..base()
+    };
+    let data = raw(Some(&bytes(&[wide])), None, b"x");
     assert!(compare(&data));
     let layout = wire_decode_data_layout_via_kel(&data).unwrap().unwrap();
-    assert_eq!(layout.slots.len(), 65536);
-    assert_eq!(layout.shared_layout.len(), 65536);
-    assert_eq!(layout.shared_layout[65535].offset, 65535 * 8);
+    assert_eq!(layout.slot_count(), MAX_DATA_ADDR as usize);
+    assert_eq!(
+        layout
+            .shared_slot(MAX_DATA_ADDR as usize - 1)
+            .unwrap()
+            .offset,
+        MAX_DATA_ADDR - 1
+    );
+
+    let many: Vec<DataFieldRecord> = (0..300u32)
+        .map(|i| DataFieldRecord {
+            first_slot: i,
+            count: 1,
+            offset: i * 8,
+            stride: 0,
+            ..base()
+        })
+        .collect();
+    let data = raw(Some(&bytes(&many)), None, b"x");
+    assert!(compare(&data));
+    assert_eq!(
+        wire_decode_data_layout_via_kel(&data)
+            .unwrap()
+            .unwrap()
+            .fields
+            .len(),
+        300
+    );
 }

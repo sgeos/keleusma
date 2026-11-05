@@ -38,7 +38,7 @@ fn wide_shared_segment_compiles_and_runs() {
     let module = compile_src(SRC);
     // The `n` scalar sits at byte offset 70000, beyond the old 16-bit ceiling.
     let dl = module.data_layout.as_ref().expect("data layout");
-    let n_offset = dl.shared_layout.last().expect("n slot").offset;
+    let n_offset = dl.shared_slots().last().expect("n slot").offset;
     assert!(
         n_offset > u16::MAX as u32,
         "expected the scalar offset {n_offset} to exceed 65535, proving the widened field is exercised"
@@ -91,9 +91,10 @@ fn set_and_get_shared_reach_a_high_offset_slot() {
         .data_layout
         .as_ref()
         .unwrap()
-        .slots
+        .fields
         .iter()
-        .position(|s| s.name == "d.n")
+        .find(|f| f.name == "d.n")
+        .map(|f| f.first_slot as usize)
         .expect("n slot");
     assert!(n_slot > u16::MAX as usize, "n slot {n_slot} exceeds 65535");
 

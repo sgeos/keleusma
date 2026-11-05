@@ -1,5 +1,15 @@
 //! `SHARED_LAYOUT` is run-compressible, measured rather than assumed.
 //!
+//! ## Status after Encoding F
+//!
+//! The run-length `SHARED_LAYOUT` table this measured was retired on
+//! 2026-10-31, when the operator chose Encoding F, one `DATA_FIELDS` record per
+//! declared field. A field record carries a whole array whatever its length, so
+//! the encoding no longer depends on how slots group. The measurement is kept,
+//! over the slots the field layout expands to, because it still describes how
+//! the stages declare shared data, and the per-field cost is measured in
+//! `docs/decisions/ARRAY_WIRE_SLOT_DESIGN.md`.
+//!
 //! ## Why this test exists
 //!
 //! `SharedSlotRecord` is ONE word today, and a run-length record needs
@@ -141,12 +151,12 @@ fn measure_shared_layout_run_distribution() {
 
     for (name, src) in STAGES {
         let m = compile_stage(src);
-        let empty: Vec<SharedSlotLayout> = Vec::new();
-        let slots: &Vec<SharedSlotLayout> = m
+        let expanded: Vec<SharedSlotLayout> = m
             .data_layout
             .as_ref()
-            .map(|d| &d.shared_layout)
-            .unwrap_or(&empty);
+            .map(|d| d.shared_slots())
+            .unwrap_or_default();
+        let slots = &expanded;
         if slots.is_empty() {
             println!(
                 "{name:<20} {:>8} {:>8} {:>9} {:>7} {:>11} {:>11} {:>9}",

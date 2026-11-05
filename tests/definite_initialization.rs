@@ -104,11 +104,11 @@ fn every_private_slot_gets_a_non_unit_initializer() {
                u: (Word, bool), n: Word, s: [Text; 2] }\n\
                fn main() -> Word { d.n = d.n + 1; d.n }";
     let module = compiled(src).unwrap_or_else(|e| panic!("{e}"));
-    let inits = &module
+    let inits = module
         .data_layout
         .as_ref()
         .expect("a data layout")
-        .private_init;
+        .private_init_values();
     assert_eq!(inits.len(), 11, "{inits:?}");
     assert!(
         inits.iter().all(|v| *v != ConstValue::Unit),
@@ -116,6 +116,21 @@ fn every_private_slot_gets_a_non_unit_initializer() {
     );
     assert_eq!(inits[1], ConstValue::StaticStr(String::new()));
     assert_eq!(verdict(&module), Ok(()));
+}
+
+/// The first private field of `module`, whose initialiser a test overwrites
+/// to model a module from an older compiler.
+fn first_private_field(
+    module: &mut keleusma::bytecode::Module,
+) -> &mut keleusma::bytecode::DataField {
+    module
+        .data_layout
+        .as_mut()
+        .unwrap()
+        .fields
+        .iter_mut()
+        .find(|f| f.visibility == keleusma::bytecode::SlotVisibility::Private)
+        .expect("a private field")
 }
 
 /// A slot of type `()` keeps `Unit`, its only value, and is the residual case
@@ -135,7 +150,7 @@ fn a_unit_initialized_private_slot_must_be_written_before_its_read() {
                fn main(k: Word) -> Word { d.u = (); let v = d.u; d.n }";
     let module = compiled(src).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
-        module.data_layout.as_ref().unwrap().private_init[0],
+        module.data_layout.as_ref().unwrap().private_init_values()[0],
         ConstValue::Unit
     );
     assert_eq!(verdict(&module), Ok(()), "written before the read");
@@ -146,7 +161,7 @@ fn a_unit_initialized_private_slot_must_be_written_before_its_read() {
     );
     let mut module = compiled(&src).unwrap();
     assert_eq!(verdict(&module), Ok(()), "control");
-    module.data_layout.as_mut().unwrap().private_init[0] = ConstValue::Unit;
+    first_private_field(&mut module).init = keleusma::bytecode::DataInit::Unit;
     assert_rule_rejects(verdict(&module), "a Unit composite read before a write");
     // Written by a callee on every path, the read is accepted.
     let src = format!(
@@ -154,7 +169,7 @@ fn a_unit_initialized_private_slot_must_be_written_before_its_read() {
          fn main() -> Word {{ let z = init(); let q = d.p; q.x + z }}"
     );
     let mut module = compiled(&src).unwrap();
-    module.data_layout.as_mut().unwrap().private_init[0] = ConstValue::Unit;
+    first_private_field(&mut module).init = keleusma::bytecode::DataInit::Unit;
     assert_eq!(verdict(&module), Ok(()), "a callee writes the slot");
 }
 
@@ -342,7 +357,7 @@ fn run_main(module: Module, swap: Option<Module>) -> keleusma::bytecode::Value {
         let count = next
             .data_layout
             .as_ref()
-            .map_or(0, |dl| dl.private_init.len());
+            .map_or(0, |dl| dl.private_slot_count());
         vm.replace_module(next, vec![Value::Unit; count])
             .expect("hot swap");
     }

@@ -1085,134 +1085,82 @@ fn elay_variant_disc(i: Word, k: Word) -> Word {
     )
 }
 
-// --- SLICE 5d: the data segment ------------------------------------------
+// --- SLICE 5d: the data segment, Encoding F ------------------------------
 //
 // PRESENCE IS SEMANTIC HERE, WHICH IT IS NOWHERE ELSE IN THIS FILE.
 //
-// An absent `DATA_SLOTS` region means the module has NO data layout; an empty
-// one means it has a layout with no slots. Those are different programs, and
+// An absent `DATA_FIELDS` region means the module has NO data layout; an empty
+// one means it has a layout with no fields. Those are different programs, and
 // collapsing them is a silent wrong answer rather than a fault. Every other
 // count accessor in this file returns 0 for an absent region, which is right
-// for them and would be WRONG here — so the data segment splits the question in
+// for them and would be WRONG here, so the data segment splits the question in
 // two, exactly as slice 5c split a variant's bound from its value:
 // `data_layout_present` first, then the counts.
-
-fn kind_data_slots() -> Word { 0x001A }
-fn kind_shared_layout() -> Word { 0x001B }
-fn kind_private_composite() -> Word { 0x001C }
-fn kind_data_init() -> Word { 0x001D }
-
-// DataSlotRecord: name u32 @0, visibility u8 @4, reserved u8 @5. Packed to six
-// bytes, so the stride is the word it rounds up to, not the packed size.
-fn dslot_stride() -> Word { wire_eight() }
-fn dslot_off_name() -> Word { wire_zero() }
-fn dslot_off_visibility() -> Word { wire_four() }
-// The two reserved fields exist for the EMITTER, not the reader. A reader can
-// ignore them; an emitter that leaves them to a zeroed buffer is the defect
-// slice 4 argued against, and would diverge the moment a window is reused.
-fn dslot_off_reserved() -> Word { wire_five() }
-fn dslot_off_run() -> Word { wire_six() }
-
-// SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6,
-// first_slot u32 @8, run u16 @12, stride u16 @14. TWO words.
 //
-// A record stands for a RUN of consecutive shared slots sharing a kind and a
-// length whose offsets advance by a constant stride, which is what an array
-// declares. The first four fields keep their offsets from the one-word form,
-// so only the three new ones are additions here.
+// THE FOUR RETIRED KINDS ARE REFUSED, NOT IGNORED. Before Encoding F the layout
+// lived in `0x001A` to `0x001D`. An artifact carrying any of them and no
+// `DATA_FIELDS` would read here as a module with no data block, so
+// `data_layout_present` reports such an artifact as `-292`, the reference's
+// `SchemaError::RetiredRegion`, before any count is asked.
+
+fn kind_data_fields() -> Word { 0x0027 }
+
+// 1 when the artifact carries any of the retired data-layout kinds.
+fn data_layout_retired() -> Word {
+    if dir_find(0x001A) >= wire_zero() orelse dir_find(0x001B) >= wire_zero()
+        orelse dir_find(0x001C) >= wire_zero() orelse dir_find(0x001D) >= wire_zero() { wire_one() }
+    else { wire_zero() }
+}
+
+// DataFieldRecord, four words: name u32 @0, first_slot u32 @4, count u32 @8,
+// offset u32 @12, stride u32 @16, elem_len u16 @20, kind u8 @22, visibility u8
+// @23, init u8 @24, reserved0 u8 @25, reserved1 u16 @26, init_const u32 @28.
 //
 // `first_slot` and `stride` are STORED rather than derived. Deriving
 // `first_slot` would need a prefix sum, turning the host's logical slot lookup
 // into a scan; deriving `stride` would put a kind-to-size table on this side
 // AND the Rust side, and that particular duplication has already produced
 // three defects in this project.
-fn sslot_stride() -> Word { wire_sixteen() }
-fn sslot_off_offset() -> Word { wire_zero() }
-fn sslot_off_kind() -> Word { wire_four() }
-fn sslot_off_len() -> Word { wire_six() }
-fn sslot_off_reserved() -> Word { wire_five() }
-fn sslot_off_first_slot() -> Word { wire_eight() }
-fn sslot_off_run() -> Word { wire_twelve() }
-fn sslot_off_stride() -> Word { 14 }
+fn dfield_stride() -> Word { 32 }
+fn dfield_off_name() -> Word { wire_zero() }
+fn dfield_off_first_slot() -> Word { wire_four() }
+fn dfield_off_count() -> Word { wire_eight() }
+fn dfield_off_offset() -> Word { wire_twelve() }
+fn dfield_off_stride() -> Word { wire_sixteen() }
+fn dfield_off_elem_len() -> Word { 20 }
+fn dfield_off_kind() -> Word { 22 }
+fn dfield_off_visibility() -> Word { 23 }
+fn dfield_off_init() -> Word { 24 }
+// The two reserved fields exist for the EMITTER, not the reader. A reader can
+// ignore them; an emitter that leaves them to a zeroed buffer is the defect
+// slice 4 argued against, and would diverge the moment a window is reused.
+fn dfield_off_reserved0() -> Word { 25 }
+fn dfield_off_reserved1() -> Word { 26 }
+fn dfield_off_init_const() -> Word { 28 }
 
-// PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
-fn pcomp_stride() -> Word { wire_eight() }
-fn pcomp_off_slot() -> Word { wire_zero() }
-fn pcomp_off_reserved() -> Word { wire_two() }
-fn pcomp_off_offset() -> Word { wire_four() }
-
-// DataInitRecord: first u32 @0, count u32 @4. A range into the constant table.
-fn dinit_stride() -> Word { wire_eight() }
-fn dinit_off_first() -> Word { wire_zero() }
-fn dinit_off_count() -> Word { wire_four() }
-
-// 1 when the module has a data layout at all. Ask this BEFORE any count below;
-// a zero from `data_slot_count` means "a layout with no slots", not "no layout".
+// 1 when the module has a data layout, 0 when it has none, and -292 when it
+// carries a retired region. Ask this BEFORE any count below; a zero from
+// `data_field_count` means "a layout with no fields", not "no layout".
 fn data_layout_present() -> Word {
-    if dir_find(kind_data_slots()) == wire_zero() - wire_one() { wire_zero() } else { wire_one() }
+    if data_layout_retired() == wire_one() { wire_zero() - 292 } else {
+    if dir_find(kind_data_fields()) == wire_zero() - wire_one() { wire_zero() } else { wire_one() } }
 }
 
-// The counts. Each returns 0 - 1 when its region is absent rather than 0, so an
-// absent table is never mistaken for an empty one at any level, not just at the
-// top. A caller that wants the lenient reading can compare against 0 - 1 itself.
-fn data_slot_count() -> Word {
-    if dir_find(kind_data_slots()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
-        rec_count(dir_find(kind_data_slots()), dslot_stride())
+// The count returns 0 - 1 when the region is absent rather than 0, so an absent
+// table is never mistaken for an empty one. A caller that wants the lenient
+// reading can compare against 0 - 1 itself.
+fn data_field_count() -> Word {
+    if dir_find(kind_data_fields()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
+        rec_count(dir_find(kind_data_fields()), dfield_stride())
     }
 }
 
-fn shared_slot_count() -> Word {
-    if dir_find(kind_shared_layout()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
-        rec_count(dir_find(kind_shared_layout()), sslot_stride())
-    }
+fn dfield_u32(i: Word, off: Word) -> Word {
+    rec_u32(dir_find(kind_data_fields()), dfield_stride(), i, off)
 }
 
-fn privcomp_count() -> Word {
-    if dir_find(kind_private_composite()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
-        rec_count(dir_find(kind_private_composite()), pcomp_stride())
-    }
-}
-
-fn datainit_count() -> Word {
-    if dir_find(kind_data_init()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
-        rec_count(dir_find(kind_data_init()), dinit_stride())
-    }
-}
-
-fn data_slot_name(i: Word) -> Word {
-    rec_u32(dir_find(kind_data_slots()), dslot_stride(), i, dslot_off_name())
-}
-
-fn data_slot_visibility(i: Word) -> Word {
-    rec_u8(dir_find(kind_data_slots()), dslot_stride(), i, dslot_off_visibility())
-}
-
-fn shared_slot_offset(i: Word) -> Word {
-    rec_u32(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_offset())
-}
-
-fn shared_slot_kind(i: Word) -> Word {
-    rec_u8(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_kind())
-}
-
-fn shared_slot_len(i: Word) -> Word {
-    rec_u16(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_len())
-}
-
-fn privcomp_slot(i: Word) -> Word {
-    rec_u16(dir_find(kind_private_composite()), pcomp_stride(), i, pcomp_off_slot())
-}
-
-fn privcomp_offset(i: Word) -> Word {
-    rec_u32(dir_find(kind_private_composite()), pcomp_stride(), i, pcomp_off_offset())
-}
-
-fn datainit_first(i: Word) -> Word {
-    rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_first())
-}
-
-fn datainit_range_count(i: Word) -> Word {
-    rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_count())
+fn dfield_u8(i: Word, off: Word) -> Word {
+    rec_u8(dir_find(kind_data_fields()), dfield_stride(), i, off)
 }
 
 // --- SLICE 5e: the module level ------------------------------------------
@@ -1534,38 +1482,40 @@ fn emit_name_records(at: Word, n: Word) -> Word {
     }
 }
 
-// --- SLICE 6 OF THE WIRING INCREMENT: the two per-slot tables --------------
+// --- SLICE 6 OF THE WIRING INCREMENT, ENCODING F: the field table ---------
 //
-// `DATA_SLOTS` and `SHARED_LAYOUT` complete the four regions that together are
-// 99.96% of `lexer`'s auxiliary body, alongside `NAMES` and `STRING_POOL`. All
-// three record tables carry the SAME count, one entry per data slot, because
-// every array element becomes its own slot.
-//
-// Both records are four fields in one word, and both include a reserved field
-// that no reader consults. They are written anyway, for the reason slice 4
-// established: an emitter that relies on its output starting zeroed breaks the
-// day it writes into a reused window, which is what a staged emitter does.
+// `DATA_FIELDS` holds one record per declared field, so its count is the field
+// count and not the element count, whatever the element kind or visibility.
+// The record includes two reserved fields that no reader consults. They are
+// written anyway, for the reason slice 4 established: an emitter that relies on
+// its output starting zeroed breaks the day it writes into a reused window,
+// which is what a staged emitter does.
 
-fn dslot_fields() -> Word { wire_four() }
+fn dfield_fields() -> Word { wire_twelve() }
 
-fn emit_data_slot_records(at: Word, n: Word) -> Word {
-    if (n * dslot_fields()) > fin_capacity() { 0 - 203 } else {
+// Lay out one field record at `at` from the twelve fields starting at `base`.
+fn put_data_field(at: Word, base: Word) -> Word {
+    put_u32(at + dfield_off_name(), wire.fin[base]);
+    put_u32(at + dfield_off_first_slot(), wire.fin[base + 1]);
+    put_u32(at + dfield_off_count(), wire.fin[base + 2]);
+    put_u32(at + dfield_off_offset(), wire.fin[base + 3]);
+    put_u32(at + dfield_off_stride(), wire.fin[base + 4]);
+    put_u16(at + dfield_off_elem_len(), wire.fin[base + 5]);
+    put_u8(at + dfield_off_kind(), wire.fin[base + 6]);
+    put_u8(at + dfield_off_visibility(), wire.fin[base + 7]);
+    put_u8(at + dfield_off_init(), wire.fin[base + 8]);
+    put_u8(at + dfield_off_reserved0(), wire.fin[base + 9]);
+    put_u16(at + dfield_off_reserved1(), wire.fin[base + 10]);
+    put_u32(at + dfield_off_init_const(), wire.fin[base + 11]);
+    dfield_stride()
+}
+
+fn emit_data_field_records(at: Word, n: Word) -> Word {
+    if (n * dfield_fields()) > fin_capacity() { 0 - 203 } else {
         for j in 0..n limit 1024 {
-            put_u32(at + (j * dslot_stride()) + dslot_off_name(), wire.fin[j * dslot_fields()]);
-            put_u8(
-                at + (j * dslot_stride()) + dslot_off_visibility(),
-                wire.fin[(j * dslot_fields()) + 1],
-            );
-            put_u8(
-                at + (j * dslot_stride()) + dslot_off_reserved(),
-                wire.fin[(j * dslot_fields()) + 2],
-            );
-            put_u16(
-                at + (j * dslot_stride()) + dslot_off_run(),
-                wire.fin[(j * dslot_fields()) + 3],
-            );
+            put_data_field(at + (j * dfield_stride()), j * dfield_fields());
         }
-        n * dslot_stride()
+        n * dfield_stride()
     }
 }
 
@@ -1584,8 +1534,8 @@ fn emit_data_slot_records(at: Word, n: Word) -> Word {
 // the constraint required.
 //
 // **COVERAGE IS WHAT THESE ARE, WHICH IS FORMATTING.** They lay out records the
-// host hands them. `DATA_SLOTS`'s run-length grouping, a signature's parameter
-// range, a shape's size -- all are decided outside. That makes these regions
+// host hands them. A signature's parameter range and a shape's size are decided
+// outside. That makes these regions
 // encoded but not derived, the standing the `HEADER` record has, and counting
 // them beside `NAMES`, which the stage computes from the module blob, would
 // overstate what is self-hosted.
@@ -1596,11 +1546,7 @@ fn emit_data_slot_records(at: Word, n: Word) -> Word {
 // with its neighbours, and a reader would have to open its body to learn it reset
 // nothing.
 fn ds_stream_step() -> Word {
-    put_u32(dslot_off_name(), wire.fin[0]);
-    put_u8(dslot_off_visibility(), wire.fin[1]);
-    put_u8(dslot_off_reserved(), wire.fin[2]);
-    put_u16(dslot_off_run(), wire.fin[3]);
-    dslot_stride()
+    put_data_field(wire_zero(), wire_zero())
 }
 
 fn sh_stream_step() -> Word {
@@ -1624,45 +1570,6 @@ fn ev_stream_step() -> Word {
     put_u32(evar_off_reserved(), wire.fin[1]);
     put_u32(evar_off_disc(), wire.fin[2]);
     evar_stride()
-}
-
-// Seven inputs per record, not four: the run-length form carries `first_slot`,
-// `run` and `stride` alongside the original four fields. The host supplies all
-// seven; grouping slots into runs is the CALLER's job, exactly as it is for
-// `DATA_SLOTS`.
-fn sslot_fields() -> Word { wire_seven() }
-
-fn emit_shared_slot_records(at: Word, n: Word) -> Word {
-    if (n * sslot_fields()) > fin_capacity() { 0 - 204 } else {
-        for j in 0..n limit 1024 {
-            put_u32(at + (j * sslot_stride()) + sslot_off_offset(), wire.fin[j * sslot_fields()]);
-            put_u8(
-                at + (j * sslot_stride()) + sslot_off_kind(),
-                wire.fin[(j * sslot_fields()) + 1],
-            );
-            put_u8(
-                at + (j * sslot_stride()) + sslot_off_reserved(),
-                wire.fin[(j * sslot_fields()) + 2],
-            );
-            put_u16(
-                at + (j * sslot_stride()) + sslot_off_len(),
-                wire.fin[(j * sslot_fields()) + 3],
-            );
-            put_u32(
-                at + (j * sslot_stride()) + sslot_off_first_slot(),
-                wire.fin[(j * sslot_fields()) + 4],
-            );
-            put_u16(
-                at + (j * sslot_stride()) + sslot_off_run(),
-                wire.fin[(j * sslot_fields()) + 5],
-            );
-            put_u16(
-                at + (j * sslot_stride()) + sslot_off_stride(),
-                wire.fin[(j * sslot_fields()) + 6],
-            );
-        }
-        n * sslot_stride()
-    }
 }
 
 // --- SLICE 7 OF THE WIRING INCREMENT: the remaining populated tables -------
@@ -1746,21 +1653,6 @@ fn emit_enum_layout_records(at: Word, n: Word) -> Word {
             );
         }
         n * elay_stride()
-    }
-}
-
-fn dinit_fields() -> Word { wire_two() }
-
-fn emit_data_init_records(at: Word, n: Word) -> Word {
-    if (n * dinit_fields()) > fin_capacity() { 0 - 209 } else {
-        for j in 0..n limit 1024 {
-            put_u32(at + (j * dinit_stride()) + dinit_off_first(), wire.fin[j * dinit_fields()]);
-            put_u32(
-                at + (j * dinit_stride()) + dinit_off_count(),
-                wire.fin[(j * dinit_fields()) + 1],
-            );
-        }
-        n * dinit_stride()
     }
 }
 
@@ -1864,25 +1756,6 @@ fn emit_struct_template_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn pcomp_fields() -> Word { wire_three() }
-
-fn emit_private_composite_records(at: Word, n: Word) -> Word {
-    if (n * pcomp_fields()) > fin_capacity() { 0 - 214 } else {
-        for j in 0..n limit 1024 {
-            put_u16(at + (j * pcomp_stride()) + pcomp_off_slot(), wire.fin[j * pcomp_fields()]);
-            put_u16(
-                at + (j * pcomp_stride()) + pcomp_off_reserved(),
-                wire.fin[(j * pcomp_fields()) + 1],
-            );
-            put_u32(
-                at + (j * pcomp_stride()) + pcomp_off_offset(),
-                wire.fin[(j * pcomp_fields()) + 2],
-            );
-        }
-        n * pcomp_stride()
-    }
-}
-
 fn native_fields() -> Word { wire_two() }
 
 fn emit_native_records(at: Word, n: Word) -> Word {
@@ -1944,22 +1817,21 @@ fn stride_of_kind_a(k: Word) -> Word {
 }
 
 fn stride_of_kind_b(k: Word) -> Word {
-    if k == kind_data_slots() { dslot_stride() } else {
-    if k == kind_shared_layout() { sslot_stride() } else {
-    if k == kind_private_composite() { pcomp_stride() } else {
-    if k == kind_data_init() { dinit_stride() } else {
+    if k == kind_data_fields() { dfield_stride() } else {
     if k == kind_param_types() { 0 } else {
     if k == kind_chunks() { chunk_stride() } else {
     if k == kind_natives() { native_stride() } else {
     if k == kind_native_returns() { natret_stride() } else {
     if k == kind_header() { header_stride() } else {
     if k == kind_debug_pool() { 0 } else {
-    0 - 1 }}}}}}}}}}
+    0 - 1 }}}}}}}
 }
 
 // Stride in bytes for a record kind, 0 for a byte pool, -1 for an unknown kind.
+// The split falls at `PARAM_TYPES`, 0x001E, the first live kind past the four
+// retired data-layout kinds, which therefore report -1 like any unknown kind.
 fn stride_of_kind(k: Word) -> Word {
-    if k < kind_data_slots() { stride_of_kind_a(k) } else { stride_of_kind_b(k) }
+    if k < kind_param_types() { stride_of_kind_a(k) } else { stride_of_kind_b(k) }
 }
 
 // Rewrite `wire.rlen[0..n]` from COUNTS into BYTES, then emit the header area.
@@ -2383,22 +2255,23 @@ fn dispatch_runs(cmd: Word) -> Word {
     0 - 95 }}}}}}}}}}}}}}}}}
 }
 
+// The field readers take the FIELD index in `warg`. Command 68 is unassigned
+// since the four retired regions it and its neighbours read were removed.
 fn dispatch_data(cmd: Word) -> Word {
     if cmd == 55 { data_layout_present() } else {
-    if cmd == 56 { data_slot_count() } else {
-    if cmd == 57 { data_slot_name(wire.warg) } else {
-    if cmd == 58 { data_slot_visibility(wire.warg) } else {
-    if cmd == 59 { shared_slot_count() } else {
-    if cmd == 60 { shared_slot_offset(wire.warg) } else {
-    if cmd == 61 { shared_slot_kind(wire.warg) } else {
-    if cmd == 62 { shared_slot_len(wire.warg) } else {
-    if cmd == 63 { privcomp_count() } else {
-    if cmd == 64 { privcomp_slot(wire.warg) } else {
-    if cmd == 65 { privcomp_offset(wire.warg) } else {
-    if cmd == 66 { datainit_count() } else {
-    if cmd == 67 { datainit_first(wire.warg) } else {
-    if cmd == 68 { datainit_range_count(wire.warg) } else {
-    0 - 94 }}}}}}}}}}}}}}
+    if cmd == 56 { data_field_count() } else {
+    if cmd == 57 { dfield_u32(wire.warg, dfield_off_name()) } else {
+    if cmd == 58 { dfield_u8(wire.warg, dfield_off_visibility()) } else {
+    if cmd == 59 { dfield_u32(wire.warg, dfield_off_first_slot()) } else {
+    if cmd == 60 { dfield_u32(wire.warg, dfield_off_count()) } else {
+    if cmd == 61 { dfield_u32(wire.warg, dfield_off_offset()) } else {
+    if cmd == 62 { dfield_u32(wire.warg, dfield_off_stride()) } else {
+    if cmd == 63 { rec_u16(dir_find(kind_data_fields()), dfield_stride(), wire.warg, dfield_off_elem_len()) } else {
+    if cmd == 64 { dfield_u8(wire.warg, dfield_off_kind()) } else {
+    if cmd == 65 { dfield_u8(wire.warg, dfield_off_init()) } else {
+    if cmd == 66 { dfield_u32(wire.warg, dfield_off_init_const()) } else {
+    if cmd == 67 { data_layout_retired() } else {
+    0 - 94 }}}}}}}}}}}}}
 }
 
 fn dispatch_module(cmd: Word) -> Word {
@@ -2473,21 +2346,18 @@ fn dispatch_emit(cmd: Word) -> Word {
     if cmd == 117 { emit_pool_bytes(wire.warg, wire.warg2) } else {
     if cmd == 118 { emit_pool_pad(wire.warg, wire.warg2) } else {
     if cmd == 119 { emit_name_records(wire.warg, wire.warg2) } else {
-    if cmd == 120 { emit_data_slot_records(wire.warg, wire.warg2) } else {
-    if cmd == 121 { emit_shared_slot_records(wire.warg, wire.warg2) } else {
+    if cmd == 120 { emit_data_field_records(wire.warg, wire.warg2) } else {
     if cmd == 122 { emit_shape_records(wire.warg, wire.warg2) } else {
     if cmd == 123 { emit_signature_records(wire.warg, wire.warg2) } else {
     if cmd == 124 { emit_enum_variant_records(wire.warg, wire.warg2) } else {
     if cmd == 125 { emit_enum_layout_records(wire.warg, wire.warg2) } else {
-    if cmd == 126 { emit_data_init_records(wire.warg, wire.warg2) } else {
     if cmd == 127 { emit_const_records(wire.warg, wire.warg2) } else {
     if cmd == 128 { emit_struct_aux_records(wire.warg, wire.warg2) } else {
     if cmd == 129 { emit_enum_aux_records(wire.warg, wire.warg2) } else {
     if cmd == 130 { emit_struct_template_records(wire.warg, wire.warg2) } else {
-    if cmd == 131 { emit_private_composite_records(wire.warg, wire.warg2) } else {
     if cmd == 132 { emit_native_records(wire.warg, wire.warg2) } else {
     if cmd == 133 { emit_native_return_records(wire.warg, wire.warg2) } else {
-    0 - 98 }}}}}}}}}}}}}}}}}}}
+    0 - 98 }}}}}}}}}}}}}}}}
 }
 
 // The DRIVER's own chain. `dispatch_emit` reached twenty arms with the region
@@ -2527,11 +2397,13 @@ fn dispatch_emit(cmd: Word) -> Word {
 // eighteen a nested-call body allows; flattening the argument moves it well clear
 // rather than leaving the next kind to discover the ceiling as a SIGABRT.
 fn emit_at(k: Word, n: Word, at: Word) -> Word {
-    // TWENTY ARMS EXCEED THE EIGHTEEN A SINGLE CHAIN ALLOWS, so the kinds are split at
-    // DATA_SLOTS, 0x001A, into two chains of ten, the low kinds first. The split adds one
-    // level and no function, since a new function here would also push this stage past the
-    // name-occurrence capacity of the self-hosted type stage's input channels.
-    if k < kind_data_slots() {
+    // TWENTY ARMS EXCEEDED THE EIGHTEEN A SINGLE CHAIN ALLOWS, so the kinds are split
+    // at PARAM_TYPES, 0x001E, into two chains, the low kinds first. The split fell at
+    // DATA_SLOTS, 0x001A, until Encoding F retired the four data-layout kinds from
+    // 0x001A to 0x001D. The split adds one level and no function, since a new function
+    // here would also push this stage past the name-occurrence capacity of the
+    // self-hosted type stage's input channels.
+    if k < kind_param_types() {
     if k == kind_names() { emit_name_records(at, n) } else {
     if k == kind_consts() { emit_const_records(at, n) } else {
     if k == kind_shapes() { emit_shape_records(at, n) } else {
@@ -2586,10 +2458,7 @@ fn emit_at(k: Word, n: Word, at: Word) -> Word {
     // place on a kind nobody had exercised.
     if k == kind_natives() { emit_native_records(at, n) } else {
     if k == kind_native_returns() { emit_native_return_records(at, n) } else {
-    if k == kind_private_composite() { emit_private_composite_records(at, n) } else {
-    if k == kind_data_slots() { emit_data_slot_records(at, n) } else {
-    if k == kind_shared_layout() { emit_shared_slot_records(at, n) } else {
-    if k == kind_data_init() { emit_data_init_records(at, n) } else {
+    if k == kind_data_fields() { emit_data_field_records(at, n) } else {
     // DEBUG_POOL reaches this dispatch for the first time here. Slice 9 drove it
     // through a different caller, so the generic path never needed an arm and the
     // stride table has known the kind all along -- `stride_of_kind` returns 0 for
@@ -2597,7 +2466,7 @@ fn emit_at(k: Word, n: Word, at: Word) -> Word {
     // the window emitter does, can reach it, which is why a corpus that never sets
     // `emit_debug` left the gap invisible.
     if k == kind_debug_pool() { emit_pool_bytes(at, n) } else {
-    0 - 222 }}}}}}}}}}
+    0 - 222 }}}}}}}
     }
 }
 
@@ -5035,21 +4904,18 @@ fn ds_name_begin() -> Word {
     if nm.jj < 0 { nm.jj } else { nm.cnt }
 }
 
-// One data-slot record, with the RUN INDEX in `fin[0]` where the formatter takes
-// a name index, and the remaining three fields unchanged.
+// One data-field record, with the FIELD INDEX in `fin[0]` where the formatter
+// takes a name index, and the remaining eleven fields unchanged.
 //
 // The bound is checked rather than trusted. `fin[0]` comes from the host, and an
-// out-of-range run index would read a name belonging to some other section --
+// out-of-range field index would read a name belonging to some other section --
 // a wrong answer rather than a fault, which is the failure this whole route
 // exists to prevent.
 fn ds_name_step() -> Word {
     if wire.fin[0] >= nm.scnt { 0 - 243 } else {
     if wire.fin[0] < 0 { 0 - 243 } else {
-        put_u32(dslot_off_name(), wire.nmap[nm.sbase + wire.fin[0]]);
-        put_u8(dslot_off_visibility(), wire.fin[1]);
-        put_u8(dslot_off_reserved(), wire.fin[2]);
-        put_u16(dslot_off_run(), wire.fin[3]);
-        dslot_stride()
+        wire.fin[0] = wire.nmap[nm.sbase + wire.fin[0]];
+        put_data_field(wire_zero(), wire_zero())
     } }
 }
 
@@ -5535,14 +5401,15 @@ fn template_step() -> Word {
     }
 }
 
-// Private initialization is elided only for a nonempty sequence of Int(0).
-// The first stored root follows the chunk pools, whose counts arrive separately.
+// Each data field's explicit initialiser is one constant root, placed after
+// every chunk pool in field order. The host reports each field's initialiser
+// FORM and the chunk pool sizes; the stage numbers the roots, so the index a
+// `DATA_FIELDS` record carries is the stage's and not the host's.
 private data initialization {
     chunks: Word,
     total: Word,
     seen: Word,
-    first: Word,
-    elided: Word,
+    next: Word,
     active: Word,
     bad: Word,
 }
@@ -5555,8 +5422,7 @@ fn init_begin() -> Word {
         initialization.chunks = wire.warg;
         initialization.total = wire.warg2;
         initialization.seen = wire_zero();
-        initialization.first = wire_zero();
-        initialization.elided = if wire.warg2 == wire_zero() { wire_zero() } else { wire_one() };
+        initialization.next = wire_zero();
         initialization.active = wire_one();
         wire_zero()
     }
@@ -5564,13 +5430,18 @@ fn init_begin() -> Word {
 
 fn init_chunk() -> Word {
     if initialization.active != wire_one() orelse initialization.chunks <= wire_zero()
-        orelse wire.warg < wire_zero() orelse wire.warg > absent_index() - initialization.first { init_error() } else {
-        initialization.first = initialization.first + wire.warg;
+        orelse wire.warg < wire_zero() orelse wire.warg > absent_index() - initialization.next { init_error() } else {
+        initialization.next = initialization.next + wire.warg;
         initialization.chunks = initialization.chunks - wire_one();
         wire_zero()
     }
 }
 
+// One batch of `warg` fields, `fin[i]` the initialiser form of field i: 0 the
+// zero of its kind, 1 `Unit`, 2 an explicit constant. Each entry is replaced by
+// the field's `init_const`, the next root index for form 2 and `ABSENT`
+// otherwise. An unknown form refuses the whole batch before any entry is
+// rewritten, so a refusal leaves no half-numbered batch behind.
 fn init_values() -> Word {
     let n = wire.warg;
     if initialization.active != wire_one() orelse initialization.chunks != wire_zero()
@@ -5578,13 +5449,15 @@ fn init_values() -> Word {
         orelse n > initialization.total - initialization.seen { init_error() } else {
         initialization.bad = wire_zero();
         for i in 0..n limit 512 {
-            let tag = wire.fin[i * wire_two()];
-            if tag < tag_unit() orelse tag > tag_none() { initialization.bad = wire_one(); }
+            if wire.fin[i] < wire_zero() orelse wire.fin[i] > wire_two() { initialization.bad = wire_one(); }
         }
         if initialization.bad != wire_zero() { init_error() } else {
             for i in 0..n limit 512 {
-                if wire.fin[i * wire_two()] != tag_int() orelse wire.fin[i * wire_two() + wire_one()] != wire_zero() {
-                    initialization.elided = wire_zero();
+                if wire.fin[i] == wire_two() {
+                    wire.fin[i] = initialization.next;
+                    initialization.next = initialization.next + wire_one();
+                } else {
+                    wire.fin[i] = absent_index();
                 }
             }
             initialization.seen = initialization.seen + n;
@@ -5596,12 +5469,9 @@ fn init_values() -> Word {
 fn init_finish() -> Word {
     if initialization.active != wire_one() orelse initialization.chunks != wire_zero()
         orelse initialization.seen != initialization.total { init_error() } else {
-    if initialization.elided == wire_zero() andalso initialization.total > absent_index() - initialization.first { init_error() } else {
-        put_u32(dinit_off_first(), if initialization.elided == wire_one() { absent_index() } else { initialization.first });
-        put_u32(dinit_off_count(), initialization.total);
-        wire.fin[wire_zero()] = initialization.elided;
+    if initialization.next > absent_index() { init_error() } else {
         initialization.active = wire_zero();
-        dinit_stride()
+        initialization.seen
     }}
 }
 
@@ -5843,15 +5713,14 @@ private data recordread {
 
 fn rr_stride(kind: Word) -> Word {
     if kind == kind_names() orelse kind == kind_struct_aux()
-        orelse kind == kind_shapes() orelse kind == kind_data_slots()
-        orelse kind == kind_private_composite() orelse kind == kind_data_init()
+        orelse kind == kind_shapes()
         orelse kind == kind_natives() orelse kind == kind_native_returns() { wire_eight() } else {
     if kind == kind_consts() orelse kind == kind_enum_aux()
         orelse kind == kind_signatures() orelse kind == kind_struct_templates()
-        orelse kind == kind_enum_variants() orelse kind == kind_enum_layouts()
-        orelse kind == kind_shared_layout() { wire_sixteen() } else {
+        orelse kind == kind_enum_variants() orelse kind == kind_enum_layouts() { wire_sixteen() } else {
+    if kind == kind_data_fields() { dfield_stride() } else {
     if kind == kind_chunks() { chunk_stride() } else {
-    if kind == kind_header() { header_stride() } else { wire_zero() }}}}
+    if kind == kind_header() { header_stride() } else { wire_zero() }}}}}
 }
 
 fn rr_u32s(count: Word) -> Word {
@@ -5862,29 +5731,24 @@ fn rr_u32s(count: Word) -> Word {
 }
 
 fn rr_small() -> Word {
-    if recordread.kind == kind_shapes() {
-        wire.fin[wire_zero()] = get_u16(shape_off_tag());
-        wire.fin[wire_one()] = wire.bytes[shape_off_kind()] as Word;
-        wire.fin[wire_two()] = wire.bytes[shape_off_reserved()] as Word;
-        wire.fin[wire_three()] = get_u32(shape_off_size());
-        shape_fields()
-    } else { if recordread.kind == kind_private_composite() {
-        wire.fin[wire_zero()] = get_u16(pcomp_off_slot());
-        wire.fin[wire_one()] = get_u16(pcomp_off_reserved());
-        wire.fin[wire_two()] = get_u32(pcomp_off_offset());
-        pcomp_fields()
-    } else {
-        wire.fin[wire_zero()] = get_u32(wire_zero());
-        wire.fin[wire_one()] = wire.bytes[wire_four()] as Word;
-        wire.fin[wire_two()] = wire.bytes[wire_five()] as Word;
-        wire.fin[wire_three()] = get_u16(wire_six());
-        if recordread.kind == kind_data_slots() { dslot_fields() } else {
-            wire.fin[wire_four()] = get_u32(sslot_off_first_slot());
-            wire.fin[wire_five()] = get_u16(sslot_off_run());
-            wire.fin[wire_six()] = get_u16(sslot_off_stride());
-            sslot_fields()
-        }
-    }}
+    wire.fin[wire_zero()] = get_u16(shape_off_tag());
+    wire.fin[wire_one()] = wire.bytes[shape_off_kind()] as Word;
+    wire.fin[wire_two()] = wire.bytes[shape_off_reserved()] as Word;
+    wire.fin[wire_three()] = get_u32(shape_off_size());
+    shape_fields()
+}
+
+// The twelve fields of one data field record, in record order.
+fn rr_field() -> Word {
+    rr_u32s(wire_five());
+    wire.fin[wire_five()] = get_u16(dfield_off_elem_len());
+    wire.fin[wire_six()] = wire.bytes[dfield_off_kind()] as Word;
+    wire.fin[wire_seven()] = wire.bytes[dfield_off_visibility()] as Word;
+    wire.fin[wire_eight()] = wire.bytes[dfield_off_init()] as Word;
+    wire.fin[9] = wire.bytes[dfield_off_reserved0()] as Word;
+    wire.fin[10] = get_u16(dfield_off_reserved1());
+    wire.fin[11] = get_u32(dfield_off_init_const());
+    dfield_fields()
 }
 
 fn rr_wide() -> Word {
@@ -5926,10 +5790,10 @@ fn rr_fields() -> Word {
     if kind == kind_header() { rr_header() } else {
     if kind == kind_consts() orelse kind == kind_enum_aux()
         orelse kind == kind_enum_variants() { rr_wide() } else {
-    if kind == kind_shapes() orelse kind == kind_data_slots()
-        orelse kind == kind_private_composite() orelse kind == kind_shared_layout() { rr_small() } else {
+    if kind == kind_shapes() { rr_small() } else {
+    if kind == kind_data_fields() { rr_field() } else {
         rr_u32s(recordread.stride / wire_four())
-    }}}}
+    }}}}}
 }
 
 fn rr_begin() -> Word {

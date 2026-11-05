@@ -67,8 +67,8 @@ fn private_initializers_preserve_shipping_metadata() {
     let pipeline =
         keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()).unwrap();
     assert_eq!(
-        pipeline.data_layout.as_ref().unwrap().private_init,
-        reference.data_layout.as_ref().unwrap().private_init
+        pipeline.data_layout.as_ref().unwrap().fields,
+        reference.data_layout.as_ref().unwrap().fields
     );
     assert_eq!(pipeline.to_bytes().unwrap(), reference.to_bytes().unwrap());
     let control = "private data d { n: Word } fn main() -> Word { d.n = d.n + 1; d.n }";

@@ -1,115 +1,104 @@
 // compiler/kel/verify_datalayout.kel -- the self-hosted module-level data-layout validation of
 // the A.2.1 typed pass (reference `verify_typed.rs::validate_data_layout`), audit findings B6 and
-// C4, in a BATCHED form so it scales to the self-hosted stages (whose layouts expand to tens of
-// thousands of slots, one per array element).
+// C4, over the field-based layout of Encoding F, one entry per declared field.
 //
-// Three checks (see the reference for the full rationale):
-//   * B6 contiguity/count: the shared slots must be a contiguous prefix of the unified slot
-//     array (`prefix_shared == total_shared`), and there must be exactly one shared-layout entry
-//     per shared slot (`n_shared == total_shared`).
-//   * B6 bounds: every shared slot's byte extent (`offset + size`) must lie within the
-//     shared-data buffer. The host precomputes `size` (the composite body length, or the scalar
-//     size at the module widths) and the undecodable-kind flag `a2`.
-//   * C4 monotonicity: the private-composite layout must have strictly ascending unique slot
-//     indices in range (`< n_slots`) and strictly ascending pool offsets in range (`< pool`).
+// The checks, see the reference for the full rationale:
+//   * Tiling: no field has a zero count, each field's first slot is the running sum of the counts
+//     before it, and the total stays within the 24-bit slot space.
+//   * B6 prefix: every shared field precedes every private field.
+//   * B6 bounds: a shared field has an offset, carries the host-initialised form, and its last
+//     element's extent (`offset + (count - 1) * stride + size`) lies within the shared buffer.
+//     The host precomputes `size`, the composite body length or the scalar size at the module
+//     widths, as -1 for an undecodable kind.
+//   * Initialiser: a private field taking the zero of its kind needs a kind that has one. The
+//     host supplies `zeroable` from the one kind-to-zero table, `crate::bytecode::data_kind_zero`.
+//   * C4 placement: a private field without an offset carries no stride; a pooled private field
+//     holds a flat composite with a non-zero body, its elements do not overlap, and the pooled
+//     fields are ascending, disjoint, and end within the persistent composite pool.
 //
-// The tables are fed to this stage one 1024-entry batch at a time by resuming the coroutine: the
-// host writes the batch into `a0`/`a1`/`a2` with the `phase` (1 slots, 2 shared bounds, 3
-// private) and `count`, then resumes; the running state `io_*` (the shared prefix/total counts,
-// the private-layout previous slot/offset, and the accumulated `bad`) persists in the shared
-// buffer across resumes. After the last batch the host reads `io_prefix`/`io_total`/`io_bad` and
-// finalises the contiguity/count comparison. The stage self-hosts the reconcile/bounds/
-// monotonicity algorithm; the driver orchestrates the batching, as it does the topological
-// resource-bound resolution for analyze.kel.
+// The fields are fed to this stage in batches of 256 by resuming the coroutine: phase 0 resets
+// the running state, phase 1 checks the batch the host wrote with its `count`, and phase 2
+// returns the verdict. The running state `io_*` persists in the shared buffer across resumes.
+// The stage self-hosts the tiling, prefix, bounds and placement algorithm; the driver
+// orchestrates the batching, as it does the topological resource-bound resolution for
+// analyze.kel.
 require word >= 32;
 
 // The host-facing block: the batch descriptor (`phase`/`count`), the layout scalars, the running
-// state `io_*` (read at the start of each batch, written back at the end), and the batch arrays
-// (`a0`: shared flag / shared offset / private slot; `a1`: shared size / private offset; `a2`:
-// shared undecodable flag), reused per phase.
+// state `io_*` (read at the start of each batch, written back at the end), and one array per
+// field column.
 shared data dl {
     phase: Word,
     count: Word,
-    n_slots: Word,
     buffer: Word,
     pool: Word,
-    io_prefix: Word,
-    io_total: Word,
-    io_still: Word,
-    io_prev_slot: Word,
-    io_prev_off: Word,
-    io_first: Word,
+    io_next: Word,
+    io_private: Word,
+    io_pool_end: Word,
     io_bad: Word,
-    a0: [Word; 1024],
-    a1: [Word; 1024],
-    a2: [Word; 1024],
-    shared_count: Word,
+    vis: [Word; 256],
+    first: [Word; 256],
+    cnt: [Word; 256],
+    off: [Word; 256],
+    stride: [Word; 256],
+    size: [Word; 256],
+    elen: [Word; 256],
+    comp: [Word; 256],
+    init: [Word; 256],
+    zeroable: [Word; 256],
+}
+
+// One shared field, entry `i` of the batch.
+fn check_shared(i: Word) -> Word {
+    if dl.io_private == 1 { dl.io_bad = 1; }
+    if dl.init[i] != 0 { dl.io_bad = 1; }
+    if dl.off[i] < 0 { dl.io_bad = 1; }
+    if dl.size[i] < 0 { dl.io_bad = 1; }
+    if dl.off[i] >= 0 andalso dl.size[i] >= 0 {
+        if dl.off[i] + (dl.cnt[i] - 1) * dl.stride[i] + dl.size[i] > dl.buffer { dl.io_bad = 1; }
+    }
+    0
+}
+
+// One private field, entry `i` of the batch.
+fn check_private(i: Word) -> Word {
+    dl.io_private = 1;
+    if dl.init[i] == 0 andalso dl.zeroable[i] == 0 { dl.io_bad = 1; }
+    if dl.off[i] < 0 {
+        if dl.stride[i] != 0 { dl.io_bad = 1; }
+    } else {
+        if dl.comp[i] == 0 orelse dl.elen[i] == 0 { dl.io_bad = 1; }
+        if dl.cnt[i] > 1 andalso dl.stride[i] < dl.elen[i] { dl.io_bad = 1; }
+        if dl.off[i] < dl.io_pool_end { dl.io_bad = 1; }
+        dl.io_pool_end = dl.off[i] + (dl.cnt[i] - 1) * dl.stride[i] + dl.elen[i];
+        if dl.io_pool_end > dl.pool { dl.io_bad = 1; }
+    }
+    0
 }
 
 // Process one batch of the current `phase`, updating the running `io_*` state.
 fn run() -> Word {
     if dl.phase == 0 {
-        dl.io_prefix = 0; dl.io_total = 0; dl.io_still = 1;
-        dl.io_prev_slot = 0; dl.io_prev_off = 0; dl.io_first = 1; dl.io_bad = 0;
+        dl.io_next = 0; dl.io_private = 0; dl.io_pool_end = 0; dl.io_bad = 0;
         0
-    } else { if dl.phase == 4 {
-        if dl.io_prefix != dl.io_total orelse dl.shared_count != dl.io_total { dl.io_bad = 1; }
+    } else { if dl.phase == 2 {
         dl.io_bad
     } else {
-    if dl.phase == 1 {
-        // B6 contiguity/count: count the leading shared prefix and the total shared slots.
-        for i in 0..1024 limit 1024 {
+        for i in 0..256 limit 256 {
             if dl.count > i {
-                if dl.a0[i] == 1 {
-                    dl.io_total = dl.io_total + 1;
-                    if dl.io_still == 1 {
-                        dl.io_prefix = dl.io_prefix + 1;
-                    }
-                } else {
-                    dl.io_still = 0;
+                // Tiling: a zero count, a gap or an overlap would resolve a slot to the wrong
+                // field or to none.
+                if dl.cnt[i] < 1 { dl.io_bad = 1; }
+                if dl.first[i] != dl.io_next { dl.io_bad = 1; }
+                dl.io_next = dl.io_next + dl.cnt[i];
+                if dl.io_next > 16777216 { dl.io_bad = 1; }
+                if dl.cnt[i] >= 1 {
+                    if dl.vis[i] == 1 { check_shared(i); } else { check_private(i); }
                 }
             }
         }
-    } else {
-    if dl.phase == 2 {
-        // B6 bounds: each shared slot's extent must lie within the buffer.
-        for i in 0..1024 limit 1024 {
-            if dl.count > i {
-                if dl.a2[i] == 1 {
-                    dl.io_bad = 1;
-                } else {
-                    if dl.a0[i] + dl.a1[i] > dl.buffer {
-                        dl.io_bad = 1;
-                    }
-                }
-            }
-        }
-    } else {
-        // C4 monotonicity: strictly ascending, in-range slots and pool offsets.
-        for i in 0..1024 limit 1024 {
-            if dl.count > i {
-                if dl.a0[i] >= dl.n_slots {
-                    dl.io_bad = 1;
-                }
-                if dl.a1[i] >= dl.pool {
-                    dl.io_bad = 1;
-                }
-                if dl.io_first == 0 {
-                    if dl.a0[i] <= dl.io_prev_slot {
-                        dl.io_bad = 1;
-                    }
-                    if dl.a1[i] <= dl.io_prev_off {
-                        dl.io_bad = 1;
-                    }
-                }
-                dl.io_prev_slot = dl.a0[i];
-                dl.io_prev_off = dl.a1[i];
-                dl.io_first = 0;
-            }
-        }
+        0
     } }
-    0
-} }
 }
 
 loop main(resume: Word) -> Word {
