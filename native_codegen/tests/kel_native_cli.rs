@@ -234,14 +234,14 @@ fn every_documented_failure_reaches_its_exit_status() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A variant whose payload holds an enum, matched by a pattern that binds it.
+/// A match binding a payload whose enum is declared after the enum holding it.
 /// The reference compiler accepts it, and the self-hosted parser refuses it as
-/// outside the subset, because it does not model that payload layout. It is
-/// the witness `tests/self_hosted_backend.rs` uses for
-/// `SelfHostError::Unsupported`. Absorption 129 replaced a pipe into a generic
-/// template and then a nested destructuring `let`, and absorption 132 a typed
-/// destructuring `let`, each when upstream brought it into the subset, in pull
-/// requests 694, 705 and 723.
+/// outside the subset, which is the witness `tests/self_hosted_backend.rs` uses
+/// for `SelfHostError::Unsupported`. Absorption 129 replaced a pipe into a
+/// generic template and then a nested destructuring `let`, and absorption 132 a
+/// typed destructuring `let`, each when upstream brought it into the subset, in
+/// pull requests 694, 705 and 723. This line keeps the stream form, so the
+/// native route the test then runs lowers a stream.
 const OUTSIDE_SUBSET: &str = "enum W { A(V, Word) }\nenum V { B(Word), C }\n\
     loop main(t: Word) -> Word { let w = W::A(V::C, t); \
     let r = yield match w { W::A(v, y) => y }; yield r }";
