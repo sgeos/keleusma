@@ -57,10 +57,9 @@ and the width feeds the worst-case memory bound. The container is built by the s
 defaults, `--no-default-features`, `--features signatures`, `--features signatures,shell`, and
 isolated `--features self-host`. **`--all-features` is not one of them and does not pass.** It selects the
 mutually exclusive `narrow-word-*` and `narrow-address-*` selectors at once, and it pulls in
-`sdl3-example`, which builds SDL3 from source. Root continuous integration never builds the
-detached `native_codegen/` package. Its own workflow, `.github/workflows/native.yml`, runs
-`native_codegen/tools/backend-gate.sh` with default features and with `--narrow` on `main`,
-`v0.2.3` and `v0.3.0`, and it is not part of `CI result`.
+`sdl3-example`, which builds SDL3 from source. The detached `native_codegen/` package has its
+own jobs in `ci.yml`, under `CI result`, which run `native_codegen/tools/backend-gate.sh` with
+default features and with `--narrow` whenever a native input changes.
 
 **Conservative-verification stance.** The compile pipeline admits a broader surface than the WCET
 and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable, and
@@ -247,8 +246,8 @@ job on every branch run and on a ready pull request's full run, and the document
 intra-doc link is invisible to `test` and `clippy`. A pull request that changes only
 documentation, the book or `scripts/` gets a light run of the documentation guards, the link
 check and the script checks, and the branch run after its merge is full. A branch run whose tree
-a full pull-request run already tested is not repeated. `main` requires the `CI result` job,
-which fails when any job failed. A draft pull request defers the self-host tier, so iterate as a
+a full pull-request run already tested is not repeated. `main` and `v0.2.3` require the `CI result`
+job, which fails when any job failed, the native gate jobs included. A draft pull request defers the self-host tier, so iterate as a
 draft, mark it ready when done, and merge on the ready run's green. The rules are at the top of
 `.github/workflows/ci.yml`.
 Before any publication, run the full

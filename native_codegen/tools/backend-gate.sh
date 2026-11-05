@@ -4,7 +4,7 @@
 # WHY THIS EXISTS
 #
 # `native_codegen` is a detached package. The workspace gate does not build it.
-# Since 2026-10-22 the native workflow runs THIS SCRIPT, in both float
+# Since 2026-10-22 continuous integration runs THIS SCRIPT, in both float
 # configurations, so continuous integration and a local run execute the same
 # phases. It originally replaced commands retyped from memory, with three facts
 # living only in a session's scrollback:
