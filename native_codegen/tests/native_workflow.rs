@@ -113,9 +113,28 @@ fn the_path_filter_covers_every_input_the_suite_reads() {
         "the native workflow does not run when {missing:?} changes, although the \
          suite reads it. Add it to both paths lists."
     );
+
+    let branches = branch_lists(&workflow());
+    assert_eq!(
+        branches.len(),
+        2,
+        "expected one branches list for push and one for pull_request"
+    );
+    assert_eq!(
+        branches[0], branches[1],
+        "the push and pull_request branch lists differ, so one event skips a line"
+    );
+    for branch in BRANCHES {
+        assert!(
+            branches[0].contains(branch),
+            "the native workflow no longer runs for {branch}: {}",
+            branches[0]
+        );
+    }
 }
 
-/// MUST-FIRE: a filter missing one entry is reported.
+/// MUST-FIRE: a filter missing one entry is reported, and so is a branch list
+/// missing `v0.2.3`.
 #[test]
 fn a_filter_missing_an_input_is_detected() {
     let text = workflow().replace("      - 'docs/decisions/ABSORPTION_*_BRIEF.md'\n", "");
@@ -124,7 +143,33 @@ fn a_filter_missing_an_input_is_detected() {
         !lists[0].contains(&pattern_for("../docs/decisions/ABSORPTION_*_BRIEF.md")),
         "the control did not remove the entry, so it proves nothing"
     );
+
+    let text = workflow().replace("'v0.2.3', ", "");
+    let branches = branch_lists(&text);
+    assert_eq!(branches.len(), 2, "the control parsed no branch lists");
+    assert!(
+        !branches[0].contains(BRANCHES[1]),
+        "the control did not remove the branch, so it proves nothing"
+    );
 }
+
+/// The `branches:` lists of the two events, in order of appearance.
+fn branch_lists(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.trim().strip_prefix("branches:"))
+        .map(|b| b.trim().to_string())
+        .collect()
+}
+
+/// The branches both events must list.
+///
+/// **THE GATE RUNS ON EVERY LINE THAT SHIPS THIS BACKEND.** The operator ruled
+/// on 2026-11-04 that the unified V0.2.X and V0.3.X work runs one set of gates.
+/// Before that the workflow ran only for `main` and `v0.3.0`, and three native
+/// tests drifted on `v0.2.3` against root changes with nothing red, because
+/// nothing ran. The check sits inside the existing filter test and its control,
+/// rather than in new test functions, so the recorded population is unchanged.
+const BRANCHES: [&str; 3] = ["main", "'v0.2.3'", "'v0.3.0'"];
 
 /// Both float configurations run the COMPLETE gate script, not a subset.
 #[test]

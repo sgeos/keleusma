@@ -9,9 +9,15 @@ name: Native gate
 # is REACH in native_codegen/tools/gate-status.sh, which reach_census.rs checks
 # against the suite's actual reads, and native_workflow.rs checks that every
 # REACH entry is listed here, so the two cannot drift apart silently.
+#
+# Branches: since 2026-11-04 the workflow also runs for `v0.2.3`, because the
+# operator ruled that the unified V0.2.X and V0.3.X work runs one set of gates.
+# Until then the native suite was not run there, and three of its tests drifted
+# against root changes unseen. native_workflow.rs checks that both events list
+# every version branch named here.
 on:
   push:
-    branches: [main, 'v0.3.0']
+    branches: [main, 'v0.2.3', 'v0.3.0']
     paths:
       - 'native_codegen/**'
       - 'src/**'
@@ -30,7 +36,7 @@ on:
       - 'keleusma-wire-derive/**'
       - '.github/workflows/native.yml'
   pull_request:
-    branches: [main, 'v0.3.0']
+    branches: [main, 'v0.2.3', 'v0.3.0']
     paths:
       - 'native_codegen/**'
       - 'src/**'

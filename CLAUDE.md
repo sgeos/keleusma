@@ -57,7 +57,10 @@ and the width feeds the worst-case memory bound. The container is built by the s
 defaults, `--no-default-features`, `--features signatures`, `--features signatures,shell`, and
 isolated `--features self-host`. **`--all-features` is not one of them and does not pass.** It selects the
 mutually exclusive `narrow-word-*` and `narrow-address-*` selectors at once, and it pulls in
-`sdl3-example`, which builds SDL3 from source.
+`sdl3-example`, which builds SDL3 from source. Root continuous integration never builds the
+detached `native_codegen/` package. Its own workflow, `.github/workflows/native.yml`, runs
+`native_codegen/tools/backend-gate.sh` with default features and with `--narrow` on `main`,
+`v0.2.3` and `v0.3.0`, and it is not part of `CI result`.
 
 **Conservative-verification stance.** The compile pipeline admits a broader surface than the WCET
 and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable, and

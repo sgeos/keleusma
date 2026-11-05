@@ -17,7 +17,8 @@ import sys
 
 # Light prefixes. Each is read only by the guard binaries, the `docs-links` job and the
 # `scripts` job, which a light run executes. `native_codegen/` is a detached package that
-# no job here builds. `native.yml` on `v0.3.0` covers it, and V0.3.X agreed on 2026-10-25
+# no job here builds. `native.yml` covers it on `main`, `v0.3.0` and, since 2026-11-04,
+# `v0.2.3`. V0.3.X agreed on 2026-10-25
 # on the condition that `documentation_links` and `comment_citations`, which walk its
 # files, stay in the light run. `test_ci_classify.py` checks that condition.
 LIGHT_PREFIXES = ('docs/', 'book/', 'scripts/', 'assets/', '.github/ISSUE_TEMPLATE/', 'native_codegen/')
