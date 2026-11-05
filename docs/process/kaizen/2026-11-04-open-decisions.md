@@ -116,6 +116,55 @@ release. The operator's one-time steps are in
 [the signing proposal](./2026-11-01-release-signing-proposal.md#ruling-and-procedure).
 (b) Publish V0.2.3 unsigned and begin with the next release.
 
+## Work on open issues, 2026-11-05
+
+The operator asked on 2026-11-04 for every known open issue that needs no further
+input to be addressed. This section records what was done and the one new question
+that arose.
+
+- **The state file budget.** `tests/state_file_budget.rs` fails when a file under
+  `docs/process/handoffs/` that states "within a budget of N KB" exceeds N thousand
+  bytes, and fails when no file opts in, so it cannot pass by checking nothing. It runs
+  on the light path, which `tests/ci_light_path_coverage.rs` required. A file over
+  budget and a renamed phrase each fail it.
+- **The fuzz crash path.** The "Run each target" step was run locally under GitHub's
+  default shell flags, with a stand-in for `cargo fuzz` whose second of three targets
+  crashed. Every target ran, the step failed naming the crashing target, and the
+  crashing input was under `fuzz/artifacts/`. The upload action itself is still
+  untested. A job stopped by its 75-minute limit is cancelled rather than failed, so
+  `if: failure()` would not upload its inputs.
+- **The gate saving of pull request 508**, the Jev selection task
+  `kaizen-release-gate-timing`. That pull request filtered the `selfhost_*` binaries out
+  of the gate's workspace test step, because the self-host step runs them as the run of
+  record. nextest builds every binary whatever the filter, so the saving is run time
+  alone. **Fact.** On 2026-11-05 at `e0488c25`, with the binaries built first,
+  `cargo nextest run --profile ci --workspace -E 'package(keleusma) & binary(~selfhost)'`
+  ran 1,024 tests in 71 binaries, all passing, in 4,355 seconds. The load average was 40
+  to 63 during the run, against about 8 before it, partly from this run's own build.
+  **Inference.** The step now saves about 73 minutes on this machine under that load and
+  less when it is quiet. One run under contention is not a quiet-machine figure. The
+  release line was asked to cite this where the release procedure describes the local
+  gate, since that document changes through it.
+
+**E4. The interline checkpoint carries other projects' messages.** *Judgment.*
+**Fact.** The shared store under `secret/interline/` now registers the lines
+`pydromon`, `pykeleusma` and `radiate` beside Keleusma's, and on 2026-11-05 it holds
+293 messages. Six from `radiate` to `pydromon` match kept disclosure term 3.
+**Fact.** The tracked checkpoints, which a public repository serves, carry messages
+between `radiate` and `pydromon`, 23 on `main`, 47 on `v0.2.3` and 28 on `v0.3.0`.
+None of those match a term or name a home directory. **Fact.**
+[The protocol](../INTERLINE_PROTOCOL.md) describes the store as shared by the lines of
+one repository and forbids private material in checkpoints. This line holds its own
+export and asked V0.2.X, V0.3.X and proofs in sequences 294 to 296 to hold theirs.
+(a) Export only messages whose sender and recipient are both Keleusma lines, by a
+change to `scripts/interline.py` that this line would make with tests. The messages
+already published stay in history, since removing them would need a history rewrite
+and force pushes.
+(b) As (a), and also remove the other projects' messages from the current tracked
+checkpoints by an ordinary commit on each branch, leaving history as it is.
+(c) Give the other projects their own store, so Keleusma's holds only its own lines.
+(d) Keep exporting everything, after removing the six matching messages' bodies.
+
 ## The operator's own checks
 
 Unchanged since 2026-10-30. K6, look in the repository settings for "Require merge

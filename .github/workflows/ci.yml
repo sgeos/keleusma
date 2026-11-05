@@ -158,6 +158,7 @@ jobs:
             --test push_order_claims \
             --test release_process_crate_list \
             --test spec_trap_claims \
+            --test state_file_budget \
             --test toolchain_pin_components
 
   # THE ADVISORY DATABASE, WHICH HAD NEVER BEEN CONSULTED.
