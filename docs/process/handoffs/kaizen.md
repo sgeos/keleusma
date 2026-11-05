@@ -58,7 +58,8 @@ run.
   target` after any `cargo clean`. On 2026-11-05 the volume had 40 GiB free after the
   E1 removals.
 - **Fuzz.** The nightly run passes and starts six to ten hours after its 10:17 UTC
-  cron time. No target has crashed, so the crash path is untested.
+  cron time. The crash path's logic passed a local simulation on 2026-11-05. The
+  artifact upload is untested, and a job stopped by its time limit would not upload.
 - **Idle compaction.** False from 05:42 UTC on 2026-11-01, D2 of 2026-11-01.
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner. The
   blog's Pages build holds a shared runner much of a busy day, item K11.
@@ -93,14 +94,16 @@ authority, so the startup-file positions reach them first-hand.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
-6. Measure branch-run cost again once changelog fragments are in use.
+5. Measure branch-run cost again once changelog fragments are in use.
+6. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
 
 ## Open with the operator
 
 [The open decisions of 2026-11-04](../kaizen/2026-11-04-open-decisions.md) hold the
-list and the operator's ruling of that day. The signing key is the operator's to make,
-and V0.2.3's publication waits for it. The K-series checks are deferred.
+list and the operator's ruling of that day. E4 asks whether the interline checkpoint
+keeps other projects' messages, and every line holds its export meanwhile, by sequences
+294 to 296. The signing key is the operator's to make, and V0.2.3's publication waits
+for it. The K-series checks are deferred.
 
 ## Concerns
 
