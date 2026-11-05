@@ -145,7 +145,7 @@ compaction.
 
 **After completing each task.**
 1. Update task status in `docs/process/TASKLOG.md`.
-2. Overwrite `docs/process/REVERSE_PROMPT.md` with verification, questions, concerns and the intended next step.
+2. Overwrite the `v0.2.3` line's own block of `docs/process/REVERSE_PROMPT.md` with verification, questions, concerns and the intended next step. Since the lines were unified through `main` on 2026-11-01 the file also carries the V0.3.X line's appended block. On the operator's ruling of 2026-11-04 each line tracks only its own material in these shared process files, `REVERSE_PROMPT.md`, `TASKLOG.md` and the handoffs, and leaves the other line's material in place until the files are unified at the next merge.
 3. Commit with a conventional commit referencing the task.
 4. If blocked or uncertain, document it in `REVERSE_PROMPT.md` and **stop**.
 

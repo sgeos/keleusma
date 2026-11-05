@@ -247,6 +247,8 @@ A future release will add a `Value::Opaque` variant and a marshalling path so op
 
 No implicit type coercion exists. Numeric conversion requires the `as` keyword.
 
+A no-payload enum-variant pattern in a `match` whose scrutinee is a `Word` is not a coercion. The pattern compares the word with the variant's discriminant and constructs no enum value, as [the type system](TYPE_SYSTEM.md#matching-a-word-by-variant-discriminant) specifies. Where this document and that section once appeared to disagree, the operator ruled on 2026-11-04 that the type system governs and the construct stays.
+
 ````
 let x: Word = 42;
 let y: Float = x as Float;
@@ -583,7 +585,7 @@ The compiler verifies that all `yield` functions eventually reach the end of the
 
 ### 6.3 Productive Divergent Functions (`loop`)
 
-Productive divergent functions are yielding coroutine control loops. They restart at the top when they reach the bottom and must yield on every iteration. They never exit. Only the top-level entry point function of a script may be of this type.
+Productive divergent functions are yielding coroutine control loops. They restart at the top when they reach the bottom and must yield on every iteration. They never exit. The entry point `main` may be of this type, and so may a `loop` function that another `loop` function calls.
 
 ````
 loop main(cmd: AudioCommand) -> AudioAction {
@@ -596,8 +598,9 @@ The implicit loop behavior means the function body restarts from the beginning a
 Productive divergent functions may call:
 - Any atomic function (`fn`).
 - Non-atomic functions (`yield`) that share the same yield contract.
+- Other productive divergent functions (`loop`) that share the same yield contract.
 
-Only one `loop` function may exist per script, and it serves as the coroutine entry point.
+A script may hold more than one `loop` function. The entry point `main` is the coroutine entry, and any other `loop` function is reached only by delegation from a `loop`. A delegated `loop` never returns to its caller. When its body reaches the bottom it restarts in place, with the caller's frame beneath it. Each resume value is written to the parameter of the innermost running `loop`, at every resume and not only at the restart, which is the rule `loop main` already follows. The operator admitted this shape on 2026-11-04, and noted that inner and outer loops need arenas that reset independently, with consequences for hot code reload. That arena design is an open question recorded separately from this grammar.
 
 ### 6.4 Yield Contract
 
@@ -1709,7 +1712,7 @@ Assuming all called native functions return and the host resumes the coroutine a
 Must yield on every iteration but never exit. The compiler verifies:
 - The function body implicitly loops (restarts from the top).
 - At least one `yield` expression exists on every execution path through the body.
-- Only one `loop` function exists per script (the entry point).
+- A `loop` other than the entry point `main` is reached only by delegation from a `loop`, and shares the entry's yield contract.
 
 The host is guaranteed to receive output on every coroutine step.
 
