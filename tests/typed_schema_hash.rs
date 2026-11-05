@@ -1,4 +1,4 @@
-//! The hot-swap schema hash covers each data slot's declared type.
+//! The hot-swap schema hash covers each data field's declared type, one line per field.
 //!
 //! The operator ruled on 2026-10-28 that the schema hash cover slot types.
 //! Before, it covered slot names and visibility only, so a swap between two
@@ -87,6 +87,64 @@ fn the_self_hosted_compiler_computes_the_same_hash() {
         assert_eq!(
             actual.to_bytes().unwrap(),
             reference.to_bytes().unwrap(),
+            "{source}"
+        );
+    }
+}
+
+/// THE PROPERTY H2 EXISTS FOR. The operator chose the per-field form on
+/// 2026-10-31, one canonical line per field with an array's element count in
+/// its token. Resizing an array, retyping its element, or swapping two arrays
+/// of one element type and different lengths each changes the hash.
+#[test]
+fn resizing_retyping_or_reordering_an_array_changes_the_hash() {
+    let base = with_data("private data d { a: [Word; 4], b: [Word; 2], n: Word }");
+    let resized = with_data("private data d { a: [Word; 5], b: [Word; 2], n: Word }");
+    let retyped = with_data("private data d { a: [Byte; 4], b: [Word; 2], n: Word }");
+    let reordered = with_data("private data d { b: [Word; 2], a: [Word; 4], n: Word }");
+    let lengths_swapped = with_data("private data d { a: [Word; 2], b: [Word; 4], n: Word }");
+    for (what, other) in [
+        ("resized", &resized),
+        ("retyped", &retyped),
+        ("reordered", &reordered),
+        ("lengths swapped", &lengths_swapped),
+    ] {
+        assert_ne!(base.schema_hash, other.schema_hash, "{what}");
+    }
+    // An array of one element is not the scalar it holds.
+    let one = with_data("private data d { a: [Word; 1], n: Word }");
+    let scalar = with_data("private data d { a: Word, n: Word }");
+    assert_ne!(one.schema_hash, scalar.schema_hash);
+}
+
+/// The hash is one line per field, so it is the CRC of a buffer whose size
+/// does not grow with an array's element count. Stated against the canonical
+/// form directly, so a return to one line per element fails here.
+#[test]
+fn the_hash_is_one_canonical_line_per_field() {
+    let m = with_data("private data d { a: [Word; 1000], n: Word }");
+    let layout = m.data_layout.as_ref().expect("a data layout");
+    let tokens = ["[Word;1000]".to_string(), "Word".to_string()];
+    assert_eq!(
+        m.schema_hash,
+        keleusma::bytecode::compute_typed_schema_hash(Some(layout), &tokens)
+    );
+}
+
+/// The self-hosted driver builds the same per-field tokens for array fields,
+/// including an array of one element, which keeps a token distinct from the
+/// scalar it holds.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_driver_hashes_array_fields_alike() {
+    use keleusma::selfhost::{compile_src, schema_hash_from_pipeline};
+    for source in [
+        "private data d { a: [Word; 1], n: Word }\nfn main() -> Word { d.n = d.n + 1; d.n }",
+        "shared data s { a: [Byte; 7], w: Word }\nprivate data d { n: Word, b: [Word; 9] }\nfn main() -> Word { d.n = s.w; d.n }",
+    ] {
+        assert_eq!(
+            schema_hash_from_pipeline(source),
+            compile_src(source).schema_hash,
             "{source}"
         );
     }

@@ -47,11 +47,7 @@ impl<'a> Machine<'a> {
             .ok_or_else(|| error("missing stage layout"))?;
         let mut slots = [0; 17];
         for (i, field) in FIELDS.iter().enumerate() {
-            slots[i] = layout
-                .slots
-                .iter()
-                .position(|s| s.name == *field)
-                .ok_or_else(|| error(field))?;
+            slots[i] = layout.slot_of(field).ok_or_else(|| error(field))?;
         }
         let vm = stage_vm(module, arena).map_err(error)?;
         let shared = vec![0; vm.shared_data_bytes()];

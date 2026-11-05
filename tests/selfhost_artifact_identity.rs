@@ -156,10 +156,7 @@ fn reference_record_bytes(record: &keleusma::selfhost::WireSchemaRecord) -> Vec<
         WireSchemaRecord::StructTemplateRecord(value) => encode(value),
         WireSchemaRecord::EnumVariantRecord(value) => encode(value),
         WireSchemaRecord::EnumLayoutRecord(value) => encode(value),
-        WireSchemaRecord::DataSlotRecord(value) => encode(value),
-        WireSchemaRecord::SharedSlotRecord(value) => encode(value),
-        WireSchemaRecord::PrivateCompositeRecord(value) => encode(value),
-        WireSchemaRecord::DataInitRecord(value) => encode(value),
+        WireSchemaRecord::DataFieldRecord(value) => encode(value),
         WireSchemaRecord::ChunkRecord(value) => encode(value),
         WireSchemaRecord::NativeRecord(value) => encode(value),
         WireSchemaRecord::HeaderRecord(value) => encode(value),
@@ -291,15 +288,20 @@ fn assert_complete_stage_artifact(name: &str, source: &str) {
     match (&decoded_data, &reference.data_layout) {
         (None, None) => {}
         (Some(a), Some(b)) => {
-            assert_eq!(a.slots, b.slots, "{name}: data slots");
-            assert_eq!(a.shared_layout, b.shared_layout, "{name}: shared offsets");
+            assert_eq!(a, b, "{name}: data fields");
             assert_eq!(
-                a.private_composite_layout, b.private_composite_layout,
-                "{name}: private placements"
-            );
-            assert_eq!(
-                keleusma::wire_schema::encode_constants(&a.private_init).unwrap(),
-                keleusma::wire_schema::encode_constants(&b.private_init).unwrap(),
+                keleusma::wire_schema::encode_constants(
+                    &keleusma::wire_schema::data_init_roots(a)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                )
+                .unwrap(),
+                keleusma::wire_schema::encode_constants(
+                    &keleusma::wire_schema::data_init_roots(b)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                )
+                .unwrap(),
                 "{name}: initializers"
             );
         }

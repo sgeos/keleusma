@@ -149,7 +149,7 @@
 //! assertion, and no observed behaviour depends on it.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
-use keleusma::bytecode::{BlockType, Module, Op, SlotVisibility, Value, WireShape};
+use keleusma::bytecode::{BlockType, Module, Op, Value, WireShape};
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
@@ -696,17 +696,9 @@ fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
     let dl = m.data_layout.as_ref()?;
     let scalar = format!(".{suffix}");
     let element0 = format!(".{suffix}[0]");
-    let mut shared_ix = 0usize;
-    for sl in &dl.slots {
-        if sl.visibility != SlotVisibility::Shared {
-            continue;
-        }
-        if sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
-            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
-        }
-        shared_ix += 1;
-    }
-    None
+    keleusma_native::data_view::shared_field_offset(dl, |name| {
+        name.ends_with(&scalar) || name.ends_with(&element0)
+    })
 }
 
 /// A payload for any module declaring the documented `len` + `bytes`
@@ -789,17 +781,9 @@ fn shared_slot_offset(m: &Module, suffix: &str) -> Option<u32> {
     let dl = m.data_layout.as_ref()?;
     let scalar = format!(".{suffix}");
     let element0 = format!(".{suffix}[0]");
-    let mut shared_ix = 0usize;
-    for sl in &dl.slots {
-        if sl.visibility != SlotVisibility::Shared {
-            continue;
-        }
-        if sl.name == suffix || sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
-            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
-        }
-        shared_ix += 1;
-    }
-    None
+    keleusma_native::data_view::shared_field_offset(dl, |name| {
+        name == suffix || name.ends_with(&scalar) || name.ends_with(&element0)
+    })
 }
 
 /// Write `body.len()` into the length slot and `body` into the array slot.
@@ -2000,12 +1984,7 @@ fn run_native(
     let n_priv_slots = m
         .data_layout
         .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Private)
-                .count()
-        })
+        .map(|dl| dl.private_slot_count())
         .unwrap_or(0);
     let n_priv = (keleusma::vm::required_persistent_capacity_for(m)
         + keleusma_native::region::persistent_supplement_bytes(m) as usize)
@@ -2412,6 +2391,16 @@ const KNOWN_VACUOUS: &[&str] = &[
     // stage, and its unseeded run now changes the segment. That agreement is
     // still one sixty-tick run with no input, which the gate prints as its
     // weakest residual; leaving this list does not make it strong evidence.
+    //
+    // **It RETURNED with Encoding F, on V0.2.X's branch, and that is the stage
+    // changing again rather than a regression.** The stage now takes one row per
+    // data field, and its unseeded run is a phase 0 turn that resets a running
+    // state already zero, so the segment does not change. Its real-input
+    // evidence is `verify_datalayout_agrees_with_the_vm_across_its_batched_phases`
+    // in `stage_differential.rs`, which feeds field rows from four real layouts,
+    // six constructed ones and a batch boundary, and compares every batch result
+    // and the running state with the virtual machine.
+    "verify_datalayout.kel",
     //
     // **`template_scan.kel` JOINED in absorption 119, as the added fifteenth
     // stage.** The host feeds it batches of tokens through `AnalysisMachine`, and
@@ -5009,12 +4998,7 @@ fn the_private_contract_exceeds_the_slot_array_for_real_corpus_modules() {
         let slots = m
             .data_layout
             .as_ref()
-            .map(|dl| {
-                dl.slots
-                    .iter()
-                    .filter(|s| s.visibility == SlotVisibility::Private)
-                    .count()
-            })
+            .map(|dl| dl.private_slot_count())
             .unwrap_or(0);
         if slots == 0 {
             continue;

@@ -491,23 +491,18 @@ fn branch_joins_loop_back_edges_and_calls_resume_correctly() {
 
 #[test]
 fn lexer_retcon_matches_seeded_vm_tokens_and_shared_writes() {
-    use keleusma::bytecode::{SlotVisibility, Value};
+    use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
     let program = common::build(&std::fs::read_to_string("../src/selfhost/kel/lexer.kel").unwrap());
     let text = b"fn add(x: Word, y: Word) -> Word { x + y } loop main(t: Word) -> Word { if t > 10 { yield add(t, 2) } else { yield 0 } }";
     let layout = program.data_layout.as_ref().unwrap();
     let offset = |suffix: &str| {
-        let index = layout
-            .slots
-            .iter()
-            .filter(|s| s.visibility == SlotVisibility::Shared)
-            .position(|s| {
-                s.name.ends_with(&format!(".{suffix}"))
-                    || s.name.ends_with(&format!(".{suffix}[0]"))
-                    || s.name == suffix
-            })
-            .unwrap();
-        layout.shared_layout[index].offset as usize
+        keleusma_native::data_view::shared_field_offset(layout, |name| {
+            name.ends_with(&format!(".{suffix}"))
+                || name.ends_with(&format!(".{suffix}[0]"))
+                || name == suffix
+        })
+        .unwrap() as usize
     };
     let mut seed = vec![0; program.shared_data_bytes as usize];
     let len = offset("len");
@@ -954,7 +949,7 @@ fn nested_stream_release_stops_before_the_next_iteration() {
 
 #[test]
 fn private_scalar_initializers_do_not_constrain_later_values() {
-    use keleusma::bytecode::{ConstValue, Value};
+    use keleusma::bytecode::{ConstValue, DataInit, Value};
     use keleusma::vm::{Vm, VmState};
     for (source, slot, first, replies, expected) in [
         (
@@ -973,7 +968,58 @@ fn private_scalar_initializers_do_not_constrain_later_values() {
         ),
     ] {
         let mut program = common::build(source);
-        program.data_layout.as_mut().unwrap().private_init[slot] = ConstValue::Float(0.0);
+        // Give private slot `slot`, and only it, a float initializer. Since
+        // Encoding F one initializer covers every element of a field, so the
+        // slot is split out of its field into a field of its own, and every
+        // other slot keeps its initializer.
+        {
+            let dl = program.data_layout.as_mut().unwrap();
+            let logical = dl.shared_slot_count() + slot;
+            let index = dl
+                .field_index_at(logical)
+                .expect("the slot lies in a field");
+            let original = dl.fields.remove(index);
+            let k = logical as u32 - original.first_slot;
+            let at = |element: u32| {
+                original
+                    .offset
+                    .map(|_| original.element_offset(element).expect("in range"))
+            };
+            let single = |first_slot: u32, count: u32, offset: Option<u32>| {
+                let mut piece = original.clone();
+                piece.first_slot = first_slot;
+                piece.count = count;
+                piece.offset = offset;
+                if count == 1 || offset.is_none() {
+                    piece.stride = 0;
+                }
+                piece
+            };
+            let mut pieces = Vec::new();
+            if k > 0 {
+                pieces.push(single(original.first_slot, k, at(0)));
+            }
+            let mut corrupted = single(original.first_slot + k, 1, at(k));
+            corrupted.init = DataInit::Const(ConstValue::Float(0.0));
+            pieces.push(corrupted);
+            if k + 1 < original.count {
+                pieces.push(single(
+                    original.first_slot + k + 1,
+                    original.count - k - 1,
+                    at(k + 1),
+                ));
+            }
+            dl.fields.splice(index..index, pieces);
+            let init = dl.private_init_values();
+            assert!(matches!(init[slot], ConstValue::Float(_)));
+            assert_eq!(
+                init.iter()
+                    .filter(|v| matches!(v, ConstValue::Float(_)))
+                    .count(),
+                1,
+                "only the chosen slot is corrupted"
+            );
+        }
         keleusma::verify::verify(&program).unwrap();
         let capacity = keleusma::vm::required_persistent_capacity_for(&program);
         let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);

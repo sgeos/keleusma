@@ -262,23 +262,15 @@ fn assert_round_trip(stage: &str, want: &WireAuxBody) {
     match (&got.data_layout, &want.data_layout) {
         (None, None) => {}
         (Some(g), Some(w)) => {
-            assert_eq!(g.slots.len(), w.slots.len(), "{stage}: data slots");
-            for (gs, ws) in g.slots.iter().zip(&w.slots) {
-                assert_eq!(gs.name, ws.name, "{stage}");
-                assert_eq!(gs.visibility, ws.visibility, "{stage}");
-            }
-            assert_eq!(g.shared_layout, w.shared_layout, "{stage}");
-            assert_eq!(
-                g.private_composite_layout, w.private_composite_layout,
-                "{stage}"
-            );
-            assert_eq!(
-                g.private_init.len(),
-                w.private_init.len(),
-                "{stage}: private init"
-            );
-            for (gi, wi) in g.private_init.iter().zip(&w.private_init) {
-                assert!(deep_eq(gi, wi), "{stage}: private init value");
+            assert_eq!(g, w, "{stage}: data layout");
+            for (gf, wf) in g.fields.iter().zip(&w.fields) {
+                if let (
+                    keleusma::bytecode::DataInit::Const(gi),
+                    keleusma::bytecode::DataInit::Const(wi),
+                ) = (&gf.init, &wf.init)
+                {
+                    assert!(deep_eq(gi, wi), "{stage}: private init value");
+                }
             }
         }
         (g, w) => panic!(

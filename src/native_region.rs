@@ -251,10 +251,17 @@ pub fn native_persistent_supplement_bytes(module: &Module) -> u32 {
         .iter()
         .filter(|c| c.block_type == BlockType::Stream)
         .count();
-    let composite_slots = module
-        .data_layout
-        .as_ref()
-        .map_or(0, |dl| dl.private_composite_layout.len());
+    let composite_slots = module.data_layout.as_ref().map_or(0, |dl| {
+        // One initialisation word per pooled private ELEMENT, which is what the
+        // per-element placement table counted before the field layout.
+        dl.fields
+            .iter()
+            .filter(|f| {
+                f.visibility == crate::bytecode::SlotVisibility::Private && f.offset.is_some()
+            })
+            .map(|f| f.count as usize)
+            .sum::<usize>()
+    });
     let words = |n: usize| align(u32::try_from(n).unwrap_or(u32::MAX).saturating_mul(8));
     words(streams).saturating_add(words(composite_slots))
 }

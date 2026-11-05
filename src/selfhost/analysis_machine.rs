@@ -28,11 +28,7 @@ impl<'a, const N: usize> AnalysisMachine<'a, N> {
             .ok_or_else(|| error("missing layout"))?;
         let mut slots = [0; N];
         for (i, name) in fields.iter().enumerate() {
-            slots[i] = layout
-                .slots
-                .iter()
-                .position(|s| s.name == *name)
-                .ok_or_else(|| error(name))?;
+            slots[i] = layout.slot_of(name).ok_or_else(|| error(name))?;
         }
         let vm = stage_vm(module, arena).map_err(|e| VerificationError::Execution {
             stage: "analysis",

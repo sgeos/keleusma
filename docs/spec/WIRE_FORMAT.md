@@ -196,9 +196,9 @@ The body of the bytecode partitions into three sections after the framing header
 2. **Operand pool.** Concatenated eight-byte entries indexed by the inline pool index in the opcode records that reference them.
 3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, entry point index, a `schema_hash` (u32), the per-enum-type layout table (`enum_layouts`, added under B37 with the variant discriminants and padded-body sizes), and the typed-verifier descriptor tables (Annex A.2.1) that seed the typed operand-stack pass: a per-chunk signature table (`signatures`, the flat shape of each parameter, the return, and the Stream resume), and a per-native return-shape table (`native_return_shapes`, parallel to the native names). The verifier tables are additive and carry no `BYTECODE_VERSION` change; an empty table reproduces the unseeded behaviour. The auxiliary body is encoded in the container specified under [The auxiliary body container](#the-auxiliary-body-container). Each item named above occupies one or more regions of that container, listed in the region table there.
 
-   The `schema_hash` is a CRC-32 of the data-segment layout, computed from a canonical serialisation of each slot's name, visibility and declared type in declaration order (`Module::schema_hash`, `compute_typed_schema_hash`). The type enters as a canonical token, a struct expanded to its fields' names and types, so two layouts whose slots share names but not types hash differently. The field's width and position are unchanged. The runtime uses it to gate hot-swap compatibility: `Vm::replace_module` rejects a swap against an incompatible schema before any data is loaded. A module with no data layout reports zero.
+   The `schema_hash` is a CRC-32 of the data-segment layout, computed from a canonical serialisation of one line per data field, each carrying the field's name, visibility and declared type in layout order (`Module::schema_hash`, `compute_typed_schema_hash`). The type enters as a canonical token, a struct expanded to its fields' names and types, so two layouts whose fields share names but not types hash differently. An array field's token is `[leaf;count]`, the innermost element's token and the element count, so resizing, retyping or reordering an array changes the hash. The operator chose this per-field form on 2026-10-31. The field's width and position are unchanged. The runtime uses it to gate hot-swap compatibility: `Vm::replace_module` rejects a swap against an incompatible schema before any data is loaded. A module with no data layout reports zero.
 
-   The data layout itself carries four parts (`DataLayout` in `src/bytecode.rs`). The first is `slots`, the named slots in declaration order, whose index corresponds to the `GetData`/`SetData` operand. The second is `shared_layout: Vec<SharedSlotLayout>`, one entry per shared slot in declaration order, each carrying a byte `offset` (u32 since V2, validated below `2^24` so the shared segment may reach 16 MB) into the host buffer, a `kind` (u8) that is a scalar-kind tag when the `SHARED_SLOT_COMPOSITE_FLAG` high bit is clear or a composite-kind tag in the low bits when set, and a `len` (u16) that is the flat composite body length for a composite slot and zero for a scalar slot (a single composite body still fits sixteen bits). This table is empty when there are no shared slots. The third is `private_composite_layout: Vec<PrivateCompositeSlot>`, one entry per private slot that holds a flat composite body (single composite fields and array-of-composite element slots alike), each carrying the unified data-slot index `slot` (u16) and the byte `offset` (u32) of the body within the persistent composite pool, sorted ascending by `slot` so the runtime resolves a slot by binary search. This table is empty for a module with no private composite slots, so the wire form of such a module is unchanged. The fourth is `private_init: Vec<ConstValue>`, the load-time initial value of each private slot in private-slot order (parallel to the private-slot suffix of `slots`), the `.data`-section model: a scalar slot carries its `= literal` initializer or the type's zero, and a composite or `Text` slot carries `ConstValue::Unit`. The runtime writes these into the persistent region when the VM is constructed; they persist across RESET and are not re-applied. This table is empty for a module with no private data, so the wire form of such a module is unchanged.
+   The data layout itself is one `DataField` per declared field (`DataLayout` in `src/bytecode.rs`), shared fields first, each in declaration order. A scalar field has a count of one, and an array field, however many dimensions it has, is one field whose count is the product of its dimensions. Every element still occupies one logical data slot, so a `GetData`/`SetData` operand counts elements and a field's slots are `first_slot` to `first_slot + count`. On the wire the layout is the `DATA_FIELDS` region, specified under [The data layout](#the-data-layout), whose size is a function of the field count and not of the element count. The runtime writes each private field's initial value into every element of it when the VM is constructed; the values persist across RESET and are not re-applied.
 
 The CRC-32 trailer covers the header and all three sections. The trailer's algebraic self-inclusion property holds: a consumer computing the CRC over the bytes from offset zero through the four-byte trailer obtains the residue constant `0x2144DF1C`. This property survives the section-partitioned body unchanged.
 
@@ -287,18 +287,57 @@ Correction returns a **value** and never writes to the caller's buffer. An in-pl
 
 | Kind | Region | Kind | Region |
 |---|---|---|---|
-| `0x0010` | `STRING_POOL` | `0x001A` | `DATA_SLOTS` |
-| `0x0011` | `NAMES` | `0x001B` | `SHARED_LAYOUT` |
-| `0x0012` | `CONSTS` | `0x001C` | `PRIVATE_COMPOSITE` |
-| `0x0013` | `STRUCT_AUX` | `0x001D` | `DATA_INIT` |
+| `0x0010` | `STRING_POOL` | `0x001A` | Retired, refused |
+| `0x0011` | `NAMES` | `0x001B` | Retired, refused |
+| `0x0012` | `CONSTS` | `0x001C` | Retired, refused |
+| `0x0013` | `STRUCT_AUX` | `0x001D` | Retired, refused |
 | `0x0014` | `ENUM_AUX` | `0x001E` | `PARAM_TYPES` |
 | `0x0015` | `SHAPES` | `0x001F` | `CHUNKS` |
 | `0x0016` | `SIGNATURES` | `0x0020` | `NATIVES` |
 | `0x0017` | `STRUCT_TEMPLATES` | `0x0021` | `HEADER` |
 | `0x0018` | `ENUM_VARIANTS` | `0x0022` | `DEBUG_POOL` |
 | `0x0019` | `ENUM_LAYOUTS` | `0x0023` | `NATIVE_RETURNS` |
+| `0x0024` to `0x0026` | Reserved, unemitted | `0x0027` | `DATA_FIELDS` |
 
-A region that is absent carries meaning. An absent `DATA_SLOTS` region denotes `None`, whereas an empty one denotes `Some` with no slots: a module with no `data` block and a module whose data block is empty are different programs. By contrast an absent `STRUCT_TEMPLATES` region simply denotes no templates, since that has only one reading. `u32::MAX` is the optional-index sentinel, used for the entry point, a native's return shape, and a chunk's debug pool.
+A region that is absent carries meaning. An absent `DATA_FIELDS` region denotes `None`, whereas an empty one denotes `Some` with no fields: a module with no `data` block and a module whose data block is empty are different programs. By contrast an absent `STRUCT_TEMPLATES` region simply denotes no templates, since that has only one reading. `u32::MAX` is the optional-index sentinel, used for the entry point, a native's return shape, and a chunk's debug pool.
+
+### The data layout
+
+The data layout occupies one region, `DATA_FIELDS` (`0x0027`), holding one thirty-two-byte record per declared field, `DataFieldRecord` in `src/wire_schema.rs`. The operator chose this form, Encoding F, on 2026-10-31, and the decision is recorded in [the array wire-slot design](../decisions/ARRAY_WIRE_SLOT_DESIGN.md). Every field is little-endian.
+
+| Offset | Width | Field | Meaning |
+|---|---|---|---|
+| 0 | u32 | `name` | `NAMES` index of `block.field` |
+| 4 | u32 | `first_slot` | Logical slot index of element zero |
+| 8 | u32 | `count` | Element count, never zero |
+| 12 | u32 | `offset` | Byte offset of element zero in the shared host buffer or in the persistent composite pool, or `0xFFFFFFFF` when a private field has no pool home |
+| 16 | u32 | `stride` | Byte distance between consecutive elements, zero when `count` is one or when `offset` is `0xFFFFFFFF` |
+| 20 | u16 | `elem_len` | Flat composite body length of one element, zero for a scalar element |
+| 22 | u8 | `kind` | A scalar-kind tag when the high bit `0x80` is clear, or a composite-kind tag in the low seven bits when it is set |
+| 23 | u8 | `visibility` | `1` shared, `2` private |
+| 24 | u8 | `init` | `0` for the zero of the scalar kind of a private field or for a host-initialised shared field, `1` for `Unit`, `2` for an explicit constant |
+| 25 | u8 | `reserved0` | Zero |
+| 26 | u16 | `reserved1` | Zero |
+| 28 | u32 | `init_const` | `CONSTS` index of the initial value when `init` is `2`, `0xFFFFFFFF` otherwise |
+
+The stride is stored rather than derived from the kind, so a reader needs no table from a kind to a size. `first_slot` is stored rather than derived from the counts before it, so a reader resolves a logical slot to its field by binary search, a bound of the logarithm of the field count.
+
+**An explicit initial value is one constant root per field.** The encoder places each field's `init_const` root after every chunk's constant pool, in field order, so the index is the number of chunk roots plus the number of explicit initial values before it. A private field whose elements start at the zero of a `Bool`, `Byte`, `Int`, `Fixed` or `Float` kind carries form `0` and no constant, and the reader supplies the zero from the kind. The encoder chooses form `0` exactly when the value is that zero, comparing a float by its bits so that negative zero is kept as an explicit constant.
+
+**A reader refuses, and never repairs, any record that breaks these rules.**
+
+- `name` is below the `NAMES` record count, and `visibility` is `1` or `2`.
+- Every shared field precedes every private field.
+- `reserved0` and `reserved1` are zero.
+- `count` is not zero, `first_slot` equals the sum of the counts of the records before it, and `first_slot + count` is at most `2^24`. The fields therefore tile the slot space from zero, contiguous, ascending and without overlap.
+- `kind` names a scalar or composite kind this build knows, and a scalar kind carries an `elem_len` of zero.
+- A shared field has an `offset`. A field with no `offset` has a `stride` of zero, and a field with one element has a `stride` of zero.
+- `offset + (count - 1) * stride` is representable in thirty-two bits.
+- A shared field carries `init` `0` and no `init_const`. A private field carries `init` `0` only for a kind that has a zero, `init` `0` or `1` with an `init_const` of `0xFFFFFFFF`, and `init` `2` with an `init_const` below the `CONSTS` record count. Any other `init` value is refused.
+
+The typed verifier checks further invariants that depend on the module rather than on the record alone: that the last element of each shared field lies within the shared host buffer, and that the pooled private fields are ascending, disjoint, non-overlapping within themselves, and end within the persistent composite pool.
+
+**The four regions this replaced are retired, and an artifact carrying any of them is refused.** Before Encoding F the layout occupied `DATA_SLOTS` (`0x001A`), `SHARED_LAYOUT` (`0x001B`), `PRIVATE_COMPOSITE` (`0x001C`) and `DATA_INIT` (`0x001D`). Region absence means that a module has no data block, so a reader that looked only for `DATA_FIELDS` would read an artifact of the older form as a module without data. A reader therefore refuses any artifact that carries one of the four retired kinds, whether or not it also carries `DATA_FIELDS`, with `SchemaError::RetiredRegion`. The four kind numbers are never reused. `BYTECODE_VERSION` remains `2` and the format fingerprint is unchanged within the release cycle, by the operator's ruling of 2026-10-31, so this structural refusal is what keeps an artifact of the older form from being misread.
 
 ### The forward-ordering invariant
 

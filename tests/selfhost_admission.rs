@@ -137,7 +137,7 @@ fn nesting_capacity_preserves_the_declared_boundary() {
 fn layout_failures_are_stage_decisions() {
     let mut module = compile_src("shared data d { n: Word } fn main() -> Word { d.n = 7; d.n }");
     accepted(&module);
-    module.data_layout.as_mut().unwrap().shared_layout[0].offset = module.shared_data_bytes;
+    module.data_layout.as_mut().unwrap().fields[0].offset = Some(module.shared_data_bytes);
     assert!(keleusma::verify::verify(&module).is_err());
     assert_eq!(
         verify_module_via_kel(&module).unwrap(),
@@ -221,11 +221,17 @@ fn declared_target_widths_include_float_disabled_modules() {
 
 #[test]
 fn data_layout_batches_preserve_a_late_failure() {
-    let mut module = compile_src(
-        "shared data d { xs: [Word; 1025] } fn main() -> Word { d.xs[0] = 7; d.xs[0] }",
-    );
+    // The stage takes one entry per FIELD, 256 to a batch, so 300 fields put the
+    // defect in the second batch, after a first batch that is clean.
+    let fields = (0..300)
+        .map(|i| format!("f{i}: Word"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut module = compile_src(&format!(
+        "shared data d {{ {fields} }} fn main() -> Word {{ d.f0 = 7; d.f0 }}"
+    ));
     accepted(&module);
-    module.data_layout.as_mut().unwrap().shared_layout[1024].offset = module.shared_data_bytes;
+    module.data_layout.as_mut().unwrap().fields[299].offset = Some(module.shared_data_bytes);
     assert!(keleusma::verify::verify(&module).is_err());
     assert_eq!(
         verify_module_via_kel(&module).unwrap(),

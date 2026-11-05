@@ -151,6 +151,15 @@ The per-family counts after the repair are these.
 | native shape | 7 | 1 | 1 |
 | data layout | 53 | 24 | 24 |
 
+The data-layout row was measured against the slot, shared-layout and private-placement tables.
+Encoding F replaced those tables with one record per declared field, and the data-layout
+mutations were ported to it. Each field's visibility is flipped and each field is removed, each
+shared field's offset and kind are rewritten, and each pooled private field's first slot and
+offset are rewritten, at the boundary values the tables used. Measured on the merged tree in a
+release build with the family alone, the ported family generates 51 mutants, the reference
+rejects 25 at `verify` and 25 at admission, and none is unsound, over-rejected or unavailable.
+The other rows were not re-measured after the port.
+
 The whole corpus costs more than a test can spend in a continuous-integration shard, so it is
 `#[ignore]`d as `c5_the_whole_mutation_corpus` and is the review's instrument. The test that
 runs by default, `c5_the_self_hosted_validator_accepts_no_sampled_mutant_the_reference_rejects`,

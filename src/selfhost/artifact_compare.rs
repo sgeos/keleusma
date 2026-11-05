@@ -1,7 +1,7 @@
 //! Differential checks on independently assembled modules.
 //!
 //! Exhaustive destructuring makes newly added metadata fields require an explicit decision.
-use crate::bytecode::{Chunk, DataLayout, Module};
+use crate::bytecode::{Chunk, DataField, DataLayout, Module};
 use alloc::format;
 use alloc::string::String;
 
@@ -91,20 +91,39 @@ pub(super) fn difference(actual: &Module, expected: &Module) -> Option<String> {
 }
 
 fn data_difference(actual: &DataLayout, expected: &DataLayout) -> Option<&'static str> {
-    let DataLayout {
-        slots,
-        shared_layout,
-        private_composite_layout,
-        private_init,
+    let DataLayout { fields } = expected;
+    if actual.fields.len() != fields.len() {
+        return Some("data field count");
+    }
+    actual
+        .fields
+        .iter()
+        .zip(fields)
+        .find_map(|(a, b)| field_difference(a, b))
+}
+
+fn field_difference(actual: &DataField, expected: &DataField) -> Option<&'static str> {
+    let DataField {
+        name,
+        visibility,
+        first_slot,
+        count,
+        kind,
+        elem_len,
+        offset,
+        stride,
+        init,
     } = expected;
     [
-        ("slots", actual.slots != *slots),
-        ("shared layout", actual.shared_layout != *shared_layout),
-        (
-            "private composite layout",
-            actual.private_composite_layout != *private_composite_layout,
-        ),
-        ("private initializers", actual.private_init != *private_init),
+        ("data field names", actual.name != *name),
+        ("data field visibility", actual.visibility != *visibility),
+        ("data field first slots", actual.first_slot != *first_slot),
+        ("data field counts", actual.count != *count),
+        ("data field kinds", actual.kind != *kind),
+        ("data field element lengths", actual.elem_len != *elem_len),
+        ("data field offsets", actual.offset != *offset),
+        ("data field strides", actual.stride != *stride),
+        ("private initializers", actual.init != *init),
     ]
     .into_iter()
     .find_map(|(field, differs)| differs.then_some(field))
@@ -140,7 +159,8 @@ fn chunk_difference(actual: &Chunk, expected: &Chunk) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::bytecode::{
-        BlockType, ConstValue, EnumLayout, PrivateCompositeSlot, StructTemplate, TypeTag, WireShape,
+        BlockType, ConstValue, DataInit, EnumLayout, SlotVisibility, StructTemplate, TypeTag,
+        WireShape,
     };
     use alloc::vec;
 
@@ -180,21 +200,35 @@ mod tests {
             ("native names", |m| m.native_names.push("native".into())),
             ("entry", |m| m.entry_point = None),
             ("data presence", |m| m.data_layout = None),
-            ("data slots", |m| {
-                m.data_layout.as_mut().unwrap().slots[0].name.push('x')
+            ("data field count", |m| {
+                m.data_layout.as_mut().unwrap().fields.pop();
             }),
-            ("shared layout", |m| {
-                m.data_layout.as_mut().unwrap().shared_layout[0].offset += 1
+            ("data field names", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].name.push('x')
             }),
-            ("private layout", |m| {
-                m.data_layout
-                    .as_mut()
-                    .unwrap()
-                    .private_composite_layout
-                    .push(PrivateCompositeSlot { slot: 1, offset: 0 })
+            ("data field visibility", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].visibility = SlotVisibility::Private
+            }),
+            ("data field first slots", |m| {
+                m.data_layout.as_mut().unwrap().fields[1].first_slot += 1
+            }),
+            ("data field counts", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].count += 1
+            }),
+            ("data field kinds", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].kind ^= 1
+            }),
+            ("data field element lengths", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].elem_len += 1
+            }),
+            ("data field offsets", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].offset = Some(1)
+            }),
+            ("data field strides", |m| {
+                m.data_layout.as_mut().unwrap().fields[0].stride += 1
             }),
             ("private initialization", |m| {
-                m.data_layout.as_mut().unwrap().private_init[0] = ConstValue::Int(1)
+                m.data_layout.as_mut().unwrap().fields[1].init = DataInit::Const(ConstValue::Int(1))
             }),
             ("word width", |m| m.word_bits_log2 ^= 1),
             ("address width", |m| m.addr_bits_log2 ^= 1),

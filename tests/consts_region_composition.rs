@@ -48,7 +48,7 @@
 
 #![cfg(all(feature = "compile", feature = "self-host"))]
 
-use keleusma::bytecode::{ConstValue, Module};
+use keleusma::bytecode::{ConstValue, DataInit, Module, SlotVisibility};
 use keleusma::wire_format::{WireAuxBody, WireChunk};
 
 const CORPUS_STAGES: &[(&str, &str)] = &[
@@ -185,19 +185,30 @@ fn name_bearing_nodes(v: &ConstValue) -> usize {
 ///
 /// **THIS IS NOT THE SET THE ENCODER EMITS**, and using it for a size or a
 /// capacity is how "a hundred and two calls" got recorded for a stage that needs
-/// six. The wholly-default private-slot initialisers are elided from the
-/// artifact; `keleusma::wire_schema::constant_roots` is the emitted set. What
+/// six. A field whose initialiser is the zero of its kind carries no constant on
+/// the wire; `keleusma::wire_schema::constant_roots` is the emitted set. What
 /// this function is right for is an interning census, where a composite
-/// anywhere in the module matters whether or not it reaches an artifact.
+/// anywhere in the module matters whether or not it reaches an artifact, so it
+/// takes every private slot's load-time value.
 fn all_constants(m: &Module) -> Vec<ConstValue> {
     let mut out: Vec<ConstValue> = Vec::new();
     for c in &m.chunks {
         out.extend(c.constants.iter().cloned());
     }
     if let Some(dl) = &m.data_layout {
-        out.extend(dl.private_init.iter().cloned());
+        out.extend(dl.private_init_values());
     }
     out
+}
+
+/// The private fields of `m` whose initialiser is an explicit constant.
+fn const_init_fields(m: &Module) -> usize {
+    m.data_layout.as_ref().map_or(0, |dl| {
+        dl.fields
+            .iter()
+            .filter(|f| matches!(f.init, DataInit::Const(_)))
+            .count()
+    })
 }
 
 /// **THE LOAD-BEARING FACT.** No stage's constants make the flattener intern a
@@ -240,7 +251,11 @@ fn the_flattener_interns_no_name_for_any_stage() {
             c.constants.clear();
         }
         if let Some(dl) = stripped.data_layout.as_mut() {
-            dl.private_init.clear();
+            for f in dl.fields.iter_mut() {
+                if matches!(f.init, DataInit::Const(_)) {
+                    f.init = DataInit::Unit;
+                }
+            }
         }
 
         let with = region_bytes(&encode(&base), KIND_STRING_POOL);
@@ -257,134 +272,120 @@ fn the_flattener_interns_no_name_for_any_stage() {
     assert_eq!(checked, CORPUS_STAGES.len(), "not every stage was checked");
 }
 
-/// **THE ELISION, MEASURED AT THE ARTIFACT.** The wholly-default initialiser pool
-/// contributes no records at all.
+/// **ONE ROOT PER EXPLICIT INITIALISER, MEASURED AT THE ARTIFACT.** A field whose
+/// elements start at the zero of their kind contributes no record at all, however
+/// many elements it has.
 ///
-/// This test previously asserted the opposite — that the region holds the sum of
-/// both sources — and that assertion is what quantified the waste this change
-/// removes. It is inverted rather than deleted, because the property worth
-/// guarding now is that the elision actually reaches the bytes. A test of the
-/// encoder's intent that never looked at an artifact would pass for an encoder
-/// that computed the elision and then stored the records anyway.
+/// This test previously measured the elision of a wholly-default per-element
+/// pool, and before that the waste that elision removed. Encoding F, chosen by
+/// the operator on 2026-10-31, made the property structural: a `DATA_FIELDS`
+/// record names its zero by its kind, and only an explicit initialiser reaches
+/// `CONSTS`, once per field. The property worth guarding is that the bytes
+/// agree, because a test of the encoder's intent that never looked at an
+/// artifact would pass for an encoder that stored the records anyway.
 ///
-/// Both halves are asserted. A stage whose data segment is wholly default must
-/// contribute nothing, and the pool must be non-empty first, or the case is
-/// vacuous: a stage with no data segment would satisfy the first half for a
-/// reason that has nothing to do with eliding anything.
+/// Both halves are asserted. A stage's private elements must be numerous first,
+/// or the case is vacuous: a stage with no data segment would contribute nothing
+/// for a reason that has nothing to do with the encoding.
 #[test]
-fn the_all_default_initialiser_pool_is_elided_from_the_region() {
-    let mut with_elision = 0usize;
-    let mut elided_records = 0usize;
+fn a_zero_initialised_field_contributes_no_constant_record() {
+    let mut private_elements = 0usize;
+    let mut zero_fields = 0usize;
     for (name, src) in CORPUS_STAGES {
         let m = compile_stage(src);
         let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
-        let from_data = m.data_layout.as_ref().map_or(0, |d| d.private_init.len());
-        // RESTATED ON PURPOSE, AND IT MUST NOT DELEGATE.
-        // `keleusma::wire_schema::private_init_is_elided` is the encoder's own
-        // predicate, and this test is the oracle for it. A version of this line
-        // that called the library would agree with a WRONG predicate, which is
-        // exactly the failure the test exists to catch. The agreement between
-        // the two statements is asserted separately, by
-        // `the_shared_predicate_agrees_with_the_artifact`.
-        let all_default = from_data > 0
-            && m.data_layout.as_ref().is_some_and(|d| {
-                d.private_init
-                    .iter()
-                    .all(|v| matches!(v, ConstValue::Int(0)))
-            });
-
+        let explicit = const_init_fields(&m);
+        // RESTATED ON PURPOSE, AND IT MUST NOT DELEGATE. The count of explicit
+        // initialisers is read off the fields here, not taken from
+        // `keleusma::wire_schema::data_init_roots`, so a wrong root model in
+        // the library cannot agree with itself through this test.
         let records =
             region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
-
-        if all_default {
-            assert_eq!(
-                records, from_chunks,
-                "{name}: the region holds {records} records against {from_chunks} chunk \
-                 constants, so {from_data} wholly-default initialisers reached the artifact \
-                 after all"
-            );
-            with_elision += 1;
-            elided_records += from_data;
-        } else {
-            assert_eq!(
-                records,
-                from_chunks + from_data,
-                "{name}: a pool that is not wholly default must be stored in full"
-            );
+        assert_eq!(
+            records,
+            from_chunks + explicit,
+            "{name}: the region holds {records} records against {from_chunks} chunk              constants and {explicit} explicit initialisers"
+        );
+        if let Some(dl) = &m.data_layout {
+            private_elements += dl.private_slot_count();
+            zero_fields += dl
+                .fields
+                .iter()
+                .filter(|f| f.visibility == SlotVisibility::Private && f.init == DataInit::Zero)
+                .count();
         }
     }
-
     assert!(
-        with_elision >= 8,
-        "only {with_elision} stages had a wholly-default pool to elide, so the corpus no \
-         longer exercises the case this encoding exists for"
+        zero_fields >= 8,
+        "only {zero_fields} private fields start at the zero of their kind, so the corpus          no longer exercises the case this encoding exists for"
     );
     assert!(
-        elided_records > 30_000,
-        "only {elided_records} records were elided; the measurement that justified this \
-         encoding found 38,087, and a collapse of that figure means the data segment \
-         changed shape"
+        private_elements > 30_000,
+        "only {private_elements} private elements; the measurement that justified this          encoding found 38,087, and a collapse of that figure means the data segment          changed shape"
     );
 }
 
-/// A pool that is NOT wholly default is stored in full.
+/// An explicit initialiser is stored, once for its field.
 ///
 /// **MUST-NOT-FIRE, and the corpus cannot supply it.** Every stage's data segment
-/// is entirely zero, so nothing above exercises the fallback, and an encoder that
-/// elided unconditionally would pass every test in this file. The value here is
-/// deliberately non-zero and deliberately last, which is also the position a
-/// trailing-run scheme would get wrong.
+/// is entirely zero, so nothing above exercises the explicit form, and an encoder
+/// that dropped every initialiser would pass every test in this file. The value
+/// here is deliberately non-zero and deliberately last.
 #[test]
-fn a_pool_with_any_non_default_value_is_stored_in_full() {
+fn an_explicit_initialiser_is_stored_once_for_its_field() {
     let m = compile_stage(
         "private data d { xs: [Word; 4], flag: Word = 7 }\n\
          fn main() -> Word { d.xs[0] = 1; d.flag }",
     );
     let dl = m.data_layout.as_ref().expect("a private data segment");
-    assert!(
-        dl.private_init
-            .iter()
-            .any(|v| !matches!(v, ConstValue::Int(0))),
-        "the subject has no non-default initialiser, so it tests nothing"
+    assert_eq!(
+        const_init_fields(&m),
+        1,
+        "the subject must carry exactly one explicit initialiser"
+    );
+    assert_eq!(
+        dl.fields[0].init,
+        DataInit::Zero,
+        "the array starts at zero"
     );
 
     let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
     let records = region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
     assert_eq!(
         records,
-        from_chunks + dl.private_init.len(),
-        "a pool carrying a non-default value must be stored whole; eliding it would lose \
-         the value"
+        from_chunks + 1,
+        "an explicit initialiser must be stored once, and the zero array not at all"
     );
 
     // And it must survive the round trip, which is the property that actually
-    // matters to a host: the encoder may store or elide, but the decoder must
-    // return what went in either way.
+    // matters to a host.
     let bytes = encode(&corpus_aux_of(&m));
     let back = keleusma::wire_schema::decode_aux_body(&bytes).expect("decode");
     assert_eq!(
-        back.data_layout.as_ref().map(|d| &d.private_init),
-        Some(&dl.private_init),
-        "the initialisers did not round-trip"
+        back.data_layout.as_ref(),
+        Some(dl),
+        "the layout did not round-trip"
     );
 }
 
-/// The elided pool round-trips, which is the only property a host depends on.
+/// Every private slot's load-time value round-trips, which is the only property
+/// a host depends on.
 ///
-/// The encoder storing nothing is worth having only if the decoder reconstructs
-/// exactly what was elided. Asserted against a real stage rather than a
-/// constructed one, so the count is whatever the compiler actually emits.
+/// The encoder storing no constant for a zero field is worth having only if the
+/// decoder reconstructs exactly the values it stands for. Asserted against a real
+/// stage rather than a constructed one, so the count is whatever the compiler
+/// actually emits.
 #[test]
-fn an_elided_pool_round_trips_to_the_values_it_replaced() {
+fn every_private_value_round_trips_through_the_field_records() {
     let m = compile_stage(CORPUS_STAGES[1].1);
     let before = m
         .data_layout
         .as_ref()
-        .map(|d| d.private_init.clone())
+        .map(|d| d.private_init_values())
         .expect("parse has a private data segment");
     assert!(
         before.len() > 1000,
-        "the subject carries only {} initialisers, too few to be the case of interest",
+        "the subject carries only {} private elements, too few to be the case of interest",
         before.len()
     );
 
@@ -393,36 +394,34 @@ fn an_elided_pool_round_trips_to_the_values_it_replaced() {
     let after = back
         .data_layout
         .as_ref()
-        .map(|d| d.private_init.clone())
+        .map(|d| d.private_init_values())
         .expect("the decoded layout is present");
     assert_eq!(
         after, before,
-        "the elided pool decoded to something other than the values it replaced"
+        "the field records decoded to values other than the ones they stand for"
     );
 }
 
 /// Every data-segment initialiser in the corpus is the integer zero.
 ///
-/// Measured at 38,087 records, which is 609,392 bytes at the 16-byte stride, and
-/// approximately 85% of the 712,936-byte corpus auxiliary body. The encoder
-/// spends that on one fixed-size record per zero.
-///
-/// **This is recorded, not acted on.** A run-length or implicit-zero encoding
-/// would collapse it, and it would also lift the artifact-size ceiling that
-/// currently keeps `parse` out of reach of a single-window emit — its `CONSTS`
-/// region alone is 278,256 bytes against a 65,536-byte stage buffer. Both are
-/// changes to the wire format, which moves every artifact the byte-identical
-/// differential compares against, so the decision belongs to the operator.
+/// Measured at 38,087 private elements when every element carried its own
+/// sixteen-byte constant record, which was approximately 85% of the 712,936-byte
+/// corpus auxiliary body. Under Encoding F each such field costs no constant at
+/// all, which this pins by requiring the zero form and not merely a zero value.
 #[test]
 fn every_data_segment_initialiser_is_zero() {
     let (mut zero, mut nonzero) = (0usize, 0usize);
     for (_name, src) in CORPUS_STAGES {
         let m = compile_stage(src);
         let Some(dl) = &m.data_layout else { continue };
-        for k in &dl.private_init {
-            match k {
-                ConstValue::Int(0) => zero += 1,
-                _ => nonzero += 1,
+        for f in dl
+            .fields
+            .iter()
+            .filter(|f| f.visibility == SlotVisibility::Private)
+        {
+            match (&f.init, f.kind) {
+                (DataInit::Zero, 3) => zero += f.count as usize,
+                _ => nonzero += f.count as usize,
             }
         }
     }
@@ -430,8 +429,7 @@ fn every_data_segment_initialiser_is_zero() {
     assert_eq!(
         nonzero,
         0,
-        "{nonzero} of {} data initialisers are not the integer zero. The claim that the \
-         region is compressible to almost nothing no longer holds as stated.",
+        "{nonzero} of {} private elements do not start at the integer zero form",
         zero + nonzero
     );
 }
@@ -527,9 +525,9 @@ fn the_node_walk_cap_is_what_excludes_the_stages() {
 #[test]
 fn widening_the_walk_costs_more_than_the_region_it_would_emit() {
     const NODE_WORDS: usize = 6;
-    // The emitted forest, not the one the module carries: the wholly-default
-    // initialisers are elided and a walk sized for them would be sized for
-    // records that never reach an artifact.
+    // The emitted forest, not the one the module carries: a zero field carries
+    // no constant and a walk sized for its elements would be sized for records
+    // that never reach an artifact.
     let worst = CORPUS_STAGES
         .iter()
         .map(|(n, src)| {
@@ -566,78 +564,62 @@ fn widening_the_walk_costs_more_than_the_region_it_would_emit() {
 // THE SHARED CONSTANT-ROOT DEFINITION, AND THE FIGURES IT MADE STALE
 // ---------------------------------------------------------------------------
 
-/// **THE ENCODER'S PREDICATE AGREES WITH THE ARTIFACT.**
+/// **THE ENCODER'S ROOT MODEL AGREES WITH THE ARTIFACT.**
 ///
-/// [`the_all_default_initialiser_pool_is_elided_from_the_region`] restates the
-/// elision rule and measures it at the bytes; that restatement is the oracle and
-/// must not delegate. This test is the join between the oracle and the shared
-/// predicate `keleusma::wire_schema::private_init_is_elided`, which
+/// [`a_zero_initialised_field_contributes_no_constant_record`] restates the rule
+/// and measures it at the bytes; that restatement is the oracle and must not
+/// delegate. This test is the join between the oracle and the shared definition
+/// `keleusma::wire_schema::data_init_roots`, which
 /// [`SchemaBuilder::add_data_layout`] and
 /// [`keleusma::wire_schema::constant_roots`] both consume.
 ///
-/// # Why the predicate needs its own test rather than being trusted
-///
-/// A wrong predicate is silent in the only direction that matters. Reporting an
-/// elided pool as stored over-counts the region by the whole data segment, which
-/// on a stage is 21,642 records for `parse` against 857 real ones — a model
-/// twenty-six times too large, which nothing downstream would flag as absurd.
-///
-/// Both directions are exercised: the corpus supplies the elided case and the
-/// source below supplies the stored one, so a predicate stuck at either constant
-/// fails.
+/// Both directions are exercised: the corpus supplies the zero case and the
+/// source below supplies the explicit one, so a definition stuck at either
+/// constant fails.
 #[test]
-fn the_shared_predicate_agrees_with_the_artifact() {
-    let mut elided = 0usize;
-    let mut stored = 0usize;
-
-    for (name, src) in CORPUS_STAGES {
-        let m = compile_stage(src);
-        let Some(dl) = m.data_layout.as_ref() else {
-            continue;
-        };
+fn the_shared_root_definition_agrees_with_the_artifact() {
+    let mut zero = 0usize;
+    let mut explicit = 0usize;
+    let check = |m: &Module| {
+        let dl = m.data_layout.as_ref().expect("data layout");
         let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
         let records =
-            region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
-
-        if keleusma::wire_schema::private_init_is_elided(dl) {
-            assert_eq!(
-                records, from_chunks,
-                "{name}: the predicate says the pool is elided and the artifact carries \
-                 {records} records against {from_chunks} chunk constants"
-            );
-            elided += 1;
+            region_bytes(&encode(&corpus_aux_of(m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
+        let roots = keleusma::wire_schema::data_init_roots(dl).count();
+        assert_eq!(
+            records,
+            from_chunks + roots,
+            "the root definition disagrees"
+        );
+        roots
+    };
+    for (_name, src) in CORPUS_STAGES {
+        let m = compile_stage(src);
+        if m.data_layout.is_none() {
+            continue;
+        }
+        if check(&m) == 0 {
+            zero += 1;
         } else {
-            assert_eq!(
-                records,
-                from_chunks + dl.private_init.len(),
-                "{name}: the predicate says the pool is stored and the artifact disagrees"
-            );
-            stored += 1;
+            explicit += 1;
         }
     }
-
-    // The stored direction, which the corpus cannot supply: every stage's data
-    // segment is entirely zero.
     let m = compile_stage(
         "private data d { xs: [Word; 4], flag: Word = 7 }\n\
          fn main() -> Word { d.xs[0] = 1; d.flag }",
     );
-    let dl = m.data_layout.as_ref().expect("data layout");
-    assert!(
-        !keleusma::wire_schema::private_init_is_elided(dl),
-        "a pool with a non-default initialiser must not be reported as elided"
-    );
-    stored += 1;
+    assert_eq!(check(&m), 1);
+    explicit += 1;
 
     assert!(
-        elided >= 8,
-        "only {elided} stages exercised the elided direction, so the corpus no longer \
-         covers the case the predicate exists for"
+        zero >= 8,
+        "only {zero} stages exercised the zero direction, so the corpus no longer covers \
+         the case the definition exists for"
     );
     assert!(
-        stored >= 1,
-        "the stored direction was never exercised, so a predicate returning `true` \
-         unconditionally would pass"
+        explicit >= 1,
+        "the explicit direction was never exercised, so a definition returning nothing \
+         would pass"
     );
 }
 
@@ -688,7 +670,7 @@ fn constant_roots_matches_the_emitted_region_for_every_stage() {
 ///
 /// Chunk constants first, then the data segment's initialisers. A module drawing
 /// from only one source cannot tell the two orders apart, and every stage in the
-/// corpus is such a module because its data pool is elided. The source here
+/// corpus is such a module because no data field carries an explicit initialiser. The source here
 /// draws from both.
 #[test]
 fn constant_roots_puts_the_chunk_pools_before_the_data_segment() {

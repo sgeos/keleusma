@@ -76,17 +76,9 @@ fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
     let dl = m.data_layout.as_ref()?;
     let scalar = format!(".{suffix}");
     let element0 = format!(".{suffix}[0]");
-    let mut shared_ix = 0usize;
-    for s in &dl.slots {
-        if s.visibility != SlotVisibility::Shared {
-            continue;
-        }
-        if s.name == suffix || s.name.ends_with(&scalar) || s.name.ends_with(&element0) {
-            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
-        }
-        shared_ix += 1;
-    }
-    None
+    keleusma_native::data_view::shared_field_offset(dl, |name| {
+        name == suffix || name.ends_with(&scalar) || name.ends_with(&element0)
+    })
 }
 
 /// Write `count` into the `len`-style slot and `body` into the array slot.
@@ -915,11 +907,12 @@ fn slot_words(m: &Module, suffix: &str) -> usize {
     let dl = m.data_layout.as_ref().expect("a data layout");
     let scalar = format!(".{suffix}");
     let element = format!(".{suffix}[");
-    dl.slots
+    dl.fields
         .iter()
-        .filter(|s| s.visibility == SlotVisibility::Shared)
-        .filter(|s| s.name == suffix || s.name.ends_with(&scalar) || s.name.contains(&element))
-        .count()
+        .filter(|f| f.visibility == SlotVisibility::Shared)
+        .filter(|f| f.name == suffix || f.name.ends_with(&scalar) || f.name.contains(&element))
+        .map(|f| f.count as usize)
+        .sum()
 }
 
 #[test]
@@ -1468,54 +1461,40 @@ fn wire_agrees_with_the_vm_on_real_artifacts_driven_by_commands() {
 // ================= `verify_datalayout.kel`, DRIVEN IN ITS BATCHED PHASES
 //
 // This stage was recorded as blocked by design, because its verdict accumulates
-// across three differently encoded phases and no single seeded buffer can
-// produce one. That was a limit of a harness that seeds once and then only
-// ticks. With host writes per turn, the batches are fed as
-// `dl_reject_module_via_kel` in `src/selfhost/mod.rs` feeds them: the running
-// state initialised once, then phase 1 over the slot visibilities, phase 2 over
-// the shared layout, phase 3 over the private composite layout, each 1024
-// entries per turn. A final phase 4 turn has the stage itself compare the
-// shared prefix and total with the shared-layout count, where the driver does
-// that comparison in Rust.
+// across batches and no single seeded buffer can produce one. That was a limit
+// of a harness that seeds once and then only ticks. With host writes per turn,
+// the batches are fed as `layout` in `src/selfhost/validation.rs` feeds them.
+// Since Encoding F the stage takes one row per data FIELD, ten columns wide:
+// phase 0 sets the buffer and pool sizes and resets the running state, each
+// phase 1 turn checks up to 256 rows, and a phase 2 turn returns the verdict.
+// Before Encoding F it took one entry per slot, in three differently encoded
+// phases of 1024 entries, and a final phase that compared the shared prefix.
 
-const DL_BATCH: usize = 1024;
+const DL_BATCH: usize = 256;
 
 /// A real layout with a shared block, perturbed into each constructed defect.
 const DEFECT_BASE: &str = "../src/selfhost/kel/wire_debug.kel";
 
-/// One phase's batches, each a turn writing `phase`, `count` and the arrays.
-fn dl_batches(phase: i64, columns: &[(&str, Vec<i64>)], script: &mut Vec<Step>) {
-    let n = columns.first().map_or(0, |(_, c)| c.len());
-    for start in (0..n).step_by(DL_BATCH) {
-        let end = (start + DL_BATCH).min(n);
-        script.push(Step {
-            words: vec![
-                ("phase".to_string(), phase),
-                ("count".to_string(), (end - start) as i64),
-            ],
-            bytes: Vec::new(),
-            tables: columns
-                .iter()
-                .map(|(name, col)| (name.to_string(), col[start..end].to_vec()))
-                .collect(),
-            byte_tables: Vec::new(),
-            reply: 0,
-        });
-    }
-}
+/// The stage's ten column arrays, in its row order.
+const DL_COLUMNS: [&str; 10] = [
+    "vis", "first", "cnt", "off", "stride", "size", "elen", "comp", "init", "zeroable",
+];
 
-/// The columns the driver derives from a module, as `dl_reject_module_via_kel` does.
+/// What the driver derives from a module: the two sizes and one row per field.
+#[derive(Clone)]
 struct DlInput {
-    n_slots: i64,
     buffer: i64,
     pool: i64,
-    visibility: Vec<i64>,
-    shared: [Vec<i64>; 3],
-    private: [Vec<i64>; 2],
+    rows: Vec<[i64; 10]>,
 }
 
+/// One row per data field, as `dl_field_rows` in `src/selfhost/mod.rs` derives
+/// it: shared flag, first slot, count, offset or -1, stride, element extent at
+/// the module widths or -1 for an undecodable kind, element body length,
+/// composite flag, initialiser form, and whether the kind has a zero. The rows
+/// are transport. Every verdict over them is the stage's.
 fn dl_input_of(m: &Module) -> DlInput {
-    use keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG;
+    use keleusma::bytecode::{DataInit, SHARED_SLOT_COMPOSITE_FLAG, data_kind_zero};
     use keleusma::value_layout::ScalarKind;
     let layout = m
         .data_layout
@@ -1524,93 +1503,82 @@ fn dl_input_of(m: &Module) -> DlInput {
     let wb = (1usize << m.word_bits_log2) / 8;
     let fb = (1usize << m.float_bits_log2) / 8;
     let ab = (1usize << m.addr_bits_log2) / 8;
-    let mut shared = [Vec::new(), Vec::new(), Vec::new()];
-    for sl in &layout.shared_layout {
-        let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
-            (sl.len as i64, 0)
-        } else {
-            match ScalarKind::from_tag(sl.kind) {
-                Some(k) => (k.size_in_bytes(wb, fb, ab) as i64, 0),
-                None => (0, 1),
-            }
-        };
-        shared[0].push(sl.offset as i64);
-        shared[1].push(size);
-        shared[2].push(bad);
-    }
+    let rows = layout
+        .fields
+        .iter()
+        .map(|f| {
+            let composite = f.kind & SHARED_SLOT_COMPOSITE_FLAG != 0;
+            let extent = if composite {
+                i64::from(f.elem_len)
+            } else {
+                ScalarKind::from_tag(f.kind).map_or(-1, |k| k.size_in_bytes(wb, fb, ab) as i64)
+            };
+            [
+                i64::from(f.visibility == SlotVisibility::Shared),
+                i64::from(f.first_slot),
+                i64::from(f.count),
+                f.offset.map_or(-1, i64::from),
+                i64::from(f.stride),
+                extent,
+                i64::from(f.elem_len),
+                i64::from(composite),
+                match f.init {
+                    DataInit::Zero => 0,
+                    DataInit::Unit => 1,
+                    DataInit::Const(_) => 2,
+                },
+                i64::from(data_kind_zero(f.kind).is_some()),
+            ]
+        })
+        .collect();
     DlInput {
-        n_slots: layout.slots.len() as i64,
         buffer: m.shared_data_bytes as i64,
         pool: m.persistent_composite_bytes as i64,
-        visibility: layout
-            .slots
-            .iter()
-            .map(|s| i64::from(matches!(s.visibility, SlotVisibility::Shared)))
-            .collect(),
-        shared,
-        private: [
-            layout
-                .private_composite_layout
-                .iter()
-                .map(|e| e.slot as i64)
-                .collect(),
-            layout
-                .private_composite_layout
-                .iter()
-                .map(|e| e.offset as i64)
-                .collect(),
-        ],
+        rows,
     }
 }
 
+/// The first slot after the last row, where an appended row must start.
+fn dl_next_slot(d: &DlInput) -> i64 {
+    d.rows.last().map_or(0, |r| r[1] + r[2])
+}
+
+/// A pooled private composite row of one eight-byte element at `offset`.
+fn dl_pooled_row(first: i64, offset: i64) -> [i64; 10] {
+    [0, first, 1, offset, 0, 8, 8, 1, 1, 0]
+}
+
 fn dl_script(d: &DlInput) -> Vec<Step> {
-    let init = [
-        ("io_prefix", 0),
-        ("io_total", 0),
-        ("io_still", 1),
-        ("io_prev_slot", 0),
-        ("io_prev_off", 0),
-        ("io_first", 1),
-        ("io_bad", 0),
-        ("n_slots", d.n_slots),
-        ("buffer", d.buffer),
-        ("pool", d.pool),
-        ("shared_count", d.shared[0].len() as i64),
-    ];
-    let mut script = Vec::new();
-    dl_batches(1, &[("a0", d.visibility.clone())], &mut script);
-    dl_batches(
-        2,
-        &[
-            ("a0", d.shared[0].clone()),
-            ("a1", d.shared[1].clone()),
-            ("a2", d.shared[2].clone()),
-        ],
-        &mut script,
-    );
-    dl_batches(
-        3,
-        &[("a0", d.private[0].clone()), ("a1", d.private[1].clone())],
-        &mut script,
-    );
-    script.push(Step {
-        words: vec![("phase".to_string(), 4)],
+    let turn = |words: Vec<(&str, i64)>, tables: Vec<(String, Vec<i64>)>| Step {
+        words: words.into_iter().map(|(n, v)| (n.to_string(), v)).collect(),
         bytes: Vec::new(),
-        tables: Vec::new(),
+        tables,
         byte_tables: Vec::new(),
         reply: 0,
-    });
-    let first = script.first_mut().expect("at least the final turn");
-    first
-        .words
-        .splice(0..0, init.iter().map(|(n, v)| (n.to_string(), *v)));
+    };
+    let mut script = vec![turn(
+        vec![("buffer", d.buffer), ("pool", d.pool), ("phase", 0)],
+        Vec::new(),
+    )];
+    for batch in d.rows.chunks(DL_BATCH) {
+        let tables = DL_COLUMNS
+            .iter()
+            .enumerate()
+            .map(|(c, name)| (name.to_string(), batch.iter().map(|r| r[c]).collect()))
+            .collect();
+        script.push(turn(
+            vec![("phase", 1), ("count", batch.len() as i64)],
+            tables,
+        ));
+    }
+    script.push(turn(vec![("phase", 2)], Vec::new()));
     script
 }
 
 #[test]
 fn verify_datalayout_agrees_with_the_vm_across_its_batched_phases() {
     let dl = module_of("../src/selfhost/kel/verify_datalayout.kel");
-    // Real layouts, from one slot to the lexer's buffer of many batches.
+    // Real layouts, from one field to the lexer's.
     let mut subjects: Vec<(String, DlInput, i64)> = [
         "../examples/scripts/14_frame_log.kel",
         "../examples/scripts/native_witnesses/opcode_witness.kel",
@@ -1624,32 +1592,57 @@ fn verify_datalayout_agrees_with_the_vm_across_its_batched_phases() {
     // Constructed defects, one per check, each from a real layout, so the
     // verdict is seen to move as well as to hold.
     let base = dl_input_of(&module_of(DEFECT_BASE));
-    let mut out_of_bounds = dl_input_of(&module_of(DEFECT_BASE));
+    assert!(
+        base.rows.iter().any(|r| r[0] == 1),
+        "the defect base declares no shared field, so two of the defects cannot fire"
+    );
+    let mut out_of_bounds = base.clone();
     out_of_bounds.buffer = 0;
     subjects.push(("shared extent past the buffer".into(), out_of_bounds, 1));
-    let mut gap = dl_input_of(&module_of(DEFECT_BASE));
-    gap.visibility.insert(0, 0);
-    gap.n_slots += 1;
-    subjects.push(("shared slots not a prefix".into(), gap, 1));
-    let mut descending = dl_input_of(&module_of(DEFECT_BASE));
+    // A private field before the shared ones, with every first slot moved up
+    // by one so the tiling still holds and only the prefix rule is broken.
+    let mut gap = base.clone();
+    for row in &mut gap.rows {
+        row[1] += 1;
+    }
+    gap.rows.insert(0, [0, 0, 1, -1, 0, 8, 0, 0, 0, 1]);
+    subjects.push(("shared fields not a prefix".into(), gap, 1));
+    let mut descending = base.clone();
     descending.pool = 64;
-    descending.n_slots = descending.n_slots.max(4);
-    descending.private = [vec![2, 1], vec![0, 8]];
-    subjects.push(("private slots descending".into(), descending, 1));
-    let mut ascending = dl_input_of(&module_of(DEFECT_BASE));
+    let next = dl_next_slot(&descending);
+    descending.rows.push(dl_pooled_row(next, 8));
+    descending.rows.push(dl_pooled_row(next + 1, 0));
+    subjects.push(("pooled private fields descending".into(), descending, 1));
+    let mut ascending = base.clone();
     ascending.pool = 64;
-    ascending.n_slots = ascending.n_slots.max(4);
-    ascending.private = [vec![1, 2], vec![0, 8]];
-    subjects.push(("private slots ascending".into(), ascending, 0));
-    assert!(
-        !base.shared[0].is_empty(),
-        "the defect base declares no shared slot, so two of the defects cannot fire"
-    );
+    let next = dl_next_slot(&ascending);
+    ascending.rows.push(dl_pooled_row(next, 0));
+    ascending.rows.push(dl_pooled_row(next + 1, 8));
+    subjects.push(("pooled private fields ascending".into(), ascending, 0));
+    // A field is one row however large its array, so no real layout spans more
+    // than one batch. Three hundred shared Word fields carry the running state
+    // across a batch boundary, and the last one past the buffer is refused only
+    // in the second batch.
+    let many = DlInput {
+        buffer: 300 * 8,
+        pool: 0,
+        rows: (0..300)
+            .map(|i| [1, i, 1, i * 8, 0, 8, 0, 0, 0, 1])
+            .collect(),
+    };
+    let mut many_past = many.clone();
+    many_past.buffer -= 1;
+    subjects.push(("three hundred shared fields".into(), many, 0));
+    subjects.push((
+        "the last of three hundred past the buffer".into(),
+        many_past,
+        1,
+    ));
 
     let mut multi_batch = false;
     for (name, d, want) in &subjects {
         let script = dl_script(d);
-        multi_batch |= d.visibility.len() > DL_BATCH;
+        multi_batch |= d.rows.len() > DL_BATCH;
         let seeded = vec![0u8; shared_data_bytes_for(&dl)];
         let vm = run_vm_script(&dl, &seeded, &script);
         let verdict = *vm.yields.last().expect("a final turn");

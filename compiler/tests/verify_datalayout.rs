@@ -151,7 +151,7 @@ fn shared_slot_offset_out_of_bounds_is_rejected() {
     // Push the first shared slot's byte offset past the shared-data buffer (B6 bounds).
     let buffer = m.shared_data_bytes;
     let layout = m.data_layout.as_mut().expect("data layout");
-    layout.shared_layout[0].offset = buffer + 64;
+    layout.fields[0].offset = Some(buffer + 64);
     assert!(
         typed_check_module(&m, WB, FB).is_err(),
         "reference must reject the out-of-bounds shared slot"
@@ -165,10 +165,11 @@ fn shared_slot_offset_out_of_bounds_is_rejected() {
 #[test]
 fn shared_slots_not_a_contiguous_prefix_is_rejected() {
     let mut m = base_shared();
-    // Make the first slot private while a later slot stays shared: the shared slots are no longer
-    // a contiguous prefix, and the shared-layout count no longer matches (B6 contiguity/count).
+    // Make the first field private while a later field stays shared: the shared fields are no
+    // longer a contiguous prefix (B6 contiguity).
     let layout = m.data_layout.as_mut().expect("data layout");
-    layout.slots[0].visibility = SlotVisibility::Private;
+    layout.fields[0].visibility = SlotVisibility::Private;
+    layout.fields[0].offset = None;
     assert!(
         typed_check_module(&m, WB, FB).is_err(),
         "reference must reject the non-contiguous shared prefix"
@@ -188,7 +189,12 @@ fn private_composite_offset_out_of_pool_is_rejected() {
     // Push the private composite's pool offset outside the persistent composite pool (C4).
     let pool = m.persistent_composite_bytes;
     let layout = m.data_layout.as_mut().expect("data layout");
-    layout.private_composite_layout[0].offset = pool + 64;
+    let pooled = layout
+        .fields
+        .iter_mut()
+        .find(|f| f.offset.is_some())
+        .expect("a pooled private field");
+    pooled.offset = Some(pool + 64);
     assert!(
         typed_check_module(&m, WB, FB).is_err(),
         "reference must reject the out-of-pool private composite offset"

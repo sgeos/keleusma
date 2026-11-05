@@ -77,6 +77,7 @@
 
 pub mod coroutine;
 pub mod cost;
+pub mod data_view;
 pub mod linkage;
 pub mod opaque;
 pub mod region;
@@ -321,9 +322,7 @@ use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
 use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue, ValueKind};
-use keleusma::bytecode::{
-    BlockType, Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility, TypeTag,
-};
+use keleusma::bytecode::{BlockType, Chunk, ConstValue, Module, Op, SharedSlotLayout, TypeTag};
 use std::collections::BTreeMap;
 
 /// Maximum operand-stack depth the lowering provisions slots for.
@@ -2345,16 +2344,14 @@ fn lower_module_with<'ctx>(
 
     // Shared slots occupy the low indices of the unified slot space, so their
     // count is also the private boundary.
-    let (shared_count, shared_layout): (u32, &[SharedSlotLayout]) = match &program.data_layout {
-        Some(dl) => (
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Shared)
-                .count() as u32,
-            dl.shared_layout.as_slice(),
-        ),
-        None => (0, &[]),
-    };
+    // Encoding F made the layout field-based, so the per-slot tables are
+    // expanded once here. See `data_view`.
+    let layout = program.data_layout.as_ref();
+    let shared_count = data_view::shared_slot_count(layout) as u32;
+    let shared_layout_table = data_view::shared_layout(layout);
+    let shared_layout: &[SharedSlotLayout] = &shared_layout_table;
+    let private_composite_table = data_view::private_composite_layout(layout);
+    let private_init_table = data_view::private_init(layout);
     // **A STREAM CHUNK NEEDS THE REGION EVEN WITH NO COMPOSITES.** Its locals
     // live in the arena rather than in machine-stack `alloca`s, because a
     // resumable stream returns at each `yield` and re-enters at the same point,
@@ -2378,31 +2375,16 @@ fn lower_module_with<'ctx>(
         stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
             .unwrap_or(u32::MAX),
         needs_region,
-        private_composite_slots: program
-            .data_layout
-            .as_ref()
-            .map(|dl| dl.private_composite_layout.as_slice())
-            .unwrap_or(&[]),
-        private_init: program
-            .data_layout
-            .as_ref()
-            .map(|dl| dl.private_init.as_slice())
-            .unwrap_or(&[]),
+        private_composite_slots: &private_composite_table,
+        private_init: &private_init_table,
         persistent_composite_bytes: program.persistent_composite_bytes,
         composite_init_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
             .unwrap_or(u32::MAX)
             .saturating_add(crate::region::stream_state_supplement_bytes(program)),
         shared_count,
         shared_layout,
-        has_data: program
-            .data_layout
-            .as_ref()
-            .is_some_and(|dl| !dl.slots.is_empty()),
-        slot_count: program
-            .data_layout
-            .as_ref()
-            .map(|dl| dl.slots.len() as u32)
-            .unwrap_or(0),
+        has_data: data_view::slot_count(layout) > 0,
+        slot_count: data_view::slot_count(layout) as u32,
     };
 
     // **The shared buffer arrives as a trailing pointer parameter**, and only
@@ -2419,10 +2401,7 @@ fn lower_module_with<'ctx>(
     // dimensions, and a caller would have to reproduce that reasoning to get
     // the arity right. One rule is cheaper than two, and an unused pointer
     // costs a register.
-    let has_data = program
-        .data_layout
-        .as_ref()
-        .is_some_and(|dl| !dl.slots.is_empty());
+    let has_data = data_view::slot_count(layout) > 0;
     if shared_count > 0 {
         check_target_endianness()?;
     }
@@ -2833,7 +2812,7 @@ struct DataCtx<'a> {
     /// and `2` here.
     ///
     /// Empty for [`lower_chunk`], like every other module-level fact.
-    private_composite_slots: &'a [keleusma::bytecode::PrivateCompositeSlot],
+    private_composite_slots: &'a [crate::data_view::PrivateCompositeSlot],
     /// Byte offset, from the PRIVATE pointer, of the per-composite-slot
     /// initialisation words.
     ///
@@ -2913,7 +2892,7 @@ fn private_composite_extent(data: &DataCtx<'_>, slot: u32) -> Result<(u32, u32),
 
     let offset = table
         .iter()
-        .find(|e| u32::from(e.slot) == slot)
+        .find(|e| e.slot == slot)
         .map(|e| e.offset)
         .ok_or_else(|| LowerError::UnsupportedDataSlot {
             slot,
@@ -7479,11 +7458,7 @@ fn lower_chunk_body<'ctx>(
                     //
                     // The extent is derived from the module's own table and the
                     // derivation is validated — see `private_composite_extent`.
-                    if data
-                        .private_composite_slots
-                        .iter()
-                        .any(|p| u32::from(p.slot) == slot)
-                    {
+                    if data.private_composite_slots.iter().any(|p| p.slot == slot) {
                         // **INDEXED IS REFUSED, NOT EXTRAPOLATED.** An array of
                         // composites gives every element slot its own entry, so
                         // `base + index * size` needs the stride proven uniform
@@ -7541,7 +7516,7 @@ fn lower_chunk_body<'ctx>(
                         let init_index = data
                             .private_composite_slots
                             .iter()
-                            .position(|p| u32::from(p.slot) == slot)
+                            .position(|p| p.slot == slot)
                             .expect("the slot was just found in this table");
                         // **THE FLAG MOVES WITH THE ELEMENT.** Each element slot has
                         // its own pool entry and therefore its own word; using the

@@ -129,7 +129,7 @@ fn a_composite_slot_starts_written_with_its_types_zero() {
     let image = region::private_init_image(&m).expect("placeable");
     let dl = m.data_layout.as_ref().expect("data");
     assert_eq!(
-        dl.private_composite_layout.len(),
+        keleusma_native::data_view::private_composite_layout(Some(dl)).len(),
         1,
         "the subject must declare exactly one composite slot"
     );
