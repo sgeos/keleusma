@@ -87,7 +87,9 @@ record="GATE_RECORD.md"
 # quoted so that the shell passes it to git as a pathspec rather than expanding it.
 #
 # `.github/workflows/native.yml` joined on 2026-10-22, when `tests/native_workflow.rs`
-# began reading it to check that its path filter covers this very set. Keep comments
+# began reading it to check that its path filter covers this very set. On 2026-11-04
+# the native jobs moved into `.github/workflows/ci.yml` and their path filter into
+# `NATIVE_PATTERNS` of `scripts/ci_classify.py`, so those two replaced it. Keep comments
 # out of the array: that test splits it on whitespace.
 REACH=(
     .
@@ -98,7 +100,8 @@ REACH=(
     ../src
     ../examples
     ../compiler/kel
-    ../.github/workflows/native.yml
+    ../.github/workflows/ci.yml
+    ../scripts/ci_classify.py
 )
 # Exit 1 means no current verified PASS. Diagnostics distinguish recorded FAIL
 # from invalid, incomplete or stale evidence.

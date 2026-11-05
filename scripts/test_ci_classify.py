@@ -45,8 +45,40 @@ class ClassifyTests(unittest.TestCase):
                 self.assertEqual(self.mode('docs/a.md', event=event), 'full')
 
     def test_an_empty_or_blank_list_fails_closed(self):
-        self.assertEqual(ci_classify.classify('pull_request', []), {'mode': 'full', 'vscode': 'true'})
-        self.assertEqual(ci_classify.classify('pull_request', ['', '  ']), {'mode': 'full', 'vscode': 'true'})
+        closed = {'mode': 'full', 'native': 'true', 'vscode': 'true'}
+        self.assertEqual(ci_classify.classify('pull_request', []), closed)
+        self.assertEqual(ci_classify.classify('pull_request', ['', '  ']), closed)
+        self.assertEqual(ci_classify.classify('push', []), closed)
+        self.assertEqual(ci_classify.classify('workflow_dispatch', []), closed)
+
+    def native(self, *paths, event='pull_request'):
+        return ci_classify.classify(event, list(paths))['native']
+
+    def test_native_inputs_select_the_native_gate_on_any_event(self):
+        for path in ('native_codegen/src/lib.rs', 'src/vm.rs', 'examples/scripts/01_arithmetic.kel',
+                     'compiler/kel/prelude.kel', 'docs/decisions/ABSORPTION_130_BRIEF.md',
+                     'docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md',
+                     'docs/process/REVERSE_PROMPT.md', 'docs/process/handoffs/v0.3.0.md',
+                     'Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'keleusma-arena/src/lib.rs',
+                     'keleusma-macros/src/lib.rs', 'keleusma-wire/src/lib.rs',
+                     'keleusma-wire-derive/src/lib.rs', '.github/workflows/ci.yml',
+                     'scripts/ci_classify.py'):
+            for event in ('pull_request', 'push'):
+                with self.subTest(path=path, event=event):
+                    self.assertEqual(self.native('docs/a.md', path, event=event), 'true')
+
+    def test_a_light_native_pull_request_still_runs_the_native_gate(self):
+        result = ci_classify.classify('pull_request', ['native_codegen/tests/differential.rs'])
+        self.assertEqual((result['mode'], result['native']), ('light', 'true'))
+
+    def test_documentation_only_changes_skip_the_native_gate(self):
+        for path in ('docs/process/GIT_STRATEGY.md', 'book/src/intro.md', 'CLAUDE.md',
+                     'docs/decisions/ABSORPTION_130_PLAN.md', 'docs/process/handoffs/kaizen.md',
+                     'scripts/jev_shadow.py', 'tests/claimed_counts.rs', 'keleusma-cli/src/main.rs'):
+            with self.subTest(path=path):
+                self.assertEqual(self.native(path), 'false')
+        result = ci_classify.classify('pull_request', ['docs/process/GIT_STRATEGY.md'])
+        self.assertEqual((result['mode'], result['native']), ('light', 'false'))
 
     def test_vscode_flag_follows_the_extension_directory(self):
         self.assertEqual(ci_classify.classify('push', ['editors/vscode/package.json'])['vscode'], 'true')
@@ -56,13 +88,13 @@ class ClassifyTests(unittest.TestCase):
         out = io.StringIO()
         with mock.patch('sys.stdin', io.StringIO('docs/a.md\n')), redirect_stdout(out):
             ci_classify.main(['--event', 'pull_request'])
-        self.assertEqual(out.getvalue(), 'mode=light\nvscode=false\n')
+        self.assertEqual(out.getvalue(), 'mode=light\nnative=false\nvscode=false\n')
         broken = mock.Mock()
         broken.read.side_effect = UnicodeError('undecodable')
         out = io.StringIO()
         with mock.patch('sys.stdin', broken), redirect_stdout(out):
             ci_classify.main(['--event', 'pull_request'])
-        self.assertEqual(out.getvalue(), 'mode=full\nvscode=true\n')
+        self.assertEqual(out.getvalue(), 'mode=full\nnative=true\nvscode=true\n')
 
 
 if __name__ == '__main__':
