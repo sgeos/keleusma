@@ -134,8 +134,7 @@ cmd_new() {
 # Report each package `target` of a live tree that is a directory rather than a link,
 # which is build output on the tree's own volume. Trees made without this script, such
 # as Claude Code's agent trees under .claude/worktrees/, are the expected case. A target
-# under 1 MB is skipped, because a tree whose Cargo `build-dir` points at scratch, as the
-# agent trees' does since 2026-11-01, keeps only a few kilobytes of locks there.
+# under 1 MB holds no build output worth moving, only lock files, and is skipped.
 report_unlinked() {
   local paths tree target kilobytes
   paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
@@ -154,6 +153,24 @@ report_unlinked() {
   done <<< "$paths"
 }
 
+# The scratch folder each live tree's linked package targets point into, one per line.
+# A tree linked by hand may use a folder named after its branch rather than its leaf,
+# as the agent trees under .claude/worktrees/ do, so the leaf alone does not show use.
+linked_folders() {
+  local paths tree target dest prefix="$SCRATCH_BASE/$REPO_NAME/"
+  paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
+  while IFS= read -r tree; do
+    if [ -z "$tree" ] || [ ! -d "$tree" ]; then continue; fi
+    while IFS= read -r target; do
+      if [ -z "$target" ] || [ ! -L "$tree/$target" ]; then continue; fi
+      dest="$(readlink "$tree/$target")"
+      case "$dest" in
+        "$prefix"*) dest="${dest#"$prefix"}"; printf '%s\n' "${dest%%/*}" ;;
+      esac
+    done <<< "$(package_targets "$tree")"
+  done <<< "$paths"
+}
+
 cmd_list() {
   git worktree list
   [ -n "${SCRATCH_BASE:-}" ] || return 0
@@ -161,7 +178,7 @@ cmd_list() {
   report_unlinked
   [ -d "$SCRATCH_BASE/$REPO_NAME" ] || return 0
   local used folder
-  used="$(tree_names)"
+  used="$(tree_names; linked_folders)"
   for folder in "$SCRATCH_BASE/$REPO_NAME"/*/; do
     [ -d "$folder" ] || continue
     folder="${folder%/}"
