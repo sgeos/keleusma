@@ -364,11 +364,20 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // `verify_datalayout.kel`, `wire.kel` and `wire_schema.kel`. Nothing was added
 // or removed.
 //
+// **RE-PINNED 2026-11-05, self-hosted `Text<N>`.** V0.2.X's
+// `feat/v02-selfhost-text-n` lowers `Text<N>`, its literal cast, its five
+// operations and the `Byte` and `Word` literal suffixes in the self-hosted
+// stages, which changed `codegen.kel`, `lexer.kel`, `parse.kel` and
+// `reconstruct.kel`. Nothing was added or removed. The derived figures the guard
+// names were re-run by `tools/backend-gate.sh` in both float configurations.
+//
 // **RE-PINNED 2026-11-05, option B.** V0.2.X's `feat/v02-array-option-b-s1`
 // makes a data operand name a field, which changed `codegen.kel`, `parse.kel`
 // and `verify_structural.kel`. Nothing was added or removed. The derived
 // figures the guard names passed unchanged in the default-feature gate run
-// that reported the movement.
+// that reported the movement. Re-pinned again when `v0.2.3` at `f372463d`, the
+// self-hosted `Text<N>` above, was merged, since `codegen.kel` and `parse.kel`
+// then carry both changes.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -577,13 +586,13 @@ const PINNED: &[(&str, u64)] = &[
     ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     // Absorption 116 omits the unreachable default of checked arithmetic.
-    ("src/selfhost/kel/codegen.kel", 0x0cf0ac65a1abb205),
-    ("src/selfhost/kel/lexer.kel", 0xc0141bf600a7be4d),
+    ("src/selfhost/kel/codegen.kel", 0xbde280a323e0017a),
+    ("src/selfhost/kel/lexer.kel", 0x39fe77b5403b897f),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
     // Absorption 116 lowers a cast to the operand's own type as identity.
-    ("src/selfhost/kel/parse.kel", 0xefcdc3b31b33613c),
-    ("src/selfhost/kel/reconstruct.kel", 0x5a5314dbf0987c1c),
+    ("src/selfhost/kel/parse.kel", 0x3c40719b201b15ca),
+    ("src/selfhost/kel/reconstruct.kel", 0x85fe89091c7949a2),
     // Absorption 119 adds the template header scan as the fifteenth stage.
     ("src/selfhost/kel/template_scan.kel", 0x2389d34aaba8c2c7),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe20a0b1cb2ef8962),

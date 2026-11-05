@@ -783,7 +783,7 @@ pub const VERIFY_OP_CAP: usize = 8192;
 pub const LEX_SOURCE_CAP: usize = 524288;
 
 /// How many distinct identifiers `src.istart`/`src.ilen` in `lexer.kel` hold.
-pub const LEX_INTERN_CAP: usize = 1280;
+pub const LEX_INTERN_CAP: usize = 1536;
 
 /// Slot of `src.len`, the source byte count.
 pub const BR_LEX_LEN: usize = 0;
@@ -989,6 +989,12 @@ pub const PARSE_GENERIC_REQUEST_TAG: i64 = 140;
 /// The tag `parse.kel` reports a resume value's fixed kind under in a probe round, carrying
 /// the `yield`'s token position times sixteen plus the kind. No other record uses this tag.
 pub const PARSE_RESUME_FACT_TAG: i64 = 142;
+/// The capacity `N` of a `Text<N>` type, following the `Text` type record it qualifies, in
+/// a signature, a `let` annotation or a declaration. The payload is the positive literal
+/// capacity. It is a type record, so in a body it is diverted with the annotation that
+/// carries it and never reaches `reconstruct.kel`, where the generic argument tags would
+/// collide with the outcome records.
+pub const PARSE_TEXT_CAPACITY_TAG: i64 = 143;
 
 #[cfg(test)]
 mod shared_layout_tests {
