@@ -154,6 +154,24 @@ report_unlinked() {
   done <<< "$paths"
 }
 
+# The scratch folder each live tree's linked package targets point into, one per line.
+# A tree linked by hand may use a folder named after its branch rather than its leaf,
+# as the agent trees under .claude/worktrees/ do, so the leaf alone does not show use.
+linked_folders() {
+  local paths tree target dest prefix="$SCRATCH_BASE/$REPO_NAME/"
+  paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
+  while IFS= read -r tree; do
+    if [ -z "$tree" ] || [ ! -d "$tree" ]; then continue; fi
+    while IFS= read -r target; do
+      if [ -z "$target" ] || [ ! -L "$tree/$target" ]; then continue; fi
+      dest="$(readlink "$tree/$target")"
+      case "$dest" in
+        "$prefix"*) dest="${dest#"$prefix"}"; printf '%s\n' "${dest%%/*}" ;;
+      esac
+    done <<< "$(package_targets "$tree")"
+  done <<< "$paths"
+}
+
 cmd_list() {
   git worktree list
   [ -n "${SCRATCH_BASE:-}" ] || return 0
@@ -161,7 +179,9 @@ cmd_list() {
   report_unlinked
   [ -d "$SCRATCH_BASE/$REPO_NAME" ] || return 0
   local used folder
-  used="$(tree_names)"
+  # `agents` holds the agent trees' Cargo build-dir output, named by hash, if the
+  # operator's .claude/worktrees/.cargo/config.toml exists. It is not one tree's folder.
+  used="$(tree_names; linked_folders; printf 'agents\n')"
   for folder in "$SCRATCH_BASE/$REPO_NAME"/*/; do
     [ -d "$folder" ] || continue
     folder="${folder%/}"
