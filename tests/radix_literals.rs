@@ -92,19 +92,24 @@ fn every_radix_form_agrees_with_the_reference() {
 /// begins the `Byte` numeric suffix, so `0Byte` is the byte literal zero. A stage that took
 /// `0B` as binary unconditionally would turn `0Byte` into a malformed binary literal.
 ///
-/// This test asserts the DISAMBIGUATION, not the suffix support: the stage has never
-/// supported numeric suffixes, so it and the reference still differ on `0Byte`. What must
-/// hold is that the stage does not read the `B` as a radix prefix.
+/// This test asserts the DISAMBIGUATION. The stage supports the numeric suffixes since
+/// 2026-11-02, so `0Byte` is the byte literal zero, Tok 77, exactly as the reference reads it,
+/// and the `Byte` is consumed by the literal rather than left as a name. Before that the stage
+/// read the integer zero followed by the name `Byte`, which this test pinned as the state then.
 #[test]
 fn an_uppercase_b_without_a_binary_digit_is_not_a_radix_prefix() {
-    let stage = stage_tokens("fn f() -> Byte { 0Byte }");
+    let (names, toks) = keleusma::selfhost::lex_token_trace("fn f() -> Byte { 0Byte }");
     assert!(
-        stage.contains(&"int 0".to_string()),
-        "`0Byte` must still yield the integer zero, got {stage:?}"
+        toks.contains(&(77, 0)),
+        "`0Byte` must yield the byte literal zero, got {toks:?}"
     );
-    assert!(
-        stage.contains(&"ident Byte".to_string()),
-        "the `B` must begin the `Byte` suffix rather than a binary literal, got {stage:?}"
+    let byte = names.iter().position(|n| n == "Byte").map(|i| i as i64);
+    assert_eq!(
+        toks.iter()
+            .filter(|&&(k, v)| k == 1 && Some(v) == byte)
+            .count(),
+        1,
+        "only the return type names `Byte`, so the suffix was not read as a name, got {toks:?}"
     );
 }
 

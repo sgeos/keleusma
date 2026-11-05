@@ -504,23 +504,25 @@ fn an_enclosing_allocation_is_sized_word_bytes_plus_n_and_the_bound_follows() {
 
 // --- The self-hosted compiler ---
 
-/// The stages under `src/selfhost/kel/` do not lower `Text<N>`. The shipping
-/// cross-check must refuse it as unsupported in every position, never report a
-/// divergence or panic, and must still report the reference's own rejection
-/// when the reference rejects the program.
+/// The stages under `src/selfhost/kel/` lower `Text<N>` and its literal cast in
+/// a signature, a `let`, a tuple, an array, a struct field and an enum payload,
+/// which `capacity_bounded_text_has_its_pinned_outcomes` in
+/// `tests/selfhost_full_language.rs` compiles byte for byte. The uses they do not
+/// lower must be refused as unsupported before any stage runs, never reported as
+/// a divergence or a panic, and a program the reference rejects must still report
+/// the reference's own rejection. Every case here is decided before a stage runs,
+/// so this stays cheap in the quick tier.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_self_hosted_compiler_refuses_text_n_cleanly() {
     use keleusma::selfhost::{SelfHostError, self_hosted_compile};
     let target = keleusma::target::Target::host();
     for src in [
-        "fn main(a: Text<8>) -> Word { 1 }",
-        "fn main() -> Text<8> { \"abc\" as Text<8> }",
-        "fn main() -> Word { let t = \"abc\" as Text<8>; 1 }",
-        "fn main() -> Word { let t: Text<8> = \"abc\" as Text<8>; 1 }",
-        "fn main() -> (Word, Text<4>) { (1, \"a\" as Text<4>) }",
-        "struct S { a: Word, t: Text<8> }\nfn main() -> Word { 1 }",
         "private data d { t: Text<8> }\nfn main() -> Word { d.t = \"a\" as Text<8>; 1 }",
+        "fn main() -> Option<Text<8>> { Option::Some(\"a\" as Text<8>) }",
+        "fn f<const n: Word>() -> Text<n> { \"ab\" as Text<n> }\nfn main() -> Text<4> { f::<4>() }",
+        "fn main() -> Text<70000> { \"x\" as Text<70000> }",
+        "newtype T = Text<4>;\nfn main() -> Word { let t = T(\"a\" as Text<4>); 1 }",
     ] {
         match self_hosted_compile(src, &target) {
             Err(SelfHostError::Unsupported { detail }) => {
