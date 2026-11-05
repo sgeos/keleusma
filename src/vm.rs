@@ -3933,6 +3933,69 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.shared_slot_count as usize + self.private_slot_count as usize
     }
 
+    /// The element slot a `GetData(field)` or `SetData(field)` operand
+    /// addresses. The operand names a field, option B of the array wire-slot
+    /// design, and the field's record gives its first element slot in one
+    /// constant-time read.
+    ///
+    /// # Errors
+    ///
+    /// [`VmError::InvalidBytecode`] when the module has no field `field`,
+    /// which the structural verifier refuses at load for checked bytecode.
+    fn data_operand_slot(&self, field: u32) -> Result<usize, VmError> {
+        let slot = self
+            .aux()
+            .data_layout()
+            .and_then(|dl| dl.operand_slot(field))
+            .ok_or_else(|| {
+                VmError::InvalidBytecode(format!("data field index {field} out of bounds"))
+            })?;
+        // A validated layout's slots lie below the element count, so this
+        // holds for every module the loader admitted.
+        if slot >= self.data_len() {
+            return Err(VmError::InvalidBytecode(format!(
+                "data field {field} begins at slot {slot}, outside the data segment"
+            )));
+        }
+        Ok(slot)
+    }
+
+    /// The first element slot of the span a `GetDataIndexed(field, len)` or
+    /// `SetDataIndexed(field, len)` operand addresses. A nonempty span lies
+    /// within the one field the operand names.
+    ///
+    /// # Errors
+    ///
+    /// [`VmError::InvalidBytecode`] when the span names no field or is longer
+    /// than its field, which the structural verifier refuses at load.
+    fn data_operand_span(&self, field: u32, len: u32, what: &str) -> Result<usize, VmError> {
+        let first = self
+            .aux()
+            .data_layout()
+            .map_or(
+                if field == 0 && len == 0 {
+                    Some(0)
+                } else {
+                    None
+                },
+                |dl| dl.operand_span(field, len),
+            )
+            .ok_or_else(|| {
+                VmError::InvalidBytecode(format!(
+                    "{what} span of {len} element(s) in data field {field} exceeds the data segment"
+                ))
+            })?;
+        if first
+            .checked_add(len as usize)
+            .is_none_or(|end| end > self.data_len())
+        {
+            return Err(VmError::InvalidBytecode(format!(
+                "{what} span exceeds the data segment"
+            )));
+        }
+        Ok(first)
+    }
+
     /// Flat byte length of the borrowed shared-data buffer this module
     /// expects (B28 item 2).
     ///
@@ -6295,27 +6358,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     self.stack[base + slot as usize] = val;
                 }
 
-                Op::GetData(slot) => {
-                    let idx = slot as usize;
-                    let total = self.data_len();
-                    if idx >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "data slot index {} out of bounds",
-                            idx
-                        )));
-                    }
+                Op::GetData(field) => {
+                    let idx = self.data_operand_slot(field)?;
                     let val = self.read_data_slot(idx)?;
                     sp!(self, val);
                 }
-                Op::SetData(slot) => {
-                    let idx = slot as usize;
-                    let total = self.data_len();
-                    if idx >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "data slot index {} out of bounds",
-                            idx
-                        )));
-                    }
+                Op::SetData(field) => {
+                    let idx = self.data_operand_slot(field)?;
                     // A data slot lives in the persistent region and survives
                     // RESET. `write_data_slot` persists a flat composite body
                     // into the persistent composite pool at its compiler-baked
@@ -6345,24 +6394,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    let first = usize::try_from(base).map_err(|_| {
-                        VmError::InvalidBytecode(String::from(
-                            "indexed read base exceeds the host representation",
-                        ))
-                    })?;
-                    let count = usize::try_from(len).map_err(|_| {
-                        VmError::InvalidBytecode(String::from(
-                            "indexed read length exceeds the host representation",
-                        ))
-                    })?;
-                    if first
-                        .checked_add(count)
-                        .is_none_or(|end| end > self.data_len())
-                    {
-                        return Err(VmError::InvalidBytecode(String::from(
-                            "indexed read span exceeds the data segment",
-                        )));
-                    }
+                    let first = self.data_operand_span(base, len, "indexed read")?;
                     let offset = index.to_i64();
                     let invalid = offset < 0 || offset >= i64::from(len);
                     let value = if invalid {
@@ -6396,22 +6428,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     };
                     let val = self.pop()?;
-                    let first = usize::try_from(base).map_err(|_| {
-                        VmError::InvalidBytecode(String::from(
-                            "indexed store base exceeds the host representation",
-                        ))
-                    })?;
-                    let count = usize::try_from(len).map_err(|_| {
-                        VmError::InvalidBytecode(String::from(
-                            "indexed store length exceeds the host representation",
-                        ))
-                    })?;
-                    let total = self.data_len();
-                    if first.checked_add(count).is_none_or(|end| end > total) {
-                        return Err(VmError::InvalidBytecode(String::from(
-                            "indexed store span exceeds the data segment",
-                        )));
-                    }
+                    let first = self.data_operand_span(base, len, "indexed store")?;
                     let invalid = index.to_i64() < 0 || index.to_i64() >= i64::from(len);
                     if !invalid {
                         // The checked span and index make this addition in range.

@@ -200,13 +200,25 @@ fn node(ctx: &mut Ctx, kind: i64, arg: i64, lhs: i64, rhs: i64) -> i64 {
     (ctx.nodes.len() - 1) as i64
 }
 
-/// Resolve a `data.field` reference to its slot index in the module data layout.
+/// The field index of the element slot at `pos`, the number of fields that begin
+/// before it. `slots` names every element slot by its field, in slot order, so a
+/// field begins wherever the name changes. A data operand names a field since
+/// option B of the array wire-slot design, where it named an element slot before.
+fn field_index_at(slots: &[String], pos: usize) -> i64 {
+    (0..pos)
+        .filter(|&i| i == 0 || slots[i - 1] != slots[i])
+        .count() as i64
+}
+
+/// Resolve a `data.field` reference to its field index in the module data layout.
 fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
     let slot_name = format!("{data_name}.{field}");
-    ctx.data_slots
+    let pos = ctx
+        .data_slots
         .iter()
         .position(|n| n == &slot_name)
-        .unwrap_or_else(|| panic!("no data slot named `{slot_name}`")) as i64
+        .unwrap_or_else(|| panic!("no data slot named `{slot_name}`"));
+    field_index_at(&ctx.data_slots, pos)
 }
 
 /// Resolve a `data.field[..]` array reference to its element-0 slot (base) and its
@@ -224,13 +236,13 @@ fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
 /// tests in three places rather than one.
 fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
     let want = format!("{data_name}.{field}");
-    let base = ctx
+    let pos = ctx
         .data_slots
         .iter()
         .position(|n| n == &want)
-        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+        .unwrap_or_else(|| panic!("no data slot named `{want}`"));
     let len = ctx.data_slots.iter().filter(|n| *n == &want).count() as i64;
-    (base, len)
+    (field_index_at(&ctx.data_slots, pos), len)
 }
 
 /// A flattened function body: the flattening context and the body's block root.

@@ -1453,9 +1453,10 @@ private data mat {
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
 // (strategy B): `fdata`/`ffield` are the interned block and field names, `fbase` the
-// field's element-0 slot in the flat data segment, and `flen` its slot count (1 for a
-// scalar, N for an array). `base_ctr` is the running slot counter across all non-const
-// blocks in declaration order; const blocks carry no runtime slots and are skipped. The
+// field's index in the data layout, which is what a data operand names, and `flen` its
+// element count (1 for a scalar, N for an array). `base_ctr` is the running element counter
+// across all non-const blocks in declaration order, which bounds the 24-bit element space;
+// const blocks carry no runtime slots and are skipped. The
 // `cur_*`/`has_field` fields hold the field under construction until its length is known
 // (a scalar at its type, an array at its ASIZE), committed at the next field or the `}`.
 private data fields {
@@ -1571,18 +1572,20 @@ fn data_initializer(k: Word, v: Word) -> Word {
         } } }
     }
 }
-// Shared slots precede private slots, with declaration order retained within each partition.
+// Shared fields precede private fields, with declaration order retained within each partition.
+// A data operand names a field, one logical slot per field (option B of the array wire-slot
+// design), so each field advances its partition's counter by one, whatever its element count.
 fn data_rebase() -> Word {
     if fields.dirty == 1 {
         fields.shared_at = 0; fields.private_at = 0;
         for i in 0..fields.field_count limit 1024 {
-            if fields.fvis[i] == 0 { fields.private_at = fields.private_at + fields.flen[i]; }
+            if fields.fvis[i] == 0 { fields.private_at = fields.private_at + 1; }
         }
         for i in 0..fields.field_count limit 1024 {
             if fields.fvis[i] == 0 {
-                fields.fbase[i] = fields.shared_at; fields.shared_at = fields.shared_at + fields.flen[i];
+                fields.fbase[i] = fields.shared_at; fields.shared_at = fields.shared_at + 1;
             } else {
-                fields.fbase[i] = fields.private_at; fields.private_at = fields.private_at + fields.flen[i];
+                fields.fbase[i] = fields.private_at; fields.private_at = fields.private_at + 1;
             }
         }
         fields.dirty = 0; fields.emit_at = 1;
@@ -2898,7 +2901,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
     } } }
 }
 
-// The data-field name: resolve `da_data.field` to its element-0 slot and length in the
+// The data-field name: resolve `da_data.field` to its field index and length in the
 // accumulated table, then await the token after the field.
 fn step_dafield(k: Word, v: Word) -> Word {
     if k == 1 {
@@ -8981,7 +8984,7 @@ fn commit_field() -> Word {
             fields.dirty = 1;
             fields.fdata[fields.field_count] = fields.cur_block;
             fields.ffield[fields.field_count] = fields.cur_field;
-            fields.fbase[fields.field_count] = fields.base_ctr;
+            fields.fbase[fields.field_count] = fields.field_count;
             fields.flen[fields.field_count] = fields.cur_len;
             fields.field_count = field_push(fields.field_count);
             fields.base_ctr = fields.base_ctr + fields.cur_len;

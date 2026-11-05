@@ -2372,6 +2372,7 @@ fn lower_module_with<'ctx>(
                     && degenerate_stream_yield(c, program).is_none())
         });
     let data = DataCtx {
+        layout,
         stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
             .unwrap_or(u32::MAX),
         needs_region,
@@ -2774,6 +2775,9 @@ fn lower_module_with<'ctx>(
 /// reason a call is: the information required to resolve it was never supplied.
 #[derive(Default, Clone, Copy)]
 struct DataCtx<'a> {
+    /// The module's data layout, which translates a data operand from the field it names to
+    /// that field's first element slot. `None` for [`lower_chunk`].
+    layout: Option<&'a keleusma::bytecode::DataLayout>,
     /// Load-time values for private slots. Coroutine reads use their kinds until
     /// the first write, then load the actual kind from persistent metadata.
     private_init: &'a [ConstValue],
@@ -4763,6 +4767,12 @@ fn lower_chunk_body<'ctx>(
     }
 
     for (i, op) in chunk.ops.iter().enumerate() {
+        // A data operand names a field since option B of the array wire-slot design, and the
+        // lowering is written over element slots, so a data op is lowered with its operand
+        // translated to the field's first element. Without a layout the op is unchanged and
+        // its data access is refused below, as before.
+        let addressed = data.layout.map_or(*op, |dl| dl.element_addressed(*op));
+        let op = &addressed;
         if let Some(&bb) = blocks.get(&i) {
             if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
                 note!(i, st.depth);

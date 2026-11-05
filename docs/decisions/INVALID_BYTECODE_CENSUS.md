@@ -64,6 +64,19 @@ is right to keep every check. The question is narrower:
 
 > **Can a module that a supported producer emitted, and that `verify()` accepted, reach this site?**
 
+## Population update on 2026-11-05, option B
+
+Option B of the array wire-slot design made a data operand name a field. The
+four `GetData`, `SetData`, `GetDataIndexed` and `SetDataIndexed` handlers each
+carried their own out-of-range and span constructions, six sites in all, and
+the two indexed handlers carried two more each for an operand that did not fit
+the host representation. Those ten sites became four in two shared helpers,
+`data_operand_slot` and `data_operand_span`, each refusing an operand that names
+no field and a resolved element outside the data segment. The exact source count
+is now 49 in vm.rs and two in marshall.rs. The structural verifier refuses every
+such operand at load, as before, so each remaining site is reachable only from
+bytecode that skipped verification.
+
 ## The population, and the instrument's reach
 
 Derived from source, not chosen by hand:
@@ -72,10 +85,12 @@ Derived from source, not chosen by hand:
 grep -rn "VmError::InvalidBytecode" src/ --include=*.rs
 ```
 
-**59 matches, of which 55 are construction sites in production code.** The four excluded are named
-rather than silently dropped: one doc comment referring to the variant, one match arm listing it
-among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (53) and
-`src/marshall.rs` (2). These figures were 58, 54 and 52 until the population update of 2026-10-24.
+**57 matches, of which 51 are construction sites in production code**, counting `src/vm.rs` and
+`src/marshall.rs`. The six excluded are named rather than silently dropped: three doc comments referring to the
+variant, two of them the `# Errors` sections of the option B operand helpers, one match arm listing
+it among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (49) and
+`src/marshall.rs` (2). These figures were 59, 55 and 53 until the population update of 2026-11-05,
+and 58, 54 and 52 until the population update of 2026-10-24.
 
 **The figure was 50 and 46 until 2026-09-10.** The opaque-width repair of 2026-09-08 -- part of
 the same line of work that wrote this census -- added `"flat opaque field read out of bounds"` to

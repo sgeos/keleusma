@@ -639,8 +639,15 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
             let e = match *op {
                 Op::Const(i) => [Tag::Const as i64, k0 + i64::from(i), 0, 0],
                 Op::IsEnum(_, _, d) => [Tag::IsEnum as i64, k0 + i64::from(d), 0, 0],
-                _ => encode_op(op)
-                    .ok_or_else(|| Refusal::Unsupported(format!("chunk {ci} op {ip} {op:?}")))?,
+                // A data operand names a field, and the interpreter's data table is indexed by
+                // element, so the operand is translated to the field's first element here.
+                _ => encode_op(
+                    &module
+                        .data_layout
+                        .as_ref()
+                        .map_or(*op, |dl| dl.element_addressed(*op)),
+                )
+                .ok_or_else(|| Refusal::Unsupported(format!("chunk {ci} op {ip} {op:?}")))?,
             };
             ops.push(e);
         }

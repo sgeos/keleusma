@@ -3726,7 +3726,11 @@ fn source_data_type_ranges(
         .zip(bases)
         .map(|((type_id, count), &base)| {
             assert!(count >= 0 && base >= 0, "negative data field range");
-            let end = base.checked_add(count).expect("data slot range overflow");
+            // A data operand names a field, so the range a read's operand is looked up in is
+            // the field's own index alone. The count is still read, to keep the declaration
+            // walk aligned with the records.
+            let _ = count;
+            let end = base.checked_add(1).expect("data field index overflow");
             let tag = scalar_tag_of_type_name(
                 type_id
                     .and_then(|id| names.get(id as usize))
@@ -5896,13 +5900,14 @@ pub fn verify_structural_kel_module() -> Module {
         .clone()
 }
 
-/// The number of declared shared/private data slots (`data_layout.slots.len()`), or 0 when the
-/// module declares no data layout, matching the reference `GetData`/`SetData` bound.
+/// The number of declared data fields, or 0 when the module declares no data layout, matching
+/// the reference `GetData`/`SetData` bound. A data operand names a field, option B of the array
+/// wire-slot design.
 fn data_layout_slot_count(module: &Module) -> i64 {
     module
         .data_layout
         .as_ref()
-        .map_or(0, |dl| dl.slot_count() as i64)
+        .map_or(0, |dl| dl.field_count() as i64)
 }
 
 /// Classify an op's operand-bounds obligation as `(opb, o1, o2, o3)`, mirroring the reference's
@@ -5915,7 +5920,16 @@ fn structural_opbounds(op: &crate::bytecode::Op, module: &Module) -> (i64, i64, 
     use crate::value_layout::CompositeKind;
     match op {
         Op::GetData(s) | Op::SetData(s) => (1, *s as i64, 0, 0),
-        Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => (2, *b as i64, *l as i64, 0),
+        // A span lies within the one field its base names, so `o3` carries that field's element
+        // count, zero when the base names no field, and the stage bounds the length by it.
+        Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => {
+            let count = module
+                .data_layout
+                .as_ref()
+                .and_then(|dl| dl.fields.get(*b as usize))
+                .map_or(0, |f| i64::from(f.count));
+            (2, *b as i64, *l as i64, count)
+        }
         Op::Const(i) | Op::IsStruct(i) => (3, *i as i64, 0, 0),
         Op::GetField(StructField::Boxed { name_const }) => (3, *name_const as i64, 0, 0),
         Op::IsEnum(e, v, d) => (4, *e as i64, *v as i64, *d as i64),
@@ -7526,50 +7540,41 @@ fn private_composite_pool_bytes(data_records: &[(i64, i64)]) -> u32 {
         .expect("private composite pool size")
 }
 
-/// Each private composite slot, in pool order, with its flat body size in bytes.
+/// Each private composite field, in pool order, by the field index a data operand names,
+/// with its flat body size in bytes.
 ///
 /// This is the layout `private_composite_pool` places, and it is what `codegen.kel`'s
-/// copy pass needs to recognise a private struct read and size its copy. Every such slot
+/// copy pass needs to recognise a private struct read and size its copy. Every such field
 /// holds a struct, the only private composite field parse.kel marks with a size record.
 #[must_use]
 pub fn private_composite_sizes(data_records: &[(i64, i64)]) -> Vec<(u16, u32)> {
     use crate::selfhost_host::PARSE_PRIVATE_COMPOSITE_TAG;
-    let mut shared_slots: i64 = 0;
+    // A data operand names a field, option B of the array wire-slot design, so each private
+    // struct is reported by its field index, which counts every shared field first and then
+    // the private fields before it, however many elements each has.
+    let mut shared_fields: i64 = 0;
     let mut visibility = 0;
-    let mut last_count: i64 = 0;
     for &(code, value) in data_records {
         match code {
             9 => visibility = value % 4,
-            4 if visibility == 0 => {
-                shared_slots += 1;
-                last_count = 1;
-            }
-            8 if visibility == 0 => {
-                shared_slots += value - last_count;
-                last_count = value;
-            }
+            4 if visibility == 0 => shared_fields += 1,
             _ => {}
         }
     }
     let mut sizes = Vec::new();
-    let mut slot = shared_slots;
-    let mut field_slot = -1;
+    let mut next = shared_fields;
+    let mut field_index = -1;
     for &(code, value) in data_records {
         match code {
             9 => visibility = value % 4,
             4 if visibility == 1 => {
-                field_slot = slot;
-                slot += 1;
-                last_count = 1;
-            }
-            8 if visibility == 1 => {
-                slot += value - last_count;
-                last_count = value;
+                field_index = next;
+                next += 1;
             }
             PARSE_PRIVATE_COMPOSITE_TAG if visibility == 1 => {
-                let slot_u16 = u16::try_from(field_slot).expect("private composite slot");
+                let index_u16 = u16::try_from(field_index).expect("private composite field");
                 let bytes = u32::try_from(value).expect("private composite size");
-                sizes.push((slot_u16, bytes));
+                sizes.push((index_u16, bytes));
             }
             _ => {}
         }

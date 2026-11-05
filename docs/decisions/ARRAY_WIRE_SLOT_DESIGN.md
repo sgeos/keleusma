@@ -735,9 +735,121 @@ stays at 32 and that a private array of composites occupies its pool bodies alon
   `[Word;12]`, therefore hash alike, since they occupy the same slots. That representation is
   a choice within the ruling, not a ruling. The untyped `compute_schema_hash` keeps its
   per-slot form and values.
-- **Option B and S1.** Not done. Both change what a slot operand means and how private arrays
-  are stored, and option B changes the host's shared-slot index space, so every embedder's
-  `get_shared` and `set_shared` index changes with it.
+- **Option B.** Landed on 2026-11-05, recorded under "Option B as implemented" below. The host's
+  shared-slot index space did not change, by the operator's ruling of 2026-11-04, so no
+  embedder's `get_shared` or `set_shared` index changed with it.
+- **S1.** Not done at the time option B landed.
+
+## Option B as implemented, 2026-11-05
+
+Option B landed on branch `feat/v02-array-option-b-s1`, cut from `feat/v02-array-encoding-f` at
+`e5b6592f`, which carries Encoding F and H2. It follows ruling C3.6 and the operator's ruling of
+2026-11-04 on how a host addresses a shared slot, received first-hand by the commissioning session
+and relayed to this line by it. That ruling's item 4 was answered "A", keeping the host's
+element-indexed `get_shared` and `set_shared` and translating inside the virtual machine.
+`BYTECODE_VERSION` remains 2, the instruction set remains at 66 opcodes, and the format
+fingerprint is unchanged, by ruling C3.3.
+
+### No opcode was needed
+
+The question this increment had to settle first was whether an existing opcode can address an
+element within a field. It can. `GetDataIndexed(base, len)` and `SetDataIndexed(base, len)`
+already carried a base and a span length, and the compiler already emitted every array access
+through them with the field's first slot as the base and the field's whole element count as the
+length, a multi-dimensional array being one flat span with the per-level stride computed on the
+stack. Under option B the first operand names the field and the index selects the element within
+it. Every scalar field is read and written through `GetData` and `SetData`, which now address
+element zero of the field they name. A whole-array read or write was refused at compile time
+before this change and still is, so no access needed an element-space operand. This is a fact
+established by reading every emission site in `src/compiler.rs` and the self-hosted codegen.
+
+### What changed
+
+- **The operand.** A data operand is the index of a field in the layout, shared fields first.
+  A `GetData` or `SetData` operand is below the field count. A nonempty indexed span is no
+  longer than the named field's element count, so a span never crosses a field, and an empty
+  span is valid up to and including the field count, which restates the element-space rule.
+  `DataLayout::operand_slot`, `operand_span` and `element_addressed`, and
+  `DataLayoutTable::operand_slot` and `operand_span`, perform the translation in one place.
+- **The wire is unchanged.** The `DATA_FIELDS` record keeps its bytes. Its `first_slot` is
+  now specified as the element index of element zero in the host's index space, which is what
+  it already held. `docs/spec/WIRE_FORMAT.md` and `docs/spec/INSTRUCTION_SET.md` state the
+  operand's meaning.
+- **The compiler.** A field's operand is its position in the layout. The private-data
+  mutation check and the private composite alias analysis work over field indices, a read
+  covering its own field and a write hazarding it exactly when it names the same field, which
+  is the element-space rule restated, since a span never left its field.
+- **The virtual machine.** Each handler resolves its operand to the field's first element by
+  one record read, where it formerly used the operand as the element slot directly. The host
+  API is unchanged. `get_shared`, `set_shared`, `marshal_shared_into` and a hot swap's seeds
+  keep their element indices.
+- **The verifiers.** The structural verifier bounds a single operand by the field count and a
+  span by its field. The definite-initialization rule translates each operand to the element
+  slots it reaches before its element-space analysis. The typed verifier needed no change,
+  which is a fact established by reading it, since it treats every data read as `Top`, never
+  interprets a data operand, and validates the layout per field in element space.
+- **The self-hosted twin.** `parse.kel` assigns each field the next index in its partition
+  rather than the next element. `codegen.kel` relocates a data operand only when it is a
+  source field's index exactly, bounding an indexed width by the field's count, and its copy
+  pass treats a write as a hazard when it names the read's field. `verify_structural.kel`
+  bounds a span by the named field's element count, which the driver carries in the third
+  operand table. The driver reports private struct fields to the copy pass by field index,
+  bounds operands by the field count, resolves a data read's type by its field, and the
+  definite-initialization twin translates operands as the reference does.
+- **Other consumers.** The hosted interpreter's data table and the native backend's lowering
+  are written over element slots, and both translate each data op at the point they read it,
+  the hosted driver when it encodes an op and the native backend when it lowers or analyses
+  one. The native backend's changed files are `native_codegen/src/lib.rs` and
+  `native_codegen/src/coroutine/types.rs`.
+
+### Measured, size and memory
+
+Method. The scratch measurement program of this line, held outside the repository, compiles
+each of the fifteen stage sources with `keleusma::compiler::compile` at the default host target
+and reports the artifact length, the declared private data bytes,
+`required_persistent_capacity_for` and `auto_arena_capacity_for`. It was built with
+`RUSTC_WRAPPER=` empty against the branch point `e5b6592f` and against this increment.
+
+| Measure | Branch point, its sources | Branch point compiler, these sources | Option B, these sources |
+|---|---|---|---|
+| Artifact bytes, fifteen stages | 1,065,420 | 1,065,188 | 1,065,188 |
+| Declared private data bytes | 13,969,728 | 13,969,728 | 13,969,728 |
+| Persistent capacity | 13,969,728 | 13,969,728 | 13,969,728 |
+| `auto_arena_capacity_for`, summed | 47,320 | 47,320 | 47,320 |
+
+**What the table establishes, as fact.** Option B leaves every artifact the same size and
+every memory figure unchanged, since operands keep their twenty-four-bit encoding and no
+storage changed. The 232-byte difference between the first two columns is the three stage
+sources this increment edits, `parse.kel`, `codegen.kel` and `verify_structural.kel`, compiled
+by the same compiler.
+
+### The construct-support boundary
+
+`self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs` passed unchanged in
+the release self-host tier, so the Ok, Gap and RefRejects counts did not move.
+
+### The within-cycle hazard, narrowed
+
+An artifact compiled with element-space operands and loaded by this runtime is not refused by
+the fingerprint, by ruling C3.3, and option B changes no region, so nothing structural refuses
+it either. The structural verifier refuses many such artifacts, since an element index is often
+past the field count or a span longer than its field, but not all, and one it admits reads the
+wrong field. The exposure is narrower than it sounds, as an inference from the history. Every
+artifact built before Encoding F carries a retired region and is refused, so the only artifacts
+at risk are ones built with Encoding F but before option B, which exist only on the unmerged
+Encoding F branch and anything built from it. The question is recorded under "What remains
+open" below.
+
+### What remains open after option B
+
+1. **Whether to close the within-cycle hazard for artifacts built between Encoding F and
+   option B.** The rulings settle the fingerprint and the version, and the documents do not
+   settle whether a structural refusal is wanted for this narrower case.
+   - A. Accept it under ruling C3.3, since the artifacts at risk exist only on an unmerged
+     branch and the release rolls the fingerprint. Recommended.
+   - B. Add a structural marker that distinguishes field-space operands, which would be a wire
+     change needing its own authorization.
+   - C. Roll the fingerprint at landing, which ruling C3.3 declined for Encoding F.
 
 ## What was not verified
 

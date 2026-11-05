@@ -570,7 +570,11 @@ impl FuncCompiler {
     /// write changes. The ordinal is the read's position in emission order,
     /// which is the same on both compiles because the copy only appends
     /// straight-line ops.
-    fn note_data_read(&mut self, data_name: &str, lo: u32, len: u32, element: &TypeExpr) {
+    /// Record a read of data field `field` for the private composite alias
+    /// analysis. A data operand names one field, so the read covers that
+    /// field alone, whatever its element count, and a write hazards the read
+    /// exactly when it names the same field.
+    fn note_data_read(&mut self, data_name: &str, field: u32, element: &TypeExpr) {
         if !self.type_info.private_data_blocks.contains(data_name)
             || !matches!(
                 classify_flat_field(element, &self.type_info),
@@ -582,8 +586,8 @@ impl FuncCompiler {
         let ordinal = self.alias_reads.len();
         self.alias_reads.push(alias_copy::Read {
             at: self.chunk.ops.len(),
-            lo,
-            hi: lo.saturating_add(len),
+            lo: field,
+            hi: field.saturating_add(1),
         });
         if self.alias_copies.contains(&ordinal) {
             emit_detach_data_element(self, element);
@@ -3699,7 +3703,21 @@ fn compile_with_recorded_type_hook(
                     pass_visibility,
                     &mut visiting,
                 )?;
-                fields.push((field.name.clone(), data_slot_idx));
+                // A field is addressed by its index in the layout, one logical
+                // slot per field, option B of the array wire-slot design. The
+                // index is the position the field takes in `field_skels`
+                // below, shared fields first.
+                let field_index = u32::try_from(field_skels.len())
+                    .ok()
+                    .filter(|v| *v < MAX_DATA_ADDR)
+                    .ok_or_else(|| CompileError {
+                        message: format!(
+                            "data segment field `{}.{}` overflows the 24-bit field index space",
+                            decl.name, field.name
+                        ),
+                        span: field.span,
+                    })?;
+                fields.push((field.name.clone(), field_index));
                 // Array-typed fields expand into consecutive slots, one
                 // per scalar element. Scalar and other composite types
                 // continue to occupy a single slot whose `Value`
@@ -3733,11 +3751,11 @@ fn compile_with_recorded_type_hook(
                 tokens.push(token);
                 // ONE FIELD, HOWEVER MANY ELEMENTS IT HAS.
                 //
-                // Every element of an array still occupies one logical slot, so a
-                // `GetData`/`SetData` operand counts elements, but the layout
-                // carries the array once, under one name. An element's name is
-                // recoverable as `name[k]` from the field's first slot, so a
-                // per-element entry would store what the index already says.
+                // A data operand names the field, and the layout carries the
+                // array once, under one name. The field's element slots, the
+                // host's index space, start at `first_slot`, and an element's
+                // name is recoverable as `name[k]` from it, so a per-element
+                // entry would store what the index already says.
                 field_skels.push(DataFieldSkel {
                     name: format!("{}.{}", decl.name, field.name),
                     visibility,
@@ -3765,8 +3783,8 @@ fn compile_with_recorded_type_hook(
         }
     }
     // Compose the final slot table: shared slots first, then
-    // private slots. Slot indices in `data_fields` already
-    // reference the unified space.
+    // private slots. The indices in `data_fields` are field indices in
+    // the same shared-first order, which is what a data operand names.
     let shared_count: u32 = field_skels
         .iter()
         .filter(|f| f.visibility == SlotVisibility::Shared)
@@ -4099,6 +4117,10 @@ fn compile_with_recorded_type_hook(
     // rewrite. Const data blocks are exempt because their values
     // are compile-time and never written.
     if shared_count + private_count > 0 {
+        // Data operands name fields, so the analysis runs over field indices.
+        // A field counts as written when any of its elements is, which is
+        // what the element-space form of this check computed, since an
+        // indexed write's span never leaves the field it names.
         let mut private_slot_indices: Vec<u32> = Vec::new();
         for decl in &program.data_decls {
             if decl.visibility != DataVisibility::Private {
@@ -4106,13 +4128,10 @@ fn compile_with_recorded_type_hook(
             }
             for field in &decl.fields {
                 if let Some(field_list) = data_fields.get(&decl.name)
-                    && let Some((_, slot_idx)) =
+                    && let Some((_, field_idx)) =
                         field_list.iter().find(|(name, _)| name == &field.name)
                 {
-                    let n = slots_for_data_type(&field.type_expr);
-                    for k in 0..n {
-                        private_slot_indices.push(slot_idx.saturating_add(k));
-                    }
+                    private_slot_indices.push(*field_idx);
                 }
             }
         }
@@ -4122,13 +4141,11 @@ fn compile_with_recorded_type_hook(
             for chunk in &chunks {
                 for op in &chunk.ops {
                     match op {
-                        crate::bytecode::Op::SetData(slot) => {
-                            written.insert(*slot);
+                        crate::bytecode::Op::SetData(field) => {
+                            written.insert(*field);
                         }
-                        crate::bytecode::Op::SetDataIndexed(base, len) => {
-                            for k in 0..*len {
-                                written.insert(base.saturating_add(k));
-                            }
+                        crate::bytecode::Op::SetDataIndexed(field, len) if *len > 0 => {
+                            written.insert(*field);
                         }
                         _ => {}
                     }
@@ -5786,7 +5803,7 @@ fn emit_data_indexed_read(
     // A dynamic data-array index can trap out-of-bounds; record the
     // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
-    fc.note_data_read(chain.data_name, base, total, element);
+    fc.note_data_read(chain.data_name, base, element);
     Ok(())
 }
 
@@ -6911,8 +6928,9 @@ fn compile_data_field_assign(
             message: format!("unknown data field: {}.{}", data_name, field),
             span,
         })?;
-    // An array field occupies one data slot per element, so a single `SetData` would put the
-    // whole array value in the first slot and leave the others unwritten. A whole-array read is
+    // An array field has one element slot per element and `SetData` writes element zero, so a
+    // single `SetData` would put the whole array value in the first element and leave the others
+    // unwritten. A whole-array read is
     // refused for the same layout, and the write is refused to match, until an element-wise
     // lowering exists.
     let field_type = fc
@@ -8690,7 +8708,7 @@ fn compile_for_in_data_array(
     // Bind the iteration variable to the indexed element.
     fc.emit(Op::GetLocal(idx_slot));
     fc.emit_data_read(base, total_slots, elem_type);
-    fc.note_data_read(data_name, base, total_slots, elem_type);
+    fc.note_data_read(data_name, base, elem_type);
     let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
     fc.emit(Op::SetLocal(var_slot));
 
@@ -11194,7 +11212,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
                 fc.emit(Op::GetData(slot));
                 if let Some(t) = &field_type {
-                    fc.note_data_read(name, slot, 1, t);
+                    fc.note_data_read(name, slot, t);
                 }
                 return Ok(());
             }

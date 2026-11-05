@@ -2380,12 +2380,14 @@ pub enum Op {
     /// Pop and store to local variable slot.
     SetLocal(u16),
 
-    /// Push data segment slot value onto stack. The slot index is carried in
-    /// twenty-four bits on the wire (`u32` in memory, validated `< 1 << 24` at
-    /// compile and load), so the unified data-slot space is bounded to 16 M
-    /// slots rather than 64 K.
+    /// Push the value of element zero of a data field onto the stack. The
+    /// operand is the field's index in the data layout, one logical slot per
+    /// field, which is option B of the array wire-slot design. It is carried
+    /// in twenty-four bits on the wire (`u32` in memory, validated
+    /// `< 1 << 24` at compile and load).
     GetData(u32),
-    /// Pop a value and store it into a data-segment slot. The runtime dispatches
+    /// Pop a value and store it into element zero of a data field, the field
+    /// named by its index as for [`Op::GetData`]. The runtime dispatches
     /// on the value. A scalar is stored inline in the slot. A private slot whose
     /// value is a flat composite copies its body into the persistent composite
     /// pool at the offset the module's private-composite layout table records
@@ -2398,13 +2400,17 @@ pub enum Op {
     SetData(u32),
 
     /// Total indexed read. Pop a Word/Byte/Unit fallback and then a Word
-    /// index. Read the selected slot only in range, otherwise use fallback.
+    /// index. The first operand names a data field by its index and the
+    /// second is the span length, at most the field's element count. Read
+    /// element `index` of the field only in range, otherwise use fallback.
     /// Push value, index, four Word bound limbs, and flag zero for a read or
     /// one for fallback. Invalid spans and type/storage contract failures
-    /// remain errors. Base and length retain their u24 wire encoding.
+    /// remain errors. Field and length retain their u24 wire encoding.
     GetDataIndexed(u32, u32),
-    /// Total indexed write. Pop value and Word index, write only when the
-    /// index is in range, then push index, four Word byte limbs of the bound,
+    /// Total indexed write. Pop value and Word index, write element `index`
+    /// of the field the first operand names only when the index is in range,
+    /// the span being as for [`Op::GetDataIndexed`], then push index, four
+    /// Word byte limbs of the bound,
     /// and flag zero for success or one for an invalid index. Invalid indices
     /// and empty spans perform no write. Invalid data spans and storage/type
     /// contract failures remain errors. Both operands use u24 wire encoding.
@@ -3608,9 +3614,23 @@ fn const_bits_equal(a: &ConstValue, b: &ConstValue) -> bool {
 ///
 /// A scalar field has a `count` of one. An array field, however many
 /// dimensions it has, is one field whose `count` is the product of its
-/// dimensions. Each element still occupies one logical data slot, so a
-/// `GetData`/`SetData` operand counts elements, and the field's slots are
-/// `first_slot..first_slot + count`.
+/// dimensions.
+///
+/// # Two index spaces, by the operator's rulings
+///
+/// A data operand names a FIELD. `GetData(f)` and `SetData(f)` address
+/// element zero of field `f`, and `GetDataIndexed(f, len)` and
+/// `SetDataIndexed(f, len)` address element `i` of field `f` for an index `i`
+/// below `len`, where `len` is at most the field's `count`. This is option B
+/// of the array wire-slot design, one logical slot per field, ruled on
+/// 2026-10-31 as C3.6.
+///
+/// The host keeps the ELEMENT index space. `first_slot..first_slot + count`
+/// are the element slots of the field, in the space `Vm::get_shared` and
+/// `Vm::set_shared` index and a hot swap seeds. The operator ruled on
+/// 2026-11-04 that the host API keeps its element indices and the virtual
+/// machine translates, so no embedder changes. [`DataLayout::operand_slot`]
+/// and [`DataLayout::operand_span`] perform that translation.
 ///
 /// # Why the stride is stored rather than derived
 ///
@@ -3744,7 +3764,8 @@ pub struct DataLayout {
 }
 
 impl DataLayout {
-    /// Number of logical slots, the bound of a `GetData`/`SetData` operand.
+    /// Number of element slots, the host's index space. This is not the
+    /// bound of a data operand, which [`Self::field_count`] gives.
     #[must_use]
     pub fn slot_count(&self) -> usize {
         self.fields.iter().map(|f| f.count as usize).sum()
@@ -3794,9 +3815,75 @@ impl DataLayout {
         Some((f, f.element_of(slot)?))
     }
 
-    /// The first logical slot of the field named `name`, or `None` when no
-    /// field has that name. A linear scan, for host-side lookups that run once
-    /// per stage, never on an execution path.
+    /// Number of fields, the bound of a `GetData` or `SetData` operand.
+    #[must_use]
+    pub fn field_count(&self) -> usize {
+        self.fields.len()
+    }
+
+    /// The element slot a `GetData(field)` or `SetData(field)` operand
+    /// addresses, which is element zero of the field, or `None` when no such
+    /// field exists.
+    #[must_use]
+    pub fn operand_slot(&self, field: u32) -> Option<usize> {
+        let f = self.fields.get(usize::try_from(field).ok()?)?;
+        Some(f.first_slot as usize)
+    }
+
+    /// The first element slot of the span a `GetDataIndexed(field, len)` or
+    /// `SetDataIndexed(field, len)` operand addresses, or `None` when the
+    /// operand is invalid.
+    ///
+    /// A nonempty span must lie within one field, so `len` is at most the
+    /// field's count. An empty span needs no storage, and is valid for every
+    /// `field` up to and including the field count, the same rule the element
+    /// space applied to `base + len` before option B. The empty span past the
+    /// last field begins at [`Self::slot_count`].
+    #[must_use]
+    pub fn operand_span(&self, field: u32, len: u32) -> Option<usize> {
+        let index = usize::try_from(field).ok()?;
+        match self.fields.get(index) {
+            Some(f) if len <= f.count => Some(f.first_slot as usize),
+            Some(_) => None,
+            None if len == 0 && index == self.fields.len() => Some(self.slot_count()),
+            None => None,
+        }
+    }
+
+    /// `op` with its data operand translated from field space to element
+    /// space, for a consumer whose logic is written over element slots, such
+    /// as the native backend and the hosted interpreter. Any other op, and a
+    /// data op whose operand is invalid, is returned unchanged, so that the
+    /// consumer's own bound check refuses it.
+    #[must_use]
+    pub fn element_addressed(&self, op: Op) -> Op {
+        let wide = |slot: usize| u32::try_from(slot).ok();
+        match op {
+            Op::GetData(f) => self.operand_slot(f).and_then(wide).map_or(op, Op::GetData),
+            Op::SetData(f) => self.operand_slot(f).and_then(wide).map_or(op, Op::SetData),
+            Op::GetDataIndexed(f, len) => self
+                .operand_span(f, len)
+                .and_then(wide)
+                .map_or(op, |b| Op::GetDataIndexed(b, len)),
+            Op::SetDataIndexed(f, len) => self
+                .operand_span(f, len)
+                .and_then(wide)
+                .map_or(op, |b| Op::SetDataIndexed(b, len)),
+            other => other,
+        }
+    }
+
+    /// The index of the field named `name`, the operand a program uses to
+    /// address it, or `None` when no field has that name. A linear scan, for
+    /// host-side lookups, never on an execution path.
+    #[must_use]
+    pub fn field_index_of(&self, name: &str) -> Option<usize> {
+        self.fields.iter().position(|f| f.name == name)
+    }
+
+    /// The first element slot of the field named `name`, in the host's index
+    /// space, or `None` when no field has that name. A linear scan, for
+    /// host-side lookups that run once per stage, never on an execution path.
     #[must_use]
     pub fn slot_of(&self, name: &str) -> Option<usize> {
         self.fields
@@ -3871,6 +3958,21 @@ impl DataLayout {
             .map(|f| u32::from(f.elem_len))
             .max()
             .unwrap_or(0)
+    }
+
+    /// [`Self::shared_composite_max_len`] over the element slots a data
+    /// operand reaches. `len` is `None` for `GetData(field)`, which reaches
+    /// element zero, and the span length for `GetDataIndexed(field, len)`. An
+    /// operand that names no field reaches nothing and yields zero.
+    #[must_use]
+    pub fn operand_shared_composite_max_len(&self, field: u32, len: Option<u32>) -> u32 {
+        let reached = match len {
+            None => self.operand_slot(field).map(|slot| (slot, 1usize)),
+            Some(len) => self
+                .operand_span(field, len)
+                .map(|slot| (slot, len as usize)),
+        };
+        reached.map_or(0, |(slot, len)| self.shared_composite_max_len(slot, len))
     }
 
     /// The persistent composite pool offset of private logical `slot`, or

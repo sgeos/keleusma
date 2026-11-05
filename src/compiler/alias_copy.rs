@@ -33,7 +33,7 @@
 //!   element into its new body, and a `SetData` to a slot outside the read's
 //!   range, which copies the bytes into another slot or the host buffer.
 //! - A **hazard** is an op that may write the read's slots. It is a `SetData`
-//!   or `SetDataIndexed` whose slot range overlaps the read's range, any
+//!   or a nonempty `SetDataIndexed` that names the read's field, any
 //!   `Call`, `CallVerifiedNative` or `CallExternalNative`, since a callee may
 //!   write private data, and `Yield`, since control leaves the chunk.
 //!
@@ -83,9 +83,10 @@ pub(super) struct Read {
     /// The position of the first op after the read, where the composite is on
     /// top of the operand stack and where a copy would be emitted.
     pub(super) at: usize,
-    /// The first data slot the read covers.
+    /// The first data field the read covers. A data operand names a field,
+    /// so a read covers one field and `hi` is `lo + 1`.
     pub(super) lo: u32,
-    /// One past the last data slot the read covers.
+    /// One past the last data field the read covers.
     pub(super) hi: u32,
 }
 
@@ -152,10 +153,10 @@ fn is_dead_end(op: &Op, read: &Read) -> bool {
 fn is_hazard(op: &Op, read: &Read) -> bool {
     match op {
         Op::SetData(slot) => (read.lo..read.hi).contains(slot),
-        Op::SetDataIndexed(base, len) => {
-            let end = base.saturating_add(*len);
-            *base < read.hi && read.lo < end
-        }
+        // The first operand names a field, and a nonempty span lies within
+        // it, so the write reaches the read's field exactly when it names it.
+        // An empty span writes nothing.
+        Op::SetDataIndexed(field, len) => *len > 0 && (read.lo..read.hi).contains(field),
         Op::Call(_, _)
         | Op::CallVerifiedNative(_, _)
         | Op::CallExternalNative(_, _)
