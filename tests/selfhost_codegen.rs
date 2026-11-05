@@ -9327,10 +9327,13 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Re-measured 2026-11-01 after the C5 review's join repair, which added the
             // region write sets, the two snapshot pools and the native flag's scalar push:
             // 2142 and 557 became 3066 and 570.
+            // Re-measured 2026-11-04 after the C5 residual repairs, which added the loop
+            // fixpoint with its break accumulators and replaced the four-offset text layouts
+            // with the layout heap: 3066 and 570 became 3844 and 604.
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            3066,
-            570,
+            3844,
+            604,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {

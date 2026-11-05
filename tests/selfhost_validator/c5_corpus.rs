@@ -88,7 +88,97 @@ const CORPUS: &[(&str, &str)] = &[
         "struct P { x: Word, y: Word } private data d { p: P, n: Word } \
          fn main() -> Word { d.n = d.n + 1; d.p.x + d.n }",
     ),
+    // Added for residual 2 on 2026-11-04. Six `Text` fields are past the four offsets the
+    // typed stage recorded before its layout heap, so an access-kind rewrite of the `Word` read
+    // reached the gap.
+    (
+        "text_fields",
+        "struct S { n: Word, a: Text, b: Text, c: Text, d: Text, e: Text, f: Text } \
+         fn main() -> Word { let s = S { n: 1, a: \"a\", b: \"b\", c: \"c\", d: \"d\", e: \"e\", f: \"f\" }; s.n }",
+    ),
+    ("text_array", TEXT_ARRAY),
 ];
+
+/// An element read from an array of flat bodies that hold text, which reaches the reference's
+/// `element_text_layout`. Added with residual 2 on 2026-11-04.
+pub(super) const TEXT_ARRAY: &str = "struct R { n: Word, t: Text } \
+     fn main(i: Word) -> Word { let rs = [R { n: 1, t: \"a\" }, R { n: 2, t: \"b\" }]; rs[i].n }";
+
+/// The loop shapes of the hand-built residual-one modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LoopShape {
+    /// Local 1 holds an eight-byte flat body before the loop and is rewritten with one on every
+    /// iteration, so the fixpoint is stable at the first pass and the body is known after it.
+    Local,
+    /// Local 1 holds the flat body before the loop and a scalar is written over it, so the
+    /// fixpoint's second pass starts from a forgotten local and the body is unknown after it.
+    Widening,
+    /// The break leaves an eight-byte flat body on the operand stack above the loop's entry
+    /// height, which the reference keeps after the loop.
+    Operand,
+}
+
+/// A loop whose exit state the reference knows and the typed stage forgot before the repair of
+/// residual 1, followed by a field read at `offset` of the value the loop leaves. The source
+/// language binds each name once, so a compiled program does not reach a local that a loop
+/// writes and that is read after it, and these modules are built by hand. Each verifies at
+/// offset 0. Added on 2026-11-04.
+pub(super) fn loop_module(shape: LoopShape, offset: u16) -> Module {
+    let mut module = compile_src("fn main(n: Word) -> Word { let a = n; a }");
+    assert!(module.chunks[0].local_count >= 2);
+    let body = Op::NewComposite(NewCompositeOperand::Flat {
+        kind: CompositeKind::Struct,
+        count: 1,
+        byte_size: 8,
+    });
+    let read = Op::GetField(StructField::Flat {
+        offset,
+        kind: ScalarKind::Int,
+    });
+    module.chunks[0].ops = match shape {
+        LoopShape::Local | LoopShape::Widening => vec![
+            Op::GetLocal(0),
+            body,
+            Op::SetLocal(1),
+            Op::Loop(10),
+            Op::GetLocal(0),
+            Op::BreakIf(10),
+            Op::GetLocal(0),
+            if shape == LoopShape::Local {
+                body
+            } else {
+                Op::PopN(0)
+            },
+            Op::SetLocal(1),
+            Op::EndLoop(4),
+            Op::GetLocal(1),
+            read,
+            Op::Return,
+        ],
+        LoopShape::Operand => vec![
+            Op::Loop(7),
+            Op::GetLocal(0),
+            body,
+            Op::GetLocal(0),
+            Op::BreakIf(7),
+            Op::PopN(1),
+            Op::EndLoop(1),
+            read,
+            Op::Return,
+        ],
+    };
+    module
+}
+
+/// The hand-built bases, each mutated by the instruction and chunk families. Added for
+/// residual 1 on 2026-11-04.
+fn hand_built() -> Vec<(&'static str, Module)> {
+    vec![
+        ("loop_local", loop_module(LoopShape::Local, 0)),
+        ("loop_widening", loop_module(LoopShape::Widening, 0)),
+        ("loop_operand", loop_module(LoopShape::Operand, 0)),
+    ]
+}
 
 const OPERAND_VALUES: &[u16] = &[0, 1, 2, 255, 4096, u16::MAX];
 
@@ -600,6 +690,15 @@ fn mutants() -> Vec<Mutant> {
         table_mutants(prog, &base, &mut out);
         layout_mutants(prog, &base, &mut out);
     }
+    for (prog, base) in hand_built() {
+        assert!(
+            keleusma::verify::verify(&base).is_ok(),
+            "{prog}: the unmutated module must verify"
+        );
+        instruction_mutants(prog, &base, &mut out);
+        chunk_mutants(prog, &base, &mut out);
+        table_mutants(prog, &base, &mut out);
+    }
     out
 }
 
@@ -717,6 +816,38 @@ const REPAIRED: &[&str] = &[
     "tuple_call/c1/op11/sub=getindex_int",
 ];
 
+/// THE MUTANTS OF THE RESIDUAL BASES THAT THE STAGE ACCEPTED BEFORE THE RESIDUAL REPAIR, measured
+/// on 2026-11-04 on `ff48e35c` with this corpus. The self-hosted validator accepted all 20 and the
+/// reference rejects all 20. The 18 of the hand-built loop bases are residual 1, the forgotten
+/// loop exit, and the two of `text_fields` and `text_array` are residual 2 and the element
+/// layout. `c5_the_repaired_mutants_are_refused` holds them with `REPAIRED`.
+const REPAIRED_RESIDUALS: &[&str] = &[
+    "loop_local/c0/op11/kind=Text",
+    "loop_local/c0/op11/operand1=1",
+    "loop_local/c0/op11/operand1=2",
+    "loop_local/c0/op11/operand1=255",
+    "loop_local/c0/op11/operand1=4096",
+    "loop_local/c0/op11/operand1=65535",
+    "loop_local/c0/op11/sub=getfield_far",
+    "loop_operand/c0/op2/swap",
+    "loop_operand/c0/op7/kind=Text",
+    "loop_operand/c0/op7/operand1=1",
+    "loop_operand/c0/op7/operand1=2",
+    "loop_operand/c0/op7/operand1=255",
+    "loop_operand/c0/op7/operand1=4096",
+    "loop_operand/c0/op7/operand1=65535",
+    "loop_operand/c0/op7/sub=getfield_far",
+    "loop_widening/c0/op1/sub=call0",
+    "loop_widening/c0/op1/sub=dup",
+    "loop_widening/c0/op5/sub=popn1",
+    "text_array/c0/op17/kind=Text",
+    "text_fields/c0/op10/kind=Text",
+];
+
+fn repaired(id: &str) -> bool {
+    REPAIRED.contains(&id) || REPAIRED_RESIDUALS.contains(&id)
+}
+
 const FAMILIES: &[&str] = &[
     "operand",
     "access kind",
@@ -820,7 +951,7 @@ fn count(c: &Census, family: &str, what: &str) -> usize {
 }
 
 fn pinned(m: &Mutant) -> bool {
-    REPAIRED.contains(&m.id.as_str()) || KNOWN_UNSOUND.iter().any(|(id, _)| *id == m.id)
+    repaired(&m.id) || KNOWN_UNSOUND.iter().any(|(id, _)| *id == m.id)
 }
 
 /// THE C5 SOUNDNESS GATE, AS CONTINUOUS INTEGRATION RUNS IT. One mutant in every sixteen of each
@@ -882,7 +1013,7 @@ fn c5_the_repaired_mutants_are_refused() {
     let mut seen = 0usize;
     let mut accepted = Vec::new();
     for m in mutants() {
-        if !REPAIRED.contains(&m.id.as_str()) {
+        if !repaired(&m.id) {
             continue;
         }
         seen += 1;
@@ -899,7 +1030,7 @@ fn c5_the_repaired_mutants_are_refused() {
     }
     assert_eq!(
         seen,
-        REPAIRED.len(),
+        REPAIRED.len() + REPAIRED_RESIDUALS.len(),
         "a repaired mutant is no longer generated"
     );
     assert!(accepted.is_empty(), "not refused: {accepted:?}");

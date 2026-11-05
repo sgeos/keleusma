@@ -13,7 +13,7 @@
 //! # Skips rather than fails when the toolchain is absent
 //!
 //! Local hosts may lack the optional LLVM tools, so this test reports and returns
-//! when they are absent. The dedicated native workflow provisions and checks the
+//! when they are absent. The native jobs of continuous integration provision and check the
 //! tools before running the suite. **A skip that is silent is a test that quietly
 //! stops testing**, so the skip prints its reason.
 
