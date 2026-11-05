@@ -358,6 +358,18 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-11-04, absorption 134.** Upstream pull request 727 closed
 // the two C5 soundness residuals in `verify_typed.kel`. Nothing was added or
 // removed.
+//
+// **RE-PINNED 2026-11-04, on the `v0.2.3` line**, when the native gate began
+// running there. Upstream pull request 723, the self-hosted coverage residuals,
+// changed `codegen.kel`, `lexer.kel` and `parse.kel`, and upstream pull request
+// 725, the validator review, changed `verify_typed.kel`. Nothing was added or
+// removed. The derived figures the guard names were re-run by
+// `tools/backend-gate.sh` in both float configurations on the re-pinned tree.
+//
+// **RE-PINNED 2026-11-04 again, on the `v0.2.3` line.** Upstream pull request
+// 727, the C5 residuals, changed `verify_typed.kel`. Nothing was added or
+// removed. The derived figures the guard names were re-run by
+// `tools/backend-gate.sh` in both float configurations on the re-pinned tree.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on

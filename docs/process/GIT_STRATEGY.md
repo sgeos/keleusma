@@ -302,10 +302,10 @@ The push itself runs the cargo-husky pre-push hook (the default-feature workspac
 doc, markdown links). Per the test tiers (process audit item 1), that hook runs the **routine `quick`
 tier**, which excludes the ~198 self-hosted byte-identity tests (the `selfhost_*` binaries); it also
 does **not** exercise the `--no-default-features`/`signatures` feature matrix, and it does **not** run
-the detached `compiler/` subproject. The hook does not establish complete integration coverage. The full self-host suite, feature matrix and compiler subproject are covered by continuous integration. Detached native-code-generation checks remain separate.
+the detached `compiler/` subproject. The hook does not establish complete integration coverage. The full self-host suite, feature matrix and compiler subproject are covered by continuous integration. Detached native-code-generation checks run in the `native` and `native-linux` jobs of `.github/workflows/ci.yml`, under `CI result`, since 2026-11-04.
 
 ## Integration and release checkpoints
 
-Before merging into a version branch, require green remote continuous integration on the pull request. Select local checks by affected scope and the confidence needed for that remote result. Native-only changes need relevant native checks because root continuous integration does not exercise the detached package. Both complete native configurations are not mandatory for every version-branch integration.
+Before merging into a version branch, require green remote continuous integration on the pull request. Select local checks by affected scope and the confidence needed for that remote result. On a pull request that changes an input the native suite reads, the native jobs run the complete native gate in both float configurations and the two Linux targets, and `CI result` fails when any of them fails. A pull request that changes no native input skips them, and a skipped job counts as passing. Native-only changes still need relevant local native checks for confidence before the remote run. Both complete native configurations are not mandatory for every version-branch integration.
 
 Before publication or merging into `main`, full gates must pass against the candidate inputs. Run `scripts/release-gate.sh`, with `--miri` for publication, and the complete gates for affected detached packages. For the native backend, that includes both float configurations with current clean, frozen, passing records. Remote green remains required. Publication requires explicit in-session confirmation.
