@@ -134,8 +134,7 @@ cmd_new() {
 # Report each package `target` of a live tree that is a directory rather than a link,
 # which is build output on the tree's own volume. Trees made without this script, such
 # as Claude Code's agent trees under .claude/worktrees/, are the expected case. A target
-# under 1 MB is skipped, because a tree whose Cargo `build-dir` points at scratch, as the
-# agent trees' does since 2026-11-01, keeps only a few kilobytes of locks there.
+# under 1 MB holds no build output worth moving, only lock files, and is skipped.
 report_unlinked() {
   local paths tree target kilobytes
   paths="$(git worktree list --porcelain | sed -n 's/^worktree //p')"
@@ -179,9 +178,7 @@ cmd_list() {
   report_unlinked
   [ -d "$SCRATCH_BASE/$REPO_NAME" ] || return 0
   local used folder
-  # `agents` holds the agent trees' Cargo build-dir output, named by hash, if the
-  # operator's .claude/worktrees/.cargo/config.toml exists. It is not one tree's folder.
-  used="$(tree_names; linked_folders; printf 'agents\n')"
+  used="$(tree_names; linked_folders)"
   for folder in "$SCRATCH_BASE/$REPO_NAME"/*/; do
     [ -d "$folder" ] || continue
     folder="${folder%/}"
