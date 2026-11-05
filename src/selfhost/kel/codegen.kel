@@ -696,6 +696,24 @@ fn push_floatlit(p: Word) -> Word {
     push_emit(wire.konst + idx * wire.radix)
 }
 
+// ByteLit (kind 87): a `Byte`-suffixed literal, a Byte pool entry, tag 5, deduplicated by
+// its value among Byte entries, as the reference's structural deduplication keeps it apart
+// from an Int of the same value.
+fn push_bytelit(p: Word) -> Word {
+    let value = ast.args[p];
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 5 { st.dup_idx = i; }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 5;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
 // Local (kind 2): schedule GetLocal(slot).
 fn push_local(p: Word) -> Word {
     push_emit(wire.getlocal + ast.args[p] * wire.radix)
@@ -3519,6 +3537,7 @@ fn walk_step() -> Word {
         match ast.kinds[payload] {
             1 => push_literal(payload),
             86 => push_text_op(payload),
+            87 => push_bytelit(payload),
             2 => push_local(payload),
             3 => push_binop(payload),
             44 => push_byte_binop(payload),

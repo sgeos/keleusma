@@ -510,8 +510,11 @@ execution returning seven. These results do not complete Keleusma wire serializa
 
 ## Current construct-support boundary, 2026-11-02
 
-The executable table in `tests/selfhost_codegen.rs` contains 148 cases with
-139 SOk / 4 Refuses / 2 Diverges / 3 RefRejects. The capacity-bounded text increment of
+The executable table in `tests/selfhost_codegen.rs` contains 152 cases with
+142 SOk / 4 Refuses / 2 Diverges / 4 RefRejects. The literal suffixes of 2026-11-02 added four
+`suffix` cases. Three are SOk, a `Byte` literal in byte arithmetic, a tuple mixing a word and a
+byte, and a byte array beside a `Word`-suffixed literal. One is the reference's rejection of a
+`Byte` literal above 255. The capacity-bounded text increment of
 2026-11-02 added ten `text_n` cases. Nine are SOk, the literal cast, escapes with a UTF-8
 character, an annotated `let`, a parameter with a call, a tuple element, an array element,
 a struct field, an enum payload with a match and two branches. One is the reference's

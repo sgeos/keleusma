@@ -422,15 +422,31 @@ fn float_token() -> Word {
     }
 }
 
+// The type suffix of a decimal literal at the cursor, as the reference lexes one: 1 for
+// `Byte`, 2 for `Word`, else 0. A suffix is the whole identifier run, so `2Bytes` is not one.
+fn integer_suffix() -> Word {
+    let c = st.cursor;
+    if is_ident_cont(peek_at(c + 4)) == 1 { 0 } else {
+    if peek_at(c) == 66 andalso peek_at(c + 1) == 121 andalso peek_at(c + 2) == 116 andalso peek_at(c + 3) == 101 { 1 } else {
+    if peek_at(c) == 87 andalso peek_at(c + 1) == 111 andalso peek_at(c + 2) == 114 andalso peek_at(c + 3) == 100 { 2 } else { 0 } } }
+}
+
+// A completed integer literal. A decimal literal may carry a type suffix: `Word` changes
+// nothing, and `Byte` makes it the byte literal Tok 77 carrying the value, which must lie in
+// `0..=255` as the reference requires.
 fn integer_token() -> Word {
     let valid = st.kind == 3 orelse st.ndig > 0;
+    let suffix = if st.kind == 3 { integer_suffix() } else { 0 };
+    let end = st.cursor;
     st.kind = 0;
-    if not valid { 66 + st.cursor * 256 } else {
+    if suffix > 0 { st.cursor = st.cursor + 4; }
+    if not valid orelse (suffix == 1 andalso st.val > 255) { 66 + st.cursor * 256 } else {
+        if suffix == 1 { 77 + st.val * 256 } else {
         if st.val <= (bnot 0 lsr 1) / 256 { 12 + st.val * 256 } else {
-            let id = intern_id(st.start, st.cursor - st.start);
+            let id = intern_id(st.start, end - st.start);
             src.values[id] = st.val;
             65 + id * 256
-        }
+        } }
     }
 }
 

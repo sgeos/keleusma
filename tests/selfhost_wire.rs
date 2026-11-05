@@ -13037,9 +13037,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // `header_text`, `header_text_field` and `enum_text_payload`, for 1187, and took the
     // blob to 37,174. The five operations the same day added `txo` with its fields and
     // `text_method`, `text_layout_cap`, `text_method_begin`, `text_open`, `text_comma` and
-    // `text_close`, for 1199, and took the blob to 37,772.
+    // `text_close`, for 1199, and took the blob to 37,772. The `Byte` literal suffix added
+    // no name and took the blob to 37,802.
     assert_eq!(worst_names, 1199, "the worst-case name count moved");
-    assert_eq!(worst_blob, 37772, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 37802, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

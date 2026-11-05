@@ -5233,6 +5233,7 @@ fn value_record(word: Word) -> Word {
     if kind == 10 orelse kind == 65 { value_scalar(if kind == 10 andalso arg == 1 { 5 } else { 3 }); }
     if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
     if kind == 82 { value_scalar(5); }
+    if kind == 87 { value_scalar(2); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
     if kind == 144 {
         // A text operation's value: a word for `len` and `capacity`, a bool for `eq`, and a
@@ -6524,6 +6525,17 @@ fn step_normal(k: Word, v: Word) -> Word {
         step_if(k)
     } else {
     let sat = saturation_word(k, v);
+    if k == 77 {
+        // A `Byte`-suffixed literal, Tok 77, the reference's byte constant. Record 87 is a
+        // leaf that code generation interns as a Byte pool entry, and the value is a Byte
+        // operand, as a `Byte` cast's is.
+        ops.expect_operand = 0;
+        ps.last_enum = 0;
+        stmt.pending_copt = 0; stmt.pending_cenum = 0;
+        ps.last_byte = 1;
+        ps.emit_arg = v;
+        87
+    } else {
     if k == Tok::IntLit() as Word orelse sat != 0 {
         ops.expect_operand = 0;
         ps.last_enum = 0;
@@ -6617,7 +6629,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
         step_op(k)
-    } } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 // The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was

@@ -3333,6 +3333,7 @@ fn try_parse_functions_impl_with(
 /// | 2 | `Bool` | 0 or 1 |
 /// | 3 | `Float` | the lexer intern id of the literal's text |
 /// | 4 | `Tuple(Int, Array)` | a `Text<N>` literal cast, the intern id below 65536 and `N` above it |
+/// | 5 | `Byte` | a `Byte`-suffixed literal's value |
 ///
 /// The string, float and text entries need `names`, which is why this cannot be a plain
 /// `From` impl on the pair. It is public so that the test drivers which copy the pipeline
@@ -3370,6 +3371,9 @@ pub fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValu
                 )
             }
             4 => text_cast_constant(v, names),
+            5 => ConstValue::Byte(
+                u8::try_from(v).expect("codegen.kel interned a Byte literal outside 0..=255"),
+            ),
             other => panic!(
                 "codegen.kel emitted constant-pool tag {other}, which this host does not \
                  know. A new tag needs a `ConstValue` mapping here, not a default"

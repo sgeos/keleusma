@@ -2115,8 +2115,9 @@ fn self_compile_codegen_atomic_functions() {
     // self-compiling (105 -> 117). The `Text<N>` literal cast adds `text_cast_base` and
     // `push_text_cast`, both self-compiling (117 -> 119), 2026-11-02. The five `Text<N>`
     // operations add `push_text_op`, `text_step` and the `tx_` helpers, all
-    // self-compiling (119 -> 139), the same day.
-    const EXPECTED_SELF_COMPILE: usize = 139;
+    // self-compiling (119 -> 139), the same day, and the `Byte` literal suffix adds
+    // `push_bytelit` (139 -> 140).
+    const EXPECTED_SELF_COMPILE: usize = 140;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -4518,8 +4519,9 @@ fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].ops = ops;
         // A tag-1 pool entry is a StaticStr: its value is the lexer intern id, resolved to the
         // string bytes through the name table. A tag-0 entry is an Int.
-        // A tag-4 entry is a `Text<N>` literal cast's flat body. The shipping driver's
-        // conversion is used for that tag, so the two cannot drift on its layout.
+        // A tag-4 entry is a `Text<N>` literal cast's flat body and a tag-5 entry a Byte
+        // literal. The shipping driver's conversion is used for those tags, so the two
+        // cannot drift on them.
         module.chunks[idx].constants = pool
             .iter()
             .map(|&(v, t)| {
@@ -4530,7 +4532,7 @@ fn self_host_compile(src: &str) -> Module {
                 } else if t == 3 {
                     // A Float literal's interned text, as the shipping driver converts it.
                     ConstValue::Float(names[v as usize].parse().expect("float literal text"))
-                } else if t == 4 {
+                } else if t == 4 || t == 5 {
                     keleusma::selfhost::pool_to_constants(&[(v, t)], &names).remove(0)
                 } else {
                     ConstValue::Int(v)
@@ -9263,6 +9265,32 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             Refuses,
             "fn id<T>(x: T) -> T { x }\nloop main(t: (Word, Word)) -> Word { let r = yield 1; let s = id(r); yield 0 }",
         ),
+        // --- the `Byte` and `Word` literal suffixes, 2026-11-02 ------------------------
+        //
+        // The lexer read `2Byte` as the integer 2 followed by the name `Byte`, so the parser
+        // reported an undefined identifier and the type stage rejected a tuple mixing a word
+        // and a byte that the reference accepts. A suffixed literal is now the reference's
+        // byte constant, and a `Word` suffix changes nothing.
+        (
+            "suffix/byte_literal",
+            SOk,
+            "fn f(x: Byte) -> Byte { x + 3Byte }",
+        ),
+        (
+            "suffix/word_and_byte_tuple",
+            SOk,
+            "fn f() -> Byte { let t = (1, 2Byte); t.1 }",
+        ),
+        (
+            "suffix/byte_array_and_word_suffix",
+            SOk,
+            "fn f() -> (Word, [Byte; 2]) { (7Word, [0Byte, 255Byte]) }",
+        ),
+        (
+            "suffix/byte_out_of_range__REJECT",
+            RefRejects,
+            "fn f() -> Byte { 256Byte }",
+        ),
         // --- the capacity-bounded text type, 2026-11-02 ------------------------------
         //
         // `Text<N>` is laid out as the tuple of a length word and `N` bytes, and a literal
@@ -9504,10 +9532,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // with the peak unchanged. The typed pattern annotation, `dq_type`, `dq_top` and
             // `dq_push_typed`, took it to 2823 on 2026-11-01 with the peak unchanged. The
             // `Text<N>` fold, `tx_is_text`, `tx_take`, `tx_release` and `tx_filter`, took it
-            // to 3013 on 2026-11-02 with the peak unchanged.
+            // to 3013 on 2026-11-02 with the peak unchanged, and the numeric suffixes,
+            // `integer_suffix`, to 3116 the same day.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            3013,
+            3116,
             421,
         ),
         (
