@@ -19,7 +19,11 @@
 - **`Module::declares_private_data` replaces the `private_data_bytes != 0` test** in the
   ephemerality rule, since a module whose only private field is a composite array now
   declares zero private data bytes and still holds persistent state.
-- **The native route keeps its private image.** The native backend lays its private image
-  out against `native_region::native_private_base_bytes`, the element-slot figure that
-  `required_persistent_capacity_for` returned before packing, so every native memory image
-  and offset is unchanged and `native_route_buffers_for` reports the same private figure.
+- **The native route keeps its private image and its sizing contract.** The native backend
+  lays its private image out against `native_region::native_private_base_bytes`, the
+  element-slot figure that `required_persistent_capacity_for` returned before packing, so
+  every native memory image and offset is unchanged. Its persistent supplement now includes
+  the gap between the two, `native_region::native_private_gap_bytes`, so a host that sizes
+  the native private buffer as `required_persistent_capacity_for` plus the supplement, as
+  the backend's contract states, allocates the same buffer as before, and
+  `native_route_buffers_for` reports the same private figure.

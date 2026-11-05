@@ -898,8 +898,13 @@ write-before-read contract.
 - **The native backend.** Its private image stores each element in a word of its own and was
   laid out after `required_persistent_capacity_for`, which packing made smaller than that image.
   It now lays out after `native_region::native_private_base_bytes`, the element-slot figure, so
-  every native memory image and offset is unchanged. The changed native files are
-  `native_codegen/src/lib.rs`, `linkage.rs`, `region.rs` and `stage.rs`.
+  every native memory image and offset is unchanged. Its persistent supplement carries the gap
+  between the two figures, `native_region::native_private_gap_bytes`, so its published sizing
+  contract, the runtime's figure plus the supplement, sizes the same buffer as before. The first
+  gate run without the gap measured the hazard, a `SIGTRAP` and a `SIGSEGV` in two native tests
+  whose harness sized the buffer by that contract. The changed native sources are
+  `native_codegen/src/lib.rs`, `native_codegen/src/region.rs` and
+  `native_codegen/src/coroutine/types.rs`.
 
 ### Measured, private data and memory
 

@@ -185,7 +185,7 @@ impl CompiledStage {
         let shared_bytes = keleusma::vm::shared_data_bytes_for(module);
         // The private extent is the published contract, the slot array plus the
         // persistent supplement, as the stage differential sizes it.
-        let private_words = (keleusma::native_region::native_private_base_bytes(module)
+        let private_words = (keleusma::vm::required_persistent_capacity_for(module)
             + crate::region::persistent_supplement_bytes(module) as usize)
             .div_ceil(8);
         let region_words =

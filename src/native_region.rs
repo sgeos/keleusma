@@ -61,8 +61,8 @@
 //!
 //! # The private buffer
 //!
-//! The backend's private buffer is the element-slot persistent figure,
-//! [`native_private_base_bytes`](crate::native_region::native_private_base_bytes), plus
+//! The backend's private buffer is the virtual machine's persistent figure,
+//! [`crate::vm::required_persistent_capacity_for`], plus
 //! [`native_persistent_supplement_bytes`](crate::native_region::native_persistent_supplement_bytes), the backend's
 //! `persistent_supplement_bytes`. That supplement is one word for the resume
 //! state of each `Stream` chunk and one initialisation word for each private
@@ -240,7 +240,9 @@ pub fn native_region_supplement_bytes(module: &Module) -> u32 {
 /// The persistent bytes a native compilation adds after the virtual machine's
 /// persistent figure, the backend's `persistent_supplement_bytes`.
 ///
-/// One eight-byte word for the resume state of each `Stream` chunk in the
+/// First the gap by which the backend's private image exceeds that figure,
+/// [`native_private_gap_bytes`], zero for a module without a packed private
+/// array. Then one eight-byte word for the resume state of each `Stream` chunk in the
 /// module, whether or not it is the entry, and one eight-byte initialisation
 /// word for each private composite pool slot, which records whether the slot
 /// has been written. Each of the two counts is rounded up to the body
@@ -263,7 +265,26 @@ pub fn native_persistent_supplement_bytes(module: &Module) -> u32 {
             .sum::<usize>()
     });
     let words = |n: usize| align(u32::try_from(n).unwrap_or(u32::MAX).saturating_mul(8));
-    words(streams).saturating_add(words(composite_slots))
+    native_private_gap_bytes(module)
+        .saturating_add(words(streams))
+        .saturating_add(words(composite_slots))
+}
+
+/// The bytes by which the native backend's private image exceeds the virtual
+/// machine's persistent figure, [`native_private_base_bytes`] less
+/// [`crate::vm::required_persistent_capacity_for`], saturating at zero and at
+/// `u32::MAX`.
+///
+/// Packed private storage made the virtual machine's figure smaller than the
+/// backend's image, whose private elements each keep a word. The backend's
+/// published contract sizes its private buffer as the virtual machine's figure
+/// plus its persistent supplement, so the gap is carried in the supplement,
+/// and that contract keeps sizing the same buffer it sized before packing.
+#[must_use]
+pub fn native_private_gap_bytes(module: &Module) -> u32 {
+    let gap = native_private_base_bytes(module)
+        .saturating_sub(crate::vm::required_persistent_capacity_for(module));
+    u32::try_from(gap).unwrap_or(u32::MAX)
 }
 
 /// The buffers a host that runs `module` only as native code allocates, in
@@ -280,7 +301,7 @@ pub struct NativeRouteBuffers {
     /// The composite region, [`native_region_supplement_bytes`], the backend's
     /// `host_arena_supplement_bytes` and its header's region figure.
     pub region_bytes: usize,
-    /// The private buffer, [`native_private_base_bytes`]
+    /// The private buffer, [`crate::vm::required_persistent_capacity_for`]
     /// plus [`native_persistent_supplement_bytes`], the header's private
     /// figure. The backend's private initialisation image is copied into its
     /// start.
@@ -338,7 +359,7 @@ pub fn native_private_base_bytes(module: &Module) -> usize {
 pub fn native_route_buffers_for(module: &Module) -> NativeRouteBuffers {
     NativeRouteBuffers {
         region_bytes: native_region_supplement_bytes(module) as usize,
-        private_bytes: native_private_base_bytes(module)
+        private_bytes: crate::vm::required_persistent_capacity_for(module)
             .saturating_add(native_persistent_supplement_bytes(module) as usize),
         shared_bytes: crate::vm::shared_data_bytes_for(module),
     }

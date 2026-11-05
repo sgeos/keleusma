@@ -324,8 +324,9 @@ pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
 ///
 /// Sits immediately after `keleusma::native_region::native_private_base_bytes`,
 /// which was `keleusma::vm::required_persistent_capacity_for` before packed
-/// private storage, so a host sizes the persistent region as that figure PLUS
-/// this one.
+/// private storage. A host sizes the persistent region as
+/// `required_persistent_capacity_for` PLUS this figure, which includes the gap
+/// between the two.
 ///
 /// # This is the same weaker guarantee as [`host_arena_supplement_bytes`]
 ///
@@ -334,7 +335,13 @@ pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
 /// is under-provisioned for native streams, and publishing the figure does not
 /// change that.
 pub fn persistent_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
-    stream_state_supplement_bytes(module) + composite_init_supplement_bytes(module)
+    // The gap by which this backend's private image, laid out after
+    // `native_private_base_bytes`, exceeds the runtime's packed figure. Carried
+    // here so `required_persistent_capacity_for` plus this supplement still
+    // sizes the whole image.
+    keleusma::native_region::native_private_gap_bytes(module)
+        .saturating_add(stream_state_supplement_bytes(module))
+        .saturating_add(composite_init_supplement_bytes(module))
 }
 
 /// The resume-state half of the supplement: one word per stream chunk.

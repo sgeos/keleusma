@@ -675,7 +675,7 @@ pub fn build<'ctx>(
     }
 
     let shared_bytes = keleusma::vm::shared_data_bytes_for(program) as u64;
-    let private_bytes = (keleusma::native_region::native_private_base_bytes(program)
+    let private_bytes = (keleusma::vm::required_persistent_capacity_for(program)
         + region::persistent_supplement_bytes(program) as usize) as u64;
     let region_bytes = u64::from(region::host_arena_supplement_bytes(program));
     // `private_init_image` answers `None` both for a module without data and
