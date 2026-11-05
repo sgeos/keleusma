@@ -48,17 +48,17 @@
   "tasks": [
     {
       "line": "kaizen",
-      "outcome": null,
+      "outcome": "{\"elapsed_seconds\":null,\"notes\":\"The trial was planned in docs/process/kaizen/2026-10-31-idle-compaction-trial.md, with context_quality.py extended to compare resumptions. The operator set idleCompaction to false at 05:42 UTC on 2026-11-01, and the trial's measurement is due about 2026-11-15. The task as stated, planning the trial, is complete. Token counts were not tracked per task.\",\"resolved\":true,\"system2_input_tokens\":null,\"system2_output_tokens\":null}",
       "task_id": "kaizen-idle-compaction-trial"
     },
     {
       "line": "kaizen",
-      "outcome": null,
+      "outcome": "{\"elapsed_seconds\":null,\"notes\":\"Measured on 2026-11-05 at e0488c25. The selfhost binaries that PR 508 filters from the release gate's workspace step, 1,024 tests in 71 binaries, ran in 4,355 seconds under a load average of 40 to 63. Recorded in docs/process/kaizen/2026-11-04-open-decisions.md. Citing it in RELEASE_PROCESS.md was requested of the release line in sequence 297, because that document changes through it. Token counts were not tracked per task.\",\"resolved\":true,\"system2_input_tokens\":null,\"system2_output_tokens\":null}",
       "task_id": "kaizen-release-gate-timing"
     },
     {
       "line": "kaizen",
-      "outcome": null,
+      "outcome": "{\"elapsed_seconds\":null,\"notes\":\"tests/state_file_budget.rs landed in v0.2.3 through pull request 735, merged as 48fc0ab1 after a full CI run. It checks every state file under docs/process/handoffs/ that states a budget, and fails when none does. Its first local run surfaced that the light-path guard required it in the guards job, which was added. Token counts were not tracked per task.\",\"resolved\":true,\"system2_input_tokens\":null,\"system2_output_tokens\":null}",
       "task_id": "kaizen-state-file-guard"
     }
   ]

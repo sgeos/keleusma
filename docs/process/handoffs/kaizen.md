@@ -58,7 +58,8 @@ run.
   target` after any `cargo clean`. On 2026-11-05 the volume had 40 GiB free after the
   E1 removals.
 - **Fuzz.** The nightly run passes and starts six to ten hours after its 10:17 UTC
-  cron time. No target has crashed, so the crash path is untested.
+  cron time. The crash path's logic passed a local simulation on 2026-11-05. The
+  artifact upload is untested, and a job stopped by its time limit would not upload.
 - **Idle compaction.** False from 05:42 UTC on 2026-11-01, D2 of 2026-11-01.
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner. The
   blog's Pages build holds a shared runner much of a busy day, item K11.
@@ -69,8 +70,8 @@ run.
   confirmed `v0.3.0`.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
-- **Jev selection cohort.** The three cases were evaluated and labelled blind. The
-  comparison opens when each task is finished.
+- **Jev selection cohort.** Closed on 2026-11-05. All three tasks finished, the
+  comparison was read, and the result is in the open decisions of 2026-11-04.
 
 ## Operator positions, stated first-hand in this line's session on 2026-10-25
 
@@ -92,15 +93,15 @@ authority, so the startup-file positions reach them first-hand.
 2. Run `context_quality.py` again on about 2026-11-15 and compare with the trial report.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
-6. Measure branch-run cost again once changelog fragments are in use.
+4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
 
 ## Open with the operator
 
 [The open decisions of 2026-11-04](../kaizen/2026-11-04-open-decisions.md) hold the
-list and the operator's ruling of that day. The signing key is the operator's to make,
-and V0.2.3's publication waits for it. The K-series checks are deferred.
+list and the operator's ruling of that day. E4 asks whether the interline checkpoint
+keeps other projects' messages, and every line holds its export meanwhile, by sequences
+294 to 296. The signing key is the operator's to make, and V0.2.3's publication waits
+for it. The K-series checks are deferred.
 
 ## Concerns
 
@@ -121,7 +122,7 @@ Pilot judgments never change gates.
 | Checkpoint | SHA-256 |
 |---|---|
 | [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
-| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
+| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `8efbc7acda0987da71408c436dd77413f4db812eccd174aba02b3f6860aee580`, 3 samples evaluated and labelled and 3 task outcomes, exported on 2026-11-05, restored into a fresh store and re-exported byte-identical |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
 ## Environment
