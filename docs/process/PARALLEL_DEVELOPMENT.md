@@ -405,9 +405,9 @@ instead of the system disk. When `SCRATCH_BASE` names the volume, `worktree.sh n
 moves the `target` of every package present in the new tree, the root's and the
 nested ones listed in the script, to `$SCRATCH_BASE/keleusma/<leaf>/` through
 [`scripts/scratch.sh`](../../scripts/scratch.sh) and leaves symbolic links. `rm`
-deletes that folder once the tree is gone, and `list` reports any folder no tree
-uses, deleting none, because the operator decides deletions. Without `SCRATCH_BASE`
-nothing changes. An existing tree is moved with `scripts/scratch.sh link` from
+deletes that folder once the tree is gone, and `list` reports any folder that no tree
+is named after or links into, deleting none, because the operator decides deletions.
+Without `SCRATCH_BASE` nothing changes. An existing tree is moved with `scripts/scratch.sh link` from
 inside it, one directory at a time, when nothing is building there.
 
 - **A clean deletes the link.** `cargo clean` removes the link, not the copy, and the
