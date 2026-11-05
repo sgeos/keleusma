@@ -77,6 +77,16 @@ is now 49 in vm.rs and two in marshall.rs. The structural verifier refuses every
 such operand at load, as before, so each remaining site is reachable only from
 bytecode that skipped verification.
 
+## Population update on 2026-11-05, packed private storage
+
+Packed private storage, S1 of the array wire-slot design, added one
+construction, `data_element_outside`, the refusal of an element access that
+lies outside its field's storage, which every private storage form shares. It
+also added two direct scalar conversion paths in vm.rs, the read and the write
+of a packed private array element, so those paths are now eight in vm.rs and
+four in marshall.rs. The exact source count is now 50 in vm.rs and two in
+marshall.rs.
+
 ## The population, and the instrument's reach
 
 Derived from source, not chosen by hand:
@@ -85,11 +95,11 @@ Derived from source, not chosen by hand:
 grep -rn "VmError::InvalidBytecode" src/ --include=*.rs
 ```
 
-**57 matches, of which 51 are construction sites in production code**, counting `src/vm.rs` and
+**58 matches, of which 52 are construction sites in production code**, counting `src/vm.rs` and
 `src/marshall.rs`. The six excluded are named rather than silently dropped: three doc comments referring to the
 variant, two of them the `# Errors` sections of the option B operand helpers, one match arm listing
-it among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (49) and
-`src/marshall.rs` (2). These figures were 59, 55 and 53 until the population update of 2026-11-05,
+it among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (50) and
+`src/marshall.rs` (2). These figures were 57, 51 and 49 after option B on 2026-11-05 and 59, 55 and 53 before it,
 and 58, 54 and 52 until the population update of 2026-10-24.
 
 **The figure was 50 and 46 until 2026-09-10.** The opaque-width repair of 2026-09-08 -- part of

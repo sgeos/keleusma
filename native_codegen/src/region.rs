@@ -322,8 +322,10 @@ pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
 /// continue after. It is `.bss` — fixed size, fixed offset, and it must survive
 /// `Op::Reset`, which clears the ephemeral regions.
 ///
-/// Sits immediately after `keleusma::vm::required_persistent_capacity_for`, so a
-/// host sizes the persistent region as that figure PLUS this one.
+/// Sits immediately after `keleusma::native_region::native_private_base_bytes`,
+/// which was `keleusma::vm::required_persistent_capacity_for` before packed
+/// private storage, so a host sizes the persistent region as that figure PLUS
+/// this one.
 ///
 /// # This is the same weaker guarantee as [`host_arena_supplement_bytes`]
 ///
@@ -1162,7 +1164,7 @@ pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>
     let composites = &crate::data_view::private_composite_layout(Some(dl));
     let private_init = crate::data_view::private_init(Some(dl));
     let pool_base = private_slots * crate::PRIVATE_SLOT_BYTES as usize;
-    let init_base = keleusma::vm::required_persistent_capacity_for(module)
+    let init_base = keleusma::native_region::native_private_base_bytes(module)
         + stream_state_supplement_bytes(module) as usize;
     let image_len = if composites.is_empty() {
         pool_base

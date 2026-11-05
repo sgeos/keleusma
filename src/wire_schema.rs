@@ -2015,7 +2015,8 @@ pub fn encode_layouts(
 pub struct DataFieldRecord {
     /// Name index of `block.field`.
     pub name: u32,
-    /// Logical slot index of element zero.
+    /// Element slot index of element zero, in the host's element index space.
+    /// A data operand names the record's index instead, under option B.
     pub first_slot: u32,
     /// Element count. Never zero, and `first_slot + count` is at most
     /// [`crate::bytecode::MAX_DATA_ADDR`].

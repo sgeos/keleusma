@@ -8007,7 +8007,7 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
         .iter()
         .find(|f| chunk_name(f, names) == "main")
         .map_or(0, |f| f.text_boundary);
-    module.flags = if module.private_data_bytes != 0 {
+    module.flags = if module.declares_private_data() {
         0
     } else if text_flags == 0 {
         crate::bytecode::FLAG_EPHEMERAL
@@ -8147,9 +8147,16 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // and private byte totals the reference derives from the same layout.
     let dl = assemble_data_layout(&data_records, &struct_records, &names);
     let shared_data_bytes = shared_data_bytes_of(&dl);
-    let private_slot_count = dl.private_slot_count() as u32;
-    let private_data_bytes =
-        private_slot_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES);
+    // Packed private storage: a `Value` slot per private scalar and the packed bytes of every
+    // private array at element width, by the rule the reference applies, at the host widths
+    // the reference compiles with.
+    let private_data_bytes = {
+        let host = crate::target::Target::host();
+        dl.private_data_bytes(
+            (1usize << host.word_bits_log2) / 8,
+            (1usize << host.float_bits_log2) / 8,
+        )
+    };
     // An absent data segment has no layout regions in the artifact. An empty
     // layout would encode extra regions and differ from the reference.
     let data_layout = (!dl.fields.is_empty()).then_some(dl);

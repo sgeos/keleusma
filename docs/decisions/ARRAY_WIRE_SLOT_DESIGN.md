@@ -738,7 +738,8 @@ stays at 32 and that a private array of composites occupies its pool bodies alon
 - **Option B.** Landed on 2026-11-05, recorded under "Option B as implemented" below. The host's
   shared-slot index space did not change, by the operator's ruling of 2026-11-04, so no
   embedder's `get_shared` or `set_shared` index changed with it.
-- **S1.** Not done at the time option B landed.
+- **S1.** Landed on 2026-11-05 after option B, recorded under "Packed private storage as
+  implemented" below.
 
 ## Option B as implemented, 2026-11-05
 
@@ -851,6 +852,100 @@ open" below.
      change needing its own authorization.
    - C. Roll the fingerprint at landing, which ruling C3.3 declined for Encoding F.
 
+## Packed private storage as implemented, 2026-11-05
+
+S1 landed on the same branch as option B, in the increment after it, by ruling C3.5.
+
+### The rule
+
+A private field is packed when it has more than one element, when its elements do not start as
+`Unit`, and when its element is a fixed-width scalar, `bool`, `Byte`, `Word`, `Fixed` or `Float`,
+or a flat composite with a pool home. A packed scalar array lies at element width, little-endian
+at the module's widths, in a packed region after the private `Value` slots. A packed composite
+array keeps its bodies in the persistent composite pool and has no `Value` handles. Every other
+private field keeps one `Value` slot per element. `private_field_storage` in `src/bytecode.rs`
+decides from the field record alone, so the compiler's declared size, the self-hosted driver's,
+the runtime's placement and `required_persistent_capacity_for` apply one rule. No wire byte
+records the packing.
+
+Two choices within the ruling are recorded as choices. A one-element array is not packed, since
+the record does not distinguish `[Word; 1]` from `Word` and the record of this design keeps
+scalars as slots. A field whose elements start as `Unit` is not packed, since a packed element has
+no representation of `Unit` and an unwritten element must keep reading as `Unit` under the
+write-before-read contract.
+
+### What changed
+
+- **The declared size.** `private_data_bytes` is `VALUE_SLOT_SIZE_BYTES` per `Value` slot plus
+  the packed scalar bytes, by `DataLayout::private_data_bytes`, in the compiler and the
+  self-hosted driver alike.
+- **The runtime.** Each field's home, `Shared`, `Values`, `Scalars` or `Pool`, is resolved once
+  when an image is installed, and a data operand reaches its storage by one indexed read of that
+  table. A packed scalar is copied in and out through an eight-byte buffer, so no reference into
+  the arena is formed. A pool element is read as a handle to its body. A write of a value of
+  another kind into a packed scalar element, or of anything but a flat composite into a pool
+  element, is refused with `VmError::TypeError`, where a `Value` slot stored it before. Every
+  packed initialiser is encoded before any slot is written, and a hot swap places every seed by
+  the new plan before its commit point, so a seed a packed element cannot hold refuses the swap
+  and keeps the running module.
+- **Seeding.** A pool element is still canonicalised one element at a time through the arena's
+  top region, as its `Value` slot's seed was, so the seeding terms of `auto_arena_capacity_for`
+  are unchanged. Seeding once per field and copying the bytes would retire that term, and is
+  left as a possible improvement rather than done here.
+- **Ephemerality.** `Module::declares_private_data` replaces the test of a nonzero
+  `private_data_bytes`, in the compiler, the self-hosted driver and the input to `analyze.kel`,
+  since a module whose only private field is a composite array now declares zero bytes.
+- **The native backend.** Its private image stores each element in a word of its own and was
+  laid out after `required_persistent_capacity_for`, which packing made smaller than that image.
+  It now lays out after `native_region::native_private_base_bytes`, the element-slot figure, so
+  every native memory image and offset is unchanged. The changed native files are
+  `native_codegen/src/lib.rs`, `linkage.rs`, `region.rs` and `stage.rs`.
+
+### Measured, private data and memory
+
+Method as for option B, with the measurement program rebuilt against this increment.
+
+| Stage | Private elements | Before S1, bytes | S1, bytes | Record's computation, bytes |
+|---|---|---|---|---|
+| `analyze` | 9,904 | 316,928 | 80,384 | 80,384 |
+| `codegen` | 22,187 | 709,984 | 178,912 | 178,912 |
+| `lexer` | 340 | 10,880 | 3,200 | 2,912 |
+| `parse` | 52,942 | 1,694,144 | 432,824 | 425,760 |
+| `reconstruct` | 5,263 | 168,416 | 43,280 | 43,280 |
+| `template_scan` | 27 | 864 | 528 | 528 |
+| `verify_datalayout` | 0 | 0 | 0 | 0 |
+| `verify_depth` | 74,208 | 2,374,656 | 593,904 | 593,904 |
+| `verify_structural` | 32,775 | 1,048,800 | 262,368 | 262,368 |
+| `verify_typed` | 233,184 | 7,461,888 | 1,866,240 | 41,120 |
+| `verify_types` | 2,570 | 82,240 | 20,800 | 20,800 |
+| `verify_yield` | 2,827 | 90,464 | 22,880 | 22,880 |
+| `wire_debug` | 24 | 768 | 768 | 768 |
+| `wire_schema` | 174 | 5,568 | 5,568 | 5,568 |
+| `wire` | 129 | 4,128 | 4,128 | 4,128 |
+| **Total** | 436,554 | 13,969,728 | 3,515,784 | 1,683,312 |
+
+**What the table establishes, as fact.** On this tree S1 reduces the corpus's declared private
+data from 13,969,728 bytes to 3,515,784, 74.8 percent less, against the record's computed 74.7
+percent. Every stage whose sources are unchanged since the computation of 2026-11-02 measures
+exactly the computed figure. The three that differ, `lexer`, `parse` and `verify_typed`, gained
+private fields after that computation, `verify_typed` alone growing from 5,083 private elements to
+233,184, so their computed figures describe an older tree. The persistent figure equals the
+declared size for every stage, since no stage declares a private composite pool, and both rest on
+the 64-bit host target, the only one measured.
+
+| Measure, fifteen stages | Before S1 | S1 |
+|---|---|---|
+| Artifact bytes | 1,065,188 | 1,065,188 |
+| `required_persistent_capacity_for` | 13,969,728 | 3,515,784 |
+| `auto_arena_capacity_for`, summed | 47,320 | 47,320 |
+
+**The WCMU effect.** The persistent region a host provisions for the corpus falls by 10,453,944
+bytes, and the ephemeral arena figure does not move, which is a fact for these modules. For the
+`[P; 70000]` probe of `tests/private_composite_slot_cap.rs` the persistent figure falls from
+3,360,000 bytes to 1,120,000, the pool alone, and `auto_arena_capacity_for` stays 1,120,440.
+Both figures are pinned tight, the smallest admitted value running and one byte less refused, by
+`tests/private_composite_slot_cap.rs` and `tests/persistent_data.rs`.
+
 ## What was not verified
 
 - The runtime consequence of the placement truncation above slot 65,535, under the retired
@@ -859,11 +954,10 @@ open" below.
 - Whether the cost model charges the linear private composite scan at its worst case.
 - The owned decode heap, the schema hash buffer and the self-hosted stage time, which were read
   from code and not measured.
-- S1's WCMU effect as measured on an S1 build, since none exists. Encoding F's size was
-  measured on 2026-11-02, and S1's figure was computed from the measured field records, as
-  the section above records.
+- S1's WCMU effect on any target other than the 64-bit host. It was measured on an S1 build
+  on 2026-11-05 at that target only.
 - Any target other than the default host target.
 - Whether the `SharedSlotRecord` kind space can name every private element type, `Text` in
   particular, without extension.
-- The construct-support boundary counts under option B and S1. Under Encoding F they are
-  unchanged, `self_hosted_construct_support_boundary` passing on 2026-11-02.
+- The construct-support boundary counts were not re-derived by hand under option B and S1.
+  `self_hosted_construct_support_boundary` passed unchanged under each.

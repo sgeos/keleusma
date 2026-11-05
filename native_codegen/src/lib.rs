@@ -2373,15 +2373,19 @@ fn lower_module_with<'ctx>(
         });
     let data = DataCtx {
         layout,
-        stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
-            .unwrap_or(u32::MAX),
+        stream_state_off: u32::try_from(keleusma::native_region::native_private_base_bytes(
+            program,
+        ))
+        .unwrap_or(u32::MAX),
         needs_region,
         private_composite_slots: &private_composite_table,
         private_init: &private_init_table,
         persistent_composite_bytes: program.persistent_composite_bytes,
-        composite_init_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
-            .unwrap_or(u32::MAX)
-            .saturating_add(crate::region::stream_state_supplement_bytes(program)),
+        composite_init_off: u32::try_from(keleusma::native_region::native_private_base_bytes(
+            program,
+        ))
+        .unwrap_or(u32::MAX)
+        .saturating_add(crate::region::stream_state_supplement_bytes(program)),
         shared_count,
         shared_layout,
         has_data: data_view::slot_count(layout) > 0,
@@ -2795,7 +2799,7 @@ struct DataCtx<'a> {
     /// **`.bss` for the coroutine**: fixed size, fixed offset, and it must
     /// survive `Op::Reset`, which clears the ephemeral regions. It therefore sits
     /// in the PERSISTENT region, immediately after
-    /// `keleusma::vm::required_persistent_capacity_for`, and
+    /// `keleusma::native_region::native_private_base_bytes`, and
     /// `region::persistent_supplement_bytes` is what a host must add to make room
     /// for it.
     ///
@@ -2847,9 +2851,11 @@ struct DataCtx<'a> {
 ///
 /// # The pool's base is this backend's choice, not the runtime's
 ///
-/// `required_persistent_capacity_for` sizes the persistent region as
-/// `private_count * size_of::<Value>()` plus the pool, and the runtime's `Value`
-/// is 32 bytes where a private slot here is [`PRIVATE_SLOT_BYTES`]. **The two
+/// `keleusma::native_region::native_private_base_bytes` sizes the persistent
+/// region as `private_count * size_of::<Value>()` plus the pool, the figure
+/// the runtime's own sizing gave before packed private storage, and the
+/// runtime's `Value` is 32 bytes where a private slot here is
+/// [`PRIVATE_SLOT_BYTES`]. **The two
 /// private regions are different memory images**, so the pool is placed after
 /// this backend's own slot array rather than after the runtime's. The check
 /// below is what keeps that from colliding with the resume-state word, which

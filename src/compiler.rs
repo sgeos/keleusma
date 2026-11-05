@@ -4195,6 +4195,7 @@ fn compile_with_recorded_type_hook(
         })
         .collect();
 
+    let private_data_bytes = private_data_bytes_at(&data_layout, target, private_count);
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_typed_schema_hash(
@@ -4225,12 +4226,14 @@ fn compile_with_recorded_type_hook(
         // feature) at end of compile_with_target. `shared_data_bytes` is the
         // true flat byte size of the borrowed host-owned shared buffer (B28
         // item 2): the sum of each shared field's flat size at the module's
-        // scalar widths. `private_data_bytes` still mirrors the slot partition
-        // in `VALUE_SLOT_SIZE_BYTES` units, because private slots remain a
-        // `Value` array in the arena persistent region.
+        // scalar widths. `private_data_bytes` follows packed private storage,
+        // S1 of the array wire-slot design: `VALUE_SLOT_SIZE_BYTES` per private
+        // `Value` slot plus the packed bytes of every private array stored at
+        // element width, by the one rule `DataLayout::private_data_bytes`
+        // applies, which the runtime and the self-hosted driver share.
         flags: 0,
         shared_data_bytes: shared_data_flat_bytes,
-        private_data_bytes: private_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        private_data_bytes,
     };
 
     // Compile-time defense-in-depth for the WCET and WCMU contract.
@@ -4612,7 +4615,7 @@ fn compile_with_recorded_type_hook(
                 any_used_text_param || declared_return_carries_text
             })
             .unwrap_or(false);
-        let provably_ephemeral = module.private_data_bytes == 0 && !signature_uses_text;
+        let provably_ephemeral = !module.declares_private_data() && !signature_uses_text;
         if provably_ephemeral {
             module.flags |= crate::bytecode::FLAG_EPHEMERAL;
         }
@@ -4622,7 +4625,7 @@ fn compile_with_recorded_type_hook(
             && !provably_ephemeral
         {
             let mut reason = alloc::string::String::new();
-            if module.private_data_bytes != 0 {
+            if module.declares_private_data() {
                 reason.push_str("module declares `private data` which persists across resets");
             } else if signature_uses_text {
                 if !reason.is_empty() {
@@ -5226,6 +5229,24 @@ fn schema_type_token(t: &TypeExpr, types: &[TypeDef]) -> String {
     let mut out = String::new();
     render(t, types, 0, &mut out);
     out
+}
+
+/// The declared private data size of a module, under packed private storage.
+///
+/// A module with no layout but a nonzero private count cannot arise, and is
+/// charged a `Value` slot per private element, the figure before packing, so
+/// that the declared size is never smaller than the storage.
+fn private_data_bytes_at(
+    layout: &Option<crate::bytecode::DataLayout>,
+    target: &crate::target::Target,
+    private_count: u32,
+) -> u32 {
+    let word_bytes = (1usize << target.word_bits_log2) / 8;
+    let float_bytes = (1usize << target.float_bits_log2) / 8;
+    layout.as_ref().map_or_else(
+        || private_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        |dl| dl.private_data_bytes(word_bytes, float_bytes),
+    )
 }
 
 fn slots_for_data_type(type_expr: &TypeExpr) -> u32 {

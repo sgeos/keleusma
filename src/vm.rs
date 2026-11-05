@@ -1597,6 +1597,200 @@ impl AuxResolved {
     }
 }
 
+/// Where one data field's elements live at run time.
+///
+/// This is packed private storage, S1 of the array wire-slot design, ruled on
+/// 2026-10-31 as C3.5. The table is resolved once from the layout when an
+/// image is installed, by [`crate::bytecode::private_field_storage`], so a data
+/// operand, which names a field, reaches its storage by one indexed read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldHome {
+    /// A shared field, in the borrowed host buffer at its record's offset.
+    Shared,
+    /// One `Value` slot per element, from slot `base` of the private slot array.
+    Values { base: u32 },
+    /// Packed scalars from byte `offset` of the packed region, `width` bytes
+    /// apart, little-endian at the module's widths.
+    Scalars {
+        offset: u32,
+        kind: crate::value_layout::ScalarKind,
+        width: u32,
+    },
+    /// Element bodies in the persistent composite pool at the record's offset
+    /// and stride, with no `Value` slot.
+    Pool,
+}
+
+/// The private storage of one layout under packed private storage.
+///
+/// The persistent region holds the private `Value` slots first, then the
+/// packed scalar region, then the persistent composite pool. The two leading
+/// extents are carried here and the pool's in the module header.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PrivatePlan {
+    /// One home per field, in field order.
+    homes: Vec<FieldHome>,
+    /// `Value` slots in the private slot array.
+    value_slots: u32,
+    /// Bytes of the packed scalar region.
+    packed_bytes: u32,
+}
+
+impl PrivatePlan {
+    /// The plan of a sequence of fields, each given as whether it is shared,
+    /// its private storage and its element count.
+    fn of_fields(
+        fields: impl Iterator<Item = (bool, crate::bytecode::PrivateStorage, u32)>,
+    ) -> Result<Self, VmError> {
+        use crate::bytecode::PrivateStorage;
+        let overflow =
+            || VmError::VerifyError(String::from("private data storage exceeds 32 bits"));
+        let mut plan = Self::default();
+        for (shared, storage, count) in fields {
+            let home = if shared {
+                FieldHome::Shared
+            } else {
+                match storage {
+                    PrivateStorage::Values => {
+                        let base = plan.value_slots;
+                        plan.value_slots = base.checked_add(count).ok_or_else(overflow)?;
+                        FieldHome::Values { base }
+                    }
+                    PrivateStorage::Scalars { kind, width } => {
+                        let offset = plan.packed_bytes;
+                        plan.packed_bytes = count
+                            .checked_mul(width)
+                            .and_then(|n| offset.checked_add(n))
+                            .ok_or_else(overflow)?;
+                        FieldHome::Scalars {
+                            offset,
+                            kind,
+                            width,
+                        }
+                    }
+                    PrivateStorage::Pool => FieldHome::Pool,
+                }
+            };
+            plan.homes.push(home);
+        }
+        Ok(plan)
+    }
+
+    /// The plan of an owned layout at the module's widths.
+    fn of_layout(
+        layout: &crate::bytecode::DataLayout,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        Self::of_fields(layout.fields.iter().map(|f| {
+            (
+                f.visibility == crate::bytecode::SlotVisibility::Shared,
+                f.private_storage(word_bytes, float_bytes),
+                f.count,
+            )
+        }))
+    }
+
+    /// The plan of a borrowed layout at the module's widths. Applies the rule
+    /// [`crate::bytecode::DataField::private_storage`] applies, reading the
+    /// initialiser from the artifact, so the owned and borrowed paths agree.
+    fn of_table(
+        layout: &crate::wire_schema::DataLayoutTable<'_>,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        use crate::wire_schema::{ABSENT, visibility_tag};
+        Self::of_fields((0..layout.field_count()).filter_map(|i| {
+            let r = layout.field(i)?;
+            let starts_as_unit = !matches!(
+                layout.field_init_value(i),
+                Ok(ref v) if *v != crate::bytecode::ConstValue::Unit
+            );
+            let pooled = r.offset != ABSENT && r.elem_len > 0;
+            Some((
+                r.visibility == visibility_tag::SHARED,
+                crate::bytecode::private_field_storage(
+                    r.count,
+                    r.kind,
+                    starts_as_unit,
+                    pooled,
+                    word_bytes,
+                    float_bytes,
+                ),
+                r.count,
+            ))
+        }))
+    }
+
+    /// Bytes of the private `Value` slots and the packed scalars, the extent
+    /// before the persistent composite pool.
+    fn storage_bytes<W: crate::word::Word, F: crate::float::Float>(&self) -> usize {
+        (self.value_slots as usize)
+            .saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<W, F>>())
+            .saturating_add(self.packed_bytes as usize)
+    }
+}
+
+/// The scalar kind of a scalar value, or `None` for any other value.
+fn value_scalar_kind<W: crate::word::Word, F: crate::float::Float>(
+    value: &crate::bytecode::GenericValue<W, F>,
+) -> Option<crate::value_layout::ScalarKind> {
+    use crate::bytecode::GenericValue;
+    use crate::value_layout::ScalarKind;
+    match value {
+        GenericValue::Bool(_) => Some(ScalarKind::Bool),
+        GenericValue::Byte(_) => Some(ScalarKind::Byte),
+        GenericValue::Int(_) => Some(ScalarKind::Int),
+        GenericValue::Fixed(_) => Some(ScalarKind::Fixed),
+        #[cfg(feature = "floats")]
+        GenericValue::Float(_) => Some(ScalarKind::Float),
+        _ => None,
+    }
+}
+
+/// The little-endian bytes of `value` as a packed private element of `kind`,
+/// `width` bytes wide at the module's widths.
+///
+/// # Errors
+///
+/// [`VmError::TypeError`] when the value is not a scalar of exactly `kind`. A
+/// `Value` slot stores whatever it is given, so before packing a mismatched
+/// write succeeded and a later read observed the mismatch. A packed element
+/// has room for its own kind only, and a value of another kind would be
+/// truncated or read back as a different kind, so the write is refused.
+fn packed_scalar_bytes<W: crate::word::Word, F: crate::float::Float>(
+    value: &crate::bytecode::GenericValue<W, F>,
+    kind: crate::value_layout::ScalarKind,
+    width: u32,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<[u8; 8], VmError> {
+    if value_scalar_kind(value) != Some(kind) {
+        return Err(VmError::TypeError(format!(
+            "a packed private array element of kind {kind:?} cannot hold a {} value",
+            value.type_name()
+        )));
+    }
+    let mut buf = [0u8; 8];
+    let width = (width as usize).min(8);
+    value.write_scalar_le(&mut buf[..width], 0, word_bytes, float_bytes)?;
+    Ok(buf)
+}
+
+/// A seed for one element of a pool-packed private field, as `(field, element,
+/// value)`, carried from a hot swap's commit point to the arena reset after it.
+type PoolSeed<W, F> = (usize, u32, crate::bytecode::GenericValue<W, F>);
+
+/// The refusal of an access to element `element` of data field `field` that
+/// lies outside the field or its storage. The structural verifier refuses the
+/// operands that reach it, so it is reachable only from unverified bytecode or
+/// a layout the loader did not validate.
+fn data_element_outside(field: usize, element: u32) -> VmError {
+    VmError::InvalidBytecode(format!(
+        "element {element} of data field {field} lies outside its storage"
+    ))
+}
+
 /// Parametric stack-based virtual machine. The type parameters
 /// model the runtime's word, address, and float widths so a host
 /// can construct a narrow-width runtime (`GenericVm<i16, u16, f32>`)
@@ -1648,11 +1842,21 @@ pub struct GenericVm<
     /// with more than 64 K data slots (a large shared byte buffer) is
     /// counted without saturation, matching the twenty-four-bit slot operands.
     shared_slot_count: u32,
-    /// Number of private slots. Cached at construction. Private
-    /// slots live in the arena's persistent region starting at
-    /// `arena.persistent_ptr()` and occupy
-    /// `private_slot_count * size_of::<crate::bytecode::GenericValue<W, F>>()` bytes there.
+    /// Number of private element slots, the host's index space for a hot
+    /// swap's seeds. Cached at construction.
     private_slot_count: u32,
+    /// Where each data field's elements live, one entry per field, resolved
+    /// from the layout when the image is installed. See [`FieldHome`].
+    field_homes: Vec<FieldHome>,
+    /// Number of private `Value` slots, which live in the arena's persistent
+    /// region from `arena.persistent_ptr()` and occupy
+    /// `value_slot_count * size_of::<crate::bytecode::GenericValue<W, F>>()`
+    /// bytes there. Under packed private storage this is the private scalar
+    /// count plus the elements of every private field that is not packed.
+    value_slot_count: u32,
+    /// Bytes of the packed scalar region that follows the `Value` slots. The
+    /// persistent composite pool follows it.
+    packed_private_bytes: u32,
     /// Host-owned dual-end bump-allocated arena. Borrowed for the
     /// lifetime of the VM. Native functions that allocate dynamic
     /// strings pass `vm.arena()` to [`crate::kstring::KString::alloc`].
@@ -1790,8 +1994,10 @@ pub struct GenericVm<
 /// let vm = Vm::new(module, &arena)?;
 /// ```
 ///
-/// The returned value is `private_slot_count * size_of::<crate::bytecode::GenericValue<W, F>>()`,
-/// which is the actual runtime storage requirement. It differs
+/// The returned value is the private `Value` slots at
+/// `size_of::<crate::bytecode::GenericValue<W, F>>()` each, plus the packed
+/// private array bytes, plus the persistent composite pool, which is the
+/// actual runtime storage requirement. It differs
 /// from `module.private_data_bytes` because that field is in
 /// `VALUE_SLOT_SIZE_BYTES`-sized logical units for WCMU
 /// accounting; the actual `Value` enum is larger than the WCMU
@@ -1805,17 +2011,20 @@ pub fn required_persistent_capacity_for(module: &crate::bytecode::Module) -> usi
 pub fn required_persistent_capacity_for_generic<W: crate::word::Word, F: crate::float::Float>(
     module: &crate::bytecode::Module,
 ) -> usize {
-    let private_count = module
-        .data_layout
-        .as_ref()
-        .map_or(0, crate::bytecode::DataLayout::private_slot_count);
-    // The private-slot `Value` array, plus the persistent flat-composite body
-    // pool those slots need (B28 P3 item 5, item 3a). A private slot holding a
-    // flat composite stores its body in the pool, which follows the slot array
-    // in the persistent region and survives RESET in place. `0` for a module
-    // with no private composite slots, so this is unchanged for such modules.
-    private_count * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>()
-        + module.persistent_composite_bytes as usize
+    let word_bytes = (1usize << module.word_bits_log2) / 8;
+    let float_bytes = (1usize << module.float_bits_log2) / 8;
+    // Packed private storage: the private `Value` slots, then the packed
+    // scalars of every private array stored at element width, then the
+    // persistent flat-composite body pool (B28 P3 item 5, item 3a), which holds
+    // the bodies of private composite fields, a private array of composites
+    // occupying its bodies alone. Every region survives RESET in place.
+    let (values, packed) = module.data_layout.as_ref().map_or((0, 0), |dl| {
+        dl.private_storage_extent(word_bytes, float_bytes)
+    });
+    values
+        .saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<W, F>>())
+        .saturating_add(packed)
+        .saturating_add(module.persistent_composite_bytes as usize)
 }
 
 /// Flat byte length of the borrowed shared-data buffer `module` expects
@@ -1843,11 +2052,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// VM; calling `Arena::resize_persistent` is the host's
     /// choice.
     fn drop(&mut self) {
-        if self.private_slot_count == 0 {
+        if self.value_slot_count == 0 {
             return;
         }
         let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
-        for i in 0..self.private_slot_count as usize {
+        // Only the `Value` slots hold values with destructors. Packed scalars
+        // and pool bodies are plain bytes.
+        for i in 0..self.value_slot_count as usize {
             // SAFETY: each private slot was initialised to
             // `crate::bytecode::GenericValue::Unit` at construction and updated through
             // `write_data_slot` (which drops the old occupant
@@ -3148,8 +3359,40 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 ),
             }
         };
-        let private_storage_bytes =
-            private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
+        // Plan the private storage and write each private field's load-time
+        // value into its `Value` slots or packed bytes. One initialiser per
+        // private FIELD, applied to each of its elements. An initialiser that
+        // does not decode is refused, since starting a slot as `Unit` in its
+        // place would hand the program a value its verifier never accounted
+        // for. Pool-packed elements are seeded once the VM exists, by
+        // `persist_seeded_private_composites`.
+        let word_bytes = (1usize << bytes[12]) / 8;
+        let float_bytes = (1usize << bytes[14]) / 8;
+        let (plan, inits) = {
+            let aux_bytes = Self::aux_body_slice(bytes);
+            let view = crate::wire_schema::AuxView::parse(aux_bytes)
+                .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+            match view.data_layout() {
+                None => (PrivatePlan::default(), Vec::new()),
+                Some(dl) => {
+                    let plan = PrivatePlan::of_table(&dl, word_bytes, float_bytes)?;
+                    let mut inits = Vec::with_capacity(dl.field_count());
+                    for f in 0..dl.field_count() {
+                        let Some(r) = dl.field(f) else { continue };
+                        if r.visibility != crate::wire_schema::visibility_tag::PRIVATE {
+                            inits.push((r.count, None));
+                            continue;
+                        }
+                        let cv = dl.field_init_value(f).map_err(|e| {
+                            VmError::TypeError(alloc::format!("private initialiser: {:?}", e))
+                        })?;
+                        inits.push((r.count, Some(cv)));
+                    }
+                    (plan, inits)
+                }
+            }
+        };
+        let private_storage_bytes = plan.storage_bytes::<W, F>();
         if arena.persistent_capacity() < private_storage_bytes {
             return Err(VmError::VerifyError(alloc::format!(
                 "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
@@ -3157,53 +3400,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 private_storage_bytes,
             )));
         }
-        if private_count > 0 {
-            let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
-            // Private slots initialize from the module's `.data`-section
-            // initializer table, a scalar zero or `= literal` or a composite's
-            // zero, which `persist_seeded_private_composites` moves into the
-            // pool below. A slot with no entry, or a module predating the
-            // table, falls back to `Unit`.
-            let aux_bytes = Self::aux_body_slice(bytes);
-            let word_bytes = (1usize << bytes[12]) / 8;
-            let float_bytes = (1usize << bytes[14]) / 8;
-            // One initialiser per private FIELD, applied to each of its
-            // elements. An initialiser that does not decode is refused, since
-            // starting a slot as `Unit` in its place would hand the program a
-            // value its verifier never accounted for.
-            let view = crate::wire_schema::AuxView::parse(aux_bytes)
-                .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
-            let mut inits: alloc::vec::Vec<crate::bytecode::ConstValue> =
-                alloc::vec::Vec::with_capacity(private_count as usize);
-            if let Some(dl) = view.data_layout() {
-                for f in 0..dl.field_count() {
-                    let Some(r) = dl.field(f) else { continue };
-                    if r.visibility != crate::wire_schema::visibility_tag::PRIVATE {
-                        continue;
-                    }
-                    let cv = dl.field_init_value(f).map_err(|e| {
-                        VmError::TypeError(alloc::format!("private initialiser: {:?}", e))
-                    })?;
-                    for _ in 0..r.count {
-                        inits.push(cv.clone());
-                    }
-                }
-            }
-            for i in 0..private_count as usize {
-                let value = match inits.get(i) {
-                    Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
-                        cv,
-                        word_bytes,
-                        float_bytes,
-                    ),
-                    None => crate::bytecode::GenericValue::Unit,
-                };
-                // SAFETY: same justification as in `Vm::construct`.
-                unsafe {
-                    base.add(i).write(value);
-                }
-            }
-        }
+        Self::write_private_inits(arena, &plan, &inits, word_bytes, float_bytes)?;
         let decoded_ops = decode_all_ops(bytes)?;
         // The zero-copy view path receives raw bytes with no owned
         // `Module`, so the verifier's footprint analysis is not available
@@ -3244,6 +3441,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             natives: Vec::new(),
             shared_slot_count: shared_count,
             private_slot_count: private_count,
+            field_homes: plan.homes,
+            value_slot_count: plan.value_slots,
+            packed_private_bytes: plan.packed_bytes,
             arena,
             started: false,
             breakpoints: alloc::vec::Vec::new(),
@@ -3267,7 +3467,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         vm.build_const_pool();
         // As the owned path does, move each composite private initializer into
         // its pool slot.
-        vm.persist_seeded_private_composites()?;
+        vm.persist_seeded_private_composites(None)?;
         Ok(vm)
     }
 
@@ -3381,63 +3581,49 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 )
             }
         };
-        let private_storage_bytes =
-            private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
-        // The persistent region must also hold the private composite body pool
-        // that follows the slot array (B28 P3 item 5, item 3a). Rejecting an
-        // undersized arena here surfaces the error at construction; the
-        // per-write bounds check in `persist_composite_body` is the soundness
-        // guard regardless.
+        // Plan the private storage under packed private storage. The
+        // persistent region holds the `Value` slots, the packed scalars and the
+        // private composite body pool that follows them (B28 P3 item 5, item
+        // 3a). Rejecting an undersized arena here surfaces the error at
+        // construction; the per-write bounds check in `persist_composite_body`
+        // is the soundness guard regardless.
+        let word_bytes = (1usize << module.word_bits_log2) / 8;
+        let float_bytes = (1usize << module.float_bits_log2) / 8;
+        let plan = match module.data_layout.as_ref() {
+            None => PrivatePlan::default(),
+            Some(dl) => PrivatePlan::of_layout(dl, word_bytes, float_bytes)?,
+        };
+        let private_storage_bytes = plan.storage_bytes::<W, F>();
         let required_persistent =
             private_storage_bytes + module.persistent_composite_bytes as usize;
         if arena.persistent_capacity() < required_persistent {
             return Err(VmError::VerifyError(alloc::format!(
-                "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes: {} slot(s) at {} bytes each plus {} bytes of persistent composite bodies); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
+                "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes: {} slot(s) at {} bytes each, {} bytes of packed arrays and {} bytes of persistent composite bodies); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
                 arena.persistent_capacity(),
                 required_persistent,
-                private_count,
+                plan.value_slots,
                 core::mem::size_of::<crate::bytecode::GenericValue<W, F>>(),
+                plan.packed_bytes,
                 module.persistent_composite_bytes,
             )));
         }
-        // Initialise each private slot from the module's `.data`-section
-        // initializer table via `ptr::write` so the bytes hold a valid Value
-        // before any subsequent reader clones or any subsequent writer drops
-        // the old occupant. The arena's persistent region is freshly zeroed
-        // when first resized, but those zero bytes are not a valid `Value`, so
-        // write through `write` not assignment. A scalar slot receives its
-        // baked zero or `= literal`. A composite slot receives its type's zero,
-        // materialised here at the module's widths and moved into the
+        // Initialise each private `Value` slot and each packed scalar from the
+        // module's `.data`-section initializer table. A `Value` slot is written
+        // through `ptr::write` so the bytes hold a valid Value before any
+        // subsequent reader clones or any subsequent writer drops the old
+        // occupant. A composite field receives its type's zero, moved into the
         // persistent composite pool once the VM exists, by
-        // `persist_seeded_private_composites`, as a hot swap's seed is. A slot
-        // with no entry, or a module predating the table, falls back to `Unit`.
-        if private_count > 0 {
-            let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
-            let inits = module
-                .data_layout
-                .as_ref()
-                .map(crate::bytecode::DataLayout::private_init_values)
-                .unwrap_or_default();
-            let word_bytes = (1usize << module.word_bits_log2) / 8;
-            let float_bytes = (1usize << module.float_bits_log2) / 8;
-            for i in 0..private_count as usize {
-                let value = match inits.get(i) {
-                    Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
-                        cv,
-                        word_bytes,
-                        float_bytes,
-                    ),
-                    None => crate::bytecode::GenericValue::Unit,
-                };
-                // SAFETY: `i` is within the slot count just
-                // verified to fit in the persistent capacity; the
-                // arena owns the buffer for the VM's lifetime;
-                // `Value` is properly aligned at every multiple
-                // of its size on the 16-byte-aligned buffer base.
-                unsafe {
-                    base.add(i).write(value);
-                }
-            }
+        // `persist_seeded_private_composites`, as a hot swap's seed is.
+        if let Some(dl) = module.data_layout.as_ref() {
+            let inits: Vec<(u32, Option<crate::bytecode::ConstValue>)> = dl
+                .fields
+                .iter()
+                .map(|f| match f.visibility {
+                    crate::bytecode::SlotVisibility::Shared => (f.count, None),
+                    crate::bytecode::SlotVisibility::Private => (f.count, f.init.value(f.kind)),
+                })
+                .collect();
+            Self::write_private_inits(arena, &plan, &inits, word_bytes, float_bytes)?;
         }
         let bytes = module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
@@ -3480,6 +3666,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             natives: Vec::new(),
             shared_slot_count: shared_count,
             private_slot_count: private_count,
+            field_homes: plan.homes,
+            value_slot_count: plan.value_slots,
+            packed_private_bytes: plan.packed_bytes,
             arena,
             started: false,
             breakpoints: alloc::vec::Vec::new(),
@@ -3503,66 +3692,271 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Move each composite private initializer into its pool slot, so that a
         // read before the program's first write sees its type's zero rather than
         // the empty-slot `Unit` (definite initialization, option (b)).
-        vm.persist_seeded_private_composites()?;
+        vm.persist_seeded_private_composites(None)?;
         Ok(vm)
     }
 
-    /// Read a data slot's current value, cloning. Dispatches by
-    /// the unified slot index: indices below `shared_slot_count`
-    /// resolve to the Vm-owned `data` vector; higher indices
-    /// resolve to the arena's persistent region.
-    fn read_data_slot(&self, slot: usize) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
-        if slot < self.shared_slot_count as usize {
-            // A shared slot reads the borrowed host buffer (B28 item 2).
-            // `enter_shared` guarantees a module with shared slots is entered
-            // with an active buffer, so this is always reached with one.
-            return self.read_shared_from_buffer(slot);
+    /// Write every private `Value` slot and packed scalar of a freshly planned
+    /// layout from its fields' load-time values.
+    ///
+    /// `inits` holds, per field in field order, the element count and the
+    /// value every element starts as, `None` for a shared field or for a
+    /// private field whose initialiser is absent, whose `Value` slots then
+    /// start as `Unit`. Pool-packed elements are not written here. Every packed
+    /// value is encoded before any slot is written, so a refusal leaves no
+    /// `Value` slot written and nothing to drop.
+    fn write_private_inits(
+        arena: &keleusma_arena::Arena,
+        plan: &PrivatePlan,
+        inits: &[(u32, Option<crate::bytecode::ConstValue>)],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<(), VmError> {
+        use crate::bytecode::GenericValue;
+        let value_of = |cv: &Option<crate::bytecode::ConstValue>| match cv {
+            Some(cv) => GenericValue::<W, F>::from_const(cv, word_bytes, float_bytes),
+            None => GenericValue::Unit,
+        };
+        let mut packed: Vec<(usize, usize, u32, [u8; 8])> = Vec::new();
+        for (home, (count, init)) in plan.homes.iter().zip(inits) {
+            if let FieldHome::Scalars {
+                offset,
+                kind,
+                width,
+            } = *home
+            {
+                let bytes =
+                    packed_scalar_bytes(&value_of(init), kind, width, word_bytes, float_bytes)?;
+                packed.push((offset as usize, width as usize, *count, bytes));
+            }
         }
-        // SAFETY: the slot is within the partition checked at
-        // construction; the persistent region was initialised
-        // with `crate::bytecode::GenericValue::Unit` for every slot and updates flow
-        // through `write_data_slot`, so the pointee is always
-        // a valid `Value`.
-        unsafe {
-            let private_idx = slot - self.shared_slot_count as usize;
-            let base =
-                self.arena.persistent_ptr().as_ptr() as *const crate::bytecode::GenericValue<W, F>;
-            Ok((*base.add(private_idx)).clone())
+        let slots = arena.persistent_ptr().as_ptr() as *mut GenericValue<W, F>;
+        for (home, (count, init)) in plan.homes.iter().zip(inits) {
+            if let FieldHome::Values { base } = *home {
+                for k in 0..*count as usize {
+                    // SAFETY: `base + k` is below `plan.value_slots`, whose
+                    // slots the caller verified fit the persistent capacity;
+                    // the arena owns the buffer for the VM's lifetime; `Value`
+                    // is properly aligned at every multiple of its size on the
+                    // 16-byte-aligned buffer base.
+                    unsafe { slots.add(base as usize + k).write(value_of(init)) };
+                }
+            }
+        }
+        let region = plan.value_slots as usize * core::mem::size_of::<GenericValue<W, F>>();
+        let bytes = arena.persistent_ptr().as_ptr();
+        for (offset, width, count, value) in packed {
+            for k in 0..count as usize {
+                // SAFETY: the packed region of `plan.packed_bytes` bytes follows
+                // the slot array within the verified capacity, and this field's
+                // elements occupy `offset..offset + count * width` of it.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        value.as_ptr(),
+                        bytes.add(region + offset + k * width),
+                        width,
+                    )
+                };
+            }
+        }
+        Ok(())
+    }
+
+    /// The home and record of data field `field`.
+    fn field_storage(
+        &self,
+        field: usize,
+    ) -> Result<(FieldHome, crate::wire_schema::DataFieldRecord), VmError> {
+        let record = self.aux().data_layout().and_then(|dl| dl.field(field));
+        match (self.field_homes.get(field), record) {
+            (Some(home), Some(record)) => Ok((*home, record)),
+            _ => Err(data_element_outside(field, 0)),
         }
     }
 
-    /// The persistent composite pool region of a private slot that holds a
-    /// flat composite body (B28 item 2 step 6A), as `(offset, end)` with `end`
-    /// exclusive. `None` for a scalar slot or a composite with no flat body,
-    /// neither of which has a pool home.
-    ///
-    /// Resolved by binary search over the field records, whose bound is the
-    /// logarithm of the field count. The placement table this replaced was
-    /// scanned linearly on every private composite write, in a quantity the
-    /// program's declarations control.
-    ///
-    /// The element's own body length bounds its region (audit D4), so a
-    /// mismatched body cannot overwrite the adjacent element, which the
-    /// per-element placement table could only approximate by the next offset
-    /// because it carried no length.
-    fn private_composite_region(&self, slot: usize) -> Option<(usize, usize)> {
-        let aux = self.aux();
-        let dl = aux.data_layout()?;
-        let (offset, len) = dl.private_composite(slot)?;
-        let offset = offset as usize;
-        Some((offset, offset.checked_add(usize::from(len))?))
+    /// Byte offset of element `element` of a field placed at the record's
+    /// offset and stride, or `None` when the field has no offset, the element
+    /// is out of range, or the arithmetic overflows.
+    fn record_element_offset(
+        record: &crate::wire_schema::DataFieldRecord,
+        element: u32,
+    ) -> Option<usize> {
+        if element >= record.count || record.offset == crate::wire_schema::ABSENT {
+            return None;
+        }
+        let offset = record
+            .offset
+            .checked_add(element.checked_mul(record.stride)?)?;
+        Some(offset as usize)
     }
 
-    /// The persistent composite pool offset of a private slot, see
-    /// [`Self::private_composite_region`].
-    fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
-        self.private_composite_region(slot)
-            .map(|(offset, _)| offset)
+    /// The `Value` slot index of element `element` of a field whose slots begin
+    /// at `base`.
+    fn value_slot_index(
+        &self,
+        field: usize,
+        base: u32,
+        element: u32,
+        record: &crate::wire_schema::DataFieldRecord,
+    ) -> Result<usize, VmError> {
+        let index = (base as usize).saturating_add(element as usize);
+        if element >= record.count || index >= self.value_slot_count as usize {
+            return Err(data_element_outside(field, element));
+        }
+        Ok(index)
+    }
+
+    /// Byte offset, from the start of the persistent region, of the packed
+    /// scalar region.
+    fn packed_region_offset(&self) -> usize {
+        self.value_slot_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>()
+    }
+
+    /// Byte offset, from the start of the persistent region, of the persistent
+    /// composite pool.
+    fn pool_region_offset(&self) -> usize {
+        self.packed_region_offset() + self.packed_private_bytes as usize
+    }
+
+    /// The persistent-region byte offset and width of packed element `element`
+    /// of a field whose packed elements begin at `offset`.
+    fn packed_element_at(
+        &self,
+        field: usize,
+        offset: u32,
+        width: u32,
+        element: u32,
+        record: &crate::wire_schema::DataFieldRecord,
+    ) -> Result<(usize, usize), VmError> {
+        let width = width as usize;
+        let at = (element as usize)
+            .checked_mul(width)
+            .and_then(|n| n.checked_add(offset as usize))
+            .and_then(|n| n.checked_add(self.packed_region_offset()));
+        match at {
+            Some(at)
+                if element < record.count
+                    && width <= 8
+                    && at.saturating_add(width) <= self.pool_region_offset()
+                    && at.saturating_add(width) <= self.arena.persistent_capacity() =>
+            {
+                Ok((at, width))
+            }
+            _ => Err(data_element_outside(field, element)),
+        }
+    }
+
+    /// Read element `element` of data field `field`, cloning.
+    ///
+    /// A shared element reads the borrowed host buffer (B28 item 2), which
+    /// `enter_shared` guarantees is active for a module with shared fields. A
+    /// private element reads its `Value` slot, its packed bytes, or its body in
+    /// the persistent composite pool, by the field's home.
+    fn read_field_element(
+        &self,
+        field: usize,
+        element: u32,
+    ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
+        let (home, record) = self.field_storage(field)?;
+        match home {
+            FieldHome::Shared => {
+                let offset = Self::record_element_offset(&record, element)
+                    .ok_or_else(|| data_element_outside(field, element))?;
+                self.read_shared_from_buffer(offset, record.kind, usize::from(record.elem_len))
+            }
+            FieldHome::Values { base } => {
+                let index = self.value_slot_index(field, base, element, &record)?;
+                let slots = self.arena.persistent_ptr().as_ptr()
+                    as *const crate::bytecode::GenericValue<W, F>;
+                // SAFETY: the index lies below `value_slot_count`, every slot of
+                // which was initialised at construction or hot swap and is
+                // updated only through `write_field_element`, so the pointee is
+                // always a valid `Value`.
+                Ok(unsafe { (*slots.add(index)).clone() })
+            }
+            FieldHome::Scalars {
+                offset,
+                kind,
+                width,
+            } => {
+                let (at, width) = self.packed_element_at(field, offset, width, element, &record)?;
+                let mut buf = [0u8; 8];
+                // SAFETY: `packed_element_at` placed `at..at + width` inside the
+                // packed region, within the persistent capacity.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        self.arena.persistent_ptr().as_ptr().add(at),
+                        buf.as_mut_ptr(),
+                        width,
+                    )
+                };
+                crate::bytecode::GenericValue::read_scalar_le(
+                    &buf[..width],
+                    0,
+                    kind,
+                    self.module_word_bytes(),
+                    self.module_float_bytes(),
+                )
+                .map_err(VmError::from)
+            }
+            FieldHome::Pool => {
+                let offset = Self::record_element_offset(&record, element)
+                    .ok_or_else(|| data_element_outside(field, element))?;
+                self.read_pool_body(field, element, offset, record.kind, record.elem_len)
+            }
+        }
+    }
+
+    /// A handle to the pool body of a pool-packed private element, wrapped as
+    /// its composite kind. The handle points into the persistent region, which
+    /// a RESET never reclaims, as the handle a `Value` slot holds for a single
+    /// private composite does.
+    fn read_pool_body(
+        &self,
+        field: usize,
+        element: u32,
+        offset: usize,
+        kind: u8,
+        len: u16,
+    ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
+        use crate::bytecode::{ArrayBody, EnumBody, GenericValue, StructBody, TupleBody};
+        use crate::value_layout::CompositeKind;
+        let len = usize::from(len);
+        let at = self
+            .pool_region_offset()
+            .checked_add(offset)
+            .filter(|at| at.saturating_add(len) <= self.arena.persistent_capacity())
+            .filter(|_| len > 0)
+            .ok_or_else(|| data_element_outside(field, element))?;
+        let ck = CompositeKind::from_tag(kind & !crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG)
+            .filter(|_| kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .ok_or_else(|| {
+                VmError::TypeError(String::from("bad private composite element kind"))
+            })?;
+        // SAFETY: `at..at + len` lies within the persistent region, which the
+        // arena owns for the VM's lifetime, and holds the element's body as
+        // seeded at construction and written by `persist_composite_body`.
+        let handle = unsafe {
+            let dst = self.arena.persistent_ptr().as_ptr().add(at);
+            let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, len);
+            keleusma_arena::ArenaHandle::from_raw_parts(
+                core::ptr::NonNull::new_unchecked(raw),
+                self.arena.epoch(),
+            )
+        };
+        let fc = crate::flat_value::FlatComposite::Arena(handle);
+        Ok(match ck {
+            CompositeKind::Tuple => GenericValue::Tuple(TupleBody::Flat(fc)),
+            CompositeKind::Array => GenericValue::Array(ArrayBody::Flat(fc)),
+            CompositeKind::Struct => GenericValue::Struct(StructBody::Flat(fc)),
+            CompositeKind::Enum => GenericValue::Enum(EnumBody::Flat(fc)),
+        })
     }
 
     /// The shared layout entry for a shared slot, as `(byte offset, kind tag,
     /// composite body length)` copied out of the archived table so the borrow
-    /// of the bytecode image does not outlive the read (B28 item 2).
+    /// of the bytecode image does not outlive the read (B28 item 2). This is
+    /// the host API's element-indexed lookup.
     fn shared_layout_entry(&self, slot: usize) -> (usize, u8, usize) {
         let aux = self.aux();
         let dl = aux
@@ -3574,18 +3968,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         (e.offset as usize, e.kind, e.len as usize)
     }
 
-    /// Read a shared slot in place from the borrowed host buffer (B28 item 2).
-    /// A scalar slot decodes directly by offset (a plain owned value, no
-    /// pointer into the buffer). A composite slot copies its byte range into a
-    /// fresh arena body tagged with the current epoch, so the value is
-    /// RESET-scoped and can never outlive the host's borrow.
+    /// Read a shared element in place from the borrowed host buffer (B28 item
+    /// 2), given its byte offset, kind tag and composite body length. A scalar
+    /// decodes directly by offset (a plain owned value, no pointer into the
+    /// buffer). A composite copies its byte range into a fresh arena body
+    /// tagged with the current epoch, so the value is RESET-scoped and can
+    /// never outlive the host's borrow.
     fn read_shared_from_buffer(
         &self,
-        slot: usize,
+        offset: usize,
+        kind: u8,
+        len: usize,
     ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         use crate::bytecode::{ArrayBody, EnumBody, GenericValue, StructBody, TupleBody};
         use crate::value_layout::{CompositeKind, ScalarKind};
-        let (offset, kind, len) = self.shared_layout_entry(slot);
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
         let buf = self
@@ -3619,48 +4015,96 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
-    /// Overwrite a data slot. Same dispatch as `read_data_slot`.
-    /// Assignment via `*ptr = value` drops the previous occupant,
-    /// which is valid because every private slot is initialised
-    /// to `crate::bytecode::GenericValue::Unit` at construction.
-    fn write_data_slot(
+    /// Overwrite element `element` of data field `field`. Same dispatch as
+    /// [`Self::read_field_element`].
+    ///
+    /// A `Value` slot of a field with a pool home, a single private composite
+    /// field, copies a flat composite's body into the persistent composite pool
+    /// at the element's offset and stores a region-aware handle that survives
+    /// RESET in place (B28 item 2 step 6A), so no private composite write needs
+    /// a global-heap owned body; any other value is stored directly, and the
+    /// assignment drops the previous occupant, which is valid because every
+    /// `Value` slot is initialised at construction. A pool-packed element
+    /// copies the body and keeps no handle, and refuses a value that is not a
+    /// flat composite, since it has nowhere else to put one. A packed scalar
+    /// element refuses a value of any other kind.
+    fn write_field_element(
         &mut self,
-        slot: usize,
+        field: usize,
+        element: u32,
         value: crate::bytecode::GenericValue<W, F>,
     ) -> Result<(), VmError> {
-        if slot < self.shared_slot_count as usize {
-            // A shared slot writes the borrowed host buffer (B28 item 2);
-            // `enter_shared` guarantees an active buffer for any module with
-            // shared slots.
-            return self.write_shared_to_buffer(slot, value);
+        let (home, record) = self.field_storage(field)?;
+        match home {
+            FieldHome::Shared => {
+                let offset = Self::record_element_offset(&record, element)
+                    .ok_or_else(|| data_element_outside(field, element))?;
+                self.write_shared_entry(
+                    field,
+                    offset,
+                    record.kind,
+                    usize::from(record.elem_len),
+                    value,
+                )
+            }
+            FieldHome::Values { base } => {
+                let index = self.value_slot_index(field, base, element, &record)?;
+                let pooled =
+                    Self::record_element_offset(&record, element).filter(|_| record.elem_len > 0);
+                let to_store = if crate::bytecode::flat_composite_ref(&value).is_some()
+                    && let Some(off) = pooled
+                {
+                    self.persist_composite_body(value, off, off + usize::from(record.elem_len))?
+                } else {
+                    value
+                };
+                let slots = self.arena.persistent_ptr().as_ptr()
+                    as *mut crate::bytecode::GenericValue<W, F>;
+                // SAFETY: the index lies below `value_slot_count`; the pointee is
+                // a valid `Value` per the construction-time initialisation, so
+                // dropping it via the assignment is sound.
+                unsafe { *slots.add(index) = to_store };
+                Ok(())
+            }
+            FieldHome::Scalars {
+                offset,
+                kind,
+                width,
+            } => {
+                let (at, width) = self.packed_element_at(field, offset, width, element, &record)?;
+                let bytes = packed_scalar_bytes(
+                    &value,
+                    kind,
+                    width as u32,
+                    self.module_word_bytes(),
+                    self.module_float_bytes(),
+                )?;
+                // SAFETY: `packed_element_at` placed `at..at + width` inside the
+                // packed region, within the persistent capacity.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        bytes.as_ptr(),
+                        self.arena.persistent_ptr().as_ptr().add(at),
+                        width,
+                    )
+                };
+                Ok(())
+            }
+            FieldHome::Pool => {
+                let offset = Self::record_element_offset(&record, element)
+                    .ok_or_else(|| data_element_outside(field, element))?;
+                if crate::bytecode::flat_composite_ref(&value).is_none() {
+                    return Err(VmError::TypeError(format!(
+                        "a private composite array element takes a flat composite, not a {} value",
+                        value.type_name()
+                    )));
+                }
+                // The persisted copy is the element's only home, so the handle
+                // `persist_composite_body` returns is dropped here.
+                self.persist_composite_body(value, offset, offset + usize::from(record.elem_len))?;
+                Ok(())
+            }
         }
-        // A private slot holding a flat composite copies its body into the
-        // persistent composite pool at the offset the private-composite layout
-        // table records for the slot and stores a region-aware handle that
-        // survives RESET in place (B28 item 2 step 6A), so no private composite
-        // write needs a global-heap owned body. Every private composite slot,
-        // a single composite field and each array-of-composite element alike,
-        // has a table entry, so `SetData` and `SetDataIndexed` both persist
-        // through this one path. A scalar, an empty composite, or a boxed value
-        // has no table entry and is stored directly.
-        let to_store = if crate::bytecode::flat_composite_ref(&value).is_some()
-            && let Some((off, end)) = self.private_composite_region(slot)
-        {
-            self.persist_composite_body(value, off, end)?
-        } else {
-            value
-        };
-        // SAFETY: the slot is within the partition checked at
-        // construction; the pointee is a valid `Value` per
-        // the construction-time initialisation, so dropping
-        // it via the assignment is sound.
-        unsafe {
-            let private_idx = slot - self.shared_slot_count as usize;
-            let base =
-                self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
-            *base.add(private_idx) = to_store;
-        }
-        Ok(())
     }
 
     /// Write a shared slot in place to the borrowed host buffer (B28 item 2).
@@ -3669,12 +4113,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// mutable buffer slice, then copies the bytes into the field; the owned
     /// copy is the one transient allocation, on the rare composite-shared-write
     /// path (the common case is scalar slots).
-    fn write_shared_to_buffer(
+    fn write_shared_entry(
         &mut self,
         slot: usize,
+        offset: usize,
+        kind: u8,
+        len: usize,
         value: crate::bytecode::GenericValue<W, F>,
     ) -> Result<(), VmError> {
-        let (offset, kind, len) = self.shared_layout_entry(slot);
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
@@ -3738,9 +4184,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         rel_offset: usize,
         slot_end: usize,
     ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
-        let private_storage = self.private_slot_count as usize
-            * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
-        let dst_off = private_storage + rel_offset;
+        // The pool follows the `Value` slots and the packed scalar region.
+        let dst_off = self.pool_region_offset() + rel_offset;
         let handle = {
             let fc = crate::bytecode::flat_composite_ref(&val)
                 .expect("persist_composite_body called on a non-flat-composite value");
@@ -4939,22 +5384,111 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 initial_data.len()
             )));
         }
-        let new_private_storage =
-            new_private as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
-        // The persistent region must hold the new module's private-slot array
-        // plus its persistent composite body pool (B28 P3 item 3a). Checking
-        // both here surfaces an undersized arena before the swap commits.
+        let new_word_bytes = (1usize << new_module.word_bits_log2) / 8;
+        let new_float_bytes = (1usize << new_module.float_bits_log2) / 8;
+        let new_plan = match new_module.data_layout.as_ref() {
+            None => PrivatePlan::default(),
+            Some(dl) => PrivatePlan::of_layout(dl, new_word_bytes, new_float_bytes)?,
+        };
+        let new_private_storage = new_plan.storage_bytes::<W, F>();
+        // The persistent region must hold the new module's private `Value`
+        // slots and packed arrays plus its persistent composite body pool (B28
+        // P3 item 3a). Checking both here surfaces an undersized arena before
+        // the swap commits.
         let new_required_persistent =
             new_private_storage + new_module.persistent_composite_bytes as usize;
         if self.arena.persistent_capacity() < new_required_persistent {
             return Err(VmError::VerifyError(format!(
-                "arena persistent_capacity ({} bytes) is too small for new module's private data ({} bytes: {} bytes of slots plus {} bytes of persistent composite bodies); resize before hot swap",
+                "arena persistent_capacity ({} bytes) is too small for new module's private data ({} bytes: {} bytes of slots and packed arrays plus {} bytes of persistent composite bodies); resize before hot swap",
                 self.arena.persistent_capacity(),
                 new_required_persistent,
                 new_private_storage,
                 new_module.persistent_composite_bytes,
             )));
         }
+        // The host-supplied initial values are exactly the new module's
+        // private elements, in element order; shared elements live in the
+        // borrowed buffer.
+        //
+        // A host seeds `Unit` to mean "no value", as every host did before
+        // composite private fields had initializers. Such a seed takes the new
+        // module's own load-time initializer instead, so that a hot swap keeps
+        // the guarantee construction gives, that no private slot with an
+        // initializer starts as the empty-slot `Unit` (definite
+        // initialization, option (b)). Any other seed is written as given.
+        //
+        // The seeds are placed by the new plan before anything changes, so a
+        // seed that a packed element cannot hold refuses the swap and keeps the
+        // running module. A `Value` slot takes any seed. A packed scalar takes
+        // a scalar of its own kind, encoded here. A pool-packed element takes a
+        // composite, canonicalised once the arena is reset.
+        let (value_seeds, packed_seeds, pool_seeds) = {
+            use crate::bytecode::GenericValue;
+            let mut value_seeds: Vec<GenericValue<W, F>> =
+                Vec::with_capacity(new_plan.value_slots as usize);
+            let mut packed_seeds: Vec<u8> = alloc::vec![0; new_plan.packed_bytes as usize];
+            let mut pool_seeds: Vec<PoolSeed<W, F>> = Vec::new();
+            let mut seeds = initial_data.into_iter();
+            if let Some(dl) = new_module.data_layout.as_ref() {
+                for (field, (f, home)) in dl.fields.iter().zip(&new_plan.homes).enumerate() {
+                    if *home == FieldHome::Shared {
+                        continue;
+                    }
+                    let init = f.init.value(f.kind);
+                    for k in 0..f.count {
+                        let seeded = seeds.next().unwrap_or(GenericValue::Unit);
+                        let seeded = match (&seeded, &init) {
+                            (GenericValue::Unit, Some(cv))
+                                if *cv != crate::bytecode::ConstValue::Unit =>
+                            {
+                                GenericValue::<W, F>::from_const(
+                                    cv,
+                                    new_word_bytes,
+                                    new_float_bytes,
+                                )
+                            }
+                            _ => seeded,
+                        };
+                        match *home {
+                            FieldHome::Shared => {}
+                            FieldHome::Values { .. } => value_seeds.push(seeded),
+                            FieldHome::Scalars {
+                                offset,
+                                kind,
+                                width,
+                            } => {
+                                let bytes = packed_scalar_bytes(
+                                    &seeded,
+                                    kind,
+                                    width,
+                                    new_word_bytes,
+                                    new_float_bytes,
+                                )?;
+                                let at = offset as usize + k as usize * width as usize;
+                                packed_seeds[at..at + width as usize]
+                                    .copy_from_slice(&bytes[..width as usize]);
+                            }
+                            FieldHome::Pool => {
+                                if !matches!(
+                                    seeded,
+                                    GenericValue::Tuple(_)
+                                        | GenericValue::Array(_)
+                                        | GenericValue::Struct(_)
+                                        | GenericValue::Enum(_)
+                                ) {
+                                    return Err(VmError::TypeError(format!(
+                                        "a hot swap seeds a private composite array element of field {field} with a {} value",
+                                        seeded.type_name()
+                                    )));
+                                }
+                                pool_seeds.push((field, k, seeded));
+                            }
+                        }
+                    }
+                }
+            }
+            (value_seeds, packed_seeds, pool_seeds)
+        };
         // Build the new bytecode image and decode its ops BEFORE touching any
         // old state. These two `?` steps are the only remaining fallible work,
         // so performing them first makes the swap transactional: a failure here
@@ -5010,7 +5544,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Drop the old private slots. Each was initialised at
         // construction or at a prior hot swap and may hold owned
         // resources whose destructor must run.
-        let old_private_count = self.private_slot_count as usize;
+        let old_private_count = self.value_slot_count as usize;
         if old_private_count > 0 {
             let base =
                 self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
@@ -5023,39 +5557,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 drop(old);
             }
         }
-        // The host-supplied initial values are exactly the new module's
-        // private slots; shared slots live in the borrowed buffer.
-        //
-        // A host seeds `Unit` to mean "no value", as every host did before
-        // composite private fields had initializers. Such a seed takes the new
-        // module's own load-time initializer instead, so that a hot swap keeps
-        // the guarantee construction gives, that no private slot with an
-        // initializer starts as the empty-slot `Unit` (definite
-        // initialization, option (b)). Any other seed is written as given.
-        let new_word_bytes = (1usize << new_module.word_bits_log2) / 8;
-        let new_float_bytes = (1usize << new_module.float_bits_log2) / 8;
-        let new_inits = new_module
-            .data_layout
-            .as_ref()
-            .map(crate::bytecode::DataLayout::private_init_values)
-            .unwrap_or_default();
-        let private_init: Vec<crate::bytecode::GenericValue<W, F>> = initial_data
-            .into_iter()
-            .enumerate()
-            .map(|(i, seeded)| match (&seeded, new_inits.get(i)) {
-                (crate::bytecode::GenericValue::Unit, Some(cv))
-                    if *cv != crate::bytecode::ConstValue::Unit =>
-                {
-                    crate::bytecode::GenericValue::<W, F>::from_const(
-                        cv,
-                        new_word_bytes,
-                        new_float_bytes,
-                    )
-                }
-                _ => seeded,
-            })
-            .collect();
-
         // Recompute the bottom-region footprint for the new module so the
         // `full_reset_arena_internal` below re-reserves the operand stack,
         // frames, and registry to the swapped-in module's exact worst case
@@ -5072,6 +5573,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.decoded_ops = decoded_ops;
         self.shared_slot_count = new_shared;
         self.private_slot_count = new_private;
+        self.field_homes = new_plan.homes;
+        self.value_slot_count = new_plan.value_slots;
+        self.packed_private_bytes = new_plan.packed_bytes;
         // New bytecode means the native-classification check must
         // re-run; the previous module's chunks are gone and the
         // new module's call sites have not yet been validated
@@ -5080,10 +5584,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Initialise the new private slots via `ptr::write` (no
         // drop on the destination, because we just dropped the
         // old occupants above).
-        if new_private > 0 {
+        if !value_seeds.is_empty() {
             let base =
                 self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
-            for (i, val) in private_init.into_iter().enumerate() {
+            for (i, val) in value_seeds.into_iter().enumerate() {
                 // SAFETY: the destination is within the
                 // persistent region whose capacity was verified
                 // above; the bytes are uninitialised after the
@@ -5114,6 +5618,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .arena
                 .zero_persistent_range(new_private_storage, pcap - new_private_storage);
         }
+        // The packed scalars follow the `Value` slots, and were encoded from
+        // the seeds before the commit point.
+        if !packed_seeds.is_empty() {
+            let at = self.packed_region_offset();
+            // SAFETY: the packed region of `packed_seeds.len()` bytes follows
+            // the slot array within the persistent capacity verified above.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    packed_seeds.as_ptr(),
+                    self.arena.persistent_ptr().as_ptr().add(at),
+                    packed_seeds.len(),
+                )
+            };
+        }
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks before clearing both ends. The
         // persistent region is preserved through the reset.
@@ -5131,7 +5649,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // can reference a freed box at the moment it is dropped (and a dropped
         // `Flat(Arena)` handle reads no bytes in any case).
         self.build_const_pool();
-        self.persist_seeded_private_composites()?;
+        self.persist_seeded_private_composites(Some(pool_seeds))?;
         self.started = false;
         self.pop_proof = new_proof;
         if self.pop_proof.is_some() {
@@ -5149,28 +5667,85 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// flat-baked field reads refuse, or as a handle into arena memory the reset reclaimed. Each
     /// is now canonicalised into the fresh arena and persisted at its slot's pool offset. A
     /// scalar is left as written.
-    fn persist_seeded_private_composites(&mut self) -> Result<(), VmError> {
-        let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+    fn persist_seeded_private_composites(
+        &mut self,
+        pool_seeds: Option<Vec<PoolSeed<W, F>>>,
+    ) -> Result<(), VmError> {
+        use crate::bytecode::GenericValue;
+        let slots = self.arena.persistent_ptr().as_ptr() as *mut GenericValue<W, F>;
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
         let ab = self.module_addr_bytes();
-        for i in 0..self.private_slot_count as usize {
-            let slot = self.shared_slot_count as usize + i;
-            if self.private_composite_pool_offset(slot).is_none() {
+        // A single private composite field keeps a `Value` slot with a pool
+        // home. Its seed is canonicalised and persisted in place, element by
+        // element, in field order.
+        for field in 0..self.field_homes.len() {
+            let FieldHome::Values { base } = self.field_homes[field] else {
+                continue;
+            };
+            let (_, record) = self.field_storage(field)?;
+            if record.visibility != crate::wire_schema::visibility_tag::PRIVATE
+                || record.offset == crate::wire_schema::ABSENT
+            {
                 continue;
             }
-            // SAFETY: `i` is within the private slot array the swap just initialised, and the
-            // value is replaced by `Unit` before it is moved out, so no slot is left aliased.
-            let seeded =
-                unsafe { core::ptr::replace(base.add(i), crate::bytecode::GenericValue::Unit) };
-            if matches!(seeded, crate::bytecode::GenericValue::Unit) {
+            for k in 0..record.count {
+                let index = self.value_slot_index(field, base, k, &record)?;
+                // SAFETY: `index` is within the private slot array the
+                // construction or swap just initialised, and the value is
+                // replaced by `Unit` before it is moved out, so no slot is left
+                // aliased.
+                let seeded = unsafe { core::ptr::replace(slots.add(index), GenericValue::Unit) };
+                if matches!(seeded, GenericValue::Unit) {
+                    continue;
+                }
+                let arena = self.arena;
+                let flat = seeded
+                    .into_arena_canonical(wb, fb, ab, arena)
+                    .map_err(|_| out_of_arena_push("seeded private composite", arena.capacity()))?;
+                self.write_field_element(field, k, flat)?;
+            }
+        }
+        // A pool-packed field has no `Value` slot to carry its seed, so the
+        // seed comes from the module's initialiser at construction and from
+        // the host at a hot swap. Each element is canonicalised separately, as
+        // a `Value` slot's seed was, so the arena top region holds the same
+        // bodies until the first `Reset` that it held before packing.
+        let seeds: Vec<PoolSeed<W, F>> = match pool_seeds {
+            Some(seeds) => seeds,
+            None => {
+                let mut seeds = Vec::new();
+                for field in 0..self.field_homes.len() {
+                    if self.field_homes[field] != FieldHome::Pool {
+                        continue;
+                    }
+                    let (count, cv) = {
+                        let aux = self.aux();
+                        let dl = aux
+                            .data_layout()
+                            .ok_or_else(|| data_element_outside(field, 0))?;
+                        let count = dl.field(field).map_or(0, |r| r.count);
+                        let cv = dl.field_init_value(field).map_err(|e| {
+                            VmError::TypeError(alloc::format!("private initialiser: {:?}", e))
+                        })?;
+                        (count, cv)
+                    };
+                    for k in 0..count {
+                        seeds.push((field, k, GenericValue::from_const(&cv, wb, fb)));
+                    }
+                }
+                seeds
+            }
+        };
+        for (field, k, seeded) in seeds {
+            if matches!(seeded, GenericValue::Unit) {
                 continue;
             }
             let arena = self.arena;
             let flat = seeded
                 .into_arena_canonical(wb, fb, ab, arena)
                 .map_err(|_| out_of_arena_push("seeded private composite", arena.capacity()))?;
-            self.write_data_slot(slot, flat)?;
+            self.write_field_element(field, k, flat)?;
         }
         Ok(())
     }
@@ -6359,12 +6934,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::GetData(field) => {
-                    let idx = self.data_operand_slot(field)?;
-                    let val = self.read_data_slot(idx)?;
+                    self.data_operand_slot(field)?;
+                    let val = self.read_field_element(field as usize, 0)?;
                     sp!(self, val);
                 }
                 Op::SetData(field) => {
-                    let idx = self.data_operand_slot(field)?;
+                    self.data_operand_slot(field)?;
                     // A data slot lives in the persistent region and survives
                     // RESET. `write_data_slot` persists a flat composite body
                     // into the persistent composite pool at its compiler-baked
@@ -6372,7 +6947,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // is stored in a persistent slot and no global-heap owned
                     // body is needed; a scalar is stored directly.
                     let val = self.pop()?;
-                    self.write_data_slot(idx, val)?;
+                    self.write_field_element(field as usize, 0, val)?;
                 }
                 Op::GetDataIndexed(base, len) => {
                     let fallback = self.pop()?;
@@ -6394,13 +6969,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    let first = self.data_operand_span(base, len, "indexed read")?;
+                    self.data_operand_span(base, len, "indexed read")?;
                     let offset = index.to_i64();
                     let invalid = offset < 0 || offset >= i64::from(len);
                     let value = if invalid {
                         fallback
                     } else {
-                        self.read_data_slot(first + offset as usize)?
+                        // The checked span and index place the element in the
+                        // field the operand names.
+                        self.read_field_element(base as usize, offset as u32)?
                     };
                     sp!(self, value);
                     sp!(self, crate::bytecode::GenericValue::Int(index));
@@ -6428,12 +7005,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     };
                     let val = self.pop()?;
-                    let first = self.data_operand_span(base, len, "indexed store")?;
+                    self.data_operand_span(base, len, "indexed store")?;
                     let invalid = index.to_i64() < 0 || index.to_i64() >= i64::from(len);
                     if !invalid {
                         // The checked span and index make this addition in range.
                         // Existing scalar and composite storage checks remain in force.
-                        self.write_data_slot(first + index.to_i64() as usize, val)?;
+                        self.write_field_element(base as usize, index.to_i64() as u32, val)?;
                     }
                     sp!(self, crate::bytecode::GenericValue::Int(index));
                     for byte in len.to_le_bytes() {

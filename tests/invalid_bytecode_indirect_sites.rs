@@ -62,7 +62,8 @@ const MARSHALL: &str = include_str!("../src/marshall.rs");
 
 /// **THE INDIRECT POPULATION, PINNED.**
 ///
-/// Ten call sites, six in `src/vm.rs` and four in `src/marshall.rs`. Each one
+/// Twelve call sites, eight in `src/vm.rs` and four in `src/marshall.rs`. The
+/// two added on 2026-11-05 read and write a packed private array element. Each one
 /// converts a `ScalarError` into `VmError::InvalidBytecode`, through `?` in a
 /// function whose error type is `VmError` or through an explicit
 /// `map_err(VmError::from)`.
@@ -76,7 +77,7 @@ fn the_census_population_is_understated_by_exactly_these_indirect_sites() {
     let marshall = scalar_call_sites(MARSHALL);
     assert_eq!(
         (vm, marshall),
-        (6, 4),
+        (8, 4),
         "the number of paths from a `ScalarError` to `InvalidBytecode` has changed \
          ({vm} in src/vm.rs, {marshall} in src/marshall.rs, against 6 and 4 recorded). \
          `docs/decisions/INVALID_BYTECODE_CENSUS.md` reports these as a single group-A row, \
@@ -165,7 +166,7 @@ fn the_census_population_matches_the_source_it_enumerates() {
     let marshall = construction_sites(MARSHALL);
     assert_eq!(
         (vm, marshall),
-        (49, 2),
+        (50, 2),
         "the constructed `InvalidBytecode` sites are now {vm} in src/vm.rs and {marshall} in \
          src/marshall.rs. `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates them and states \
          a population; add or remove the row there rather than adjusting this number"

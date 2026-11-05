@@ -61,8 +61,8 @@
 //!
 //! # The private buffer
 //!
-//! The backend's private buffer is the virtual machine's persistent figure,
-//! [`crate::vm::required_persistent_capacity_for`], plus
+//! The backend's private buffer is the element-slot persistent figure,
+//! [`native_private_base_bytes`](crate::native_region::native_private_base_bytes), plus
 //! [`native_persistent_supplement_bytes`](crate::native_region::native_persistent_supplement_bytes), the backend's
 //! `persistent_supplement_bytes`. That supplement is one word for the resume
 //! state of each `Stream` chunk and one initialisation word for each private
@@ -280,7 +280,7 @@ pub struct NativeRouteBuffers {
     /// The composite region, [`native_region_supplement_bytes`], the backend's
     /// `host_arena_supplement_bytes` and its header's region figure.
     pub region_bytes: usize,
-    /// The private buffer, [`crate::vm::required_persistent_capacity_for`]
+    /// The private buffer, [`native_private_base_bytes`]
     /// plus [`native_persistent_supplement_bytes`], the header's private
     /// figure. The backend's private initialisation image is copied into its
     /// start.
@@ -288,6 +288,34 @@ pub struct NativeRouteBuffers {
     /// The shared buffer, [`crate::vm::shared_data_bytes_for`], the same
     /// buffer the virtual machine borrows.
     pub shared_bytes: usize,
+}
+
+/// The persistent bytes the native backend lays its private image out
+/// against, before its supplement.
+///
+/// The backend stores every private element in a word of its own, followed by
+/// the composite pool, an image of its own choosing that no external consumer
+/// observes. It places its stream resume state and its composite
+/// initialisation words after this figure. Until packed private storage, S1
+/// of the array wire-slot design, the figure was the virtual machine's own
+/// [`crate::vm::required_persistent_capacity_for`], then 32 bytes per private
+/// element plus the pool, which was never smaller than the backend's image.
+/// Packed private storage made the virtual machine's figure smaller than the
+/// backend's image for a packed array of any element narrower than a word and
+/// for a private array of composites, so the backend keeps the element-slot
+/// figure, and every native memory image and offset stays as it was.
+///
+/// The figure is the private element count times the bundled runtime's
+/// `Value` size, plus the persistent composite pool. It saturates.
+#[must_use]
+pub fn native_private_base_bytes(module: &Module) -> usize {
+    let elements = module
+        .data_layout
+        .as_ref()
+        .map_or(0, crate::bytecode::DataLayout::private_slot_count);
+    elements
+        .saturating_mul(core::mem::size_of::<crate::bytecode::Value>())
+        .saturating_add(module.persistent_composite_bytes as usize)
 }
 
 /// The buffers for a host that runs `module` only as native code.
@@ -310,7 +338,7 @@ pub struct NativeRouteBuffers {
 pub fn native_route_buffers_for(module: &Module) -> NativeRouteBuffers {
     NativeRouteBuffers {
         region_bytes: native_region_supplement_bytes(module) as usize,
-        private_bytes: crate::vm::required_persistent_capacity_for(module)
+        private_bytes: native_private_base_bytes(module)
             .saturating_add(native_persistent_supplement_bytes(module) as usize),
         shared_bytes: crate::vm::shared_data_bytes_for(module),
     }
