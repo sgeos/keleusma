@@ -89,7 +89,12 @@ the UTF-8 pass, would close the five without making a time bound depend on a str
    refuses. It resets every shape at a control-flow join, as it already did. A body with more
    than four `Text` fields has an unknown layout. The element of an array of nested bodies has
    an unknown layout. A hostile module whose mistyped `Text` read relies on any of the three is
-   refused by the reference and admitted by the twin.
+   refused by the reference and admitted by the twin. All three were closed by the C5 review.
+   The `EndIf` join was repaired on 2026-11-01. On 2026-11-04 the loop exit gained the
+   reference's fixpoint and break-state join, the offsets moved into a
+   variable-length layout heap and the element read gained the reference's
+   `element_text_layout`. A layout past the heap is unavailable analysis, not a verdict. See
+   [the C5 review](./C5_SELFHOSTED_VALIDATOR_REVIEW.md).
 4. For the five boundary sources, whatever the operator rules.
 
 ## What this does not change
