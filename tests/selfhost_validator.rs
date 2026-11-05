@@ -164,3 +164,116 @@ fn absent_caller_signature_preserves_native_return_shapes() {
     assert!(keleusma::verify::verify(&module).is_err());
     assert!(structural_reject_module_via_kel(&module));
 }
+
+/// C5 RESIDUAL 1, PINNED AS AN OPEN SOUNDNESS GAP. After a loop the typed stage forgets each
+/// local the body writes, where the reference joins the break states and keeps a shape every
+/// break agrees on. Here local 1 is a scalar on every path, so the reference refuses the field
+/// read after the loop and the self-hosted validator accepts it. The shipping reference gate
+/// catches the disagreement, see `reference_disagreement_prevents_successful_admission` in
+/// `keleusma-cli/tests/validator.rs`. When the gap is repaired this test fails, and it should
+/// then assert agreement. See `docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md`.
+#[test]
+fn c5_residual_a_local_written_in_a_loop_is_forgotten_after_it() {
+    use keleusma::bytecode::StructField;
+    use keleusma::selfhost::{VerificationVerdict, verify_module_via_kel};
+    use keleusma::value_layout::ScalarKind;
+    let mut module = compile_src("fn main(n: Word) -> Word { let a = n; a }");
+    assert!(module.chunks[0].local_count >= 2);
+    module.chunks[0].ops = vec![
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::Loop(7),
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::Break(7),
+        Op::EndLoop(3),
+        Op::GetLocal(1),
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    let reference = keleusma::verify::verify(&module).expect_err("the reference refuses it");
+    assert!(
+        reference.message.contains("ExpectedComposite"),
+        "{}",
+        reference.message
+    );
+    assert_eq!(
+        verify_module_via_kel(&module).unwrap(),
+        VerificationVerdict::Accepted
+    );
+    // The control. The same read with no loop before it is refused by both.
+    module.chunks[0].ops = vec![
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::GetLocal(1),
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    assert!(keleusma::verify::verify(&module).is_err());
+    assert!(matches!(
+        verify_module_via_kel(&module).unwrap(),
+        VerificationVerdict::Rejected { stage: "types", .. }
+    ));
+}
+
+/// C5 RESIDUAL 2, PINNED AS AN OPEN SOUNDNESS GAP. The typed stage records at most four `Text`
+/// offsets of a body's layout and treats a larger layout as unknown, where the reference records
+/// every one. A `Text` read at an offset holding no text is then refused by the reference and
+/// deferred by the stage. Five `Text` fields reach it. When the gap is repaired this test fails,
+/// and it should then assert agreement.
+#[test]
+fn c5_residual_a_body_with_more_than_four_text_fields_defers_its_text_reads() {
+    use keleusma::bytecode::StructField;
+    use keleusma::selfhost::{VerificationVerdict, verify_module_via_kel};
+    use keleusma::value_layout::ScalarKind;
+    let source = |fields: usize| {
+        let decl: Vec<String> = (0..fields).map(|i| format!("t{i}: Text")).collect();
+        let init: Vec<String> = (0..fields).map(|i| format!("t{i}: \"x\"")).collect();
+        format!(
+            "struct S {{ n: Word, m: Word, {} }} fn main() -> Word {{ let s = S {{ n: 1, m: 2, {} }}; s.n }}",
+            decl.join(", "),
+            init.join(", ")
+        )
+    };
+    let mutate = |fields: usize| {
+        let mut module = compile_src(&source(fields));
+        assert!(keleusma::verify::verify(&module).is_ok());
+        let read = module.chunks[0]
+            .ops
+            .iter_mut()
+            .find(|op| matches!(op, Op::GetField(StructField::Flat { offset: 0, .. })))
+            .expect("the read of field n");
+        *read = Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Text,
+        });
+        module
+    };
+    // Four fields, the stage's capacity, are refused by both.
+    let four = mutate(4);
+    let message = keleusma::verify::verify(&four).unwrap_err().message;
+    assert!(message.contains("TextFieldMismatch"), "{message}");
+    assert!(matches!(
+        verify_module_via_kel(&four).unwrap(),
+        VerificationVerdict::Rejected { stage: "types", .. }
+    ));
+    // Five fields are refused by the reference and accepted by the stage.
+    let five = mutate(5);
+    let message = keleusma::verify::verify(&five).unwrap_err().message;
+    assert!(message.contains("TextFieldMismatch"), "{message}");
+    assert_eq!(
+        verify_module_via_kel(&five).unwrap(),
+        VerificationVerdict::Accepted
+    );
+}
+
+/// The C5 review's mutation corpus, in its own file so that its generator stays readable. See
+/// `docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md`.
+#[path = "selfhost_validator/c5_corpus.rs"]
+mod c5_corpus;

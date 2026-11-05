@@ -350,6 +350,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-11-02, absorption 132.** Upstream pull request 723,
 // self-host coverage residuals including typed let patterns, changed
 // `codegen.kel`, `lexer.kel` and `parse.kel`. Nothing was added or removed.
+//
+// **RE-PINNED 2026-11-04, absorption 133.** Upstream pull request 725, the C5
+// review of the self-hosted validator, repaired three typed-stage defects in
+// `verify_typed.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -572,7 +576,7 @@ const PINNED: &[(&str, u64)] = &[
     // Absorption 116 rejects a native index past the native table.
     ("src/selfhost/kel/verify_structural.kel", 0x3c716a472f94e1c3),
     // Absorption 119 adds the flat Text layout proof to the typed stage.
-    ("src/selfhost/kel/verify_typed.kel", 0x486783acf626b02d),
+    ("src/selfhost/kel/verify_typed.kel", 0xcdf653e70defc9ed),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x12e9047be52a0423),
     ("src/selfhost/kel/wire.kel", 0x9ce66ccc1eb03277),
