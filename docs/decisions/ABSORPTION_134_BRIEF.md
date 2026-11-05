@@ -31,14 +31,15 @@ that answer rather than on further repair.
 
 ## Verification
 
-Made with `RUSTC_WRAPPER=` at the records commit.
+Made with `RUSTC_WRAPPER=` at `36546b77`. The figures were written after the
+run, and only this file changed afterwards.
 
 | Check | Result |
 |---|---|
-| Native fmt, clippy in both float configurations, doc and shellcheck | FILL |
-| Native suites, default features and `narrow-float-32` | FILL |
-| Root `documentation_links`, `comment_citations`, `ci_shard_coverage` and `gate_ci_correspondence` | FILL |
-| Root `confinement_analysis`, `rogue_scripts`, and with `self-host` `selfhost_full_language` and `selfhost_parse_refusals` | FILL |
+| Native fmt, clippy in both float configurations, doc and shellcheck | passed |
+| Native suites, default features and `narrow-float-32` | 878 passed, 0 failed, 1 ignored each |
+| Root `documentation_links`, `comment_citations`, `ci_shard_coverage` and `gate_ci_correspondence` | 21 passed |
+| Root `confinement_analysis`, `rogue_scripts`, and with `self-host` `selfhost_full_language` and `selfhost_parse_refusals` | 62 and 123 passed |
 
 The root workspace suite was not run locally. The hosted run on the pull
 request covers it.
