@@ -169,8 +169,7 @@ class WorktreeScratchTests(unittest.TestCase):
         self.assertEqual((agent / 'compiler' / 'target' / 'marker').read_bytes(), BUILD_OUTPUT)
 
     def test_list_skips_a_target_that_holds_only_locks(self):
-        # With Cargo's build-dir on scratch, an agent tree's `target` keeps a few
-        # kilobytes of lock files, which is not build output worth reporting.
+        # A `target` holding only lock files is not build output worth reporting.
         agent = self.tmp / 'agents' / 'thirteen'
         self.git('worktree', 'add', '-q', '-b', 'agent/thirteen', str(agent))
         (agent / 'target' / 'debug').mkdir(parents=True)
@@ -178,6 +177,21 @@ class WorktreeScratchTests(unittest.TestCase):
         result = self.worktree('list')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('not on the scratch volume', result.stdout)
+
+    def test_list_counts_a_folder_a_tree_links_by_another_name(self):
+        # V0.2.X links its agent trees by hand to folders named after their branches,
+        # so a folder whose name matches no tree may still be in use.
+        agent = self.tmp / 'agents' / 'fourteen'
+        self.git('worktree', 'add', '-q', '-b', 'agent/fourteen', str(agent))
+        folder = self.home('agent-branch-name')
+        (folder / 'target').mkdir(parents=True)
+        os.symlink(folder / 'target', agent / 'target')
+        stale = self.home('agent-gone')
+        stale.mkdir(parents=True)
+        result = self.worktree('list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(str(folder), result.stdout)
+        self.assertIn(f'scratch folder used by no tree: {stale}', result.stdout)
 
     def test_list_without_scratch_base_reports_no_unlinked_target(self):
         agent = self.tmp / 'agents' / 'twelve'

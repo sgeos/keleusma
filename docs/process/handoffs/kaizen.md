@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor b24d05c1 HEAD     # the merge of PR 708 into v0.2.3
+git merge-base --is-ancestor be96737a HEAD     # the merge of PR 711 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -39,58 +39,34 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-11-01
+## State on 2026-11-04
 
-- **Merged.** Into `v0.2.3`, PRs 620, 625, 626, 624, 630, 633, 647, 649, 654 and 656,
-  PR 660, `main` merged back after PR 655, as `1ea45456`, and PR 675, the nightly fuzz
-  workflow and the fuzz lockfile check, as `b5762e2e`. Into `main`, PR 619, the
-  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82`, PR 655 as
-  `430b2625` and PR 676, the fuzz workflow and the `/fuzz` Dependabot entry, as
-  `694783ab`. PR 688 merges `main` back into `v0.2.3` with an identical tree. PRs 689,
-  693, 696 to 699 and 703 merged into `v0.2.3` on 2026-10-31 and 2026-11-01.
-- **Operator rulings of 2026-10-29.** Changelog entries are fragments under
-  `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
-  [the report](../kaizen/2026-10-29-changelog-fragments.md).
-- **Operator rulings of 2026-10-30.** First-hand in this session, recorded verbatim in
-  [the open decisions](../kaizen/2026-10-30-open-decisions.md). K1 to K13 are ruled and
-  K14 is held. PR 649 applied K2, K5 and K8. V0.2.X landed K7 in PR 658 and K3 with
-  K4a in PR 662. Also first-hand, "Yes. I pre-authorize merging green security-only
-  pull requests into `main`." and "Yes. Add a Dependabot ignore entry for
-  `dtolnay/rust-toolchain`."
-- **Operator ruling of 2026-10-31.** First-hand in this session, "Accept obvious
-  choices, take appropriate action, then give me the updated list of questions and
-  obvious choices.", recorded with each disposition in
-  [the open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md). It
-  adopted N1 to N5 and C7 D2, D3, D5, D6 and D7, applied in PRs 675 and 676.
-- **Second operator ruling of 2026-10-31.** First-hand in this session, recorded
-  verbatim in the same file. V0.2.X's record is the source of truth for its item 4,
-  now (b), and for its other questions, for those items only. N6 is (a). The
-  obvious choices O1 to O7 are adopted. The operator's checks stay open.
-- **Third operator ruling of 2026-10-31.** "Accept all obvious choices and address all
-  open concerns that need no further input from me.", recorded with dispositions in the
-  same file.
-- **Shard balance, N6.** PR 689, `843a6dbf`, pins 43 self-host tests to shards by
-  measured duration, guarded in `tests/ci_shard_coverage.rs`. Over 19 runs after it the
-  longest shard's median was 35.9 minutes against 37.4 over 47 before, not clearly
-  shorter, so keeping the lists is decision D1 of
-  [the open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md).
+- **Rulings.** Every operator ruling to this line is recorded verbatim with its
+  dispositions in the dated open-decision lists under [`../kaizen/`](../kaizen/README.md),
+  from 2026-10-30 to [2026-11-04](../kaizen/2026-11-04-open-decisions.md), and the
+  changelog-fragment rulings of 2026-10-29 in
+  [their report](../kaizen/2026-10-29-changelog-fragments.md). Standing ones are that
+  green security-only PRs into `main` are pre-authorized, branch runs stay
+  uncancelled, the pinned shard lists of PR 689 stay, and release signing begins at
+  the first release after the operator makes a key.
+- **Merged.** This line's PRs into `v0.2.3` through PR 711, `be96737a`, on 2026-11-01.
+  V0.2.X merged `v0.2.3` into `main` as `3e71844a`, and V0.3.X merged `v0.3.0` into
+  `main` as `badd3e5c`, both before a release with no tag.
 - **Scratch volume.** This worktree's `target` links to
   `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
-  target` after any `cargo clean`. PR 697 made `worktree.sh` link and remove build
-  output, the notices went out in sequences 213 to 215, and PR 703 moved the gate's
-  output there. The redacted checkpoint merged in PR 698.
-- **Idle compaction.** The operator set `idleCompaction` to false on 2026-11-01, D2.
-  See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
-- **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
-  at most. The blog's Pages build holds one shared runner for most of a busy day, by
-  the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
+  target` after any `cargo clean`. On 2026-11-05 the volume had 40 GiB free after the
+  E1 removals.
+- **Fuzz.** The nightly run passes and starts six to ten hours after its 10:17 UTC
+  cron time. No target has crashed, so the crash path is untested.
+- **Idle compaction.** False from 05:42 UTC on 2026-11-01, D2 of 2026-11-01.
+- **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner. The
+  blog's Pages build holds a shared runner much of a busy day, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
   count the pruned list. A backup is outside the repository.
-- **Propagation.** The proofs line merged into `v0.2.3` as PR 708 on 2026-11-01 and its
-  remote branch is gone, closing K13. On this line's scans, `v0.2.3` at `b24d05c1` on
-  2026-11-01 and `main` on 2026-10-31 match no term. V0.3.X confirmed that `v0.3.0`
-  matches no term.
+- **Propagation.** K13 closed when the proofs line merged as PR 708. On this line's
+  scans, `v0.2.3` at `b24d05c1` and `main` on 2026-10-31 match no term, and V0.3.X
+  confirmed `v0.3.0`.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
@@ -111,40 +87,28 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. The first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, never started. A
-   manual run on `v0.2.3`, 41309332430, passed in 33 minutes with all five targets
-   run 360 seconds and no crash. Check that the run of 2026-11-02 starts. If it does
-   not, the schedule is broken rather than dropped.
-2. Confirm that the D5 `build-dir` file takes effect on the next agent tree that
-   builds, by its size in `worktree.sh list` and a folder under scratch `agents/`.
-3. `idleCompaction` is false from 05:42 UTC on 2026-11-01. Run `context_quality.py`
-   again on about 2026-11-15 and compare with the trial report.
-4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+1. Supply the release manifest when V0.2.X cuts V0.2.3, once the operator has made
+   the signing key, E3 of 2026-11-04.
+2. Run `context_quality.py` again on about 2026-11-15 and compare with the trial report.
+3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-5. Finish the three selection tasks, record their outcomes, and read the comparison.
-6. A state-file budget guard, once the owning lines have converted their files.
-7. Measure branch-run cost again once changelog fragments are in use.
+4. Finish the three selection tasks, record their outcomes, and read the comparison.
+5. A state-file budget guard, once the owning lines have converted their files.
+6. Measure branch-run cost again once changelog fragments are in use.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record three
-rulings of that day. D4 stays open until upstream ships a `vscode-languageclient` that
-takes `minimatch` 11. The operator creates the D5 (c) `build-dir` file. Release signing
-is adopted from the first release after the operator makes a key. The operator decides
-whether V0.2.X removes the merged agent tree, whether V0.3.X's archive folder moves,
-and whether the main checkout's `target` is linked. The K-series checks K6, K9, K10 and
-K11 remain, and K14 is held. Merges into `v0.2.3` hold until V0.2.X reports that PR 707
-merged, by sequences 233 and 234. V0.2.X merged it as `3e71844a` and released the
-hold.
+[The open decisions of 2026-11-04](../kaizen/2026-11-04-open-decisions.md) hold the
+list and the operator's ruling of that day. The signing key is the operator's to make,
+and V0.2.3's publication waits for it. The K-series checks are deferred.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
-- The fuzz job has run on GitHub, but its crash path and artifact upload are untested,
-  because no target has crashed.
-- Dependabot alert 6 has no compatible fix. Recheck `vscode-languageclient` weekly.
-- Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
-  They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
+- `minimatch` 10.2.6 stays in the extension. GitHub withdrew alert 6, but the advisory
+  still covers that version and no client release accepts the fix.
+- A scratch folder outlives its tree whenever Claude Code removes the tree, so E1 recurs
+  without a rule.
 
 ## Mailbox and pilot
 
