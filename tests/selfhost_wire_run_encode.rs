@@ -1,18 +1,21 @@
-//! Logical-slot grouping and split records are Keleusma decisions.
+//! Data-field records, their names and their initialiser numbering are Keleusma decisions.
+//!
+//! This file held the run-grouping tests for the `DATA_SLOTS` and `SHARED_LAYOUT` run
+//! records. Encoding F, which the operator chose on 2026-10-31, replaced both with one
+//! `DATA_FIELDS` record per declared field, so no grouping remains to decide. What remains
+//! is that the self-hosted encoder emits the same field records as the reference, with names
+//! from its own interner, at every width and count the record carries.
 #![cfg(feature = "self-host")]
-use keleusma::bytecode::{DataLayout, DataSlot, Module, SharedSlotLayout, SlotVisibility};
+use keleusma::bytecode::{
+    ConstValue, DataField, DataInit, DataLayout, MAX_DATA_ADDR, Module, SHARED_SLOT_COMPOSITE_FLAG,
+};
 use keleusma::selfhost::{compile_src, wire_auxiliary_from_module_via_kel};
-use keleusma::wire_schema::{DataSlotRecord, SharedSlotRecord, kind};
+use keleusma::wire_schema::{DataFieldRecord, kind};
 use keleusma_wire::{WireRecord, WireView};
 
-fn module(slots: Vec<DataSlot>, shared_layout: Vec<SharedSlotLayout>) -> Module {
+fn module(fields: Vec<DataField>) -> Module {
     let mut m = compile_src("fn main() -> Word { 7 }");
-    m.data_layout = Some(DataLayout {
-        slots,
-        shared_layout,
-        private_composite_layout: vec![],
-        private_init: vec![],
-    });
+    m.data_layout = Some(DataLayout { fields });
     m
 }
 fn compare(m: &Module) -> Vec<u8> {
@@ -32,152 +35,121 @@ fn records<T: WireRecord>(bytes: &[u8], kind: u16) -> Vec<T> {
         .map(|i| table.get_as::<T>(i).unwrap())
         .collect()
 }
-fn slot(name: &str, visibility: SlotVisibility) -> DataSlot {
-    DataSlot {
-        name: name.into(),
-        visibility,
-    }
-}
-fn shared(offset: u32, kind: u8, len: u16) -> SharedSlotLayout {
-    SharedSlotLayout { offset, kind, len }
+/// `n` one-element shared `Int` fields with the given names, eight bytes apart.
+fn named(names: &[String]) -> Vec<DataField> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| DataField::shared(n.clone(), i as u32, 1, 3, 0, (i * 8) as u32, 0))
+        .collect()
 }
 
 #[test]
-fn data_names_compare_across_windows_and_stop_at_the_first_difference() {
-    use SlotVisibility::{Private, Shared};
-    for boundary in [0, 1, 7, 8, 9, 15, 16, 17] {
-        let mut slots = vec![slot("", Shared); boundary];
-        slots.push(slot("", Private));
-        slots.extend(vec![slot("", Shared); 9]);
-        let bytes = compare(&module(slots, vec![]));
-        let rows = records::<DataSlotRecord>(&bytes, kind::DATA_SLOTS);
-        assert_eq!(rows.len(), if boundary == 0 { 2 } else { 3 });
-    }
+fn field_names_are_interned_by_the_stage_with_sharing() {
+    // Equal names share one interned entry and distinct ones do not, whatever their
+    // length, including names that differ only in a late byte.
     for mismatch in [0, 63, 64, 65, 127, 128, 129] {
         let a = "x".repeat(130);
         let mut b = a.clone().into_bytes();
         b[mismatch] = b'y';
         let b = String::from_utf8(b).unwrap();
-        let mut slots = vec![slot(&a, Shared); 9];
-        slots.extend([
-            slot(&b, Shared),
-            slot(&a, Shared),
-            slot(&b, Shared),
-            slot(&b, Shared),
-            slot(&b, Private),
-        ]);
-        let bytes = compare(&module(slots, vec![]));
-        let rows = records::<DataSlotRecord>(&bytes, kind::DATA_SLOTS);
-        assert_eq!(
-            rows.iter().map(|r| r.run).collect::<Vec<_>>(),
-            [9, 1, 1, 2, 1],
-            "byte {mismatch}"
-        );
+        let names = vec![a.clone(), b.clone(), a.clone(), b.clone(), b];
+        let bytes = compare(&module(named(&names)));
+        let rows = records::<DataFieldRecord>(&bytes, kind::DATA_FIELDS);
+        assert_eq!(rows.len(), 5, "one record per field, byte {mismatch}");
+        assert_eq!(rows[0].name, rows[2].name, "equal names share an index");
+        assert_ne!(rows[0].name, rows[1].name, "byte {mismatch}");
+        assert_eq!(rows[1].name, rows[3].name);
     }
-    let name = "λ".repeat(5000);
-    compare(&module(vec![slot(&name, Shared); 17], vec![]));
+    // Empty names, and a long name of multi-byte characters.
+    compare(&module(named(&vec![String::new(); 17])));
+    compare(&module(named(&vec!["λ".repeat(5000); 3])));
 }
 
 #[test]
-fn shared_runs_preserve_greedy_stride_kind_and_length_boundaries() {
-    let cases = vec![
-        vec![],
-        vec![shared(77, 255, 65535)],
-        vec![
-            shared(0, 3, 0),
-            shared(8, 3, 0),
-            shared(16, 3, 0),
-            shared(32, 3, 0),
-            shared(48, 3, 0),
-        ],
-        vec![shared(9, 3, 0), shared(9, 3, 0), shared(9, 3, 0)],
-        vec![
-            shared(0, 1, 2),
-            shared(65535, 1, 2),
-            shared(131070, 1, 2),
-            shared(196606, 1, 2),
-        ],
-        vec![shared(0, 1, 2), shared(65536, 1, 2), shared(65537, 1, 2)],
-        vec![
-            shared(0, 1, 2),
-            shared(1, 2, 2),
-            shared(2, 2, 3),
-            shared(3, 2, 3),
-        ],
-        vec![shared(u32::MAX, 7, 9), shared(0, 7, 9), shared(1, 7, 9)],
+fn one_record_carries_any_element_count() {
+    for count in [1u32, 2, 65534, 65535, 65536, 131071, MAX_DATA_ADDR - 1] {
+        let stride = if count > 1 { 8 } else { 0 };
+        let bytes = compare(&module(vec![DataField::shared(
+            "shared.array",
+            0,
+            count,
+            3,
+            0,
+            0,
+            stride,
+        )]));
+        let rows = records::<DataFieldRecord>(&bytes, kind::DATA_FIELDS);
+        assert_eq!(rows.len(), 1, "count {count}");
+        assert_eq!((rows[0].count, rows[0].stride), (count, stride));
+    }
+}
+
+#[test]
+fn every_field_width_reaches_the_record() {
+    let pooled = DataField {
+        offset: Some(u32::MAX - 1),
+        elem_len: u16::MAX,
+        stride: u32::MAX,
+        ..DataField::private(
+            "p.wide",
+            u32::MAX - 2,
+            2,
+            SHARED_SLOT_COMPOSITE_FLAG | 3,
+            DataInit::Unit,
+        )
+    };
+    let fields = vec![
+        DataField::shared(
+            "s.t",
+            0,
+            1,
+            SHARED_SLOT_COMPOSITE_FLAG | 2,
+            65535,
+            u32::MAX - 2,
+            0,
+        ),
+        DataField::private("p.z", 1, 7, 2, DataInit::Zero),
+        DataField::private("p.c", 8, 1, 3, DataInit::Const(ConstValue::Int(-5))),
+        pooled,
     ];
-    for layout in cases {
-        compare(&module(vec![], layout));
-    }
-    let bytes = compare(&module(
-        vec![],
-        vec![
-            shared(0, 3, 0),
-            shared(8, 3, 0),
-            shared(16, 3, 0),
-            shared(32, 3, 0),
-            shared(48, 3, 0),
-        ],
-    ));
-    let rows = records::<SharedSlotRecord>(&bytes, kind::SHARED_LAYOUT);
-    assert_eq!(
-        rows.iter()
-            .map(|r| (r.first_slot, r.run, r.stride))
-            .collect::<Vec<_>>(),
-        [(0, 3, 8), (3, 2, 16)]
-    );
+    let bytes = compare(&module(fields));
+    let rows = records::<DataFieldRecord>(&bytes, kind::DATA_FIELDS);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[3].first_slot, u32::MAX - 2);
+    assert_eq!(rows[3].stride, u32::MAX);
+    assert_eq!(rows[3].elem_len, u16::MAX);
 }
 
 #[test]
-fn u16_boundaries_preserve_split_offsets_and_tail_stride() {
-    for count in [65534, 65535, 65536, 131071] {
-        let slots = vec![slot("shared.array", SlotVisibility::Shared); count];
-        let shared_layout = (0..count).map(|i| shared((i * 8) as u32, 3, 0)).collect();
-        let bytes = compare(&module(slots, shared_layout));
-        let names = records::<DataSlotRecord>(&bytes, kind::DATA_SLOTS);
-        let rows = records::<SharedSlotRecord>(&bytes, kind::SHARED_LAYOUT);
-        assert_eq!(names.len(), count.div_ceil(65535));
-        assert_eq!(rows.len(), names.len());
-        for (i, (name, row)) in names.iter().zip(&rows).enumerate() {
-            let first = i * 65535;
-            let take = (count - first).min(65535);
-            assert_eq!(name.run as usize, take);
-            assert_eq!(
-                (row.offset, row.first_slot, row.run, row.stride),
-                ((first * 8) as u32, first as u32, take as u16, 8)
-            );
-        }
-    }
-}
-
-#[test]
-fn mixed_metadata_batches_match_reference_without_assuming_sorted_offsets() {
+fn mixed_fields_match_reference_across_transport_batches() {
     let mut state = 7u32;
-    let mut slots = Vec::new();
-    let mut layout = Vec::new();
-    for i in 0..513 {
+    let mut fields = Vec::new();
+    let mut slot = 0u32;
+    for i in 0..513u32 {
         state ^= state << 13;
         state ^= state >> 17;
         state ^= state << 5;
-        slots.push(slot(
-            ["a", "b", "λ", ""][((state >> 8) & 3) as usize],
-            if state & 1 == 0 {
-                SlotVisibility::Shared
-            } else {
-                SlotVisibility::Private
-            },
-        ));
-        layout.push(shared(
-            if i % 7 < 4 { i * 8 } else { state },
-            (state & 3) as u8,
-            ((state >> 3) & 7) as u16,
-        ));
+        let count = 1 + (state >> 20) % 5;
+        let name = ["a", "b", "λ", ""][((state >> 8) & 3) as usize];
+        let field = if i < 200 {
+            DataField::shared(name, slot, count, (state & 3) as u8, 0, i * 64, 8)
+        } else {
+            let init = match state % 3 {
+                0 => DataInit::Zero,
+                1 => DataInit::Unit,
+                _ => DataInit::Const(ConstValue::Int(i64::from(state))),
+            };
+            DataField::private(name, slot, count, 3, init)
+        };
+        slot += count;
+        fields.push(field);
     }
-    compare(&module(slots, layout));
+    compare(&module(fields));
 }
 
 #[test]
-fn encoded_split_layout_executes_on_both_sides_of_the_record_boundary() {
+fn encoded_layout_executes_on_both_sides_of_the_former_record_boundary() {
     use keleusma::bytecode::Value;
     use keleusma::selfhost::{
         self_hosted_compile, wire_decode_module_via_kel, wire_module_artifact_via_kel,

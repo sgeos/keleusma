@@ -592,59 +592,72 @@ fn layout_mutants(prog: &str, base: &Module, out: &mut Vec<Mutant>) {
     let mut m = base.clone();
     m.data_layout = None;
     push(out, "data layout", format!("{prog}/layout_removed"), m);
-    for si in 0..layout.slots.len() {
+    for fi in 0..layout.fields.len() {
         let mut m = base.clone();
         if let Some(l) = m.data_layout.as_mut() {
-            let slot = &mut l.slots[si];
-            slot.visibility = match slot.visibility {
+            let field = &mut l.fields[fi];
+            field.visibility = match field.visibility {
                 SlotVisibility::Shared => SlotVisibility::Private,
                 SlotVisibility::Private => SlotVisibility::Shared,
             };
         }
-        push(out, "data layout", format!("{prog}/slot{si}/visibility"), m);
+        push(
+            out,
+            "data layout",
+            format!("{prog}/field{fi}/visibility"),
+            m,
+        );
         let mut m = base.clone();
         if let Some(l) = m.data_layout.as_mut() {
-            l.slots.remove(si);
+            l.fields.remove(fi);
         }
-        push(out, "data layout", format!("{prog}/slot{si}/removed"), m);
+        push(out, "data layout", format!("{prog}/field{fi}/removed"), m);
     }
-    for li in 0..layout.shared_layout.len() {
+    // The shared fields' buffer offsets and kinds, which the retired shared layout table held.
+    let shared = layout
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.visibility == SlotVisibility::Shared);
+    for (fi, _) in shared {
         for v in [0u32, 1, 4096, u32::MAX] {
             let mut m = base.clone();
             if let Some(l) = m.data_layout.as_mut() {
-                l.shared_layout[li].offset = v;
+                l.fields[fi].offset = Some(v);
             }
-            let id = format!("{prog}/shared{li}/offset={v}");
+            let id = format!("{prog}/shared{fi}/offset={v}");
             push(out, "data layout", id, m);
         }
         for k in [0u8, 3, 7, 0x80, 0xff] {
             let mut m = base.clone();
             if let Some(l) = m.data_layout.as_mut() {
-                l.shared_layout[li].kind = k;
+                l.fields[fi].kind = k;
             }
-            push(out, "data layout", format!("{prog}/shared{li}/kind={k}"), m);
+            push(out, "data layout", format!("{prog}/shared{fi}/kind={k}"), m);
         }
-        let mut m = base.clone();
-        if let Some(l) = m.data_layout.as_mut() {
-            l.shared_layout.remove(li);
-        }
-        push(out, "data layout", format!("{prog}/shared{li}/removed"), m);
     }
-    for pi in 0..layout.private_composite_layout.len() {
-        for v in [0u16, 1, u16::MAX] {
+    // The pooled private fields' slots and offsets, which the retired private composite
+    // placement table held.
+    let pooled = layout
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.visibility == SlotVisibility::Private && f.offset.is_some());
+    for (fi, _) in pooled {
+        for v in [0u32, 1, u32::from(u16::MAX)] {
             let mut m = base.clone();
             if let Some(l) = m.data_layout.as_mut() {
-                l.private_composite_layout[pi].slot = v;
+                l.fields[fi].first_slot = v;
             }
-            let id = format!("{prog}/private{pi}/slot={v}");
+            let id = format!("{prog}/private{fi}/slot={v}");
             push(out, "data layout", id, m);
         }
         for v in [0u32, 1, u32::MAX] {
             let mut m = base.clone();
             if let Some(l) = m.data_layout.as_mut() {
-                l.private_composite_layout[pi].offset = v;
+                l.fields[fi].offset = Some(v);
             }
-            let id = format!("{prog}/private{pi}/offset={v}");
+            let id = format!("{prog}/private{fi}/offset={v}");
             push(out, "data layout", id, m);
         }
     }

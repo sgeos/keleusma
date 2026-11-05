@@ -977,8 +977,12 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
             fell_through.push(cmd);
         }
     }
-    assert!(
-        fell_through.is_empty(),
+    // The commands Encoding F retired: the fourth data-layout reader and the
+    // shared-slot, initialiser and private-composite emitters. They are refused
+    // by the chain default, which is the answer an unassigned command must give.
+    const RETIRED: [i64; 4] = [68, 121, 126, 131];
+    assert_eq!(
+        fell_through, RETIRED,
         "these commands fell through to a chain default: {fell_through:?}"
     );
     // The bound is only load-bearing if `main` actually refuses past it.
@@ -2509,116 +2513,43 @@ fn a_variant_discriminant_of_minus_one_is_a_value_not_an_error() {
 // SLICE 5d — the data segment, where PRESENCE is semantic
 // =========================================================================
 
-use keleusma::wire_schema::{
-    DataInitRecord, DataSlotRecord, PrivateCompositeRecord, SharedSlotRecord,
-};
+use keleusma::wire_schema::DataFieldRecord;
 
 const CMD_DATA_PRESENT: i64 = 55;
-const CMD_DSLOT_COUNT: i64 = 56;
-const CMD_DSLOT_NAME: i64 = 57;
-const CMD_DSLOT_VIS: i64 = 58;
-const CMD_SSLOT_COUNT: i64 = 59;
-const CMD_SSLOT_OFFSET: i64 = 60;
-const CMD_SSLOT_KIND: i64 = 61;
-const CMD_SSLOT_LEN: i64 = 62;
-const CMD_PCOMP_COUNT: i64 = 63;
-const CMD_PCOMP_SLOT: i64 = 64;
-const CMD_PCOMP_OFFSET: i64 = 65;
-const CMD_DINIT_COUNT: i64 = 66;
-const CMD_DINIT_FIRST: i64 = 67;
-const CMD_DINIT_RANGE_COUNT: i64 = 68;
+const CMD_FIELD_COUNT: i64 = 56;
+const CMD_FIELD_NAME: i64 = 57;
+const CMD_FIELD_VIS: i64 = 58;
+const CMD_FIELD_FIRST_SLOT: i64 = 59;
+const CMD_FIELD_ELEMENTS: i64 = 60;
+const CMD_FIELD_OFFSET: i64 = 61;
+const CMD_FIELD_STRIDE: i64 = 62;
+const CMD_FIELD_ELEM_LEN: i64 = 63;
+const CMD_FIELD_KIND: i64 = 64;
+const CMD_FIELD_INIT: i64 = 65;
+const CMD_FIELD_INIT_CONST: i64 = 66;
+const CMD_DATA_RETIRED: i64 = 67;
 
 #[test]
 fn the_slice_5d_offsets_and_kinds_match_the_schema() {
-    assert_eq!(kel_const("dslot_stride"), DataSlotRecord::STRIDE as i64);
-    assert_eq!(
-        kel_const("dslot_off_name"),
-        DataSlotRecord::OFFSET_NAME as i64
-    );
-    assert_eq!(
-        kel_const("dslot_off_visibility"),
-        DataSlotRecord::OFFSET_VISIBILITY as i64
-    );
-    // Reserved fields, transcribed for the emitter rather than the reader.
-    assert_eq!(
-        kel_const("dslot_off_reserved"),
-        DataSlotRecord::OFFSET_RESERVED as i64
-    );
-    assert_eq!(
-        kel_const("dslot_off_run"),
-        DataSlotRecord::OFFSET_RUN as i64
-    );
-
-    assert_eq!(kel_const("sslot_stride"), SharedSlotRecord::STRIDE as i64);
-    assert_eq!(
-        kel_const("sslot_off_offset"),
-        SharedSlotRecord::OFFSET_OFFSET as i64
-    );
-    assert_eq!(
-        kel_const("sslot_off_kind"),
-        SharedSlotRecord::OFFSET_KIND as i64
-    );
-    assert_eq!(
-        kel_const("sslot_off_len"),
-        SharedSlotRecord::OFFSET_LEN as i64
-    );
-    assert_eq!(
-        kel_const("sslot_off_reserved"),
-        SharedSlotRecord::OFFSET_RESERVED as i64
-    );
-    // The run-length trio. These are the fields that make SharedSlotRecord two
-    // words, and a wrong offset on any of them places a run's slots at wrong
-    // byte offsets rather than failing loudly.
-    assert_eq!(
-        kel_const("sslot_off_first_slot"),
-        SharedSlotRecord::OFFSET_FIRST_SLOT as i64
-    );
-    assert_eq!(
-        kel_const("sslot_off_run"),
-        SharedSlotRecord::OFFSET_RUN as i64
-    );
-    assert_eq!(
-        kel_const("sslot_off_stride"),
-        SharedSlotRecord::OFFSET_STRIDE as i64
-    );
-
-    assert_eq!(
-        kel_const("pcomp_stride"),
-        PrivateCompositeRecord::STRIDE as i64
-    );
-    assert_eq!(
-        kel_const("pcomp_off_slot"),
-        PrivateCompositeRecord::OFFSET_SLOT as i64
-    );
-    assert_eq!(
-        kel_const("pcomp_off_reserved"),
-        PrivateCompositeRecord::OFFSET_RESERVED as i64
-    );
-    assert_eq!(
-        kel_const("pcomp_off_offset"),
-        PrivateCompositeRecord::OFFSET_OFFSET as i64
-    );
-
-    assert_eq!(kel_const("dinit_stride"), DataInitRecord::STRIDE as i64);
-    assert_eq!(
-        kel_const("dinit_off_first"),
-        DataInitRecord::OFFSET_FIRST as i64
-    );
-    assert_eq!(
-        kel_const("dinit_off_count"),
-        DataInitRecord::OFFSET_COUNT as i64
-    );
-
-    assert_eq!(kel_const("kind_data_slots"), i64::from(kind::DATA_SLOTS));
-    assert_eq!(
-        kel_const("kind_shared_layout"),
-        i64::from(kind::SHARED_LAYOUT)
-    );
-    assert_eq!(
-        kel_const("kind_private_composite"),
-        i64::from(kind::PRIVATE_COMPOSITE)
-    );
-    assert_eq!(kel_const("kind_data_init"), i64::from(kind::DATA_INIT));
+    assert_eq!(kel_const("dfield_stride"), DataFieldRecord::STRIDE as i64);
+    for (name, offset) in [
+        ("dfield_off_name", DataFieldRecord::OFFSET_NAME),
+        ("dfield_off_first_slot", DataFieldRecord::OFFSET_FIRST_SLOT),
+        ("dfield_off_count", DataFieldRecord::OFFSET_COUNT),
+        ("dfield_off_offset", DataFieldRecord::OFFSET_OFFSET),
+        ("dfield_off_stride", DataFieldRecord::OFFSET_STRIDE),
+        ("dfield_off_elem_len", DataFieldRecord::OFFSET_ELEM_LEN),
+        ("dfield_off_kind", DataFieldRecord::OFFSET_KIND),
+        ("dfield_off_visibility", DataFieldRecord::OFFSET_VISIBILITY),
+        ("dfield_off_init", DataFieldRecord::OFFSET_INIT),
+        // Reserved fields, transcribed for the emitter rather than the reader.
+        ("dfield_off_reserved0", DataFieldRecord::OFFSET_RESERVED0),
+        ("dfield_off_reserved1", DataFieldRecord::OFFSET_RESERVED1),
+        ("dfield_off_init_const", DataFieldRecord::OFFSET_INIT_CONST),
+    ] {
+        assert_eq!(kel_const(name), offset as i64, "{name}");
+    }
+    assert_eq!(kel_const("kind_data_fields"), i64::from(kind::DATA_FIELDS));
 }
 
 #[test]
@@ -2628,242 +2559,131 @@ fn an_absent_data_layout_is_distinguishable_from_an_empty_one() {
     // not existing, emptiness by it existing with no records. Every other count
     // in this file returns 0 for absence, which would collapse the two here.
     let mut vm = vm_for(WIRE_KEL);
+    let ask = |vm: &mut Vm<'static, 'static>, cmd: i64, n: i64, art: &[u8]| {
+        run_cmd_args(vm, cmd, n, art, &[], [0, 0, 0, 0, 0], 0)
+            .expect("run")
+            .0
+    };
 
-    // (a) No DATA_SLOTS region at all.
+    // (a) No DATA_FIELDS region at all.
     let mut b = keleusma_wire::WireBuilder::new();
     let p = b.region(kind::STRING_POOL, 0).expect("pool");
     b.push(p, b"x");
     let absent = b.finish().expect("finish");
-    let (present, _) = run_cmd_args(
-        &mut vm,
-        CMD_DATA_PRESENT,
-        1,
-        &absent,
-        &[],
-        [0, 0, 0, 0, 0],
+    assert_eq!(
+        ask(&mut vm, CMD_DATA_PRESENT, 1, &absent),
         0,
-    )
-    .expect("run");
-    let (count, _) = run_cmd_args(
-        &mut vm,
-        CMD_DSLOT_COUNT,
-        1,
-        &absent,
-        &[],
-        [0, 0, 0, 0, 0],
-        0,
-    )
-    .expect("run");
-    assert_eq!(present, 0, "no DATA_SLOTS region means no data layout");
-    assert_eq!(count, -1, "an absent table must not report zero slots");
+        "no DATA_FIELDS region means no data layout"
+    );
+    assert_eq!(
+        ask(&mut vm, CMD_FIELD_COUNT, 1, &absent),
+        -1,
+        "an absent table must not report zero fields"
+    );
 
-    // (b) A DATA_SLOTS region that exists and is empty.
+    // (b) A DATA_FIELDS region that exists and is empty.
     let mut b = keleusma_wire::WireBuilder::new();
     let p = b.region(kind::STRING_POOL, 0).expect("pool");
     b.push(p, b"x");
-    b.region(kind::DATA_SLOTS, 0).expect("empty slots");
+    b.region(kind::DATA_FIELDS, 0).expect("empty fields");
     let empty = b.finish().expect("finish");
-    let (present, _) = run_cmd_args(
-        &mut vm,
-        CMD_DATA_PRESENT,
-        2,
-        &empty,
-        &[],
-        [0, 0, 0, 0, 0],
-        0,
-    )
-    .expect("run");
-    let (count, _) =
-        run_cmd_args(&mut vm, CMD_DSLOT_COUNT, 2, &empty, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(
-        present, 1,
-        "an empty DATA_SLOTS region still means a layout exists"
+        ask(&mut vm, CMD_DATA_PRESENT, 2, &empty),
+        1,
+        "an empty DATA_FIELDS region still means a layout exists"
     );
-    assert_eq!(count, 0, "an empty table has zero slots");
+    assert_eq!(ask(&mut vm, CMD_FIELD_COUNT, 2, &empty), 0);
 
-    // The two must not be confusable, which is the whole assertion.
-    assert_ne!(
-        (0, -1),
-        (1, 0),
-        "absent and empty must produce different answers"
-    );
+    // (c) A retired region, with no DATA_FIELDS, is refused rather than read as
+    // a module with no data layout, which is the silent misread an artifact
+    // from before Encoding F would otherwise produce.
+    for retired in kind::RETIRED_DATA_LAYOUT {
+        let mut b = keleusma_wire::WireBuilder::new();
+        let p = b.region(kind::STRING_POOL, 0).expect("pool");
+        b.push(p, b"x");
+        let r = b.region(retired, 0).expect("retired");
+        b.push(r, &[0; 8]);
+        let old = b.finish().expect("finish");
+        assert_eq!(
+            ask(&mut vm, CMD_DATA_PRESENT, 2, &old),
+            -292,
+            "retired kind {retired:#06x} must be refused"
+        );
+        assert_eq!(ask(&mut vm, CMD_DATA_RETIRED, 2, &old), 1);
+    }
+    assert_eq!(ask(&mut vm, CMD_DATA_RETIRED, 2, &empty), 0);
 }
 
-#[allow(clippy::type_complexity)]
-fn data_artifact() -> (
-    Vec<u8>,
-    Vec<DataSlotRecord>,
-    Vec<SharedSlotRecord>,
-    Vec<PrivateCompositeRecord>,
-    Vec<DataInitRecord>,
-) {
-    let dslots = vec![
-        DataSlotRecord {
+fn data_artifact() -> (Vec<u8>, Vec<DataFieldRecord>) {
+    // Boundary values deliberately: a `count` and `first_slot` past `u16`, an
+    // `elem_len` of 65535, an `offset` past `i32`, and an `init_const` of
+    // `ABSENT`, so a narrow or signed read of any of them shows up.
+    let fields = vec![
+        DataFieldRecord {
             name: 1,
-            visibility: 1,
-            reserved: 0,
-            run: 1,
-        },
-        DataSlotRecord {
-            name: 2,
-            visibility: 2,
-            reserved: 0,
-            run: 1,
-        },
-    ];
-    // Two runs, deliberately not two singletons. A `run` of 1 leaves `stride`
-    // unused, so a fixture of singletons would not distinguish an emitter that
-    // writes the stride field from one that leaves it zero.
-    let sslots = vec![
-        SharedSlotRecord {
-            offset: 0,
-            kind: 3,
-            reserved: 0,
-            len: 8,
             first_slot: 0,
-            run: 64,
-            stride: 8,
-        },
-        SharedSlotRecord {
-            offset: 8,
-            kind: 4,
-            reserved: 0,
-            len: 65535,
-            first_slot: 64,
-            run: 65535,
-            stride: 65535,
-        },
-    ];
-    let pcomps = vec![
-        PrivateCompositeRecord {
-            slot: 0,
-            reserved: 0,
-            offset: 0,
-        },
-        PrivateCompositeRecord {
-            slot: 65535,
-            reserved: 0,
+            count: 70_000,
             offset: 4_000_000_000,
+            stride: 65_536,
+            elem_len: 65_535,
+            kind: 0x82,
+            visibility: 1,
+            init: 0,
+            reserved0: 0,
+            reserved1: 0,
+            init_const: u32::MAX,
+        },
+        DataFieldRecord {
+            name: 2,
+            first_slot: 70_000,
+            count: 1,
+            offset: u32::MAX,
+            stride: 0,
+            elem_len: 0,
+            kind: 3,
+            visibility: 2,
+            init: 2,
+            reserved0: 0,
+            reserved1: 0,
+            init_const: 3,
         },
     ];
-    let dinits = vec![DataInitRecord { first: 3, count: 2 }];
-
     let mut b = keleusma_wire::WireBuilder::new();
-    let push_all = |b: &mut keleusma_wire::WireBuilder, k: u16, bufs: &[[u8; 8]]| {
-        let id = b.region(k, 0).expect("region");
-        for x in bufs {
-            b.push(id, x);
-        }
-    };
-    let enc8 = |f: &dyn Fn(&mut [u8; 8])| {
-        let mut buf = [0u8; 8];
-        f(&mut buf);
-        buf
-    };
-    let d: Vec<[u8; 8]> = dslots
-        .iter()
-        .map(|r| {
-            enc8(&|b: &mut [u8; 8]| {
-                r.write_record(b).expect("e");
-            })
-        })
-        .collect();
-    // SharedSlotRecord is TWO words, so it needs its own encode and push.
-    let push_all16 = |b: &mut keleusma_wire::WireBuilder, k: u16, bufs: &[[u8; 16]]| {
-        let id = b.region(k, 0).expect("region");
-        for x in bufs {
-            b.push(id, x);
-        }
-    };
-    let s: Vec<[u8; 16]> = sslots
-        .iter()
-        .map(|r| {
-            let mut buf = [0u8; 16];
-            r.write_record(&mut buf).expect("e");
-            buf
-        })
-        .collect();
-    let c: Vec<[u8; 8]> = pcomps
-        .iter()
-        .map(|r| {
-            enc8(&|b: &mut [u8; 8]| {
-                r.write_record(b).expect("e");
-            })
-        })
-        .collect();
-    let i: Vec<[u8; 8]> = dinits
-        .iter()
-        .map(|r| {
-            enc8(&|b: &mut [u8; 8]| {
-                r.write_record(b).expect("e");
-            })
-        })
-        .collect();
-    push_all(&mut b, kind::DATA_SLOTS, &d);
-    push_all16(&mut b, kind::SHARED_LAYOUT, &s);
-    push_all(&mut b, kind::PRIVATE_COMPOSITE, &c);
-    push_all(&mut b, kind::DATA_INIT, &i);
-    (b.finish().expect("finish"), dslots, sslots, pcomps, dinits)
+    let id = b.region(kind::DATA_FIELDS, 0).expect("region");
+    for r in &fields {
+        b.push_record(id, r);
+    }
+    (b.finish().expect("finish"), fields)
 }
 
 #[test]
 fn the_data_segment_tables_read_back_field_for_field() {
-    // The fixture uses boundary values deliberately: a `len` of 65535 and a
-    // `slot` of 65535 are the largest a u16 holds, and an `offset` of four
-    // billion exceeds i32, so a narrow or signed read of any of them shows up.
-    let (art, dslots, sslots, pcomps, dinits) = data_artifact();
+    let (art, fields) = data_artifact();
     let mut vm = vm_for(WIRE_KEL);
-    let n = 4i64;
-
-    for (cmd, want, what) in [
-        (CMD_DSLOT_COUNT, dslots.len() as i64, "data slots"),
-        (CMD_SSLOT_COUNT, sslots.len() as i64, "shared slots"),
-        (CMD_PCOMP_COUNT, pcomps.len() as i64, "private composites"),
-        (CMD_DINIT_COUNT, dinits.len() as i64, "data inits"),
-    ] {
-        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
-        assert_eq!(got, want, "{what} count");
-    }
-
-    for (i, r) in dslots.iter().enumerate() {
+    let n = 1i64;
+    let (got, _) =
+        run_cmd_args(&mut vm, CMD_FIELD_COUNT, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(got, fields.len() as i64, "field count");
+    for (i, r) in fields.iter().enumerate() {
         for (cmd, want, what) in [
-            (CMD_DSLOT_NAME, i64::from(r.name), "name"),
-            (CMD_DSLOT_VIS, i64::from(r.visibility), "visibility"),
+            (CMD_FIELD_NAME, i64::from(r.name), "name"),
+            (CMD_FIELD_VIS, i64::from(r.visibility), "visibility"),
+            (CMD_FIELD_FIRST_SLOT, i64::from(r.first_slot), "first slot"),
+            (CMD_FIELD_ELEMENTS, i64::from(r.count), "count"),
+            (CMD_FIELD_OFFSET, i64::from(r.offset), "offset"),
+            (CMD_FIELD_STRIDE, i64::from(r.stride), "stride"),
+            (CMD_FIELD_ELEM_LEN, i64::from(r.elem_len), "element length"),
+            (CMD_FIELD_KIND, i64::from(r.kind), "kind"),
+            (CMD_FIELD_INIT, i64::from(r.init), "initialiser form"),
+            (
+                CMD_FIELD_INIT_CONST,
+                i64::from(r.init_const),
+                "initialiser constant",
+            ),
         ] {
             let (got, _) =
                 run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
-            assert_eq!(got, want, "data slot {i} {what}");
-        }
-    }
-    for (i, r) in sslots.iter().enumerate() {
-        for (cmd, want, what) in [
-            (CMD_SSLOT_OFFSET, i64::from(r.offset), "offset"),
-            (CMD_SSLOT_KIND, i64::from(r.kind), "kind"),
-            (CMD_SSLOT_LEN, i64::from(r.len), "len"),
-        ] {
-            let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
-            assert_eq!(got, want, "shared slot {i} {what}");
-        }
-    }
-    for (i, r) in pcomps.iter().enumerate() {
-        for (cmd, want, what) in [
-            (CMD_PCOMP_SLOT, i64::from(r.slot), "slot"),
-            (CMD_PCOMP_OFFSET, i64::from(r.offset), "offset"),
-        ] {
-            let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
-            assert_eq!(got, want, "private composite {i} {what}");
-        }
-    }
-    for (i, r) in dinits.iter().enumerate() {
-        for (cmd, want, what) in [
-            (CMD_DINIT_FIRST, i64::from(r.first), "first"),
-            (CMD_DINIT_RANGE_COUNT, i64::from(r.count), "count"),
-        ] {
-            let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
-            assert_eq!(got, want, "data init {i} {what}");
+            assert_eq!(got, want, "data field {i} {what}");
         }
     }
 }
@@ -4308,10 +4128,11 @@ fn the_emitted_container_header_matches_the_reference_on_real_compiler_output() 
 fn the_real_region_sets_are_the_shape_the_measurement_recorded() {
     for (name, src) in CORPUS_STAGES {
         let (specs, _) = real_stage_regions(src);
+        // Sixteen since Encoding F replaced four data-layout regions with one.
         assert_eq!(
             specs.len(),
-            19,
-            "{name}: expected 19 regions, the measured count for every stage"
+            16,
+            "{name}: expected 16 regions, the measured count for every stage"
         );
         // DEBUG_POOL is the twentieth kind and no stage emits it, because
         // `CompileOptions::emit_debug` defaults to false. Pinned here so the day
@@ -5314,88 +5135,64 @@ fn the_accumulator_differentials_report_a_perturbation() {
 // rather than left for a reader to infer from a magic number.
 const SLOT_RECORD_CAP: usize = 2048;
 
-const CMD_EMIT_DATA_SLOT_RECORDS: i64 = 120;
-const CMD_EMIT_SHARED_SLOT_RECORDS: i64 = 121;
-// THE TWO TABLES NO LONGER SHARE A SHAPE, so they no longer share constants.
-//
-// A single `SLOT_STRIDE`/`SLOT_FIELDS` pair served both while both were one
-// word of four fields. `SharedSlotRecord` gained `first_slot`, `run` and
-// `stride` and became two words of seven. Keeping one pair would have read the
-// shared table at an 8-byte stride and decoded four of its seven fields --
-// which COMPILES, and silently produces wrong rows rather than failing.
-const DSLOT_STRIDE: usize = 8;
-const DSLOT_FIELDS: usize = 4;
-const SSLOT_STRIDE: usize = 16;
-const SSLOT_FIELDS: usize = 7;
-const DSLOTS_PER_BATCH: usize = FIN_CAPACITY / DSLOT_FIELDS;
-const SSLOTS_PER_BATCH: usize = FIN_CAPACITY / SSLOT_FIELDS;
+// ONE TABLE, ONE SHAPE. Encoding F replaced the per-run `DATA_SLOTS` and
+// `SHARED_LAYOUT` tables with `DATA_FIELDS`, one thirty-two-byte record of twelve
+// fields per declared field, emitted by command 120.
+const CMD_EMIT_DATA_FIELD_RECORDS: i64 = 120;
+const DFIELD_STRIDE: usize = 32;
+const DFIELD_FIELDS: usize = 12;
+const DFIELDS_PER_BATCH: usize = FIN_CAPACITY / DFIELD_FIELDS;
 
-/// Both per-slot tables of a stage, as field rows and as reference bytes.
+/// A stage's field table, as field rows and as reference bytes.
 struct SlotCase {
-    data: Vec<[i64; DSLOT_FIELDS]>,
+    data: Vec<[i64; DFIELD_FIELDS]>,
     data_want: Vec<u8>,
-    shared: Vec<[i64; SSLOT_FIELDS]>,
-    shared_want: Vec<u8>,
+}
+
+/// The twelve fields of a record, in record order.
+fn field_row(r: &keleusma::wire_schema::DataFieldRecord) -> [i64; DFIELD_FIELDS] {
+    [
+        i64::from(r.name),
+        i64::from(r.first_slot),
+        i64::from(r.count),
+        i64::from(r.offset),
+        i64::from(r.stride),
+        i64::from(r.elem_len),
+        i64::from(r.kind),
+        i64::from(r.visibility),
+        i64::from(r.init),
+        i64::from(r.reserved0),
+        i64::from(r.reserved1),
+        i64::from(r.init_const),
+    ]
 }
 
 fn real_slot_case(src: &str) -> SlotCase {
-    use keleusma::wire_schema::{DataSlotRecord, SharedSlotRecord, kind};
+    use keleusma::wire_schema::{DataFieldRecord, kind};
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let bytes =
         keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
     let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
 
-    let dregion = view
-        .find_region(kind::DATA_SLOTS)
-        .expect("DATA_SLOTS region");
-    let dbytes = view.region_bytes(&dregion).expect("payload").to_vec();
-    let dtable = view.records(&dregion, DSLOT_STRIDE).expect("record table");
-    let dn = dtable.len().min(SLOT_RECORD_CAP);
-    let mut dslots = Vec::with_capacity(dn);
-    for i in 0..dn {
-        let r: DataSlotRecord = dtable.get_as(i).expect("record in range");
-        dslots.push([
-            i64::from(r.name),
-            i64::from(r.visibility),
-            i64::from(r.reserved),
-            i64::from(r.run),
-        ]);
+    let region = view
+        .find_region(kind::DATA_FIELDS)
+        .expect("DATA_FIELDS region");
+    let raw = view.region_bytes(&region).expect("payload").to_vec();
+    let table = view.records(&region, DFIELD_STRIDE).expect("record table");
+    let n = table.len().min(SLOT_RECORD_CAP);
+    let mut rows = Vec::with_capacity(n);
+    for i in 0..n {
+        let r: DataFieldRecord = table.get_as(i).expect("record in range");
+        rows.push(field_row(&r));
     }
-
-    let sregion = view
-        .find_region(kind::SHARED_LAYOUT)
-        .expect("SHARED_LAYOUT region");
-    let sbytes = view.region_bytes(&sregion).expect("payload").to_vec();
-    let stable = view.records(&sregion, SSLOT_STRIDE).expect("record table");
-    let sn = stable.len().min(SLOT_RECORD_CAP);
-    let mut sslots = Vec::with_capacity(sn);
-    for i in 0..sn {
-        let r: SharedSlotRecord = stable.get_as(i).expect("record in range");
-        sslots.push([
-            i64::from(r.offset),
-            i64::from(r.kind),
-            i64::from(r.reserved),
-            i64::from(r.len),
-            i64::from(r.first_slot),
-            i64::from(r.run),
-            i64::from(r.stride),
-        ]);
-    }
-
     SlotCase {
-        data: dslots,
-        data_want: dbytes[..dn * DSLOT_STRIDE].to_vec(),
-        shared: sslots,
-        shared_want: sbytes[..sn * SSLOT_STRIDE].to_vec(),
+        data: rows,
+        data_want: raw[..n * DFIELD_STRIDE].to_vec(),
     }
 }
 
-/// Generic over the field count, because the two tables no longer agree on it.
-///
 /// `stride` and `per_batch` are passed rather than derived from `F`: the byte
-/// stride is a property of the record layout, not of the field count, and
-/// deriving one from the other is the coupling that made a single constant
-/// serve two tables in the first place.
+/// stride is a property of the record layout, not of the field count.
 fn emit_slots_batched<const F: usize>(
     vm: &mut Vm<'static, 'static>,
     cmd: i64,
@@ -5425,218 +5222,146 @@ fn emit_slots_batched<const F: usize>(
 }
 
 #[test]
-fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
+fn the_emitted_field_table_matches_the_reference_on_real_compiler_output() {
     let mut vm = vm_for(WIRE_KEL);
-    let mut deepest = 0usize;
+    let mut fields = 0usize;
     for (name, src) in CORPUS_STAGES {
         let case = real_slot_case(src);
-        assert!(!case.data.is_empty(), "{name}: no data slots");
-        deepest = deepest
-            .max(case.data.len().div_ceil(DSLOTS_PER_BATCH))
-            .max(case.shared.len().div_ceil(SSLOTS_PER_BATCH));
-
-        let dgot = emit_slots_batched(
+        assert!(!case.data.is_empty(), "{name}: no data fields");
+        fields += case.data.len();
+        let got = emit_slots_batched(
             &mut vm,
-            CMD_EMIT_DATA_SLOT_RECORDS,
+            CMD_EMIT_DATA_FIELD_RECORDS,
             &case.data,
             64,
-            DSLOT_STRIDE,
-            DSLOTS_PER_BATCH,
+            DFIELD_STRIDE,
+            DFIELDS_PER_BATCH,
         );
-        assert_eq!(dgot, case.data_want, "{name}: DATA_SLOTS differs");
-
-        let sgot = emit_slots_batched(
-            &mut vm,
-            CMD_EMIT_SHARED_SLOT_RECORDS,
-            &case.shared,
-            64,
-            SSLOT_STRIDE,
-            SSLOTS_PER_BATCH,
-        );
-        assert_eq!(sgot, case.shared_want, "{name}: SHARED_LAYOUT differs");
+        assert_eq!(got, case.data_want, "{name}: DATA_FIELDS differs");
     }
-    // NEITHER TABLE CROSSES MANY BATCHES ANY MORE, and this is recorded rather
-    // than asserted away.
-    //
-    // The previous version of this test asserted `deepest >= 8`. That control
-    // was kept alive by `SHARED_LAYOUT`, which was one record per shared slot
-    // and crossed many batches after run-length encoding had already collapsed
-    // `DATA_SLOTS`. Now both tables are run-length encoded, so the real corpus
-    // produces a handful of records each and this test no longer exercises
-    // batching AT ALL.
-    //
-    // Lowering the threshold to match would be exactly the move this suite
-    // exists to prevent: an assertion retuned until it passes, still reading as
-    // coverage. So the batching property moved to
-    // `per_slot_batching_still_crosses_many_boundaries` below, which drives it
-    // from a synthetic table sized to cross boundaries by construction, and
-    // this test keeps only the property it can still measure -- byte identity
-    // against real compiler output.
-    assert!(
-        deepest >= 1,
-        "the corpus produced no per-slot records at all"
-    );
+    // One record per declared field, so the corpus produces a few hundred
+    // records in all. Batching is driven from a synthetic table below.
+    assert!(fields >= 1, "the corpus produced no field records at all");
 }
 
-/// Batching across many boundaries, from a synthetic table.
-///
-/// Run-length encoding both per-slot tables took the real corpus from thousands
-/// of records to a handful, so the real-output test above can no longer reach a
-/// second batch, let alone an eighth. **That is a coverage loss, not a reason to
-/// lower a threshold**, and the mechanism it covered is still live: any stage
-/// whose shared declarations fragment would produce a long table again.
-///
-/// The rows here are synthetic and deliberately NOT run-compressible in shape,
-/// because the point is to exercise the batching loop rather than the encoder.
+/// Batching across many boundaries, from a synthetic table, because the real
+/// corpus has too few fields to reach a second batch.
 #[test]
-fn per_slot_batching_still_crosses_many_boundaries() {
+fn field_batching_crosses_many_boundaries() {
     let mut vm = vm_for(WIRE_KEL);
-
-    let n = SSLOTS_PER_BATCH * 9 + 3;
-    let recs: Vec<[i64; SSLOT_FIELDS]> = (0..n)
+    let n = DFIELDS_PER_BATCH * 9 + 3;
+    let recs: Vec<[i64; DFIELD_FIELDS]> = (0..n)
         .map(|k| {
+            let k = k as i64;
             [
-                (k as i64) * 8,
-                (k % 7) as i64,
-                0,
-                (k % 5) as i64,
-                k as i64,
-                1,
+                k % 13,
+                k * 3,
+                3,
+                k * 64,
                 8,
+                k % 5,
+                k % 7,
+                1 + k % 2,
+                k % 3,
+                0,
+                0,
+                if k % 3 == 2 { k } else { i64::from(u32::MAX) },
             ]
         })
         .collect();
     assert!(
-        n.div_ceil(SSLOTS_PER_BATCH) >= 8,
+        n.div_ceil(DFIELDS_PER_BATCH) >= 8,
         "the synthetic table must cross at least eight batch boundaries, or \
          this test measures nothing"
     );
-
     let got = emit_slots_batched(
         &mut vm,
-        CMD_EMIT_SHARED_SLOT_RECORDS,
+        CMD_EMIT_DATA_FIELD_RECORDS,
         &recs,
         64,
-        SSLOT_STRIDE,
-        SSLOTS_PER_BATCH,
+        DFIELD_STRIDE,
+        DFIELDS_PER_BATCH,
     );
     assert_eq!(
         got.len(),
-        n * SSLOT_STRIDE,
-        "batched output is the wrong length across boundaries"
+        n * DFIELD_STRIDE,
+        "batched output is the wrong length"
     );
-
-    // Byte identity against the reference encoder, record by record, so this
-    // checks the emitted CONTENT rather than only the length.
-    let mut want = Vec::with_capacity(n * SSLOT_STRIDE);
+    // Byte identity against the reference encoder, record by record.
+    let mut want = Vec::with_capacity(n * DFIELD_STRIDE);
     for r in &recs {
-        let rec = keleusma::wire_schema::SharedSlotRecord {
-            offset: r[0] as u32,
-            kind: r[1] as u8,
-            reserved: r[2] as u8,
-            len: r[3] as u16,
-            first_slot: r[4] as u32,
-            run: r[5] as u16,
-            stride: r[6] as u16,
+        let rec = keleusma::wire_schema::DataFieldRecord {
+            name: r[0] as u32,
+            first_slot: r[1] as u32,
+            count: r[2] as u32,
+            offset: r[3] as u32,
+            stride: r[4] as u32,
+            elem_len: r[5] as u16,
+            kind: r[6] as u8,
+            visibility: r[7] as u8,
+            init: r[8] as u8,
+            reserved0: r[9] as u8,
+            reserved1: r[10] as u16,
+            init_const: r[11] as u32,
         };
-        let mut buf = [0u8; SSLOT_STRIDE];
+        let mut buf = [0u8; DFIELD_STRIDE];
         keleusma_wire::WireRecord::write_record(&rec, &mut buf).expect("encode");
         want.extend_from_slice(&buf);
     }
     assert_eq!(got, want, "batched emission differs from the reference");
 }
 
-/// Must-fire control for both per-slot tables, including the reserved fields.
+/// Must-fire control for every field of the record, the reserved ones included.
 ///
 /// The reserved fields are the interesting ones: no reader consults them, so
 /// nothing else in the suite would notice an emitter that skipped them, and an
 /// emitter that skipped them would still pass against a zeroed buffer.
 #[test]
-fn every_per_slot_field_is_independently_observable_including_reserved() {
+fn every_field_record_field_is_independently_observable_including_reserved() {
     let mut vm = vm_for(WIRE_KEL);
     let case = real_slot_case(CORPUS_STAGES[9].1);
-
-    // The two tables have different field counts now, so they can no longer be
-    // driven from one array of tuples. Written out twice rather than forced
-    // into a shared shape, since the shared shape is what went wrong.
-    assert_eq!(
-        &emit_slots_batched(
-            &mut vm,
-            CMD_EMIT_DATA_SLOT_RECORDS,
-            &case.data,
+    let emit = |vm: &mut Vm<'static, 'static>, recs: &[[i64; DFIELD_FIELDS]]| {
+        emit_slots_batched(
+            vm,
+            CMD_EMIT_DATA_FIELD_RECORDS,
+            recs,
             64,
-            DSLOT_STRIDE,
-            DSLOTS_PER_BATCH
-        ),
-        &case.data_want,
-        "DATA_SLOTS: the clean case must agree"
+            DFIELD_STRIDE,
+            DFIELDS_PER_BATCH,
+        )
+    };
+    assert_eq!(
+        emit(&mut vm, &case.data),
+        case.data_want,
+        "DATA_FIELDS: the clean case must agree"
     );
-    for f in 0..DSLOT_FIELDS {
+    for f in 0..DFIELD_FIELDS {
         let mut recs = case.data.clone();
         recs[0][f] ^= 1;
         assert_ne!(
-            &emit_slots_batched(
-                &mut vm,
-                CMD_EMIT_DATA_SLOT_RECORDS,
-                &recs,
-                64,
-                DSLOT_STRIDE,
-                DSLOTS_PER_BATCH
-            ),
-            &case.data_want,
-            "DATA_SLOTS: control did not fire, field {f} is not observable"
-        );
-    }
-
-    assert_eq!(
-        &emit_slots_batched(
-            &mut vm,
-            CMD_EMIT_SHARED_SLOT_RECORDS,
-            &case.shared,
-            64,
-            SSLOT_STRIDE,
-            SSLOTS_PER_BATCH
-        ),
-        &case.shared_want,
-        "SHARED_LAYOUT: the clean case must agree"
-    );
-    // All SEVEN fields, including the three the run-length form added. A
-    // `first_slot` or `stride` the emitter silently skipped would still leave
-    // the other four bytes correct, which is exactly the shape of defect a
-    // whole-record comparison against a zeroed buffer can miss.
-    for f in 0..SSLOT_FIELDS {
-        let mut recs = case.shared.clone();
-        recs[0][f] ^= 1;
-        assert_ne!(
-            &emit_slots_batched(
-                &mut vm,
-                CMD_EMIT_SHARED_SLOT_RECORDS,
-                &recs,
-                64,
-                SSLOT_STRIDE,
-                SSLOTS_PER_BATCH
-            ),
-            &case.shared_want,
-            "SHARED_LAYOUT: control did not fire, field {f} is not observable"
+            emit(&mut vm, &recs),
+            case.data_want,
+            "DATA_FIELDS: control did not fire, field {f} is not observable"
         );
     }
 }
 
-/// An oversized batch is rejected with its own code, per table.
+/// An oversized batch is rejected with its own code.
 #[test]
 fn an_oversized_per_slot_batch_is_reported_rather_than_truncated() {
     let mut vm = vm_for(WIRE_KEL);
-    // Per table: the capacity check is `n * fields > fin_capacity`, and the two
-    // tables no longer have the same field count, so one `over` would be past
-    // the cap for one and inside it for the other.
-    for (cmd, code, over) in [
-        (CMD_EMIT_DATA_SLOT_RECORDS, -203, DSLOTS_PER_BATCH + 1),
-        (CMD_EMIT_SHARED_SLOT_RECORDS, -204, SSLOTS_PER_BATCH + 1),
-    ] {
-        let (got, _) =
-            run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
-        assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
-    }
+    let over = DFIELDS_PER_BATCH + 1;
+    let (got, _) = run_cmd_fields(
+        &mut vm,
+        CMD_EMIT_DATA_FIELD_RECORDS,
+        0,
+        &[],
+        &[],
+        [64, over as i64, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(got, -203, "wrong or missing rejection code");
 }
 
 // --- WIRING SLICE 7: the remaining populated record tables -------------------
@@ -5691,13 +5416,6 @@ const SLICE7_KINDS: &[RecordKind] = &[
         fields: 4,
     },
     RecordKind {
-        label: "DATA_INIT",
-        cmd: 126,
-        kind: keleusma::wire_schema::kind::DATA_INIT,
-        stride: 8,
-        fields: 2,
-    },
-    RecordKind {
         label: "CONSTS",
         cmd: 127,
         kind: keleusma::wire_schema::kind::CONSTS,
@@ -5746,10 +5464,6 @@ fn decode_slice7(kind: u16, table: &keleusma_wire::RecordTable<'_>) -> Vec<Vec<i
                     i64::from(r.variants_count),
                     i64::from(r.min_payload),
                 ]
-            }
-            k if k == w::kind::DATA_INIT => {
-                let r: w::DataInitRecord = table.get_as(i).expect("record");
-                vec![i64::from(r.first), i64::from(r.count)]
             }
             k if k == w::kind::CONSTS => {
                 let r: w::ConstRecord = table.get_as(i).expect("record");
@@ -5832,7 +5546,6 @@ fn the_remaining_populated_tables_match_the_reference_on_real_compiler_output() 
         populated,
         vec![
             "CONSTS",
-            "DATA_INIT",
             "ENUM_LAYOUTS",
             "ENUM_VARIANTS",
             "SHAPES",
@@ -5939,8 +5652,7 @@ fn distinct(seed: u32, field: usize) -> u32 {
 #[test]
 fn the_uncovered_record_kinds_emit_what_the_derive_constructs() {
     use keleusma::wire_schema::{
-        EnumAux, NativeRecord, NativeReturnRecord, PrivateCompositeRecord, StructAux,
-        StructTemplateRecord,
+        EnumAux, NativeRecord, NativeReturnRecord, StructAux, StructTemplateRecord,
     };
     let mut vm = vm_for(WIRE_KEL);
     const N: usize = 5;
@@ -6023,36 +5735,6 @@ fn the_uncovered_record_kinds_emit_what_the_derive_constructs() {
             &pack(&recs),
             window,
             "STRUCT_TEMPLATES",
-        );
-    }
-
-    // PrivateCompositeRecord: two u16 then a u32, the only mixed-width case here.
-    {
-        let recs: Vec<PrivateCompositeRecord> = (0..N as u32)
-            .map(|i| PrivateCompositeRecord {
-                slot: distinct(i, 0) as u16,
-                reserved: distinct(i, 1) as u16,
-                offset: distinct(i, 2),
-            })
-            .collect();
-        let rows: Vec<Vec<i64>> = recs
-            .iter()
-            .map(|r| {
-                vec![
-                    i64::from(r.slot),
-                    i64::from(r.reserved),
-                    i64::from(r.offset),
-                ]
-            })
-            .collect();
-        check_uncovered(
-            &mut vm,
-            131,
-            PrivateCompositeRecord::STRIDE,
-            &rows,
-            &pack(&recs),
-            window,
-            "PRIVATE_COMPOSITE",
         );
     }
 
@@ -6165,7 +5847,6 @@ fn the_uncovered_kinds_reject_an_oversized_batch() {
         (128i64, 2usize, -211i64),
         (129, 3, -212),
         (130, 4, -213),
-        (131, 3, -214),
         (132, 2, -215),
         (133, 2, -216),
     ] {
@@ -6254,10 +5935,10 @@ fn the_emitted_debug_pool_matches_the_reference_on_real_compiler_output() {
             !logical.is_empty(),
             "{name}: a debug compile produced no metadata"
         );
-        // The twentieth kind. Every other compile in this suite emits 19.
+        // The seventeenth kind. Every other compile in this suite emits 16.
         assert_eq!(
-            regions, 20,
-            "{name}: a debug compile must emit all twenty region kinds"
+            regions, 17,
+            "{name}: a debug compile must emit all seventeen region kinds"
         );
         pads.push(stored.len() - logical.len());
         let got = emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY);
@@ -6299,14 +5980,14 @@ fn the_debug_pool_differential_reports_a_perturbed_byte() {
 ///
 /// This is the must-not-fire half of the pair, and it also pins the reason the
 /// gap existed: `emit_debug` defaults false, so the ten-stage corpus everything
-/// else in this suite uses emits nineteen regions, not twenty.
+/// else in this suite uses emits sixteen regions, not seventeen.
 #[test]
 fn the_default_compile_still_emits_no_debug_pool() {
     let (specs, _) = real_stage_regions(CORPUS_STAGES[9].1);
     assert_eq!(
         specs.len(),
-        19,
-        "a default compile must emit nineteen regions"
+        16,
+        "a default compile must emit sixteen regions"
     );
     assert!(
         !specs
@@ -6354,9 +6035,8 @@ fn region_counts_for(bytes: &[u8]) -> Vec<RegionSpec> {
         // defect in this project, and the fix is to stop enumerating the
         // number: a width change now propagates on its own.
         use keleusma::wire_schema::{
-            ChunkRecord, ConstRecord, DataInitRecord, DataSlotRecord, EnumLayoutRecord,
-            EnumVariantRecord, HeaderRecord, NativeRecord, NativeReturnRecord,
-            PrivateCompositeRecord, SharedSlotRecord, SignatureRecord, StructTemplateRecord,
+            ChunkRecord, ConstRecord, DataFieldRecord, EnumLayoutRecord, EnumVariantRecord,
+            HeaderRecord, NativeRecord, NativeReturnRecord, SignatureRecord, StructTemplateRecord,
         };
         let stride = match r.kind {
             kind::NAMES => <NameRef as WireRecord>::STRIDE,
@@ -6366,10 +6046,7 @@ fn region_counts_for(bytes: &[u8]) -> Vec<RegionSpec> {
             kind::STRUCT_TEMPLATES => <StructTemplateRecord as WireRecord>::STRIDE,
             kind::ENUM_VARIANTS => <EnumVariantRecord as WireRecord>::STRIDE,
             kind::ENUM_LAYOUTS => <EnumLayoutRecord as WireRecord>::STRIDE,
-            kind::DATA_SLOTS => <DataSlotRecord as WireRecord>::STRIDE,
-            kind::SHARED_LAYOUT => <SharedSlotRecord as WireRecord>::STRIDE,
-            kind::PRIVATE_COMPOSITE => <PrivateCompositeRecord as WireRecord>::STRIDE,
-            kind::DATA_INIT => <DataInitRecord as WireRecord>::STRIDE,
+            kind::DATA_FIELDS => <DataFieldRecord as WireRecord>::STRIDE,
             kind::NATIVES => <NativeRecord as WireRecord>::STRIDE,
             kind::NATIVE_RETURNS => <NativeReturnRecord as WireRecord>::STRIDE,
             kind::CHUNKS => <ChunkRecord as WireRecord>::STRIDE,
@@ -6578,11 +6255,8 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
         | w::kind::SHAPES
         | w::kind::NATIVES
         | w::kind::NATIVE_RETURNS
-        | w::kind::PRIVATE_COMPOSITE
-        | w::kind::DATA_SLOTS
-        | w::kind::SHARED_LAYOUT
-        | w::kind::DATA_INIT
         | w::kind::STRUCT_AUX => 8,
+        w::kind::DATA_FIELDS => 32,
         w::kind::CHUNKS => 48,
         w::kind::HEADER => 32,
         _ => 16,
@@ -6590,68 +6264,43 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
     let Ok(t) = view.records(&region, stride) else {
         return Vec::new();
     };
-    // THREE KINDS ARE DECODED FROM RAW BYTES, mirroring their emitters' field
-    // order exactly rather than going through the derive. `DataSlotRecord` and
-    // friends carry trailing reserved bytes that the emitter writes as separate
-    // inputs, so a struct-shaped decode would return fewer fields than the
-    // emitter consumes and the region would come out short. Offsets are the
-    // ones the emitters use.
-    // SHARED_LAYOUT is TWO words and seven fields, so it cannot share the
-    // 8-byte chunking below.
-    //
-    // `chunks_exact(8)` split every record in half and returned four fields.
-    // The symptom was a run of 5 and a stride of 24 where the reference has
-    // 6,149 and 8 -- the two u16 fields read as the low byte of each. That is
-    // the SAME defect the DATA_SLOTS note below records, arriving in the very
-    // decoder that note held up as having done it right. A note that a sibling
-    // is correct is a statement about the code as it stood, not a property that
-    // survives the sibling changing shape.
-    if kind == w::kind::SHARED_LAYOUT {
-        let raw = view.region_bytes(&region).expect("payload");
-        let mut out = Vec::new();
-        for c in raw.as_chunks::<16>().0.iter() {
+    // TWO KINDS ARE DECODED FROM RAW BYTES OR FIELD BY FIELD, mirroring their
+    // emitters' field order exactly rather than going through the derive.
+    // `DataFieldRecord` carries reserved fields that the emitter writes as
+    // separate inputs, so a decode that skipped them would return fewer fields
+    // than the emitter consumes and the region would come out short.
+    if kind == w::kind::DATA_FIELDS {
+        let mut out = Vec::with_capacity(t.len());
+        for i in 0..t.len() {
+            let r: w::DataFieldRecord = t.get_as(i).expect("rec");
             out.push(vec![
-                i64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
-                i64::from(c[4]),
-                i64::from(c[5]),
-                i64::from(u16::from_le_bytes([c[6], c[7]])),
-                i64::from(u32::from_le_bytes([c[8], c[9], c[10], c[11]])),
-                i64::from(u16::from_le_bytes([c[12], c[13]])),
-                i64::from(u16::from_le_bytes([c[14], c[15]])),
+                i64::from(r.name),
+                i64::from(r.first_slot),
+                i64::from(r.count),
+                i64::from(r.offset),
+                i64::from(r.stride),
+                i64::from(r.elem_len),
+                i64::from(r.kind),
+                i64::from(r.visibility),
+                i64::from(r.init),
+                i64::from(r.reserved0),
+                i64::from(r.reserved1),
+                i64::from(r.init_const),
             ]);
         }
         return out;
     }
-
-    if matches!(kind, w::kind::DATA_SLOTS | w::kind::STRUCT_AUX) {
+    if kind == w::kind::STRUCT_AUX {
         let raw = view.region_bytes(&region).expect("payload");
         let u32le = |b: &[u8], o: usize| -> i64 {
             i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
         };
-        let mut out = Vec::new();
-        for c in raw.as_chunks::<8>().0.iter() {
-            out.push(match kind {
-                k if k == w::kind::DATA_SLOTS => {
-                    // Field 3 is a U16 `run`, not a byte. It read `c[6]` alone
-                    // while the field was an unused `reserved2`, where a
-                    // one-byte read was harmless; run-length encoding made that
-                    // silently truncating. A run of 1,536 (0x0600) came back as
-                    // 0, and the emitter then wrote the zero it was handed --
-                    // which reads as an emitter bug and is not one.
-                    // `SHARED_LAYOUT` is decoded separately above, at its own
-                    // stride; it hit this same defect later, for the same
-                    // reason, once it grew u16 fields of its own.
-                    vec![
-                        u32le(c, 0),
-                        i64::from(c[4]),
-                        i64::from(c[5]),
-                        i64::from(u16::from_le_bytes([c[6], c[7]])),
-                    ]
-                }
-                _ => vec![u32le(c, 0), u32le(c, 4)],
-            });
-        }
-        return out;
+        return raw
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| vec![u32le(c, 0), u32le(c, 4)])
+            .collect();
     }
 
     // The kinds slice 7 already decodes, handled whole rather than per index.
@@ -6665,7 +6314,6 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
             | w::kind::CONSTS
             | w::kind::ENUM_VARIANTS
             | w::kind::ENUM_LAYOUTS
-            | w::kind::DATA_INIT
     ) {
         return decode_slice7(kind, &t);
     }
@@ -6718,14 +6366,6 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
             k if k == w::kind::NATIVE_RETURNS => {
                 let r: w::NativeReturnRecord = t.get_as(i).expect("rec");
                 vec![i64::from(r.shape), i64::from(r.reserved)]
-            }
-            k if k == w::kind::PRIVATE_COMPOSITE => {
-                let r: w::PrivateCompositeRecord = t.get_as(i).expect("rec");
-                vec![
-                    i64::from(r.slot),
-                    i64::from(r.reserved),
-                    i64::from(r.offset),
-                ]
             }
             // STRUCT_TEMPLATES had no decoder at all, and the reason is the
             // point: nothing in this suite ever produced a template record, so
@@ -9094,13 +8734,13 @@ const UPGRADE_CASES: &[(&str, u16, &str)] = &[
     ),
     (
         "private-struct-field",
-        keleusma::wire_schema::kind::PRIVATE_COMPOSITE,
+        keleusma::wire_schema::kind::DATA_FIELDS,
         "struct P { x: Word, y: Word }\nprivate data d { p: P }\n\
          fn main() -> Word { d.p = P { x: 1, y: 2 }; d.p.x }",
     ),
     (
         "private-array-of-struct",
-        keleusma::wire_schema::kind::PRIVATE_COMPOSITE,
+        keleusma::wire_schema::kind::DATA_FIELDS,
         "struct P { x: Word }\nprivate data d { ps: [P; 2] }\n\
          fn main() -> Word { d.ps[0] = P { x: 1 }; d.ps[0].x }",
     ),
@@ -9914,7 +9554,10 @@ fn every_fitting_region_of_a_real_stage_emits_into_a_window() {
         }
     }
 
-    assert!(checked >= 6, "only {checked} kinds exercised");
+    // Five since Encoding F replaced the four data-layout kinds with one, which
+    // removed three of the kinds this test reached rather than any coverage of
+    // the window path.
+    assert!(checked >= 5, "only {checked} kinds exercised");
     // The control that makes the window necessary: absolute positioning could not
     // have reached these at all.
     assert!(
@@ -10728,7 +10371,7 @@ const SHAPE_EVIDENCE: &[(u16, &str, &str)] = &[
         "use beep(Word) -> Word\nfn main() -> Word { beep(1) }",
     ),
     (
-        keleusma::wire_schema::kind::PRIVATE_COMPOSITE,
+        keleusma::wire_schema::kind::DATA_FIELDS,
         "private-struct-field",
         "struct P { x: Word, y: Word }\nprivate data d { p: P }\n\
          fn main() -> Word { d.p = P { x: 1, y: 2 }; d.p.x }",
@@ -10770,10 +10413,7 @@ fn every_record_shape_is_populated_by_some_artifact_in_the_differential() {
         (kind::STRUCT_TEMPLATES, "STRUCT_TEMPLATES"),
         (kind::ENUM_VARIANTS, "ENUM_VARIANTS"),
         (kind::ENUM_LAYOUTS, "ENUM_LAYOUTS"),
-        (kind::DATA_SLOTS, "DATA_SLOTS"),
-        (kind::SHARED_LAYOUT, "SHARED_LAYOUT"),
-        (kind::PRIVATE_COMPOSITE, "PRIVATE_COMPOSITE"),
-        (kind::DATA_INIT, "DATA_INIT"),
+        (kind::DATA_FIELDS, "DATA_FIELDS"),
         (kind::CHUNKS, "CHUNKS"),
         (kind::NATIVES, "NATIVES"),
         (kind::NATIVE_RETURNS, "NATIVE_RETURNS"),
@@ -10810,10 +10450,13 @@ fn every_record_shape_is_populated_by_some_artifact_in_the_differential() {
     // MUST-FIRE on the evidence being load-bearing. If the stage corpus grew to
     // cover everything, these extra sources would be dead weight and this test
     // would silently stop measuring what it claims to.
+    // Five since Encoding F: `PRIVATE_COMPOSITE` was one of the six kinds the
+    // stages never populate, and `DATA_FIELDS`, which replaced it, every stage
+    // with data populates.
     assert_eq!(
         SHAPES.len() - from_stages.len(),
-        6,
-        "the stage corpus covers {} of {} shapes, not 11. The evidence sources below are sized \
+        5,
+        "the stage corpus covers {} of {} shapes, not 9. The evidence sources below are sized \
          against that gap, so re-derive them rather than adjusting this number.",
         from_stages.len(),
         SHAPES.len()
@@ -11084,28 +10727,16 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
             push_name(&mut out, &var.name);
         }
     }
-    // The DATA-SLOT section, one name per RUN. Consecutive slots sharing a name
-    // and visibility collapse into one record in the reference, and the name is
-    // interned once per run; interning per SLOT would emit one name per array
+    // The DATA-FIELD section, one name per FIELD, in the order the reference
+    // interns them; interning per element would emit one name per array
     // element, which is how the pre-run-length-encoding artifact reached tens of
     // thousands of names.
-    let mut runs: Vec<String> = Vec::new();
-    if let Some(dl) = &module.data_layout {
-        let mut i = 0usize;
-        while i < dl.slots.len() {
-            let s = &dl.slots[i];
-            let mut n = 1usize;
-            while i + n < dl.slots.len()
-                && dl.slots[i + n].name == s.name
-                && dl.slots[i + n].visibility == s.visibility
-            {
-                n += 1;
-            }
-            runs.push(s.name.clone());
-            i += n;
-        }
-    }
-    let sn = u16::try_from(runs.len()).expect("slot run count fits u16");
+    let runs: Vec<String> = module
+        .data_layout
+        .iter()
+        .flat_map(|dl| dl.fields.iter().map(|f| f.name.clone()))
+        .collect();
+    let sn = u16::try_from(runs.len()).expect("data field count fits u16");
     out.extend_from_slice(&sn.to_le_bytes());
     for r in &runs {
         push_name(&mut out, r);
@@ -12632,19 +12263,7 @@ fn the_join_holds_across_every_stage() {
             ..Dims::default()
         };
         if let Some(dl) = &m.data_layout {
-            let mut i = 0usize;
-            while i < dl.slots.len() {
-                let s = &dl.slots[i];
-                let mut k = 1usize;
-                while i + k < dl.slots.len()
-                    && dl.slots[i + k].name == s.name
-                    && dl.slots[i + k].visibility == s.visibility
-                {
-                    k += 1;
-                }
-                d.slot_runs += 1;
-                i += k;
-            }
+            d.slot_runs += dl.fields.len();
         }
         for c in &m.chunks {
             for k in &c.constants {
@@ -13218,8 +12837,8 @@ type RegionSubject<'a> = (&'a str, Vec<u8>, Vec<Vec<i64>>);
 ///
 /// # What this covers, at the strength it actually has
 ///
-/// **These format records the host hands them.** `DATA_SLOTS`'s run-length
-/// grouping, a signature's parameter range, a shape's size — every one is decided
+/// **These format records the host hands them.** A data field's placement, a
+/// signature's parameter range, a shape's size — every one is decided
 /// outside the stage. That makes these regions ENCODED BUT NOT DERIVED, the same
 /// standing the `HEADER` record has, and a coverage claim counting them beside
 /// `NAMES` — which the stage computes from the module blob — would overstate what
@@ -13234,7 +12853,7 @@ fn the_four_formatting_regions_stream_one_record_per_call() {
     use keleusma::wire_schema::kind;
     // (kind, command, fields per record)
     const TABLES: &[(u16, i64, usize)] = &[
-        (kind::DATA_SLOTS, 178, 4),
+        (kind::DATA_FIELDS, 178, 12),
         (kind::SHAPES, 179, 4),
         (kind::SIGNATURES, 180, 4),
         (kind::ENUM_VARIANTS, 181, 3),
@@ -13506,11 +13125,24 @@ fn the_four_record_formatters_lay_out_a_record_the_reference_agrees_with() {
     type FormatterCase = (&'static str, i64, u16, usize, &'static [(usize, usize)]);
     let cases: &[FormatterCase] = &[
         (
-            "DATA_SLOTS",
+            "DATA_FIELDS",
             CMD_DS_STREAM_STEP,
-            kind::DATA_SLOTS,
-            8,
-            &[(0, 4), (4, 1), (5, 1), (6, 2)],
+            kind::DATA_FIELDS,
+            32,
+            &[
+                (0, 4),
+                (4, 4),
+                (8, 4),
+                (12, 4),
+                (16, 4),
+                (20, 2),
+                (22, 1),
+                (23, 1),
+                (24, 1),
+                (25, 1),
+                (26, 2),
+                (28, 4),
+            ],
         ),
         (
             "SHAPES",
@@ -13620,7 +13252,7 @@ fn the_formatter_probe_records_are_not_all_zero() {
 
     let mut nonzero = 0usize;
     for (label, k, stride) in [
-        ("DATA_SLOTS", kind::DATA_SLOTS, 8usize),
+        ("DATA_FIELDS", kind::DATA_FIELDS, 32usize),
         ("SHAPES", kind::SHAPES, 8),
         ("SIGNATURES", kind::SIGNATURES, 16),
         ("ENUM_VARIANTS", kind::ENUM_VARIANTS, 16),
@@ -13683,13 +13315,13 @@ fn run_pair(
 
 /// **THE NAME COMES FROM THE INTERNER, AND THIS IS WHAT PROVES IT.**
 ///
-/// Command 178 formats a data-slot record from four host-supplied fields, the
+/// Command 178 formats a data-field record from twelve host-supplied fields, the
 /// name index included. A host-supplied index can disagree with the interner
 /// that produced `NAMES`, and the host cannot check it. Commands 182 and 183
-/// close that: the begin runs the interner, and the step takes the RUN INDEX
+/// close that: the begin runs the interner, and the step takes the FIELD INDEX
 /// where 178 takes a name and reads `wire.nmap[sbase + k]` itself.
 ///
-/// **The three non-name fields still come from the reference**, exactly as the
+/// **The eleven non-name fields still come from the reference**, exactly as the
 /// formatter test takes them, because those are host-decided and this test is
 /// not claiming otherwise. What is under test is the NAME, and the record
 /// matching the reference byte for byte is the statement that the stage's own
@@ -13719,23 +13351,37 @@ fn the_name_aware_slot_stream_takes_its_name_from_the_interner() {
     let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
 
     let region = view
-        .find_region(kind::DATA_SLOTS)
-        .expect("the reference emitted a DATA_SLOTS region");
+        .find_region(kind::DATA_FIELDS)
+        .expect("the reference emitted a DATA_FIELDS region");
     let bytes = view.region_bytes(&region).expect("payload");
-    const STRIDE: usize = 8;
+    const STRIDE: usize = 32;
     assert!(
-        bytes.len() >= STRIDE,
-        "the region is {} bytes, shorter than one record",
+        bytes.len() >= 2 * STRIDE,
+        "the region is {} bytes, shorter than two records",
         bytes.len()
     );
-    let want = &bytes[..STRIDE];
+    // The SECOND field, so the field index is not zero and a step that ignored it
+    // would read the first field's name.
+    let want = &bytes[STRIDE..2 * STRIDE];
 
-    // The three host-decided fields, read from the reference's own record. The
-    // name slot carries the RUN INDEX instead, which is the whole difference.
-    let visibility = i64::from(want[4]);
-    let reserved = i64::from(want[5]);
-    let run = i64::from(u16::from_le_bytes([want[6], want[7]]));
-    let fields = [0i64, visibility, reserved, run];
+    // The eleven host-decided fields, read from the reference's own record. The
+    // name slot carries the FIELD INDEX instead, which is the whole difference.
+    let r: keleusma::wire_schema::DataFieldRecord =
+        keleusma_wire::WireRecord::read_record(want).expect("record");
+    let fields = [
+        1i64,
+        i64::from(r.first_slot),
+        i64::from(r.count),
+        i64::from(r.offset),
+        i64::from(r.stride),
+        i64::from(r.elem_len),
+        i64::from(r.kind),
+        i64::from(r.visibility),
+        i64::from(r.init),
+        i64::from(r.reserved0),
+        i64::from(r.reserved1),
+        i64::from(r.init_const),
+    ];
 
     let (blob, _names) = keleusma::selfhost::module_input(&module);
     let mut vm = vm_for(WIRE_KEL);
@@ -13753,9 +13399,9 @@ fn the_name_aware_slot_stream_takes_its_name_from_the_interner() {
     );
     assert_eq!(
         got, want,
-        "the streamed record differs from the reference's first DATA_SLOTS record. The three \
+        "the streamed record differs from the reference's second DATA_FIELDS record. The \
          non-name fields came from that record, so a difference is in the NAME -- the stage's \
-         interner and the encoder disagree about which name this run carries"
+         interner and the encoder disagree about which name this field carries"
     );
 }
 
@@ -13771,10 +13417,10 @@ fn the_name_aware_slot_step_refuses_a_run_index_past_the_section() {
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let (blob, _names) = keleusma::selfhost::module_input(&module);
     let mut vm = vm_for(WIRE_KEL);
-    // A run index far past any section.
-    let fields = [4096i64, 0, 0, 1];
+    // A field index far past any section.
+    let fields = [4096i64, 0, 1, 0, 0, 0, 3, 1, 0, 0, 0, i64::from(u32::MAX)];
     let (began, wrote, _got) =
-        run_pair(&mut vm, &blob, &fields, 8).expect("the pair drove without faulting");
+        run_pair(&mut vm, &blob, &fields, 32).expect("the pair drove without faulting");
     assert!(began > 0, "the begin refused with {began}");
     assert!(
         wrote < 0,

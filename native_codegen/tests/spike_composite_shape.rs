@@ -74,10 +74,9 @@ fn the_control_source_really_has_a_baked_composite_slot() {
     let m = compile(&parse(&tokenize(PRIVATE_COMPOSITE_SRC).expect("lex")).expect("parse"))
         .expect("compile");
     assert!(
-        !m.data_layout
-            .as_ref()
-            .is_some_and(|dl| dl.private_composite_layout.is_empty())
-            && m.data_layout.is_some(),
+        !m.data_layout.as_ref().is_some_and(|dl| {
+            keleusma_native::data_view::private_composite_layout(Some(dl)).is_empty()
+        }) && m.data_layout.is_some(),
         "the control source produced no private composite layout entry, so this \
          probe cannot distinguish a baked slot from a missing one"
     );
@@ -103,12 +102,9 @@ fn spike_report_private_composite_op_shape() {
         "  persistent_composite_bytes : {}",
         m.persistent_composite_bytes
     );
-    for e in &m
-        .data_layout
-        .as_ref()
-        .expect("data layout")
-        .private_composite_layout
-    {
+    for e in &keleusma_native::data_view::private_composite_layout(Some(
+        m.data_layout.as_ref().expect("data layout"),
+    )) {
         println!("  layout: slot {} at pool offset {}", e.slot, e.offset);
     }
     for c in &m.chunks {

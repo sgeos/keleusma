@@ -297,18 +297,14 @@ fn every_composite_typed_data_slot_has_a_stated_placement() {
     for (name, src) in SUBJECTS {
         let m = common::build(src);
         let dl = m.data_layout.as_ref().expect("the subject declares data");
-        let shared_count = dl
-            .slots
-            .iter()
-            .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Shared)
-            .count();
+        let shared_count = dl.shared_slot_count();
+        let shared_layout = dl.shared_slots();
 
         // A slot is composite-typed exactly when it has a placement of one kind
         // or the other; the point is that NEITHER set is empty for a subject
         // that declares a composite, and that every such slot is covered.
-        let private_placed = dl.private_composite_layout.len();
-        let shared_placed = dl
-            .shared_layout
+        let private_placed = keleusma_native::data_view::private_composite_layout(Some(dl)).len();
+        let shared_placed = shared_layout
             .iter()
             .filter(|e| e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0)
             .count();
@@ -320,7 +316,7 @@ fn every_composite_typed_data_slot_has_a_stated_placement() {
 
         // The stated length of a shared composite must be non-zero, or the kind
         // and the layout disagree and the copy would be empty.
-        for e in dl.shared_layout.iter().take(shared_count) {
+        for e in shared_layout.iter().take(shared_count) {
             if e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
                 assert!(
                     e.len > 0,

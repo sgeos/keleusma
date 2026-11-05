@@ -293,11 +293,24 @@ pub enum TypedError {
     /// the structural verifier admits (its index is below the unified slot
     /// count) indexes the layout table out of bounds at runtime.
     SharedLayoutCountMismatch {
-        /// Number of shared slots the unified slot array declares.
+        /// Number of shared slots the layout declares.
         shared_slots: usize,
-        /// Number of entries the shared-slot layout table carries.
+        /// Number of fields the layout carries.
         layout_len: usize,
         /// Which invariant was violated.
+        reason: &'static str,
+    },
+    /// A data field breaks an invariant of the field-based layout: a zero
+    /// count, a first slot that is not the sum of the counts before it, slots
+    /// beyond the twenty-four-bit space, a shared field with a module
+    /// initialiser or no offset, a private zero initialiser on a kind with no
+    /// zero, or a stride without an offset. The runtime binary-searches the
+    /// fields by first slot, so any of these resolves a slot to the wrong
+    /// field or to none.
+    DataFieldInvalid {
+        /// Zero-based field index.
+        field: usize,
+        /// Which invariant the field violated.
         reason: &'static str,
     },
 }
@@ -427,119 +440,140 @@ pub fn typed_check_module(
     Ok(())
 }
 
-/// Validate the shared-data slot layout (A.2.1 Phase 4, audit finding B6):
-/// every shared slot's byte extent must lie within the module's shared-data
-/// buffer. The runtime addresses each slot by its carried offset, so an offset
-/// or size that overruns the buffer is a memory-safety surface promoted here
-/// to a load-time MUST-REJECT.
+/// Validate the data layout's fields (A.2.1 Phase 4, audit findings B6 and
+/// C4): the fields tile the slot space, shared fields form its prefix, every
+/// shared element lies within the module's shared-data buffer, and every
+/// private composite element lies within the persistent composite pool
+/// without overlapping another. The runtime addresses each element by its
+/// field's carried offset and stride, so an offset or size that overruns its
+/// buffer is a memory-safety surface promoted here to a load-time
+/// MUST-REJECT.
 fn validate_data_layout(
     module: &Module,
     word_bytes: usize,
     float_bytes: usize,
     addr_bytes: usize,
 ) -> Result<(), TypedError> {
+    use crate::bytecode::{DataInit, SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility, data_kind_zero};
     let Some(layout) = &module.data_layout else {
         return Ok(());
     };
-    // Reconcile the shared-slot layout table with the shared slots in the
-    // unified slot array (audit B6 residual). The runtime dispatches a slot as
-    // shared when its unified index is below the shared-slot count and then
-    // indexes `shared_layout[slot]` with that same unified index. So shared
-    // slots must be a contiguous prefix of the slot array, and there must be
-    // exactly one layout entry per shared slot. Without this a shared-slot
-    // access the structural verifier admits (its index is below the unified
-    // slot count) could index the layout table out of bounds at runtime.
-    let prefix_shared = layout
-        .slots
-        .iter()
-        .take_while(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Shared))
-        .count();
-    let total_shared = layout
-        .slots
-        .iter()
-        .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Shared))
-        .count();
-    if prefix_shared != total_shared {
-        return Err(TypedError::SharedLayoutCountMismatch {
-            shared_slots: total_shared,
-            layout_len: layout.shared_layout.len(),
-            reason: "shared slots are not a contiguous prefix of the slot array",
-        });
-    }
-    if layout.shared_layout.len() != total_shared {
-        return Err(TypedError::SharedLayoutCountMismatch {
-            shared_slots: total_shared,
-            layout_len: layout.shared_layout.len(),
-            reason: "shared-slot layout entry count does not match the shared-slot count",
-        });
-    }
-
     let buffer = module.shared_data_bytes;
-    for (slot, sl) in layout.shared_layout.iter().enumerate() {
-        // A composite slot's size is its carried body length; a scalar slot's
-        // size follows from its kind tag at the module widths.
-        let size = if sl.kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0 {
-            usize::from(sl.len)
-        } else {
-            match ScalarKind::from_tag(sl.kind) {
-                Some(k) => k.size_in_bytes(word_bytes, float_bytes, addr_bytes),
-                // An undecodable kind tag cannot be sized; treat as a corrupt
-                // table entry.
-                None => {
+    let pool = u64::from(module.persistent_composite_bytes);
+    let mut next_slot: u64 = 0;
+    let mut seen_private = false;
+    // Exclusive end of the previous pooled private field, for non-overlap.
+    let mut pool_end: u64 = 0;
+    let shared_slots = layout.shared_slot_count();
+    for (index, f) in layout.fields.iter().enumerate() {
+        let invalid = |reason| TypedError::DataFieldInvalid {
+            field: index,
+            reason,
+        };
+        // The fields tile the slot space. A lookup binary-searches on
+        // `first_slot`, so a gap, an overlap or a zero count would resolve a
+        // slot to the wrong field or to none.
+        if f.count == 0 {
+            return Err(invalid("a field has a zero element count"));
+        }
+        if u64::from(f.first_slot) != next_slot {
+            return Err(invalid(
+                "a field's first slot is not the sum of the counts before it",
+            ));
+        }
+        next_slot += u64::from(f.count);
+        if next_slot > u64::from(crate::bytecode::MAX_DATA_ADDR) {
+            return Err(invalid("the fields exceed the 24-bit slot space"));
+        }
+        let elements = u64::from(f.count);
+        let span = (elements - 1) * u64::from(f.stride);
+        match f.visibility {
+            SlotVisibility::Shared => {
+                // Reconcile the shared prefix (audit B6 residual). The runtime
+                // dispatches a slot as shared when its index is below the
+                // shared-slot count, so shared fields must precede every
+                // private field.
+                if seen_private {
+                    return Err(TypedError::SharedLayoutCountMismatch {
+                        shared_slots,
+                        layout_len: layout.fields.len(),
+                        reason: "shared fields are not a contiguous prefix of the layout",
+                    });
+                }
+                if f.init != DataInit::Zero {
+                    return Err(invalid("a shared field carries a module initialiser"));
+                }
+                let Some(offset) = f.offset else {
+                    return Err(invalid("a shared field has no host-buffer offset"));
+                };
+                // A composite element's size is its carried body length; a
+                // scalar element's size follows from its kind tag at the module
+                // widths. The last element is the furthest, since the stride
+                // is not negative.
+                let size = if f.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+                    usize::from(f.elem_len)
+                } else {
+                    match ScalarKind::from_tag(f.kind) {
+                        Some(k) => k.size_in_bytes(word_bytes, float_bytes, addr_bytes),
+                        None => {
+                            return Err(TypedError::SharedSlotOutOfBounds {
+                                slot: f.first_slot as usize,
+                                offset: offset as usize,
+                                size: 0,
+                                buffer,
+                            });
+                        }
+                    }
+                };
+                let last = u64::from(offset) + span;
+                if last + size as u64 > u64::from(buffer) {
                     return Err(TypedError::SharedSlotOutOfBounds {
-                        slot,
-                        offset: sl.offset as usize,
-                        size: 0,
+                        slot: (u64::from(f.first_slot) + elements - 1) as usize,
+                        offset: last as usize,
+                        size,
                         buffer,
                     });
                 }
             }
-        };
-        let need = sl.offset as usize + size;
-        if need > buffer as usize {
-            return Err(TypedError::SharedSlotOutOfBounds {
-                slot,
-                offset: sl.offset as usize,
-                size,
-                buffer,
-            });
-        }
-    }
-
-    // Validate the private-composite layout table (audit C4). The runtime
-    // binary-searches it by slot (`private_composite_pool_offset`) and reads a
-    // flat composite write's pool offset from it, so a corrupt table can route
-    // a write to the wrong slot's offset or place a body outside the pool.
-    // Require strictly ascending unique slots (the binary-search invariant),
-    // in-range slot indices, and strictly ascending offsets within the
-    // persistent composite pool. The per-slot body size is not wire-carried,
-    // so exact non-overlap is bounded by the ascending-offset-within-pool
-    // check together with the runtime capacity guard at the write, rather than
-    // recomputed here.
-    let data_len = layout.slots.len();
-    let pool = module.persistent_composite_bytes;
-    let mut prev: Option<(u16, u32)> = None;
-    for (index, e) in layout.private_composite_layout.iter().enumerate() {
-        let invalid = |reason| TypedError::PrivateCompositeLayoutInvalid {
-            index,
-            slot: usize::from(e.slot),
-            reason,
-        };
-        if usize::from(e.slot) >= data_len {
-            return Err(invalid("slot index out of range"));
-        }
-        if e.offset >= pool {
-            return Err(invalid("pool offset outside the persistent composite pool"));
-        }
-        if let Some((pslot, poff)) = prev {
-            if e.slot <= pslot {
-                return Err(invalid("slots are not strictly ascending"));
-            }
-            if e.offset <= poff {
-                return Err(invalid("pool offsets are not strictly ascending"));
+            SlotVisibility::Private => {
+                seen_private = true;
+                if f.init == DataInit::Zero && data_kind_zero(f.kind).is_none() {
+                    return Err(invalid(
+                        "a private field takes the zero of a kind that has none",
+                    ));
+                }
+                // Validate the persistent composite placement (audit C4). A
+                // flat composite write reads its pool offset from the field, so
+                // a corrupt placement can route a write into another element's
+                // body or outside the pool.
+                let Some(offset) = f.offset else {
+                    if f.stride != 0 {
+                        return Err(invalid("a field without an offset carries a stride"));
+                    }
+                    continue;
+                };
+                let placement = |reason| TypedError::PrivateCompositeLayoutInvalid {
+                    index,
+                    slot: f.first_slot as usize,
+                    reason,
+                };
+                if f.kind & SHARED_SLOT_COMPOSITE_FLAG == 0 || f.elem_len == 0 {
+                    return Err(placement("a pooled field does not hold a flat composite"));
+                }
+                if f.count > 1 && f.stride < u32::from(f.elem_len) {
+                    return Err(placement("consecutive elements overlap in the pool"));
+                }
+                if u64::from(offset) < pool_end {
+                    return Err(placement("pool placements are not ascending and disjoint"));
+                }
+                pool_end = u64::from(offset) + span + u64::from(f.elem_len);
+                if pool_end > pool {
+                    return Err(placement(
+                        "a placement lies outside the persistent composite pool",
+                    ));
+                }
             }
         }
-        prev = Some((e.slot, e.offset));
     }
     Ok(())
 }
@@ -1457,7 +1491,7 @@ fn const_abs(cv: Option<&ConstValue>) -> AbsVal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytecode::{BlockType, Chunk};
+    use crate::bytecode::{BlockType, Chunk, DataField, DataInit, DataLayout, SlotVisibility};
     use alloc::string::String;
     use alloc::vec;
 
@@ -1672,31 +1706,33 @@ mod tests {
         ));
     }
 
-    // Phase 4 (B6): a shared data slot whose byte extent overruns the
-    // shared-data buffer is rejected at the module level; an in-bounds slot
+    // Phase 4 (B6): a shared data field whose last element overruns the
+    // shared-data buffer is rejected at the module level; an in-bounds field
     // accepts.
+    fn int_field(name: &str, first: u32, count: u32, offset: u32, stride: u32) -> DataField {
+        DataField::shared(
+            name,
+            first,
+            count,
+            ScalarKind::Int.to_tag(),
+            0,
+            offset,
+            stride,
+        )
+    }
+
+    fn with_fields(fields: Vec<DataField>, buffer: u32, pool: u32) -> Module {
+        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
+        m.shared_data_bytes = buffer;
+        m.persistent_composite_bytes = pool;
+        m.data_layout = Some(DataLayout { fields });
+        m
+    }
+
     #[test]
     fn shared_slot_out_of_bounds_rejects() {
-        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
-        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
-        m.shared_data_bytes = 16;
-        m.data_layout = Some(DataLayout {
-            // One shared slot matching the single layout entry, so the
-            // byte-extent check (not the B6-residual count reconciliation) is
-            // what rejects this fixture.
-            slots: vec![DataSlot {
-                name: String::from("s"),
-                visibility: SlotVisibility::Shared,
-            }],
-            // offset 12 + scalar Int size 8 = 20 > 16.
-            shared_layout: vec![SharedSlotLayout {
-                offset: 12,
-                kind: ScalarKind::Int.to_tag(),
-                len: 0,
-            }],
-            private_composite_layout: Vec::new(),
-            private_init: Vec::new(),
-        });
+        // offset 12 + scalar Int size 8 = 20 > 16.
+        let m = with_fields(vec![int_field("s", 0, 1, 12, 0)], 16, 0);
         assert!(matches!(
             typed_check_module(&m, 8, 8),
             Err(TypedError::SharedSlotOutOfBounds { .. })
@@ -1705,169 +1741,136 @@ mod tests {
 
     #[test]
     fn shared_slot_in_bounds_accepts() {
-        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
-        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
-        m.shared_data_bytes = 16;
-        m.data_layout = Some(DataLayout {
-            slots: vec![DataSlot {
-                name: String::from("s"),
-                visibility: SlotVisibility::Shared,
-            }],
-            shared_layout: vec![SharedSlotLayout {
-                offset: 8, // 8 + 8 = 16 <= 16
-                kind: ScalarKind::Int.to_tag(),
-                len: 0,
-            }],
-            private_composite_layout: Vec::new(),
-            private_init: Vec::new(),
-        });
+        // 8 + 8 = 16 <= 16.
+        let m = with_fields(vec![int_field("s", 0, 1, 8, 0)], 16, 0);
         assert!(typed_check_module(&m, 8, 8).is_ok());
     }
 
-    // Audit B6 residual: the shared-slot layout table must reconcile with the
-    // shared slots in the unified slot array, since the runtime dispatches a
-    // slot as shared by its unified index and indexes `shared_layout` with it.
+    // The last element of an array field bounds the whole field, since the
+    // stride is not negative. Two elements of eight bytes end exactly at 16,
+    // and a third would end at 24.
     #[test]
-    fn shared_layout_count_mismatch_rejects() {
-        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
-        // Two shared slots but one layout entry: a GetData on shared slot 1
-        // would index shared_layout[1] out of bounds at runtime.
-        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
-        m.shared_data_bytes = 16;
-        m.data_layout = Some(DataLayout {
-            slots: vec![
-                DataSlot {
-                    name: String::from("a"),
-                    visibility: SlotVisibility::Shared,
-                },
-                DataSlot {
-                    name: String::from("b"),
-                    visibility: SlotVisibility::Shared,
-                },
-            ],
-            shared_layout: vec![SharedSlotLayout {
-                offset: 0,
-                kind: ScalarKind::Int.to_tag(),
-                len: 0,
-            }],
-            private_composite_layout: Vec::new(),
-            private_init: Vec::new(),
-        });
+    fn shared_array_field_is_bounded_by_its_last_element() {
+        let fits = with_fields(vec![int_field("s", 0, 2, 0, 8)], 16, 0);
+        assert!(typed_check_module(&fits, 8, 8).is_ok());
+        let overruns = with_fields(vec![int_field("s", 0, 3, 0, 8)], 16, 0);
         assert!(matches!(
-            typed_check_module(&m, 8, 8),
-            Err(TypedError::SharedLayoutCountMismatch { .. })
+            typed_check_module(&overruns, 8, 8),
+            Err(TypedError::SharedSlotOutOfBounds { slot: 2, .. })
         ));
     }
 
+    // The fields must tile the slot space from zero, since a slot lookup
+    // binary-searches on `first_slot`.
+    #[test]
+    fn data_fields_that_do_not_tile_the_slot_space_reject() {
+        let gap = with_fields(
+            vec![int_field("a", 0, 1, 0, 0), int_field("b", 2, 1, 8, 0)],
+            16,
+            0,
+        );
+        assert!(matches!(
+            typed_check_module(&gap, 8, 8),
+            Err(TypedError::DataFieldInvalid { field: 1, .. })
+        ));
+        let overlap = with_fields(
+            vec![int_field("a", 0, 2, 0, 0), int_field("b", 1, 1, 8, 0)],
+            16,
+            0,
+        );
+        assert!(matches!(
+            typed_check_module(&overlap, 8, 8),
+            Err(TypedError::DataFieldInvalid { field: 1, .. })
+        ));
+        let empty = with_fields(vec![int_field("a", 0, 0, 0, 0)], 16, 0);
+        assert!(matches!(
+            typed_check_module(&empty, 8, 8),
+            Err(TypedError::DataFieldInvalid { field: 0, .. })
+        ));
+    }
+
+    // Audit B6 residual: shared fields must form the prefix of the layout,
+    // since the runtime dispatches a slot as shared by comparing its index
+    // with the shared-slot count.
     #[test]
     fn shared_slots_not_a_prefix_rejects() {
-        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
-        // A shared slot follows a private slot. The runtime counts one shared
-        // slot and dispatches index 0 (here the private slot) as shared, so the
-        // prefix invariant its index-based dispatch relies on is broken.
-        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
-        m.shared_data_bytes = 16;
-        m.data_layout = Some(DataLayout {
-            slots: vec![
-                DataSlot {
-                    name: String::from("p"),
-                    visibility: SlotVisibility::Private,
-                },
-                DataSlot {
-                    name: String::from("s"),
-                    visibility: SlotVisibility::Shared,
-                },
+        let m = with_fields(
+            vec![
+                DataField::private("p", 0, 1, ScalarKind::Int.to_tag(), DataInit::Zero),
+                int_field("s", 1, 1, 0, 0),
             ],
-            shared_layout: vec![SharedSlotLayout {
-                offset: 0,
-                kind: ScalarKind::Int.to_tag(),
-                len: 0,
-            }],
-            private_composite_layout: Vec::new(),
-            private_init: Vec::new(),
-        });
+            16,
+            0,
+        );
         assert!(matches!(
             typed_check_module(&m, 8, 8),
             Err(TypedError::SharedLayoutCountMismatch { .. })
         ));
     }
 
-    // Audit C4: a private-composite layout table with non-ascending (here
-    // duplicate/unsorted) slots is rejected, since the runtime binary-searches
-    // it and an unsorted table would route a composite write to the wrong
-    // slot's pool offset. An out-of-range slot and a pool-overrunning offset
-    // are likewise rejected; a well-formed table accepts.
+    // A shared field is initialised by its host, so it may carry no module
+    // initialiser, and a private zero initialiser needs a kind with a zero.
     #[test]
-    fn private_composite_layout_unsorted_rejects() {
-        use crate::bytecode::{DataLayout, DataSlot, PrivateCompositeSlot, SlotVisibility};
-        let slots = vec![
-            DataSlot {
-                name: alloc::string::String::from("a"),
-                visibility: SlotVisibility::Private,
-            },
-            DataSlot {
-                name: alloc::string::String::from("b"),
-                visibility: SlotVisibility::Private,
-            },
-        ];
-        let mk = |table: Vec<PrivateCompositeSlot>| {
-            let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
-            m.persistent_composite_bytes = 64;
-            m.data_layout = Some(DataLayout {
-                slots: slots.clone(),
-                shared_layout: Vec::new(),
-                private_composite_layout: table,
-                private_init: Vec::new(),
-            });
-            m
+    fn data_field_initialiser_forms_are_checked() {
+        let mut shared = int_field("s", 0, 1, 0, 0);
+        shared.init = DataInit::Unit;
+        assert!(matches!(
+            typed_check_module(&with_fields(vec![shared], 16, 0), 8, 8),
+            Err(TypedError::DataFieldInvalid { field: 0, .. })
+        ));
+        let text = DataField::private("t", 0, 1, ScalarKind::Text.to_tag(), DataInit::Zero);
+        assert!(matches!(
+            typed_check_module(&with_fields(vec![text], 0, 0), 8, 8),
+            Err(TypedError::DataFieldInvalid { field: 0, .. })
+        ));
+        let word = DataField::private("w", 0, 4, ScalarKind::Int.to_tag(), DataInit::Zero);
+        assert!(typed_check_module(&with_fields(vec![word], 0, 0), 8, 8).is_ok());
+    }
+
+    // Audit C4: a private composite field's elements must lie within the
+    // persistent composite pool, must not overlap one another, and must not
+    // overlap another field's, since a flat composite write reads its pool
+    // offset from the field. A well-formed placement accepts.
+    #[test]
+    fn private_composite_placements_are_checked() {
+        let pooled = |name: &str, first: u32, count: u32, offset: u32, stride: u32| DataField {
+            name: alloc::string::String::from(name),
+            visibility: SlotVisibility::Private,
+            first_slot: first,
+            count,
+            kind: crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG
+                | crate::value_layout::CompositeKind::Struct.to_tag(),
+            elem_len: 16,
+            offset: Some(offset),
+            stride,
+            init: DataInit::Unit,
         };
-        // Not strictly ascending (slot 1 then slot 0).
+        let check = |fields| typed_check_module(&with_fields(fields, 0, 64), 8, 8);
+        // Well-formed: two fields, the second a two-element array, filling
+        // the 64-byte pool exactly.
+        assert!(check(vec![pooled("a", 0, 1, 0, 0), pooled("b", 1, 2, 16, 16)]).is_ok());
+        // Not ascending: the second field starts inside the first.
         assert!(matches!(
-            typed_check_module(
-                &mk(vec![
-                    PrivateCompositeSlot { slot: 1, offset: 0 },
-                    PrivateCompositeSlot {
-                        slot: 0,
-                        offset: 16
-                    },
-                ]),
-                8,
-                8
-            ),
-            Err(TypedError::PrivateCompositeLayoutInvalid { .. })
+            check(vec![pooled("a", 0, 1, 16, 0), pooled("b", 1, 1, 0, 0)]),
+            Err(TypedError::PrivateCompositeLayoutInvalid { index: 1, .. })
         ));
-        // Slot index out of range (data layout has 2 slots).
+        // Consecutive elements overlap: a stride below the body length.
         assert!(matches!(
-            typed_check_module(&mk(vec![PrivateCompositeSlot { slot: 5, offset: 0 }]), 8, 8),
-            Err(TypedError::PrivateCompositeLayoutInvalid { .. })
+            check(vec![pooled("a", 0, 2, 0, 8)]),
+            Err(TypedError::PrivateCompositeLayoutInvalid { index: 0, .. })
         ));
-        // Offset outside the pool.
+        // The last element ends at 80, past the 64-byte pool.
         assert!(matches!(
-            typed_check_module(
-                &mk(vec![PrivateCompositeSlot {
-                    slot: 0,
-                    offset: 64
-                }]),
-                8,
-                8
-            ),
-            Err(TypedError::PrivateCompositeLayoutInvalid { .. })
+            check(vec![pooled("a", 0, 4, 16, 16)]),
+            Err(TypedError::PrivateCompositeLayoutInvalid { index: 0, .. })
         ));
-        // Well-formed: ascending slots and offsets within the pool.
-        assert!(
-            typed_check_module(
-                &mk(vec![
-                    PrivateCompositeSlot { slot: 0, offset: 0 },
-                    PrivateCompositeSlot {
-                        slot: 1,
-                        offset: 16
-                    },
-                ]),
-                8,
-                8
-            )
-            .is_ok()
-        );
+        // A pooled field must hold a flat composite.
+        let mut scalar = pooled("a", 0, 1, 0, 0);
+        scalar.kind = ScalarKind::Int.to_tag();
+        assert!(matches!(
+            check(vec![scalar]),
+            Err(TypedError::PrivateCompositeLayoutInvalid { index: 0, .. })
+        ));
     }
 
     // Phase 4 (B8): a flat-enum `NewComposite` whose baked body size matches no

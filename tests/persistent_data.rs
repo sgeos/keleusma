@@ -52,12 +52,11 @@ fn private_tuple_slot_write_then_read() {
 
 #[test]
 fn d4_private_composite_write_bounded_by_slot_region() {
-    // Audit D4: a private-composite layout table whose offsets are spaced closer
-    // than the bodies (a crafted table that still passes the ascending-offset
-    // validation) must not let one slot's write overrun into the next slot's
-    // region. Two Point slots each occupy a 16-byte body. Shrinking slot a's
-    // region to one byte by moving slot b's pool offset down to 1 keeps the
-    // table strictly ascending, so it loads, but the 16-byte write to a now
+    // Audit D4: a private composite field whose declared element length is
+    // shorter than the body written into it must not let the write overrun
+    // into the next field's region. Two Point fields each occupy a 16-byte
+    // body. Declaring field a's element one byte long keeps every placement
+    // ascending and disjoint, so it loads, but the 16-byte write to a now
     // overruns [0, 1) and must fault rather than overwrite b's region.
     let src = "struct Point { x: Word, y: Word }\n\
                private data d { a: Point, b: Point }\n\
@@ -65,12 +64,13 @@ fn d4_private_composite_write_bounded_by_slot_region() {
     let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     {
         let dl = m.data_layout.as_mut().expect("data layout");
-        assert!(
-            dl.private_composite_layout.len() >= 2,
-            "expected two private composite slots"
-        );
-        dl.private_composite_layout[0].offset = 0;
-        dl.private_composite_layout[1].offset = 1;
+        let pooled: Vec<_> = dl
+            .fields
+            .iter_mut()
+            .filter(|f| f.offset.is_some())
+            .collect();
+        assert!(pooled.len() >= 2, "expected two private composite fields");
+        pooled.into_iter().next().unwrap().elem_len = 1;
     }
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -85,6 +85,39 @@ fn d4_private_composite_write_bounded_by_slot_region() {
     assert!(
         msg.contains("overruns its pool slot region"),
         "expected a D4 pool-region fault, got: {msg}"
+    );
+}
+
+/// A placement table whose fields overlap in the pool is refused when the
+/// module is verified, before any write could reach it. The record this
+/// replaced carried no element length, so only the runtime write could catch
+/// the same overlap.
+#[test]
+fn overlapping_private_composite_placements_are_refused_at_verification() {
+    let src = "struct Point { x: Word, y: Word }\n\
+               private data d { a: Point, b: Point }\n\
+               fn main() -> Word { d.a = Point { x: 1, y: 2 }; 0 }";
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    {
+        let dl = m.data_layout.as_mut().expect("data layout");
+        let b = dl
+            .fields
+            .iter_mut()
+            .filter(|f| f.offset.is_some())
+            .nth(1)
+            .expect("two private composite fields");
+        b.offset = Some(1);
+    }
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize_persistent");
+    let err = Vm::new(m, &arena)
+        .err()
+        .expect("an overlapping placement must be refused");
+    let msg = alloc::format!("{err:?}");
+    assert!(
+        msg.contains("not ascending and disjoint"),
+        "expected a placement refusal, got: {msg}"
     );
 }
 

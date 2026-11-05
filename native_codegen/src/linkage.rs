@@ -75,7 +75,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{FileType, TargetMachine};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType};
 use inkwell::values::{BasicValue, FunctionValue};
-use keleusma::bytecode::{Module, SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
+use keleusma::bytecode::{Module, SHARED_SLOT_COMPOSITE_FLAG};
 use keleusma::trap_analysis::{TrapVerdict, classify_traps};
 use keleusma::value_layout::ScalarKind;
 
@@ -557,17 +557,13 @@ fn shared_fields(program: &Module) -> Result<Vec<SharedField>, LinkageError> {
     let Some(dl) = program.data_layout.as_ref() else {
         return Ok(Vec::new());
     };
-    let names: Vec<&str> = dl
-        .slots
-        .iter()
-        .filter(|s| s.visibility == SlotVisibility::Shared)
-        .map(|s| s.name.as_str())
-        .collect();
-    if names.len() != dl.shared_layout.len() {
+    let names = crate::data_view::shared_slot_names(Some(dl));
+    let shared_layout = crate::data_view::shared_layout(Some(dl));
+    if names.len() != shared_layout.len() {
         return Err(LinkageError::Layout(format!(
             "{} shared slots but {} layout entries",
             names.len(),
-            dl.shared_layout.len()
+            shared_layout.len()
         )));
     }
     let width = |log2: u8| (1usize << log2) / 8;
@@ -577,7 +573,7 @@ fn shared_fields(program: &Module) -> Result<Vec<SharedField>, LinkageError> {
         width(program.addr_bits_log2),
     );
     let mut fields: Vec<SharedField> = Vec::new();
-    for (name, entry) in names.iter().zip(&dl.shared_layout) {
+    for (name, entry) in names.iter().zip(&shared_layout) {
         let element_bytes = if entry.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
             u64::from(entry.len)
         } else {

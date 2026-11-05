@@ -37,11 +37,7 @@ fn call_order_with_stage(
         .ok_or_else(|| unavailable("missing layout"))?;
     let mut slots = [0; 7];
     for (index, name) in FIELDS.iter().enumerate() {
-        slots[index] = layout
-            .slots
-            .iter()
-            .position(|slot| slot.name == *name)
-            .ok_or_else(|| unavailable(name))?;
+        slots[index] = layout.slot_of(name).ok_or_else(|| unavailable(name))?;
     }
     let persistent = required_persistent_capacity_for(&stage);
     let mut arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + persistent);

@@ -106,17 +106,9 @@ fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
     let dl = m.data_layout.as_ref()?;
     let scalar = format!(".{suffix}");
     let element0 = format!(".{suffix}[0]");
-    let mut shared_ix = 0usize;
-    for s in &dl.slots {
-        if s.visibility != SlotVisibility::Shared {
-            continue;
-        }
-        if s.name == suffix || s.name.ends_with(&scalar) || s.name.ends_with(&element0) {
-            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
-        }
-        shared_ix += 1;
-    }
-    None
+    keleusma_native::data_view::shared_field_offset(dl, |name| {
+        name == suffix || name.ends_with(&scalar) || name.ends_with(&element0)
+    })
 }
 
 /// Write `src` into the module's `bytes` array and its length into `len`.
@@ -172,10 +164,10 @@ fn drive(m: &Module, seed: Option<&str>) -> Result<Run, String> {
             .data_layout
             .as_ref()
             .map(|dl| {
-                dl.slots
+                dl.fields
                     .iter()
-                    .filter(|s| s.visibility == SlotVisibility::Shared)
-                    .map(|s| s.name.as_str())
+                    .filter(|f| f.visibility == SlotVisibility::Shared)
+                    .flat_map(|f| std::iter::repeat_n(f.name.as_str(), f.count as usize))
                     .take(6)
                     .collect()
             })

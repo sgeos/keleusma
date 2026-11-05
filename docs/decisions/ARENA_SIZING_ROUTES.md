@@ -108,6 +108,16 @@ peak is the parent's 24 bytes and the child's 16, so the smallest arena that ran
 against a figure of 232. Charging the exact child bodies needs the flat size of each nested
 constant, which the module does not record, and the 8 bytes are the parent's own scalar field.
 
+**The seeded term counts every element of a private composite array.** Encoding F, landed on
+2026-11-02, carries a private array of composites as one field record rather than one placement
+per element, and `seeded_private_arena_bytes` and `native_persistent_supplement_bytes` read the
+fields. Each pooled element is still charged its own pool extent, so every figure in the tables
+above is unchanged. Measured the same way on a private `[P; 70000]`, `P` two words, the seeded
+term is 1,120,000 bytes, sixteen per element, the figure is 1,120,440, the module constructs and
+runs across a `Reset` in an arena of that figure, and one byte less fails with `OutOfArena`,
+pinned by `tests/private_composite_slot_cap.rs`. Before this term existed, the same module
+exhausted an arena of 3,425,536 bytes during construction.
+
 ## The native route against V0.3.X
 
 V0.3.X sent five figures on 2026-10-31 for a host that runs only native code. All five are
