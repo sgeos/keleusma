@@ -109,7 +109,7 @@ shared data toks {
     underflow_id: Word,
     zero_divisor_id: Word,
     // Full-width literal values, indexed by lexer token 65.
-    values: [Word; 1280],
+    values: [Word; 1536],
     invalid_index_id: Word,
     // The method table, Order 6, APPENDED. Row i resolves `recv.m(..)` for a receiver whose
     // type head is `mt_head[i]` and a method named `mt_name[i]` to chunk `mt_chunk[i]`.
@@ -2433,6 +2433,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             0
         } } }
     } else {
+        if k == 76 { enum_text_payload(vi, fi, v) } else {
         if k == Tok::LParen() as Word {
             // Open a TUPLE payload field: record its offset, a fresh tuple layout, and enter epf 1.
             enums.evfoff[fi] = 8 + enums.epayload[vi];
@@ -2488,8 +2489,27 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             0
         } else {
             0
-        } } } }
+        } } } } }
     } }
+}
+
+// A `Text<N>` payload field, recorded as a tuple payload of the flat body's layout, the
+// sentinel kind `30000 + size` that a written tuple payload takes. A size the sentinel
+// cannot carry below the array sentinels is refused.
+fn enum_text_payload(vi: Word, fi: Word, n: Word) -> Word {
+    if toks.text_id <= 0 orelse n + 8 >= 10000 { perr(pe_value_layout(), toks.at) } else {
+        let desc = text_desc(n);
+        enums.evfoff[fi] = 8 + enums.epayload[vi];
+        enums.evfstruct[fi] = 0;
+        enums.evfarrkind[fi] = 0;
+        enums.evfenum[fi] = 0;
+        enums.evftuple[fi] = ht.layout[desc] + 1;
+        enums.evfkind[fi] = 30000 + 8 + n;
+        enums.evfcount[vi] = enums.evfcount[vi] + 1;
+        enums.epayload[vi] = enums.epayload[vi] + 8 + n;
+        hq_push(143, n);
+        6 + text_name() * 64
+    }
 }
 
 // The flat body size of an enum: eight bytes for the discriminant plus the largest payload
@@ -5023,9 +5043,10 @@ fn return_query_step() -> Word {
         if rq.query == 1 {
             rq.query = 2;
             if k == Tok::Ident() as Word { return_query_finish(header_named(v)); } else {
+            if k == 76 { return_query_finish(text_desc(v)); } else {
             if k == Tok::LParen() as Word { header_open(1); } else {
             if k == Tok::LBracket() as Word { header_open(2); } else { perr(pe_value_layout(), toks.at); }
-            }}
+            }}}
         } else { header_member(k, v); }
         if rq.emit_call == 1 { ps.emit_arg = ps.cursor; 111 } else { ps.emit_arg = 0 - 1; 0 }
     }
@@ -5212,8 +5233,24 @@ fn value_record(word: Word) -> Word {
     if kind == 10 orelse kind == 65 { value_scalar(if kind == 10 andalso arg == 1 { 5 } else { 3 }); }
     if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
     if kind == 82 { value_scalar(5); }
+    if kind == 87 { value_scalar(2); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
-    if kind == 26 { value_scalar(if arg == 1 { 2 } else { 3 }); }
+    if kind == 144 {
+        // A text operation's value: a word for `len` and `capacity`, a bool for `eq`, and a
+        // text body for `concat` and `slice`, armed so an operation may follow it.
+        let op = arg % 8;
+        let a = (arg / 8) % 131072;
+        let b = (arg / 1048576) % 131072;
+        if op <= 1 { value_scalar(3); } else { if op == 3 { value_scalar(1); } else {
+            header_arm(text_desc(if op == 2 { a + b } else { a }));
+        } }
+    }
+    if kind == 26 andalso arg >= text_cast_base() {
+        // A literal cast is a `Text<N>` value, laid out as its flat body.
+        let desc = text_desc(arg - text_cast_base());
+        value_load(desc);
+    } else {
+    if kind == 26 { value_scalar(if arg == 1 { 2 } else { 3 }); } }
     if kind == 28 { value_scalar(arg / 65536); }
     if kind == 31 { value_scalar(arg); }
     if kind == 37 andalso arg < 4294967296 { value_scalar(arg / 65536); }
@@ -5273,6 +5310,8 @@ fn step_closing() -> Word {
             ops.closing = 0;
             ops.expect_operand = 0;
             if empty == 1 { Node::Unit() as Word + 3 * 64 } else {
+                // A parenthesized text body, such as a literal cast, may take an operation.
+                if vl.form == 1 andalso text_layout_cap(vl.layout) > 0 { header_arm(text_desc(text_layout_cap(vl.layout))); }
                 // Tag 85 is past the packed range of 64, so it rides the two-word form.
                 if check > 0 { type_tuple_record(85, check - 1) } else { 0 }
             }
@@ -5287,6 +5326,7 @@ fn step_closing() -> Word {
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
             if call.call_chunk[call.call_sp] >= 4096 { gen_call_close(call.call_sp); }
+            if call.call_chunk[call.call_sp] >= 3072 andalso call.call_chunk[call.call_sp] < 3080 { text_close(call.call_sp) } else {
             if call.call_chunk[call.call_sp] >= 1024 {
                 // A native call, record tag 80, carrying the import row and the argument
                 // count as `row + count * 1024`. A declared enum return makes the result that
@@ -5321,7 +5361,7 @@ fn step_closing() -> Word {
                 ps.fa_phase = 1;
             }
             return_call(Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64, call.call_chunk[call.call_sp])
-            }
+            } }
         } else {
         if top == OpCode::EnumMark() as Word {
             // A `)` closing an enum payload construction: pop the mark, count the last payload
@@ -5419,6 +5459,7 @@ fn step_cdraining() -> Word {
         } else {
             gen_note_arg(call.call_sp - 1);
             call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
+            text_comma(call.call_sp - 1);
             ops.expect_operand = 1;
             0
         } } } } }
@@ -6484,6 +6525,17 @@ fn step_normal(k: Word, v: Word) -> Word {
         step_if(k)
     } else {
     let sat = saturation_word(k, v);
+    if k == 77 {
+        // A `Byte`-suffixed literal, Tok 77, the reference's byte constant. Record 87 is a
+        // leaf that code generation interns as a Byte pool entry, and the value is a Byte
+        // operand, as a `Byte` cast's is.
+        ops.expect_operand = 0;
+        ps.last_enum = 0;
+        stmt.pending_copt = 0; stmt.pending_cenum = 0;
+        ps.last_byte = 1;
+        ps.emit_arg = v;
+        87
+    } else {
     if k == Tok::IntLit() as Word orelse sat != 0 {
         ops.expect_operand = 0;
         ps.last_enum = 0;
@@ -6577,7 +6629,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
         step_op(k)
-    } } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 // The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was
@@ -6776,10 +6828,103 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
                 104
             }
         } else {
-            ps.ta_phase = 0;
-            0
+            if k == Tok::Ident() as Word andalso text_method(v) >= 0 andalso text_layout_cap(ps.ta_tuple) > 0 {
+                text_method_begin(text_method(v), text_layout_cap(ps.ta_tuple))
+            } else {
+                ps.ta_phase = 0;
+                0
+            }
         } } }
     }
+}
+
+// THE FIVE `Text<N>` OPERATIONS, `len`, `capacity`, `concat`, `eq` and `slice`, codes 0 to 4.
+//
+// The host gives each a method-table row under the `Text` head whose chunk is the code below
+// zero, so a method of one of these names on a value laid out as a text body is lowered here
+// rather than called. The receiver is already emitted. The `(` and the arguments go through
+// the call path, with the receiver counted as the first argument, and the close emits record
+// 144 instead of a call, carrying the operation, the capacities and the hidden slots that
+// code generation needs. The slots are reserved where the reference declares its hidden
+// locals: the receiver's at the `(`, after the receiver's own, a slice's start at the comma
+// after its first argument, and the rest at the close, after the arguments' own.
+//
+// The instructions an operation emits grow with its capacities. One whose count, by the
+// formulas recorded in `docs/decisions/TEXT_CAPACITY_TYPE.md`, would pass 7000 of the code
+// generator's 8192-instruction function buffer is refused here rather than overrunning it.
+private data txo {
+    pend_op: Word, pend_cap: Word,
+    op: [Word; 9], capa: [Word; 9], s1: [Word; 9], start: [Word; 9],
+}
+fn text_method(v: Word) -> Word {
+    txo.pend_op = 0 - 1;
+    for i in 0..toks.mt_count limit 64 {
+        if toks.mt_head[i] == text_name() andalso toks.mt_name[i] == v andalso toks.mt_chunk[i] < 0 {
+            txo.pend_op = 0 - toks.mt_chunk[i] - 1;
+        }
+    }
+    if toks.text_id > 0 { txo.pend_op } else { 0 - 1 }
+}
+// The capacity of tuple layout `li` when it is a text body, a word at offset zero followed
+// by an array of bytes, else 0.
+fn text_layout_cap(li: Word) -> Word {
+    if li < 0 orelse li >= tupledefs.tup_count orelse tupledefs.tup_ecount[li] != 2 { 0 } else {
+        let e0 = tupledefs.tup_estart[li];
+        let d = tupledefs.tup_edesc[e0 + 1] - 1;
+        if d < 0 orelse tupledefs.tup_ekind[e0] != 3 orelse tupledefs.tup_eoffset[e0] != 0 orelse ht.nform[d] != 2 { 0 } else {
+            let c = ht.child[d];
+            if c < 0 orelse ht.nform[c] != 0 orelse ht.scalar[c] != 2 { 0 } else { ht.arity[d] }
+        }
+    }
+}
+fn text_method_begin(op: Word, cap: Word) -> Word {
+    ps.ta_phase = 0;
+    txo.pend_op = op; txo.pend_cap = cap;
+    call.call_pending = 3072 + op;
+    call.pipe_args = 1;
+    call.call_phase = 1;
+    0
+}
+fn text_open(sp: Word) -> Word {
+    txo.op[sp] = txo.pend_op; txo.capa[sp] = txo.pend_cap; txo.s1[sp] = 0;
+    if txo.pend_op >= 2 {
+        txo.s1[sp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+    }
+    txo.start[sp] = 0;
+    0
+}
+// The comma after a slice's first argument, where the reference declares its start local.
+fn text_comma(sp: Word) -> Word {
+    if call.call_chunk[sp] == 3076 andalso call.call_count[sp] == 2 {
+        txo.start[sp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+    }
+    0
+}
+fn text_close(sp: Word) -> Word {
+    let op = txo.op[sp];
+    let a = txo.capa[sp];
+    let arity = if op <= 1 { 1 } else { if op == 4 { 3 } else { 2 } };
+    let b = if op == 2 orelse op == 3 { if vl.form == 1 { text_layout_cap(vl.layout) } else { 0 } } else { 0 };
+    let hidden = if op == 0 { 1 } else { if op == 1 { 0 } else { if op == 2 { 5 } else { if op == 3 { 3 } else { 5 } } } };
+    let s2 = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + hidden;
+    let lesser = if a < b { a } else { b };
+    let size = if op == 2 { 27 * a + 16 * b + 47 } else { if op == 3 { 14 * lesser + 41 } else { if op == 4 { 16 * a + 61 } else { 17 } } };
+    if call.call_count[sp] != arity orelse ((op == 2 orelse op == 3) andalso b <= 0)
+        orelse a + b > text_cap_max() orelse size > 7000
+        orelse s2 + hidden > 2047 orelse txo.s1[sp] > 2047 {
+        perr(pe_method_syntax(), toks.at);
+    }
+    stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
+    ps.last_enum = 0; ps.last_byte = 0;
+    // A slice carries its start slot where a binary operation carries its argument's capacity.
+    let second = if op == 4 { txo.start[sp] } else { b };
+    ps.emit_arg = op + a * 8 + second * 1048576 + txo.s1[sp] * 137438953472 + s2 * 281474976710656;
+    144
 }
 
 // A `.N` after a let-bound value of a single-variant enum reads that variant's payload field
@@ -7003,11 +7148,18 @@ fn annotation_member(k: Word, v: Word) -> Word {
             ann.phase[i] = 1;
             type_tuple_record(95, v)
         } else {
+        if k == 76 {
+            // A `Text<N>` member, recorded as its name and its capacity.
+            ann.phase[i] = 1;
+            if v <= 0 orelse v > text_cap_max() orelse toks.text_id <= 0 { perr(pe_annotation_syntax(), toks.at); }
+            hq_push(143, v);
+            type_tuple_record(95, text_name())
+        } else {
         if k == Tok::LBracket() as Word { annotation_open(1) } else {
         if k == Tok::LParen() as Word { annotation_open(2) } else {
         if ann.kind[i] == 2 andalso (ann.length[i] == 0 orelse ann.length[i] >= 2) andalso k == Tok::RParen() as Word { annotation_close() } else {
             perr(pe_annotation_syntax(), toks.at)
-        }}}}
+        }}}}}
     } else {
     if ann.kind[i] == 2 {
         if k == Tok::Comma() as Word { ann.phase[i] = 0; ann.length[i] = ann.length[i] + 1; 0 } else {
@@ -7048,10 +7200,17 @@ fn record_let_annotation(k: Word, v: Word) -> Word {
             type_tuple_record(95, v)
         } else {
             stmt.pending_let_type = -ann.id - 1;
+            if k == 76 {
+                // A whole `Text<N>` annotation, recorded as its name and its capacity. The
+                // binding's layout comes from its value, as it does for a tuple annotation.
+                if v <= 0 orelse v > text_cap_max() orelse toks.text_id <= 0 { perr(pe_annotation_syntax(), toks.at); }
+                hq_push(143, v);
+                type_tuple_record(95, text_name())
+            } else {
             if k == Tok::LBracket() as Word { annotation_open(1) } else {
             if k == Tok::LParen() as Word { annotation_open(2) } else {
                 perr(pe_annotation_syntax(), toks.at)
-            }}
+            }}}
         }
     } else {
         if ann.depth > 0 { annotation_member(k, v) } else {
@@ -7281,6 +7440,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     } else {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
+            if call.call_pending >= 3072 andalso call.call_pending < 3080 { text_open(call.call_sp); }
             call.call_chunk[call.call_sp] = call.call_pending;
             // A piped operand's kind is the first argument's, as the reference rewrites a pipe
             // into a template to the call it stands for before monomorphizing it.
@@ -7332,6 +7492,16 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // over two Byte locals lowered to the unchecked Byte `Add` where the reference emits
         // `CheckedAdd` (found 2026-10-21).
         // A newtype operand unwraps to its base with no operation, as the reference casts it.
+        if k == 76 {
+            // `"..." as Text<N>`, the literal cast. The Cast record carries the capacity above
+            // `text_cast_base`, and code generation reads the string literal operand itself.
+            // An operand that is not a literal is the reference's refusal, so it is left to
+            // the reference.
+            gn.as_nt = 0; ps.last_byte = 0; ps.last_enum = 0;
+            stmt.pending_copt = 0; stmt.pending_cenum = 0;
+            if v <= 0 orelse v > text_cap_max() orelse toks.text_id <= 0 { perr(pe_annotation_syntax(), toks.at); }
+            Node::Cast() as Word + (text_cast_base() + v) * 64
+        } else {
         if gn.as_nt == 1 { gn.as_nt = 0; ps.last_byte = 0; 0 } else {
         // A cast to the operand's own type emits nothing, as the reference casts it. It fires
         // only on a KNOWN operand kind, so a stale kind diverges from the reference instead of
@@ -7355,7 +7525,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
                 stmt.pending_copt = 0; stmt.pending_cenum = 0;
                 0
             } else { Node::Cast() as Word }
-        } } }
+        } } } }
     } else {
     if k == Tok::As() as Word {
         // A plain `<expr> as Type` cast (not an enum cast, which step_enum consumes).
@@ -9152,6 +9322,7 @@ fn header_field(k: Word, v: Word) -> Word {
         } }
         }
     } else {
+    if k == 76 { header_text_field(v) } else {
     if k == 41 {
         if ps.ptype == 1 {
             ps.ptype = 0;
@@ -9224,7 +9395,24 @@ fn header_field(k: Word, v: Word) -> Word {
         record
     } else {
         0
-    } } } } } } } } }
+    } } } } } } } } } }
+}
+
+// A `Text<N>` field type. A struct field takes the tuple layout of the flat body, as a
+// written tuple field does, so its size and its nested reads follow from the layout.
+fn header_text_field(n: Word) -> Word {
+    if ps.ptype != 1 orelse ps.arr != 0 orelse ps.dvis != 3 orelse toks.text_id <= 0 { perr(pe_annotation_syntax(), toks.at) } else {
+        ps.ptype = 0;
+        let cur = structdefs.sd_count - 1;
+        let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+        let desc = text_desc(n);
+        structdefs.sd_ftuple[fidx] = ht.layout[desc] + 1;
+        structdefs.sd_fsize[fidx] = 8 + n;
+        structdefs.sd_fkind[fidx] = 0;
+        structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 8 + n;
+        hq_push(143, n);
+        6 + text_name() * 64
+    }
 }
 
 // Record a parameter (mode 0) or return (mode 1) type name that names a declared struct or enum,
@@ -9524,6 +9712,56 @@ fn header_tuple(frame: Word) -> Word {
     }}
 }
 
+// THE CAPACITY-BOUNDED TEXT TYPE `Text<N>`, Tok 76 from the lexer.
+//
+// Its flat body is the tuple of a length word and `N` content bytes, the layout the
+// reference's layout pass gives it, so its descriptor is the descriptor of
+// `(Word, [Byte; N])` and every layout consumer handles it with no case of its own. The
+// descriptor is built in the scratch frame just above the open ones, the way a literal
+// tuple builds its own in frame zero. `N` above the largest flat body is refused, since a
+// `NewComposite` carries a sixteen-bit size.
+fn text_cap_max() -> Word { 65527 }
+fn text_cast_base() -> Word { 1099511627776 }
+fn text_desc(n: Word) -> Word {
+    if ht.depth >= 31 orelse n <= 0 orelse n > text_cap_max() { perr(pe_annotation_syntax(), toks.at); 0 } else {
+        let f = ht.depth;
+        let w = header_node(0, 8); ht.scalar[w] = 3;
+        let b = header_node(0, 1); ht.scalar[b] = 2;
+        let arr = header_node(2, n); ht.child[arr] = b; ht.arity[arr] = n;
+        ht.next[w] = arr;
+        ht.count[f] = 2; ht.first[f] = w; ht.last[f] = arr; ht.bytes[f] = 8 + n; ht.known[f] = 1;
+        let at = header_tuple(f);
+        // The layout is complete, so a struct or enum holding it is laid out at once.
+        nl.tknown[ht.layout[at]] = 1;
+        at
+    }
+}
+// The `Text` type name, which names the type in the source type records. The host reads the
+// capacity from the record that follows it.
+fn text_name() -> Word { toks.text_id - 1 }
+// A whole parameter or return type `Text<N>`. The descriptor completes the header as a
+// written tuple would, and the type is recorded as its name and its capacity.
+fn header_text_top(n: Word, mode: Word) -> Word {
+    ht.mode = mode; ht.depth = 0; ht.base_node = ht.nodes; ht.base_layout = tupledefs.tup_count;
+    let at = text_desc(n);
+    if ps.perr_code == 0 { header_complete(at); }
+    hq_push(143, n);
+    if mode == 1 { 6 + text_name() * 64 } else { 7 + text_name() * 64 }
+}
+fn header_text(n: Word) -> Word {
+    if ps.arr == 1 andalso toks.text_id > 0 {
+        // The element of an array type `[Text<N>; M]`, completed as a tuple element is, and
+        // recorded under the array's own head record. The length follows as for any array.
+        ps.arr = 3;
+        header_text_top(n, if ps.arr_ret == 0 { 1 } else { 2 })
+    } else {
+    if ps.arr != 0 orelse toks.text_id <= 0 { perr(pe_annotation_syntax(), toks.at) } else {
+    if ps.ptype == 1 andalso ps.pdepth == 1 { header_text_top(n, 1) } else {
+    if ps.rtype == 1 andalso ps.pdepth == 0 { header_text_top(n, 2) } else {
+        perr(pe_annotation_syntax(), toks.at)
+    } } } }
+}
+
 fn header_complete(value: Word) -> Word {
     let at = if ht.nform[value] == 1 andalso ht.layout[value] >= 0 andalso tupledefs.tup_desc[ht.layout[value]] > 0 {
         tupledefs.tup_desc[ht.layout[value]] - 1
@@ -9597,10 +9835,14 @@ fn header_member(k: Word, v: Word) -> Word {
             if ht.mode != 3 { signature_text_name(v, if ht.mode == 2 { 1 } else { 0 }); }
             header_add(header_named(v)); type_tuple_record(95, v)
         } else {
+        if k == 76 {
+            // A query reads a callee's return layout and emits no type record.
+            header_add(text_desc(v)); if ht.mode != 3 { hq_push(143, v); } type_tuple_record(95, text_name())
+        } else {
         if k == Tok::LParen() as Word { header_open(1) } else {
         if k == Tok::LBracket() as Word { header_open(2) } else {
         if ht.form[frame] == 1 andalso k == Tok::RParen() as Word { header_close() } else { perr(pe_annotation_syntax(), toks.at) }
-        }}}
+        }}}}
     } else {
     if ht.form[frame] == 1 {
         if k == Tok::Comma() as Word { ht.comma[frame] = 1; ht.phase[frame] = 0; 0 } else {
@@ -9762,6 +10004,7 @@ fn header_sig_body(k: Word, v: Word) -> Word {
     if ps.tts == 1 {
         header_member(k, v)
     } else {
+    if k == 76 { header_text(v) } else {
     if k == 1 {
         if ps.arr == 3 {
             signature_text_name(v, ps.arr_ret);
@@ -10038,7 +10281,7 @@ fn header_sig_body(k: Word, v: Word) -> Word {
         } else {
             0
         }
-    } } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 fn step_body() -> Word {

@@ -314,7 +314,8 @@ fn emit(k: Word, a: Word, l: Word, r: Word) -> Word {
 // DataAssignIn 12, IndexAssignIn 14, ExprStmt 21) pops its right then left child; a
 // unary node (Not 6, Neg 10, IndexRead 13, YieldExpr 24, Cast 26, FieldAccess 28) pops one.
 fn is_leaf(k: Word) -> Word {
-    if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 orelse k == 38 orelse k == 82 { 1 } else { 0 }
+    // 87 is a `Byte`-suffixed literal.
+    if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 orelse k == 38 orelse k == 82 orelse k == 87 { 1 } else { 0 }
 }
 
 fn is_binary(k: Word) -> Word {
@@ -941,6 +942,7 @@ fn step_record(k: Word, a: Word) -> Word {
         let index = pop();
         emit(15, a, value, index)
     } else {
+    if k == 144 { text_op(a) } else {
     if k == 7 orelse k == 80 {
         // Call, or a native call (record 80) whose `chunk` is the native's import row and
         // which becomes a kind-81 node. Node kind 80 is already the checked binding, so the
@@ -1171,10 +1173,24 @@ fn step_record(k: Word, a: Word) -> Word {
         step_assembly(k, a)
     } else {
         0
-    } } } } } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } } } } }
 }
 }
 
+}
+
+// A `Text<N>` operation, record 144. The receiver and the arguments are popped into the call
+// arguments in source order, and the node, kind 86, keeps the record's packed operand, which
+// carries the operation in its low three bits, for code generation.
+fn text_op(a: Word) -> Word {
+    let op = a % 8;
+    let count = if op <= 1 { 1 } else { if op == 4 { 3 } else { 2 } };
+    let start = rs.ca;
+    for j in 0..count limit 3 {
+        io.call_args[start + count - 1 - j] = pop();
+    }
+    rs.ca = start + count;
+    emit(86, a, start, count)
 }
 
 // Pop the top depth-2+ struct reassembly frame (its sub-fields are fully laid into `seb`) and
