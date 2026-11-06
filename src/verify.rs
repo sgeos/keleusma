@@ -1082,12 +1082,12 @@ pub(crate) fn shared_composite_copyout_bytes(
     op: &Op,
     layout: Option<&crate::bytecode::DataLayout>,
 ) -> u32 {
-    let (base, len) = match op {
-        Op::GetData(slot) => (*slot as usize, 1usize),
-        Op::GetDataIndexed(base, len) => (*base as usize, *len as usize),
+    let (field, len) = match op {
+        Op::GetData(field) => (*field, None),
+        Op::GetDataIndexed(field, len) => (*field, Some(*len)),
         _ => return 0,
     };
-    layout.map_or(0, |dl| dl.shared_composite_max_len(base, len))
+    layout.map_or(0, |dl| dl.operand_shared_composite_max_len(field, len))
 }
 
 /// Compute the worst-case memory usage over a region of instructions
@@ -3603,8 +3603,10 @@ fn verify_chunk(
                     record(ip, P1, "break-if-targets-loop-exit");
                 }
                 Op::GetData(slot) | Op::SetData(slot) => {
+                    // The operand names a field, option B of the array
+                    // wire-slot design, so it is bounded by the field count.
                     let idx = *slot as usize;
-                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slot_count());
+                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.field_count());
                     if data_len == 0 {
                         let op_name = if matches!(op, Op::GetData(_)) {
                             "GetData"
@@ -3630,7 +3632,7 @@ fn verify_chunk(
                         return Err(VerifyError {
                             chunk_name: name.clone(),
                             message: alloc::format!(
-                                "{} at {} references slot {} but data layout has {} slot(s)",
+                                "{} at {} references field {} but data layout has {} field(s)",
                                 op_name,
                                 ip,
                                 idx,
@@ -3641,7 +3643,6 @@ fn verify_chunk(
                     record(ip, P1, "data-slot-index-in-range");
                 }
                 Op::GetDataIndexed(base, len) | Op::SetDataIndexed(base, len) => {
-                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slot_count());
                     let op_name = if matches!(op, Op::GetDataIndexed(_, _)) {
                         "GetDataIndexed"
                     } else {
@@ -3649,19 +3650,31 @@ fn verify_chunk(
                     };
                     // Empty spans need no storage and still have total outcomes.
                     record(ip, P1, "data-range-layout-declared");
-                    let base_usize = *base as usize;
-                    let len_usize = *len as usize;
-                    let end = base_usize.saturating_add(len_usize);
-                    if end > data_len {
+                    // The first operand names a field and a nonempty span lies
+                    // within it, so the length is bounded by that field's
+                    // element count. An empty span is valid up to and including
+                    // the field count, as `DataLayout::operand_span` states.
+                    let in_bounds = match module.data_layout.as_ref() {
+                        Some(dl) => dl.operand_span(*base, *len).is_some(),
+                        None => *base == 0 && *len == 0,
+                    };
+                    if !in_bounds {
+                        let (fields, count) = module.data_layout.as_ref().map_or((0, 0), |dl| {
+                            (
+                                dl.field_count(),
+                                dl.fields.get(*base as usize).map_or(0, |f| f.count),
+                            )
+                        });
                         return Err(VerifyError {
                             chunk_name: name.clone(),
                             message: alloc::format!(
-                                "{} at {} references slot range [{}, {}) but data layout has {} slot(s)",
+                                "{} at {} references {} element(s) of field {} but data layout has {} field(s) and that field has {} element(s)",
                                 op_name,
                                 ip,
-                                base_usize,
-                                end,
-                                data_len
+                                len,
+                                base,
+                                fields,
+                                count
                             ),
                         });
                     }
@@ -5456,7 +5469,10 @@ pub(crate) mod tests {
             }),
         };
         let err = verify(&module).unwrap_err();
-        assert!(err.message.contains("slot"));
+        // A data operand names a field since option B, so the refusal names
+        // the field and the field count.
+        assert!(err.message.contains("field 5"), "{}", err.message);
+        assert!(err.message.contains("1 field(s)"), "{}", err.message);
     }
 
     #[test]

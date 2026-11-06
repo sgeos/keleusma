@@ -2380,12 +2380,14 @@ pub enum Op {
     /// Pop and store to local variable slot.
     SetLocal(u16),
 
-    /// Push data segment slot value onto stack. The slot index is carried in
-    /// twenty-four bits on the wire (`u32` in memory, validated `< 1 << 24` at
-    /// compile and load), so the unified data-slot space is bounded to 16 M
-    /// slots rather than 64 K.
+    /// Push the value of element zero of a data field onto the stack. The
+    /// operand is the field's index in the data layout, one logical slot per
+    /// field, which is option B of the array wire-slot design. It is carried
+    /// in twenty-four bits on the wire (`u32` in memory, validated
+    /// `< 1 << 24` at compile and load).
     GetData(u32),
-    /// Pop a value and store it into a data-segment slot. The runtime dispatches
+    /// Pop a value and store it into element zero of a data field, the field
+    /// named by its index as for [`Op::GetData`]. The runtime dispatches
     /// on the value. A scalar is stored inline in the slot. A private slot whose
     /// value is a flat composite copies its body into the persistent composite
     /// pool at the offset the module's private-composite layout table records
@@ -2398,13 +2400,17 @@ pub enum Op {
     SetData(u32),
 
     /// Total indexed read. Pop a Word/Byte/Unit fallback and then a Word
-    /// index. Read the selected slot only in range, otherwise use fallback.
+    /// index. The first operand names a data field by its index and the
+    /// second is the span length, at most the field's element count. Read
+    /// element `index` of the field only in range, otherwise use fallback.
     /// Push value, index, four Word bound limbs, and flag zero for a read or
     /// one for fallback. Invalid spans and type/storage contract failures
-    /// remain errors. Base and length retain their u24 wire encoding.
+    /// remain errors. Field and length retain their u24 wire encoding.
     GetDataIndexed(u32, u32),
-    /// Total indexed write. Pop value and Word index, write only when the
-    /// index is in range, then push index, four Word byte limbs of the bound,
+    /// Total indexed write. Pop value and Word index, write element `index`
+    /// of the field the first operand names only when the index is in range,
+    /// the span being as for [`Op::GetDataIndexed`], then push index, four
+    /// Word byte limbs of the bound,
     /// and flag zero for success or one for an invalid index. Invalid indices
     /// and empty spans perform no write. Invalid data spans and storage/type
     /// contract failures remain errors. Both operands use u24 wire encoding.
@@ -3604,13 +3610,115 @@ fn const_bits_equal(a: &ConstValue, b: &ConstValue) -> bool {
     }
 }
 
+/// Where packed private storage keeps the elements of one private data field.
+///
+/// This is storage S1 of the array wire-slot design, ruled on 2026-10-31 as
+/// C3.5. A private array lies at element width, as a shared array already lies
+/// in the host buffer, and a private scalar keeps its `Value` slot.
+///
+/// # The rule, which every reader of a layout applies identically
+///
+/// [`private_field_storage`] decides from the field record alone, so the
+/// compiler's declared private size, the self-hosted driver's, the runtime's
+/// placement and [`crate::vm::required_persistent_capacity_for`] cannot
+/// disagree. A field is packed when it has more than one element, when its
+/// elements do not start as `Unit`, and when its element is either a scalar of
+/// fixed width or a flat composite with a pool home. Every other field keeps
+/// one `Value` slot per element.
+///
+/// # Why a one-element field and a `Unit`-initialised field are not packed
+///
+/// A field of one element is a scalar in all but its declared type, and the
+/// record does not carry the declared type, so the rule cannot tell `[Word; 1]`
+/// from `Word`. Keeping both as a `Value` slot follows the record's
+/// specification, which keeps scalars as slots. A field whose elements start as
+/// `Unit` relies on the write-before-read contract, and its elements must read
+/// as `Unit` until written. A packed element has no representation of `Unit`,
+/// so packing such a field would change what an unwritten element reads as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateStorage {
+    /// One `Value` slot per element in the private slot array.
+    Values,
+    /// Each element at `width` bytes, little-endian at the module's widths, in
+    /// the packed scalar region that follows the slot array.
+    Scalars {
+        /// The element's scalar kind.
+        kind: crate::value_layout::ScalarKind,
+        /// The element's width in bytes, at most eight.
+        width: u32,
+    },
+    /// Each element's body in the persistent composite pool at the field's own
+    /// offset and stride, with no `Value` slot.
+    Pool,
+}
+
+/// The [`PrivateStorage`] of a private field of `count` elements of `kind`.
+///
+/// `starts_as_unit` is whether the field's elements start as `Unit`, which
+/// includes a zero initialiser for a kind that has no zero. `pooled` is whether
+/// the field's elements have a pool home, an offset with a nonzero body
+/// length. The widths are the module's.
+#[must_use]
+pub fn private_field_storage(
+    count: u32,
+    kind: u8,
+    starts_as_unit: bool,
+    pooled: bool,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> PrivateStorage {
+    use crate::value_layout::ScalarKind;
+    if count <= 1 || starts_as_unit {
+        return PrivateStorage::Values;
+    }
+    if kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+        return if pooled {
+            PrivateStorage::Pool
+        } else {
+            PrivateStorage::Values
+        };
+    }
+    let Some(scalar) = ScalarKind::from_tag(kind) else {
+        return PrivateStorage::Values;
+    };
+    let fixed_width = match scalar {
+        ScalarKind::Bool | ScalarKind::Byte | ScalarKind::Int | ScalarKind::Fixed => true,
+        #[cfg(feature = "floats")]
+        ScalarKind::Float => true,
+        ScalarKind::Unit | ScalarKind::Text | ScalarKind::Opaque => false,
+    };
+    // The address width does not enter, since no fixed-width kind uses it.
+    let width = scalar.size_in_bytes(word_bytes, float_bytes, 0);
+    match u32::try_from(width) {
+        Ok(width) if fixed_width && (1..=8).contains(&width) => PrivateStorage::Scalars {
+            kind: scalar,
+            width,
+        },
+        _ => PrivateStorage::Values,
+    }
+}
+
 /// One declared data field, the unit the data layout is made of.
 ///
 /// A scalar field has a `count` of one. An array field, however many
 /// dimensions it has, is one field whose `count` is the product of its
-/// dimensions. Each element still occupies one logical data slot, so a
-/// `GetData`/`SetData` operand counts elements, and the field's slots are
-/// `first_slot..first_slot + count`.
+/// dimensions.
+///
+/// # Two index spaces, by the operator's rulings
+///
+/// A data operand names a FIELD. `GetData(f)` and `SetData(f)` address
+/// element zero of field `f`, and `GetDataIndexed(f, len)` and
+/// `SetDataIndexed(f, len)` address element `i` of field `f` for an index `i`
+/// below `len`, where `len` is at most the field's `count`. This is option B
+/// of the array wire-slot design, one logical slot per field, ruled on
+/// 2026-10-31 as C3.6.
+///
+/// The host keeps the ELEMENT index space. `first_slot..first_slot + count`
+/// are the element slots of the field, in the space `Vm::get_shared` and
+/// `Vm::set_shared` index and a hot swap seeds. The operator ruled on
+/// 2026-11-04 that the host API keeps its element indices and the virtual
+/// machine translates, so no embedder changes. [`DataLayout::operand_slot`]
+/// and [`DataLayout::operand_span`] perform that translation.
 ///
 /// # Why the stride is stored rather than derived
 ///
@@ -3709,6 +3817,22 @@ impl DataField {
         (within < self.count).then_some(within)
     }
 
+    /// Where packed private storage keeps this field's elements, at the
+    /// module's widths. Meaningful for a private field only.
+    #[must_use]
+    pub fn private_storage(&self, word_bytes: usize, float_bytes: usize) -> PrivateStorage {
+        let starts_as_unit = matches!(self.init.value(self.kind), None | Some(ConstValue::Unit));
+        let pooled = self.offset.is_some() && self.elem_len > 0;
+        private_field_storage(
+            self.count,
+            self.kind,
+            starts_as_unit,
+            pooled,
+            word_bytes,
+            float_bytes,
+        )
+    }
+
     /// Byte offset of element `element`, or `None` when the field has no
     /// offset, the element is out of range, or the arithmetic overflows.
     #[inline]
@@ -3744,7 +3868,8 @@ pub struct DataLayout {
 }
 
 impl DataLayout {
-    /// Number of logical slots, the bound of a `GetData`/`SetData` operand.
+    /// Number of element slots, the host's index space. This is not the
+    /// bound of a data operand, which [`Self::field_count`] gives.
     #[must_use]
     pub fn slot_count(&self) -> usize {
         self.fields.iter().map(|f| f.count as usize).sum()
@@ -3794,9 +3919,114 @@ impl DataLayout {
         Some((f, f.element_of(slot)?))
     }
 
-    /// The first logical slot of the field named `name`, or `None` when no
-    /// field has that name. A linear scan, for host-side lookups that run once
-    /// per stage, never on an execution path.
+    /// The private storage this layout needs under packed private storage,
+    /// as the number of `Value` slots and the bytes of packed scalars, at the
+    /// module's widths. Pool-packed fields add nothing, since their bodies are
+    /// counted in the persistent composite pool. Saturating, so an impossible
+    /// layout fails the arena check rather than wrapping.
+    #[must_use]
+    pub fn private_storage_extent(&self, word_bytes: usize, float_bytes: usize) -> (usize, usize) {
+        let mut values = 0usize;
+        let mut packed = 0usize;
+        for f in &self.fields {
+            if f.visibility != SlotVisibility::Private {
+                continue;
+            }
+            match f.private_storage(word_bytes, float_bytes) {
+                PrivateStorage::Values => values = values.saturating_add(f.count as usize),
+                PrivateStorage::Scalars { width, .. } => {
+                    packed =
+                        packed.saturating_add((f.count as usize).saturating_mul(width as usize));
+                }
+                PrivateStorage::Pool => {}
+            }
+        }
+        (values, packed)
+    }
+
+    /// The declared private data size the module header carries, in
+    /// `VALUE_SLOT_SIZE_BYTES` units per `Value` slot plus the packed scalar
+    /// bytes. Before packed private storage it was 32 bytes per private
+    /// element whatever its type.
+    #[must_use]
+    pub fn private_data_bytes(&self, word_bytes: usize, float_bytes: usize) -> u32 {
+        let (values, packed) = self.private_storage_extent(word_bytes, float_bytes);
+        let values = u32::try_from(values).unwrap_or(u32::MAX);
+        let packed = u32::try_from(packed).unwrap_or(u32::MAX);
+        values
+            .saturating_mul(VALUE_SLOT_SIZE_BYTES)
+            .saturating_add(packed)
+    }
+
+    /// Number of fields, the bound of a `GetData` or `SetData` operand.
+    #[must_use]
+    pub fn field_count(&self) -> usize {
+        self.fields.len()
+    }
+
+    /// The element slot a `GetData(field)` or `SetData(field)` operand
+    /// addresses, which is element zero of the field, or `None` when no such
+    /// field exists.
+    #[must_use]
+    pub fn operand_slot(&self, field: u32) -> Option<usize> {
+        let f = self.fields.get(usize::try_from(field).ok()?)?;
+        Some(f.first_slot as usize)
+    }
+
+    /// The first element slot of the span a `GetDataIndexed(field, len)` or
+    /// `SetDataIndexed(field, len)` operand addresses, or `None` when the
+    /// operand is invalid.
+    ///
+    /// A nonempty span must lie within one field, so `len` is at most the
+    /// field's count. An empty span needs no storage, and is valid for every
+    /// `field` up to and including the field count, the same rule the element
+    /// space applied to `base + len` before option B. The empty span past the
+    /// last field begins at [`Self::slot_count`].
+    #[must_use]
+    pub fn operand_span(&self, field: u32, len: u32) -> Option<usize> {
+        let index = usize::try_from(field).ok()?;
+        match self.fields.get(index) {
+            Some(f) if len <= f.count => Some(f.first_slot as usize),
+            Some(_) => None,
+            None if len == 0 && index == self.fields.len() => Some(self.slot_count()),
+            None => None,
+        }
+    }
+
+    /// `op` with its data operand translated from field space to element
+    /// space, for a consumer whose logic is written over element slots, such
+    /// as the native backend and the hosted interpreter. Any other op, and a
+    /// data op whose operand is invalid, is returned unchanged, so that the
+    /// consumer's own bound check refuses it.
+    #[must_use]
+    pub fn element_addressed(&self, op: Op) -> Op {
+        let wide = |slot: usize| u32::try_from(slot).ok();
+        match op {
+            Op::GetData(f) => self.operand_slot(f).and_then(wide).map_or(op, Op::GetData),
+            Op::SetData(f) => self.operand_slot(f).and_then(wide).map_or(op, Op::SetData),
+            Op::GetDataIndexed(f, len) => self
+                .operand_span(f, len)
+                .and_then(wide)
+                .map_or(op, |b| Op::GetDataIndexed(b, len)),
+            Op::SetDataIndexed(f, len) => self
+                .operand_span(f, len)
+                .and_then(wide)
+                .map_or(op, |b| Op::SetDataIndexed(b, len)),
+            other => other,
+        }
+    }
+
+    /// The index of the field named `name`, the operand a program uses to
+    /// address it, or `None` when no field has that name. A linear scan, for
+    /// host-side lookups, never on an execution path.
+    #[must_use]
+    pub fn field_index_of(&self, name: &str) -> Option<usize> {
+        self.fields.iter().position(|f| f.name == name)
+    }
+
+    /// The first element slot of the field named `name`, in the host's index
+    /// space, or `None` when no field has that name. A linear scan, for
+    /// host-side lookups that run once per stage, never on an execution path.
     #[must_use]
     pub fn slot_of(&self, name: &str) -> Option<usize> {
         self.fields
@@ -3871,6 +4101,21 @@ impl DataLayout {
             .map(|f| u32::from(f.elem_len))
             .max()
             .unwrap_or(0)
+    }
+
+    /// [`Self::shared_composite_max_len`] over the element slots a data
+    /// operand reaches. `len` is `None` for `GetData(field)`, which reaches
+    /// element zero, and the span length for `GetDataIndexed(field, len)`. An
+    /// operand that names no field reaches nothing and yields zero.
+    #[must_use]
+    pub fn operand_shared_composite_max_len(&self, field: u32, len: Option<u32>) -> u32 {
+        let reached = match len {
+            None => self.operand_slot(field).map(|slot| (slot, 1usize)),
+            Some(len) => self
+                .operand_span(field, len)
+                .map(|slot| (slot, len as usize)),
+        };
+        reached.map_or(0, |(slot, len)| self.shared_composite_max_len(slot, len))
     }
 
     /// The persistent composite pool offset of private logical `slot`, or
@@ -4686,6 +4931,20 @@ impl core::fmt::Display for LoadError {
 impl core::error::Error for LoadError {}
 
 impl Module {
+    /// Whether the module declares any private data element, state that
+    /// persists across `Reset`.
+    ///
+    /// This is not `private_data_bytes != 0`. Packed private storage charges a
+    /// private array of flat composites to the persistent composite pool alone,
+    /// so a module whose only private field is such an array declares zero
+    /// private data bytes and still holds persistent state.
+    #[must_use]
+    pub fn declares_private_data(&self) -> bool {
+        self.data_layout
+            .as_ref()
+            .is_some_and(|dl| dl.private_slot_count() > 0)
+    }
+
     /// Serialize the module to a self-describing byte vector.
     ///
     /// The output begins with the twelve-byte header (magic, version,
