@@ -27,6 +27,16 @@ Later the same day the operator added, verbatim.
 The work therefore has two parts. The language is enhanced until an acceptable implementation is
 enforceable rather than merely possible, and the implementation is written against that.
 
+The operator then added, verbatim.
+
+> Another couple comments. My understanding is that Keleusma is nominally a good language for
+> cryptographic work. Rust host retirement requires cryptographic work. Therefore, steps will need
+> to be taken to lean into the theoretical strengths to make sure sure the language is good for
+> cryptography in actual practice.
+
+So cryptography is a design goal of the language, and not only an application written in it. Part
+3 lists the enhancements this implies.
+
 ## Part 1. Deferred until after the next public release
 
 ### Block bodies in match arms, then named states
@@ -126,6 +136,38 @@ own repository therefore needs a module and dependency system, which question C3
    then X25519, then Ed25519 verification, then Ed25519 signing, then the authenticated cipher.
 4. For each primitive, the published test vectors and a differential test against the Rust crate
    over generated inputs, so the two must agree before anything is retired.
+
+## Part 3. Leaning into the theoretical strengths
+
+Each item turns a property the language has in principle into one an implementation can rely on.
+The opcode count is a design limit, so each is planned as a compile-time rule or a surface form
+that lowers to existing opcodes, as the `Text<N>` operations do. An item that cannot be done that
+way is to be raised separately rather than add an opcode.
+
+1. **A `secret` label that is enforced.** The compiler refuses a branch condition, an array index,
+   a loop bound and a division or modulo operand that carries the label, and refuses passing it to
+   a host native that is not declared to accept it. Declassification is an explicit, auditable
+   form. This builds on the information-flow labels that already exist.
+2. **A constant-time contract.** The virtual machine states which opcodes take time independent
+   of their operand values, and a measurement harness tests that statement statistically, so the
+   contract is evidence and not a claim. The native lowering states the same for its code, with a
+   check that a masked selection reaches the machine code without a branch.
+3. **Branchless selection as a surface form.** A `select` built from masks, and a way to turn a
+   comparison into a mask, since a `bool` does not cast to `Word` today. Both lower to the existing
+   bitwise opcodes.
+4. **Unsigned wide arithmetic.** Unsigned multiply-high and add-with-carry forms over `Word` and
+   `Multiword<N>`, lowered to the existing checked opcodes with the sign corrections the signed
+   `i128` product needs.
+5. **Guaranteed erasure.** A wipe of secret storage that survives every lowering, and a rule that
+   secret values do not outlive their scope in reclaimed arena memory.
+6. **Byte-oriented helpers.** Fixed-size byte arrays with the conversions to and from words in
+   both byte orders, and constant-time equality, which hashes and ciphers use everywhere.
+7. **A known-answer and differential test harness.** Published test vectors, and a differential
+   check against the Rust crate over generated inputs, available to any library.
+8. **Modules and dependencies,** question C3, so the cryptography lives in its own repository.
+
+Items 1 to 4 are the core. Without them an implementation can be correct but cannot be shown to
+be constant-time.
 
 ## Questions for the operator, recommendation first
 
