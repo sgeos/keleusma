@@ -540,13 +540,12 @@ run `tests/text_ops_without_feature.rs`. The isolated `self-host` run has the fe
 - **An operand whose `Text<N>` capacity the compiler cannot read** after monomorphization.
 - **A result past the flat body limit.** A flat body is at most `u16::MAX` bytes including the
   length word, and on a narrow-word target a capacity must also be a non-negative word.
-- **The self-hosted compiler** does not mirror the operations. A program using one necessarily
-  names a `Text<N>`, because the literal cast is the only way to make an operand, so the existing
-  shipping refusal reports it as unsupported and never produces bytes for it. It is pinned by
-  `a_bundled_text_operation_is_outside_the_self_hosted_subset` in `tests/text_ops.rs`, and in the
-  build without the feature by `the_self_hosted_entry_reports_the_reference_refusal` in
-  `tests/text_ops_without_feature.rs`. Mirroring them in the stages was not attempted, so whether
-  it fits the stage caps is not measured.
+- **The self-hosted compiler** did not mirror the operations when this section was written, and
+  the shipping entry refused a program using one. **Superseded on 2026-11-02**, when the stages
+  came to lower them, as recorded in
+  [the self-hosted stages](#the-self-hosted-stages-updated-2026-11-02). In the build without the
+  feature the reference's refusal is still reported, pinned by
+  `the_self_hosted_entry_reports_the_reference_refusal` in `tests/text_ops_without_feature.rs`.
 
 ### What is not built
 
@@ -554,6 +553,34 @@ Lexicographic ordering, rendering a number as text in the manner of the removed 
 reading one byte, and any operation into a smaller fixed capacity. The last is the first operation
 that can overflow, and with it comes the truncation default and its optional arm following
 `CheckedArmKind`.
+
+## The self-hosted stages, updated 2026-11-02
+
+The two refusals recorded above for the self-hosted compiler are narrowed. The lexer stage
+folds `Text<N>` into one token, the parser stage lays the type out as the tuple of a length
+word and `N` bytes, and code generation loads a literal cast as one pooled constant, so the
+artifact is byte-identical with the reference in a signature, a `let`, a tuple, an array, a
+struct field and an enum payload. This was measured on forty programs through the shipping
+entry, pinned by `capacity_bounded_text_has_its_pinned_outcomes` in
+`tests/selfhost_full_language.rs`. A data field, an `Option` payload, a capacity that is not
+a literal or exceeds 65527, a trait, an impl and a newtype remain refused by the shipping
+entry before any stage runs.
+
+**The operations, updated the same day.** The stages also lower the five operations. The
+host gives each a method-table row under the `Text` head, the parser stage recognises a
+method of one of the five names on a value it lays out as a text body, reserves the hidden
+locals where the reference declares them, and emits one record that code generation expands
+into the instruction sequence of `src/compiler/text_intrinsics.rs`, emitting each result byte
+in its own work item so that the work stack stays at a constant depth. The artifact is
+byte-identical with the reference on the programs pinned by
+`the_self_hosted_compiler_lowers_the_operations_byte_identically` in `tests/text_ops.rs`. Three
+limits remain, each a refusal rather than a divergence. An operation whose instruction count
+by the formulas above would exceed 7000 is refused, because code generation holds one
+function in an 8192-instruction buffer, so a concatenation is limited to about
+`27A + 16B <= 6953`. A text value passed to a generic function is refused, because the
+generic call machinery does not model a text argument. An operation whose receiver the parser
+does not lay out as a text body, for example an `Option` payload, is refused with the
+receiver.
 
 ## The `ScalarKind::Text` collapse, investigated 2026-10-31 and stopped
 

@@ -1413,6 +1413,21 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
             methods.push((h, m, idx as i64));
         }
     }
+    // The five `Text<N>` operations resolve by the receiver type `Text`, not by a trait
+    // impl, as the reference resolves them. Each takes a row under the `Text` head whose
+    // chunk is the operation's code below zero, `-1` for `len` through `-5` for `slice`,
+    // which `parse.kel` lowers in place rather than calling. A row is added only for a
+    // name the source spells, and a trait method of the same name on `Text` cannot
+    // shadow it, because the reference reaches the operation first.
+    if let Some(text) = names.iter().position(|n| n == "Text") {
+        for (code, op) in TEXT_OPERATIONS.iter().enumerate() {
+            if let Some(m) = names.iter().position(|n| n == op) {
+                let (h, m) = (text as i64, m as i64);
+                methods.retain(|&(mh, mm, _)| !(mh == h && mm == m));
+                methods.push((h, m, -(code as i64) - 1));
+            }
+        }
+    }
     let instances = instances
         .iter()
         .zip(&instance_ids)
@@ -2868,7 +2883,12 @@ fn try_parse_functions_impl_with(
                 }
                 return ControlFlow::Continue(());
             }
-            if (in_body || in_guard) && matches!(code, 94..=96 | 99..=101 | 103) {
+            if (in_body || in_guard)
+                && matches!(
+                    code,
+                    94..=96 | 99..=101 | 103 | crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG
+                )
+            {
                 use crate::selfhost_host::{
                     PARSE_ANNOTATION_ARRAY_TAG, PARSE_ANNOTATION_END_TAG,
                     PARSE_ANNOTATION_START_TAG,
@@ -3186,7 +3206,8 @@ fn try_parse_functions_impl_with(
                     }
                     // A builtin generic's argument follows its head and is routed the same way.
                     crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
-                    | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+                    | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG
+                    | crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG => {
                         let f = open_decl(&mut cur, code, val);
                         if !f.return_type_records.is_empty() {
                             f.return_type_records.push((code, val));
@@ -3309,9 +3330,13 @@ fn try_parse_functions_impl_with(
 /// | 0 | `Int` | the integer itself |
 /// | 1 | `StaticStr` | the **lexer intern id**, resolved here through `names` |
 /// | 2 | `Bool` | 0 or 1 |
+/// | 3 | `Float` | the lexer intern id of the literal's text |
+/// | 4 | `Tuple(Int, Array)` | a `Text<N>` literal cast, the intern id below 65536 and `N` above it |
+/// | 5 | `Byte` | a `Byte`-suffixed literal's value |
 ///
-/// A `StaticStr` is the only entry needing `names`, and it is why this cannot be a plain
-/// `From` impl on the pair.
+/// The string, float and text entries need `names`, which is why this cannot be a plain
+/// `From` impl on the pair. It is public so that the test drivers which copy the pipeline
+/// convert the pool with this one definition rather than a fifth copy.
 ///
 /// # Failure modes
 ///
@@ -3319,7 +3344,7 @@ fn try_parse_functions_impl_with(
 /// producing a silently wrong constant. Both are stage/host protocol violations: neither is
 /// reachable from a user program, and a wrong constant would be a silent miscompile, which is
 /// the class this function exists to close.
-fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
+pub fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
     pool.iter()
         .map(|&(v, tag)| match tag {
             0 => ConstValue::Int(v),
@@ -3344,12 +3369,66 @@ fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
                         .unwrap_or_else(|_| panic!("float literal `{text}` is not an f64")),
                 )
             }
+            4 => text_cast_constant(v, names),
+            5 => ConstValue::Byte(
+                u8::try_from(v).expect("codegen.kel interned a Byte literal outside 0..=255"),
+            ),
             other => panic!(
                 "codegen.kel emitted constant-pool tag {other}, which this host does not \
                  know. A new tag needs a `ConstValue` mapping here, not a default"
             ),
         })
         .collect()
+}
+
+/// The Cast node argument at and above which `parse.kel` marks a literal cast to
+/// `Text<N>`, the capacity being the argument less this base. It matches
+/// `text_cast_base` in `parse.kel` and `codegen.kel`.
+const TEXT_CAST_BASE: i64 = 1 << 40;
+
+/// The bundled `Text<N>` operations in the order of their codes, `len` code zero.
+/// `parse.kel` and `codegen.kel` number them the same way.
+const TEXT_OPERATIONS: [&str; 5] = ["len", "capacity", "concat", "eq", "slice"];
+
+/// The largest `Text<N>` capacity the stages lower, `text_cap_max` in `parse.kel`.
+const TEXT_CAPACITY_MAX: i64 = 65527;
+
+/// The flat body of a literal cast `"..." as Text<N>`, pool tag 4.
+///
+/// `codegen.kel` packs the string literal's lexer intern id below 65536 and the capacity
+/// `N` above it. The body is the reference's `ConstValue::Tuple(Int(length),
+/// Array([Byte; N]))`, the literal's escaped bytes followed by zero bytes up to `N`,
+/// as `compile_text_literal_cast` in the reference builds it.
+///
+/// # Failure modes
+///
+/// A negative packed value means the cast operand was not a string literal, and a literal
+/// longer than its capacity cannot be represented. The reference refuses both programs
+/// before this runs, so both panic by name here rather than build a body the reference
+/// never would, and the shipping entry turns the panic into a refusal.
+fn text_cast_constant(packed: i64, names: &[String]) -> ConstValue {
+    assert!(
+        packed >= 0,
+        "a `Text<N>` cast whose operand is not a string literal is outside the self-hosted subset"
+    );
+    let id = usize::try_from(packed % 65536).expect("text cast intern id");
+    let capacity = usize::try_from(packed / 65536).expect("text cast capacity");
+    let raw = names.get(id).unwrap_or_else(|| {
+        panic!("codegen.kel interned text cast id {id}, outside the lexer name table")
+    });
+    let text = unescape_string(raw);
+    let bytes = text.as_bytes();
+    assert!(
+        bytes.len() <= capacity,
+        "a string literal of {} bytes does not fit in Text<{capacity}>",
+        bytes.len()
+    );
+    let mut content: Vec<ConstValue> = bytes.iter().map(|b| ConstValue::Byte(*b)).collect();
+    content.resize(capacity, ConstValue::Byte(0));
+    ConstValue::Tuple(vec![
+        ConstValue::Int(i64::try_from(bytes.len()).expect("text cast length")),
+        ConstValue::Array(content),
+    ])
 }
 
 /// Resolve the escape sequences the reference compiler bakes into a `StaticStr`.
@@ -3686,6 +3765,9 @@ fn declared_type_operand(
             // an argument mismatch. This is recorded as a residual in the Order 6 plan.
             crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
             | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {}
+            // A `Text<N>` keeps its `Text` head in the same way, and the reference
+            // cross-check refuses a capacity mismatch.
+            crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG => {}
             _ => panic!("unknown source type record {kind}"),
         }
     }
@@ -4788,7 +4870,11 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
         } else if scalar_results && matches!(node.kind, 10 | 65 | 66) {
             row_of_node.insert(at as i64, rows.len());
             rows.push((12, operand(node.lhs), nothing.clone()));
-        } else if scalar_results && node.kind == 26 {
+        } else if scalar_results && node.kind == 26 && node.arg < TEXT_CAST_BASE {
+            // A `Text<N>` literal cast, whose argument is at or above the base, is not a
+            // scalar conversion. It contributes no row, so its type stays unknown to the
+            // stage, as the `Text` head of its annotation does, and the reference
+            // cross-check is what refuses a wrong operand or capacity.
             row_of_node.insert(at as i64, rows.len());
             let target = if node.arg == 1 { 3 } else { 1 };
             rows.push((15, operand(node.lhs), (target, 0, String::new())));
@@ -7675,6 +7761,11 @@ fn builtin_generic_shape(
                 .and_then(|n| n.checked_mul(8))
                 .map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size })
         }
+        // `Text<N>` is the flat tuple of a length word and `N` bytes.
+        (Some("Text"), crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG) => u32::try_from(value)
+            .ok()
+            .and_then(|n| n.checked_add(8))
+            .map_or(WireShape::Top, |size| WireShape::Flat { kind: 0, size }),
         _ => WireShape::Top,
     }
 }
@@ -7724,7 +7815,8 @@ fn declared_wire_shape(
                 ));
             }
             crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
-            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG
+            | crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG => {
                 stack
                     .pop()
                     .flatten()
@@ -10501,44 +10593,79 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
         .map(|(line, _, what)| (what, line))
 }
 
-/// The line of the first `Text<N>` the source names in any type position, or `None`.
+/// The first use of `Text<N>` the stages under `kel/` do not lower, named with its line, or
+/// `None`.
 ///
-/// The stages under `kel/` do not lower `Text<N>`. Left to them, a program naming it
-/// reached four different outcomes depending on where the type appeared. A parameter
-/// diverged on the module signature, a cast was rejected by the parser stage, a `let`
-/// annotation left the type evidence unavailable, and a struct field that no code used
-/// compiled. Only the first and last of these were even arguably correct. Refusing at
-/// the shipping entry, before any stage runs, makes the outcome one clean refusal that
-/// names the construct, and it stays correct when the reference later accepts more of
-/// the type, because the refusal does not depend on what the reference decides.
+/// The stages lower the type, its flat layout and the literal cast in a signature, a `let`
+/// annotation, a tuple, an array, a struct field and an enum payload. What remains is
+/// refused here, before any stage runs, because left to the stages some of these reached a
+/// divergence or unavailable type evidence rather than one clean refusal. The refusal does
+/// not depend on what the reference decides, so it stays correct when the reference admits
+/// more of the type.
+///
+/// | refused | why |
+/// |---|---|
+/// | a capacity that is not a literal | the generic template machinery does not substitute a const parameter into a capacity |
+/// | an `Option` of a `Text<N>` | an `Option` of any composite payload is outside the stages |
+/// | a data field | a private data field of a tuple layout is outside the stages |
+/// | a trait, an impl or a newtype | the stages key method heads and newtypes by a type name |
+///
+/// The five operations are lowered by the stages on a receiver the parser stage lays out
+/// as a text body. An operation the stages cannot lower is refused by the parser stage as
+/// an unsupported method call rather than here.
 ///
 /// A source the reference parser rejects answers `None`, so the existing rejection
 /// paths classify it exactly as before.
-fn first_text_capacity_line(src: &str) -> Option<u32> {
+fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
     use crate::ast::{Expr, Stmt, TypeDef, TypeExpr};
     use crate::visitor::Visitor;
 
-    fn type_line(te: &TypeExpr) -> Option<u32> {
+    /// Note every `Text<N>` inside `te`, and refuse the ones no stage lowers wherever
+    /// they appear.
+    fn type_scan(te: &TypeExpr, inside_option: bool, out: &mut Scan) {
         match te {
-            TypeExpr::TextN(_, span) => Some(span.line),
-            TypeExpr::Array(inner, _, _)
-            | TypeExpr::Option(inner, _)
-            | TypeExpr::Labelled(inner, _, _)
-            | TypeExpr::NegativeLabelled(inner, _, _) => type_line(inner),
-            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
-                items.iter().filter_map(type_line).min()
+            TypeExpr::TextN(cap, span) => {
+                out.named = true;
+                if inside_option {
+                    out.refuse("an `Option` of a `Text<N>`", span.line);
+                } else if cap.as_lit().is_none() {
+                    out.refuse("a `Text<N>` whose capacity is not a literal", span.line);
+                } else if cap.as_lit().is_some_and(|n| n > TEXT_CAPACITY_MAX) {
+                    // `text_cap_max` in `parse.kel`, the largest flat body a `NewComposite`
+                    // sixteen-bit size can carry beside the length word.
+                    out.refuse("a `Text<N>` whose capacity exceeds 65527", span.line);
+                }
             }
-            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => None,
+            TypeExpr::Option(inner, _) => type_scan(inner, true, out),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => type_scan(inner, inside_option, out),
+            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
+                items.iter().for_each(|t| type_scan(t, inside_option, out))
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => {}
         }
     }
 
+    #[derive(Default)]
     struct Scan {
-        lines: Vec<u32>,
+        named: bool,
+        refused: Vec<(u32, &'static str)>,
     }
     impl Scan {
+        fn refuse(&mut self, what: &'static str, line: u32) {
+            self.refused.push((line, what));
+        }
         fn note(&mut self, te: &TypeExpr) {
-            if let Some(line) = type_line(te) {
-                self.lines.push(line);
+            type_scan(te, false, self);
+        }
+        /// Refuse `te` as `what` when it names a `Text<N>` anywhere.
+        fn note_whole(&mut self, te: &TypeExpr, what: &'static str) {
+            let mut inner = Scan::default();
+            type_scan(te, false, &mut inner);
+            if inner.named {
+                self.named = true;
+                self.refuse(what, te.span().line);
             }
         }
     }
@@ -10560,8 +10687,8 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
     }
 
     let program = parse(&tokenize(src).ok()?).ok()?;
-    let mut scan = Scan { lines: Vec::new() };
-    let note_fn = |scan: &mut Scan, f: &crate::ast::FunctionDef| {
+    let mut scan = Scan::default();
+    for f in &program.functions {
         scan.note(&f.return_type);
         for p in &f.params {
             if let Some(te) = &p.type_expr {
@@ -10569,21 +10696,31 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
             }
         }
         scan.visit_block(&f.body);
-    };
-    for f in &program.functions {
-        note_fn(&mut scan, f);
     }
+    const IN_TRAIT: &str = "a `Text<N>` in a trait or an impl";
     for b in &program.impls {
+        scan.note_whole(&b.for_type, IN_TRAIT);
         for m in &b.methods {
-            note_fn(&mut scan, m);
+            scan.note_whole(&m.return_type, IN_TRAIT);
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    scan.note_whole(te, IN_TRAIT);
+                }
+            }
+            let mut body = Scan::default();
+            body.visit_block(&m.body);
+            if body.named {
+                scan.named = true;
+                scan.refuse(IN_TRAIT, m.span.line);
+            }
         }
     }
     for t in &program.traits {
         for m in &t.methods {
-            scan.note(&m.return_type);
+            scan.note_whole(&m.return_type, IN_TRAIT);
             for p in &m.params {
                 if let Some(te) = &p.type_expr {
-                    scan.note(te);
+                    scan.note_whole(te, IN_TRAIT);
                 }
             }
         }
@@ -10595,11 +10732,13 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
                 .variants
                 .iter()
                 .for_each(|v| v.fields.iter().for_each(|t| scan.note(t))),
-            TypeDef::Newtype(n) => scan.note(&n.underlying),
+            TypeDef::Newtype(n) => scan.note_whole(&n.underlying, "a `Text<N>` newtype"),
         }
     }
     for d in &program.data_decls {
-        d.fields.iter().for_each(|f| scan.note(&f.type_expr));
+        d.fields
+            .iter()
+            .for_each(|f| scan.note_whole(&f.type_expr, "a `Text<N>` data field"));
     }
     for u in &program.uses {
         if let Some(sig) = &u.signature {
@@ -10607,7 +10746,10 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
             sig.params.iter().for_each(|t| scan.note(t));
         }
     }
-    scan.lines.into_iter().min()
+    scan.refused
+        .into_iter()
+        .min()
+        .map(|(line, what)| (what, line))
 }
 
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
@@ -10634,16 +10776,14 @@ pub fn self_hosted_compile(
     {
         return Err(SelfHostError::NonHostTarget);
     }
-    // A `Text<N>` program is refused before any stage runs. The reference is consulted
-    // first so that a program it rejects, such as a literal longer than its capacity,
-    // reports that rejection rather than a subset limit that would send the user to a
-    // backend which rejects it too.
-    if let Some(line) = first_text_capacity_line(src) {
+    // A use of `Text<N>` the stages do not lower is refused before any stage runs. The
+    // reference is consulted first so that a program it rejects, such as a literal longer
+    // than its capacity, reports that rejection rather than a subset limit that would send
+    // the user to a backend which rejects it too.
+    if let Some((what, line)) = unsupported_text_capacity(src) {
         compile_reference(src)?;
         return Err(SelfHostError::Unsupported {
-            detail: format!(
-                "a capacity-bounded `Text<N>` at line {line} is outside the self-hosted subset"
-            ),
+            detail: format!("{what} at line {line} is outside the self-hosted subset"),
         });
     }
     // Obtain an independent verdict before the reference sees the source. Unknown facts
