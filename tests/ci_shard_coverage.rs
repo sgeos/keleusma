@@ -53,6 +53,11 @@
 //! coverage loss, because the test it no longer names falls into the hashed part, but it
 //! is a balance loss nobody would notice, so it fails here.
 //!
+//! **THE WHOLE C5 MUTATION CORPUS IS PINNED IN EQUAL SHARES.** On 2026-11-06 the corpus of
+//! `tests/selfhost_validator/c5_corpus.rs` became `PARTITIONS` tests, following the operator's
+//! ruling of 2026-11-04 to consider sharding it. This file checks that each partition is
+//! pinned to exactly one shard and that the shards' shares differ by at most one.
+//!
 //! The parse is line-based over a workflow this repository writes, and it is not a
 //! general YAML reader. It fails closed: a partitioned command whose shard expression or
 //! matrix it cannot read is a failure, not a skip.
@@ -772,6 +777,121 @@ fn the_pinned_split_check_rejects_overlap_staleness_and_an_omitted_list() {
     assert!(!is_pinned_split(
         "cargo nextest run -E \"$PINNED\" -E 'not test(slow)'"
     ));
+}
+
+/// The full nextest name of the C5 corpus partition `p`.
+fn c5_partition_name(p: usize) -> String {
+    format!("c5_corpus::c5_corpus_partition_{p:02}")
+}
+
+/// The partition count `tests/selfhost_validator/c5_corpus.rs` declares as `PARTITIONS`.
+fn c5_partition_count() -> usize {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/selfhost_validator/c5_corpus.rs");
+    let text = std::fs::read_to_string(&path).expect("the C5 corpus source");
+    let declared: Vec<usize> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("const PARTITIONS: usize = "))
+        .map(|rest| {
+            rest.strip_suffix(';')
+                .and_then(|n| n.parse().ok())
+                .expect("`PARTITIONS` is a plain integer literal")
+        })
+        .collect();
+    assert_eq!(
+        declared.len(),
+        1,
+        "the C5 corpus must declare `const PARTITIONS: usize = <n>;` once"
+    );
+    declared[0]
+}
+
+/// Why the pinned lists do not hold each of the `partitions` C5 corpus partitions exactly once,
+/// in shares that differ by at most one between shards, or nothing.
+fn c5_partition_errors(lists: &[(usize, Vec<String>)], partitions: usize) -> Vec<String> {
+    let mut errors = Vec::new();
+    if lists.is_empty() {
+        return vec!["there are no pinned lists".to_string()];
+    }
+    let expected: Vec<String> = (0..partitions).map(c5_partition_name).collect();
+    for name in &expected {
+        let holders: Vec<usize> = lists
+            .iter()
+            .filter(|(_, names)| names.contains(name))
+            .map(|(k, _)| *k)
+            .collect();
+        if holders.len() != 1 {
+            errors.push(format!(
+                "`{name}` is pinned to shards {holders:?}, and it must be pinned to exactly one"
+            ));
+        }
+    }
+    let prefix = "c5_corpus::c5_corpus_partition_";
+    let mut shares = Vec::new();
+    for (k, names) in lists {
+        let mine: Vec<&String> = names.iter().filter(|n| n.starts_with(prefix)).collect();
+        for name in &mine {
+            if !expected.contains(name) {
+                errors.push(format!("PINNED_{k} names `{name}`, which is no partition"));
+            }
+        }
+        shares.push(mine.len());
+    }
+    let (least, most) = (shares.iter().min(), shares.iter().max());
+    if most.zip(least).is_some_and(|(a, b)| a - b > 1) {
+        errors.push(format!(
+            "the shards hold {shares:?} partitions, which differ by more than one"
+        ));
+    }
+    errors
+}
+
+/// **THE WHOLE C5 CORPUS IS SPREAD EVENLY OVER THE SHARDS.** Its partitions together cost
+/// about forty test-minutes, so they are pinned rather than hashed. A hashed placement could
+/// put most of them on one shard, and a partition left unpinned would still run, so neither
+/// the coverage nor the disjointness check above would notice.
+#[test]
+fn the_c5_corpus_partitions_are_pinned_evenly_across_the_shards() {
+    let jobs = ci_jobs();
+    let job = jobs
+        .iter()
+        .find(|j| j.key == "test-self-host")
+        .expect("ci.yml has no `test-self-host` job");
+    let lists = pinned_lists(job).expect("the pinned lists parse");
+    let partitions = c5_partition_count();
+    // NON-VACUITY. Zero partitions would satisfy every check.
+    assert!(
+        partitions >= 4,
+        "the corpus declares {partitions} partitions"
+    );
+    let errors = c5_partition_errors(&lists, partitions);
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+/// The C5 placement check detects a partition pinned nowhere, one pinned twice, one that does
+/// not exist, and an uneven share.
+#[test]
+fn the_c5_partition_check_rejects_a_missing_double_unknown_and_uneven_placement() {
+    let lists = |a: &[usize], b: &[usize]| {
+        let names = |ps: &[usize]| ps.iter().map(|p| c5_partition_name(*p)).collect();
+        vec![(1, names(a)), (2, names(b))]
+    };
+    assert_eq!(
+        c5_partition_errors(&lists(&[0, 2], &[1, 3]), 4),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        c5_partition_errors(&lists(&[0, 2], &[1, 3, 4]), 5),
+        Vec::<String>::new()
+    );
+    // Partition 3 pinned nowhere.
+    assert_eq!(c5_partition_errors(&lists(&[0, 2], &[1]), 4).len(), 1);
+    // Partition 2 pinned to both shards.
+    assert_eq!(c5_partition_errors(&lists(&[0, 2], &[1, 2, 3]), 4).len(), 1);
+    // Partition 4 does not exist.
+    assert_eq!(c5_partition_errors(&lists(&[0, 2], &[1, 3, 4]), 4).len(), 1);
+    // Three against one.
+    assert_eq!(c5_partition_errors(&lists(&[0, 1, 2], &[3]), 4).len(), 1);
+    assert_eq!(c5_partition_errors(&[], 4).len(), 1);
 }
 
 /// **THE REQUIRED CHECK SEES EVERY JOB.** `main` requires `CI result`, which fails when any
