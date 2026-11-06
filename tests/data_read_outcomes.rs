@@ -18,7 +18,10 @@ fn data_read_preserves_fallback_kind_and_reifies_invalid_indices() {
             (0, 2, 1),
             (0, 2, 2),
             (0, 2, 1_i64 << 32),
-            (2, 0, 0),
+            // The empty span past the last field. A data operand names a field
+            // since option B, so the end of a one-field layout is field 1,
+            // where in element space it was slot 2.
+            (1, 0, 0),
         ] {
             for flag in [false, true] {
                 let mut m = compile(if byte {

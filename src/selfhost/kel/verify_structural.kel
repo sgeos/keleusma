@@ -35,8 +35,9 @@
 // operand index validated against a chunk or module table.
 //
 //   * local slot: `GetLocal`/`SetLocal` slot `< local_count`;
-//   * data slot: `GetData`/`SetData` slot `< data_len` (and a declared data layout), and
-//     `GetDataIndexed`/`SetDataIndexed` range `[base, base + len)` within `data_len`;
+//   * data field: `GetData`/`SetData` field `< data_len`, the field count (and a declared
+//     data layout), and `GetDataIndexed`/`SetDataIndexed` length at most the named field's
+//     element count `o3`, with the field at most `data_len` for an empty span;
 //   * constant pool: `Const`/`IsStruct`/`GetField(Boxed)` index `< const_count`, and all three
 //     of `IsEnum`'s indices `< const_count`;
 //   * call target and arity: `Call` callee `< nchunks` and argument count `<= callee locals`;
@@ -51,8 +52,8 @@
 // target), 2 Else (arg the matching EndIf), 3 EndIf, 4 Loop (arg the exit target), 5 EndLoop
 // (arg the back-edge), 6 Break (arg the loop exit), 7 BreakIf (arg the loop exit), 8 Trap,
 // 9 Call. The operand-bounds encoding is a parallel table `opb`/`o1`/`o2`/`o3` from the host's
-// `structural_opbounds`: opb 0 none, 1 data-single (`o1` slot), 2 data-range (`o1` base, `o2`
-// len), 3 constant-single (`o1` index), 4 enum-triple (`o1`/`o2`/`o3` indices), 5 call (`o1`
+// `structural_opbounds`: opb 0 none, 1 data-single (`o1` field), 2 data-range (`o1` field, `o2`
+// len, `o3` the field's element count resolved by the host), 3 constant-single (`o1` index), 4 enum-triple (`o1`/`o2`/`o3` indices), 5 call (`o1`
 // callee, `o2` argument count, `o3` the callee's local count resolved by the host), 6
 // fixed-fraction (`o1` fraction bits), 7 local (`o1` slot), 8 boxed struct/enum template (`o1`
 // meta index). The stage sets `out_reject` to 1 on the first malformed construct it proves, and
@@ -243,8 +244,10 @@ fn check_opbounds(ip: Word) -> Word {
         0
     } else {
     if k == 2 {
-        // GetDataIndexed/SetDataIndexed(base = a, len = b): range within the data slots.
-        if a + b > sv.data_len { sd.bad = 1; }
+        // GetDataIndexed/SetDataIndexed(field = a, len = b): a nonempty span lies within the
+        // field `a` names, whose element count the host carries in `d` (0 when `a` names no
+        // field), and an empty span is valid up to and including the field count.
+        if a > sv.data_len orelse b > d { sd.bad = 1; }
         0
     } else {
     if k == 3 {

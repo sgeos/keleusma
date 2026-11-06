@@ -581,7 +581,14 @@ fn analyze(
         let mut guards = BTreeMap::new();
         while let Some(ip) = work.pop_front() {
             let mut state = states[ip].clone().unwrap();
-            let op = &chunk.ops[ip];
+            // A data operand names a field since option B of the array wire-slot design, and
+            // this analysis is written over element slots, so a data op is read with its
+            // operand translated to the field's first element.
+            let addressed = m
+                .data_layout
+                .as_ref()
+                .map_or(chunk.ops[ip], |dl| dl.element_addressed(chunk.ops[ip]));
+            let op = &addressed;
             let fail = || {
                 LowerError::UnsupportedShape(format!(
                     "coroutine scalar types are not proven in {} at {ip}: {op:?}",

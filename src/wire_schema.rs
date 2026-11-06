@@ -2015,7 +2015,8 @@ pub fn encode_layouts(
 pub struct DataFieldRecord {
     /// Name index of `block.field`.
     pub name: u32,
-    /// Logical slot index of element zero.
+    /// Element slot index of element zero, in the host's element index space.
+    /// A data operand names the record's index instead, under option B.
     pub first_slot: u32,
     /// Element count. Never zero, and `first_slot + count` is at most
     /// [`crate::bytecode::MAX_DATA_ADDR`].
@@ -2413,7 +2414,31 @@ impl<'a> DataLayoutTable<'a> {
         self.pool.slice(n.offset, n.length)
     }
 
-    /// Number of LOGICAL slots, the bound of a `GetData`/`SetData` operand.
+    /// The element slot a `GetData(field)` or `SetData(field)` operand
+    /// addresses, element zero of the field, or `None` when no such field
+    /// exists. Constant time, one record read, which is why option B names
+    /// fields in operands. Mirrors [`DataLayout::operand_slot`].
+    #[inline]
+    pub fn operand_slot(&self, field: u32) -> Option<usize> {
+        Some(self.field(usize::try_from(field).ok()?)?.first_slot as usize)
+    }
+
+    /// The first element slot of the span a `GetDataIndexed(field, len)` or
+    /// `SetDataIndexed(field, len)` operand addresses, or `None` when the
+    /// operand is invalid. Mirrors [`DataLayout::operand_span`].
+    #[inline]
+    pub fn operand_span(&self, field: u32, len: u32) -> Option<usize> {
+        let index = usize::try_from(field).ok()?;
+        match self.field(index) {
+            Some(r) if len <= r.count => Some(r.first_slot as usize),
+            Some(_) => None,
+            None if len == 0 && index == self.field_count() => Some(self.slot_count()),
+            None => None,
+        }
+    }
+
+    /// Number of ELEMENT slots, the host's index space. A data operand is
+    /// bounded by [`Self::field_count`] instead.
     ///
     /// Constant time, since validation established that the fields are
     /// contiguous from slot zero.

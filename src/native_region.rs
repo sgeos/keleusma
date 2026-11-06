@@ -240,7 +240,9 @@ pub fn native_region_supplement_bytes(module: &Module) -> u32 {
 /// The persistent bytes a native compilation adds after the virtual machine's
 /// persistent figure, the backend's `persistent_supplement_bytes`.
 ///
-/// One eight-byte word for the resume state of each `Stream` chunk in the
+/// First the gap by which the backend's private image exceeds that figure,
+/// [`native_private_gap_bytes`], zero for a module without a packed private
+/// array. Then one eight-byte word for the resume state of each `Stream` chunk in the
 /// module, whether or not it is the entry, and one eight-byte initialisation
 /// word for each private composite pool slot, which records whether the slot
 /// has been written. Each of the two counts is rounded up to the body
@@ -263,7 +265,26 @@ pub fn native_persistent_supplement_bytes(module: &Module) -> u32 {
             .sum::<usize>()
     });
     let words = |n: usize| align(u32::try_from(n).unwrap_or(u32::MAX).saturating_mul(8));
-    words(streams).saturating_add(words(composite_slots))
+    native_private_gap_bytes(module)
+        .saturating_add(words(streams))
+        .saturating_add(words(composite_slots))
+}
+
+/// The bytes by which the native backend's private image exceeds the virtual
+/// machine's persistent figure, [`native_private_base_bytes`] less
+/// [`crate::vm::required_persistent_capacity_for`], saturating at zero and at
+/// `u32::MAX`.
+///
+/// Packed private storage made the virtual machine's figure smaller than the
+/// backend's image, whose private elements each keep a word. The backend's
+/// published contract sizes its private buffer as the virtual machine's figure
+/// plus its persistent supplement, so the gap is carried in the supplement,
+/// and that contract keeps sizing the same buffer it sized before packing.
+#[must_use]
+pub fn native_private_gap_bytes(module: &Module) -> u32 {
+    let gap = native_private_base_bytes(module)
+        .saturating_sub(crate::vm::required_persistent_capacity_for(module));
+    u32::try_from(gap).unwrap_or(u32::MAX)
 }
 
 /// The buffers a host that runs `module` only as native code allocates, in
@@ -288,6 +309,38 @@ pub struct NativeRouteBuffers {
     /// The shared buffer, [`crate::vm::shared_data_bytes_for`], the same
     /// buffer the virtual machine borrows.
     pub shared_bytes: usize,
+}
+
+/// The persistent bytes the native backend lays its private image out
+/// against, before its supplement.
+///
+/// The backend stores every private element in a word of its own, followed by
+/// the composite pool, an image of its own choosing that no external consumer
+/// observes. It places its stream resume state and its composite
+/// initialisation words after this figure. Until packed private storage, S1
+/// of the array wire-slot design, the figure was the virtual machine's own
+/// [`crate::vm::required_persistent_capacity_for`], then 32 bytes per private
+/// element plus the pool, which was never smaller than the backend's image.
+/// Packed private storage made the virtual machine's figure smaller than the
+/// backend's image for a packed array of any element narrower than a word and
+/// for a private array of composites, so the backend keeps the element-slot
+/// figure, and every native memory image and offset stays as it was.
+///
+/// The figure is the private element count times the bundled runtime's
+/// `Value` size, plus the persistent composite pool. It saturates. On a
+/// 64-bit target that size is pinned at 32 bytes by the `const` assertion
+/// beside `Value` in `src/bytecode.rs`, so the figure cannot drift with a
+/// host's layout there. That assertion is scoped to a 64-bit pointer width,
+/// and on a 32-bit target the slot and therefore this figure are smaller.
+#[must_use]
+pub fn native_private_base_bytes(module: &Module) -> usize {
+    let elements = module
+        .data_layout
+        .as_ref()
+        .map_or(0, crate::bytecode::DataLayout::private_slot_count);
+    elements
+        .saturating_mul(core::mem::size_of::<crate::bytecode::Value>())
+        .saturating_add(module.persistent_composite_bytes as usize)
 }
 
 /// The buffers for a host that runs `module` only as native code.
