@@ -160,13 +160,15 @@ release build with the family alone, the ported family generates 51 mutants, the
 rejects 25 at `verify` and 25 at admission, and none is unsound, over-rejected or unavailable.
 The other rows were not re-measured after the port.
 
-The whole corpus costs more than a test can spend in a continuous-integration shard, so it is
-`#[ignore]`d as `c5_the_whole_mutation_corpus` and is the review's instrument. The test that
-runs by default, `c5_the_self_hosted_validator_accepts_no_sampled_mutant_the_reference_rejects`,
-takes one mutant in sixteen of each family and every mutant the repair pinned. It judged 712
+The whole corpus costs more than a test can spend in a continuous-integration shard, so it was
+`#[ignore]`d as `c5_the_whole_mutation_corpus` and was the review's instrument. The test that
+ran by default, `c5_the_self_hosted_validator_accepts_no_sampled_mutant_the_reference_rejects`,
+took one mutant in sixteen of each family and every mutant the repair pinned. It judged 712
 mutants after the repair, with none unsound. `c5_the_repaired_mutants_are_refused` holds the 41
 as failing-first controls. All three were measured to pass after the repair, and the 41 were
-measured to be accepted before it.
+measured to be accepted before it. Since 2026-11-06 continuous integration runs the whole
+corpus as sixteen partitions and the sample is retired, see "The corpus in continuous
+integration".
 
 ## Defects found and repaired
 
@@ -271,6 +273,74 @@ sampled gate judged 875 mutants before the repair, with 2 unsound, and 893 after
 unsound, none over-rejected and none unavailable. It reaches more after the repair because it
 also takes every mutant `REPAIRED_RESIDUALS` names.
 
+## The corpus in continuous integration
+
+On 2026-11-04 the operator ruled on running the whole corpus, verbatim, "A. Consider sharding
+if reasonable and possible." Option A kept the one-in-sixteen sample in continuous integration
+and ran the whole corpus before each release. The sharding was measured and adopted on
+2026-11-06 on `ci/v02-c5-corpus-shards`, cut from `v0.2.3` at `cecd93db`.
+
+**The profile.** The self-host shards run an archive that `cargo nextest archive` builds in
+the `test` profile, which inherits `dev` at opt-level 1 with debug assertions on. They are not
+release builds, so the release figures above do not describe their cost.
+
+**The shards before the change.** Measured from `gh run view --json jobs` and the job log of
+run 42232522967, the ready run of 2026-11-06 on `3aefa398`. The four shards took 37.0, 30.2,
+35.9 and 31.9 minutes of wall time. Each spent between 1,336 and 1,635 seconds in its pinned
+step and between 386 and 480 seconds in its hashed step. Their tests summed to 7,432, 6,518,
+7,256 and 6,791 test-seconds, which is between 91 and 94 percent of the two steps' wall time
+times four threads. The four threads are inferred from the runner size and not read from the
+log. Run 42017081168 gave 37.3, 16.4, 32.1 and 34.2 minutes, and run 42083974780 had one shard
+at 137.8 minutes, 104 of them in the artifact download, so the shard times vary by run.
+
+**The corpus in that profile.** In run 42232522967 the sample took 183.2 seconds and
+`c5_the_repaired_mutants_are_refused` took 25.3 seconds. The sample judged about 893 mutants,
+the count measured locally after the residual repair and not read from the log. That gives
+about 0.2 seconds a mutant in a loaded shard, and about 2,600 test-seconds for the corpus in a
+shard, which is an estimate from a timed fraction and not a measurement. Locally the whole
+corpus was measured in the `test` profile, with
+`cargo nextest run -p keleusma --features self-host --test selfhost_validator -E 'test(/c5_/)' --run-ignored all`,
+on a shared machine whose one-minute load average was 5.8 at the start and 3.1 at the end.
+`c5_the_whole_mutation_corpus` took 1,169 seconds, and the sixteen partitions, running beside
+it on four threads, took between 66 and 78 seconds each and 1,171 test-seconds together. They
+judged nine partitions of 832 mutants and seven of 831, which is 13,305, and the whole test
+judged the same 13,305. The corpus is two smaller than the 13,307 of the table above, which
+is consistent with the data-layout port's 51 mutants in place of 53. Over those 13,305 the
+self-hosted validator accepted none the reference rejects and rejected none it accepts, 21
+analyses were unavailable, and the reference rejected 10,795 at `verify` and 11,161 at
+admission. A local partition is therefore about 2.3 times faster than the sample was in a
+shard, so a partition in a shard is estimated at about 170 seconds.
+
+**The decision.** One test holding the whole corpus would run for about forty minutes in a
+shard and lengthen that shard by about as much. Sixteen partitions cost about what the sample
+cost each, which is shorter than the longest pinned test of every shard, so no partition
+lengthens a shard's critical path. Pinned four to a shard, they add about 680 test-seconds to
+each shard less the sample's 183 seconds on one of them. At four threads near saturation that
+is estimated at about 170 seconds of wall time per shard, under ten percent of a 30 to 37
+minute shard and well inside the 25 percent bound the change was held to. Remote continuous
+integration on this branch has not run, so the growth is an estimate.
+
+**What runs.** `c5_corpus_partition_00` to `c5_corpus_partition_15` judge the mutants whose
+index in the generator's order is the partition number modulo 16, and shard k pins the
+partitions whose number modulo 4 is k minus 1. Each fails on a panic, on an unsound mutant
+`KNOWN_UNSOUND` does not name, on a named mutant of its partition that is no longer unsound,
+and on a count other than its stride assigns it. `c5_the_partitions_cover_the_whole_corpus_once`
+judges no mutant. It checks that two generations agree, that every index has exactly one
+owning partition, that each partition has its test function, and the whole-corpus properties
+no partition can see, which are the corpus and family sizes, a reference rejection in every
+family and that every `KNOWN_UNSOUND` mutant is still generated.
+`the_c5_corpus_partitions_are_pinned_evenly_across_the_shards` in `tests/ci_shard_coverage.rs`
+checks that each partition is pinned to exactly one shard in equal shares, and it was measured
+to fail on the workflow of `cecd93db`.
+
+**The sample is retired.** The partitions judge every mutant the sample judged, including
+every mutant `REPAIRED` and `REPAIRED_RESIDUALS` name, and they reach every family. Keeping it
+would judge about 893 mutants twice in every run, which the operator's ruling of 2026-10-30
+against redundant testing excludes. `c5_the_repaired_mutants_are_refused` stays, because it
+asserts more than soundness, that the self-hosted validator rejects each repaired mutant
+rather than finding its analysis unavailable. `c5_the_whole_mutation_corpus` stays ignored as
+the one-run local check.
+
 ## Residual gaps
 
 ### Closed soundness residuals
@@ -318,6 +388,23 @@ also takes every mutant `REPAIRED_RESIDUALS` names.
 
 ## Verification
 
+Measured for the partitions on 2026-11-06, with an empty `RUSTC_WRAPPER`, on the tree this
+record is committed with.
+
+| Command | Result |
+|---|---|
+| `cargo nextest run -p keleusma --features self-host --test selfhost_validator -E 'test(/c5_/)' --run-ignored all --no-fail-fast` | 24 passed. The sixteen partitions judged 13,305 mutants in 1,171 test-seconds, and the whole corpus judged 13,305 in 1,169 s |
+| `c5_the_partitions_cover_the_whole_corpus_once` with `in_partition` changed to `index % PARTITIONS <= p` | Failed, reporting mutant 0 in all sixteen partitions |
+| `cargo nextest run -p keleusma --test ci_shard_coverage` with the workflow of `cecd93db` | `the_c5_corpus_partitions_are_pinned_evenly_across_the_shards` failed, naming each partition as pinned nowhere |
+| `cargo nextest run -p keleusma --features self-host --test selfhost_validator --test ci_shard_coverage` | 41 passed, 1 skipped, the whole corpus |
+| `cargo nextest run --workspace --profile quick --no-fail-fast` | 2,944 run, 2,944 passed, 1 skipped |
+| `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` and `cargo clippy --no-default-features -p keleusma --tests -- -D warnings` | Passed, each checking `keleusma` |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` and `cargo fmt --check` | Passed |
+
+Remote continuous integration has not run on this change, so the shard growth is estimated
+and not measured. The release-profile heavy tier was not rerun, since no stage source or
+`src/selfhost` file changed.
+
 Measured in the residual repair, on 2026-11-04, with an empty `RUSTC_WRAPPER`, on the tree this
 record is committed with unless a row says otherwise.
 
@@ -332,8 +419,9 @@ record is committed with unless a row says otherwise.
 | `cargo clippy --tests --features signatures,shell,self-host -- -D warnings`, with `-p keleusma-cli --tests` and `--no-default-features -p keleusma --tests` | Passed, each checking `keleusma` |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, `cargo fmt --check` and `python3 scripts/changelog_fragments.py check` | Passed |
 
-The cost of the sampled gate in the debug profile of a continuous-integration shard is not
-measured. Remote continuous integration and every configuration other than the default
+The cost of the sampled gate in the debug profile of a continuous-integration shard was not
+measured then. It was measured on 2026-11-06 from run 42232522967, see "The corpus in
+continuous integration". Remote continuous integration and every configuration other than the default
 features with `self-host` are not verified here.
 
 The first pass measured the following on 2026-11-02, on the tree it was committed with.
