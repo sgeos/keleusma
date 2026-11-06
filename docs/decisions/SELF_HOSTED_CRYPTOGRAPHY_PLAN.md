@@ -2,7 +2,7 @@
 
 **Status.** Plan with open questions for the operator, recorded 2026-11-06. Nothing here is
 implemented. It records the operator's rulings of 2026-11-06 and the measurements behind them,
-and it sets out the decisions still to be made. [`ORDER5_CRYPTO_FRAMING_PLAN.md`](./ORDER5_CRYPTO_FRAMING_PLAN.md)
+and it sets out six decisions still to be made. [`ORDER5_CRYPTO_FRAMING_PLAN.md`](./ORDER5_CRYPTO_FRAMING_PLAN.md)
 is the framing that today delegates every primitive to the Rust host.
 
 ## The rulings
@@ -201,3 +201,16 @@ form reads tables at secret-dependent addresses, and the safe forms are slow.
 - A. In this repository, in a directory that is ready to move, until the module system exists, and
   then in its own repository.
 - B. In its own repository from the start.
+
+**C6. Where the constant-time guarantee is enforced.** The trust boundary is bytecode. The
+verifier, the time and memory analyses, `Vm::new`, hot reload, signing and the native backend all
+read bytecode, not source. Information-flow labels exist only in the surface language. Measured on
+`f372463d`, `src/bytecode.rs` has no mention of a label, and the verifier does not consult one. A
+`secret`-label rule checked only by the compiler therefore protects programs compiled from trusted
+source, and not bytecode that arrives another way. No option is recommended yet.
+- A. A bytecode-level form the verifier can check, such as secret-carrying values marked in the
+  module with branch and index rules checked on bytecode. This needs a wire change and its own
+  authorization.
+- B. A signed attestation from a trusted compiler that the rule passed, so the artifact is trusted
+  by its signature rather than by what can be proved of its bytecode.
+- C. Both, B first and A later.
