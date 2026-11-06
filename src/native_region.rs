@@ -327,7 +327,11 @@ pub struct NativeRouteBuffers {
 /// figure, and every native memory image and offset stays as it was.
 ///
 /// The figure is the private element count times the bundled runtime's
-/// `Value` size, plus the persistent composite pool. It saturates.
+/// `Value` size, plus the persistent composite pool. It saturates. On a
+/// 64-bit target that size is pinned at 32 bytes by the `const` assertion
+/// beside `Value` in `src/bytecode.rs`, so the figure cannot drift with a
+/// host's layout there. That assertion is scoped to a 64-bit pointer width,
+/// and on a 32-bit target the slot and therefore this figure are smaller.
 #[must_use]
 pub fn native_private_base_bytes(module: &Module) -> usize {
     let elements = module
