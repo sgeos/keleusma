@@ -2,7 +2,7 @@
 
 **Status.** Plan with open questions for the operator, recorded 2026-11-06. Nothing here is
 implemented. It records the operator's rulings of 2026-11-06 and the measurements behind them,
-and it sets out six decisions still to be made. [`ORDER5_CRYPTO_FRAMING_PLAN.md`](./ORDER5_CRYPTO_FRAMING_PLAN.md)
+and it sets out seven decisions still to be made. [`ORDER5_CRYPTO_FRAMING_PLAN.md`](./ORDER5_CRYPTO_FRAMING_PLAN.md)
 is the framing that today delegates every primitive to the Rust host.
 
 ## The rulings
@@ -214,3 +214,33 @@ source, and not bytecode that arrives another way. No option is recommended yet.
 - B. A signed attestation from a trusted compiler that the rule passed, so the artifact is trusted
   by its signature rather than by what can be proved of its bytecode.
 - C. Both, B first and A later.
+
+**C7. Wiping secret storage on return and on Reset.** The operator proposed, verbatim, "I think we
+need something like secure routines that destroy arena contents upon return or RESET. It might make
+sense to have termination/reset strategies like leave-stale-data, zero, and randomize."
+
+The three strategies. Leave stale data is the behaviour today and costs nothing. Zero is the
+standard defence for key erasure. Randomize also resists physical data remanence and makes wiped
+memory indistinguishable from live memory, but it needs entropy, which only a host native can give
+today, so it is the one strategy that is not deterministic.
+
+The cost is statically bounded. A wipe touches at most the bytes the region could have used, which
+the memory analysis already bounds, so its time adds a bounded term to the time analysis.
+
+The design points. What is wiped is the ephemeral arena region, the operand stack, the call frames
+and the locals. Private data survives a Reset by design, so wiping it is a separate act. A wipe
+happens at Reset, on return from a secure routine over the region from its entry mark to its high
+water mark, and on error and abort paths. Values a routine returns or yields leave its scope by
+design, and copies in host memory or machine registers are outside the language, so both are
+documented limits. On the native route an optimizer may remove a store it judges dead, so the
+lowering needs stores it cannot remove, and a test that they reach the machine code. A per-routine
+qualifier has to be readable by the virtual machine, which without a new opcode means chunk
+metadata, and that is a wire change.
+
+- A. Layered. First a strategy the host chooses for the whole virtual machine at construction,
+  needing no wire change. Then a per-routine `secure` qualifier in chunk metadata that wipes on
+  return and on Reset, applied automatically to any routine that touches a `secret` value, which
+  needs a wire change and its own authorization. Then native lowering with stores the optimizer
+  cannot remove, and a test that proves it.
+- B. The per-routine qualifier only.
+- C. The virtual machine strategy only.
