@@ -166,6 +166,33 @@ way is to be raised separately rather than add an opcode.
    check against the Rust crate over generated inputs, available to any library.
 8. **Modules and dependencies,** question C3, so the cryptography lives in its own repository.
 
+### The native route, measured on 2026-11-06
+
+`native_codegen` builds against LLVM 22 through `inkwell` 0.9 and compiles at
+`OptimizationLevel::Default`. It emits 39 `select` instructions and uses no volatile operation, no
+inline assembly and no `optnone`, so nothing protects a masked selection or a wipe from the
+optimizer today.
+
+LLVM offers these tools, none of them a per-instruction barrier. A volatile store or volatile
+`llvm.memset` is not removed or merged, which suits a wipe. An empty inline-assembly statement that
+takes a value hides that value from the optimizer, which is the usual protection for a mask, and is
+a convention rather than a guarantee. `optnone` covers a whole function. A target backend may still
+turn a `select` into a branch, so the absence of a branch can only be shown on the machine code.
+
+A constant-time select intrinsic, `llvm.ct.select`, with a Clang builtin `__builtin_ct_select`, was
+proposed in the RFC "Constant-Time Coding Support" and announced by its authors in late 2025.
+Checked on 2026-11-06, it has not landed. Its core pull request, llvm/llvm-project 166702, created
+2025-11-06, is open with changes requested, and was last updated on 2026-10-06. The Clang builtin,
+166703, and the per-target pull requests 166704 to 166709 are open too. `LangRef.rst` on `main`,
+`release/22.x` and `release/23.x` has no mention of `ct.select`. Some announcements of the work say
+it landed, which this measurement contradicts.
+
+The native part of the constant-time contract and of C7 therefore rests on tools that exist today.
+A wipe uses volatile stores and a compiler fence. A mask passes through a value barrier. A test
+disassembles the machine code for each supported target and fails on a branch in a protected
+selection or a missing store in a wipe. `llvm.ct.select` can replace the value barrier if it lands
+in a release this project adopts.
+
 Items 1 to 4 are the core. Without them an implementation can be correct but cannot be shown to
 be constant-time.
 
