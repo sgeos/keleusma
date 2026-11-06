@@ -25,7 +25,9 @@ fn indexed_store_returns_a_flag_and_never_writes_on_failure() {
                 (0, 2, 1),
                 (0, 2, 2),
                 (0, 2, i64::MAX),
-                (2, 0, 0),
+                // The empty span past the last field, field 1 since option B,
+                // where in element space it was slot 2.
+                (1, 0, 0),
             ] {
                 let mut module = compile(if byte {
                     "shared data d { x: [Byte; 2] } fn main() -> Word { 0 }"
@@ -172,7 +174,13 @@ fn handled_private_store_failure_can_continue_to_a_valid_write() {
             Op::Const(2),
             Op::SetDataIndexed(0, 2),
             Op::PopN(6),
-            Op::GetData(1),
+            // Element 1 of field 0. A data operand names a field since option
+            // B, so the element is read through the indexed form, where in
+            // element space it was `GetData(1)`.
+            Op::Const(2),
+            Op::Const(0),
+            Op::GetDataIndexed(0, 2),
+            Op::PopN(6),
             Op::Return,
         ];
         let need = keleusma::vm::required_persistent_capacity_for(&module);

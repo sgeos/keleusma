@@ -419,12 +419,34 @@ fn private_data_chunk(
         |vm| {
             let mut shared = seed_verify_depth_shared(vm, chunk);
             set(vm, &mut shared, DV_D_WIDTH, size(unit.len(), STAGE)?, STAGE)?;
+            // A data operand names a field, and the unit slots are elements, so each operand
+            // is translated to the element slots it reaches, as the reference does. An
+            // operand that names no field reaches none.
+            let layout = module.data_layout.as_ref();
+            let element = |f: u32| {
+                layout
+                    .and_then(|dl| dl.operand_slot(f))
+                    .and_then(|s| u32::try_from(s).ok())
+            };
+            let span_at = |f: u32, len: u32| {
+                layout
+                    .and_then(|dl| dl.operand_span(f, len))
+                    .and_then(|s| u32::try_from(s).ok())
+            };
             for (i, op) in chunk.ops.iter().enumerate() {
                 let (put, span, call) = match op {
-                    Op::SetData(s) => (unit.binary_search(s).map_or(0, |k| k + 1) as i64, None, 0),
+                    Op::SetData(f) => (
+                        element(*f)
+                            .and_then(|s| unit.binary_search(&s).ok())
+                            .map_or(0, |k| k + 1) as i64,
+                        None,
+                        0,
+                    ),
                     Op::Return => (-1, None, 0),
-                    Op::GetData(s) => (0, Some(unit_span(unit, *s, 1)), 0),
-                    Op::GetDataIndexed(base, len) => (0, Some(unit_span(unit, *base, *len)), 0),
+                    Op::GetData(f) => (0, element(*f).map(|s| unit_span(unit, s, 1)), 0),
+                    Op::GetDataIndexed(f, len) => {
+                        (0, span_at(*f, *len).map(|s| unit_span(unit, s, *len)), 0)
+                    }
                     Op::Call(callee, _) => (
                         0,
                         None,

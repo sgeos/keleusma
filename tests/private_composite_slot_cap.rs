@@ -130,3 +130,30 @@ fn the_bound_for_seventy_thousand_seeded_composites_is_tight() {
         other => panic!("one byte below the bound must run out, got {other:?}"),
     }
 }
+
+/// Packed private storage, S1, keeps a private array of composites in its pool
+/// bodies alone, so the persistent figure is the pool. Before packing it was
+/// 70,000 `Value` handles of 32 bytes beside the pool, 3,360,000 bytes. The
+/// figure runs and one byte less is refused at construction.
+#[test]
+fn the_persistent_figure_for_seventy_thousand_packed_composites_is_tight() {
+    let m = compile(ABOVE_THE_CAP).unwrap_or_else(|e| panic!("{e}"));
+    let need = required_persistent_capacity_for(&m);
+    assert_eq!(need, 70_000 * 16);
+    assert_eq!(m.private_data_bytes, 0, "no Value slot remains");
+    let figure = auto_arena_capacity_for(&m, &[]).expect("arena bound");
+    let construct = |persistent: usize| {
+        let mut arena = Arena::with_capacity(figure + persistent);
+        arena
+            .resize_persistent(persistent)
+            .expect("resize_persistent");
+        Vm::new(m.clone(), &arena).map(|_| ())
+    };
+    assert!(construct(need).is_ok());
+    match construct(need - 1) {
+        Err(VmError::VerifyError(message)) => {
+            assert!(message.contains("persistent_capacity"), "{message}")
+        }
+        other => panic!("one byte below the persistent figure must refuse, got {other:?}"),
+    }
+}

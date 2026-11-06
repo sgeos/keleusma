@@ -959,13 +959,11 @@ fn private_scalar_initializers_do_not_constrain_later_values() {
             [7, 0, 1, 0],
             [5, 7, 0, 1],
         ),
-        (
-            "private data st { xs: [Word; 2] } loop main(t: Word) -> Word { st.xs[0] = t; yield if st.xs[t % 2] == 0 { 1 } else { 0 } }",
-            1,
-            0,
-            [1, 2, 0, 0],
-            [1, 0, 0, 1],
-        ),
+        // An array case is no longer constructible. Splitting one element of an
+        // array out into a field of its own, as the scalar case above does for a
+        // whole field, leaves the program's indexed span crossing two fields,
+        // which option B of the array wire-slot design refuses, and Encoding F
+        // gives every element of one field the same initializer.
     ] {
         let mut program = common::build(source);
         // Give private slot `slot`, and only it, a float initializer. Since
@@ -2839,14 +2837,17 @@ fn private_scalar_indexed_ranges_cannot_cross_composite_placements() {
         }
     }
     assert_eq!(changed, 2);
-    // The verifier permits this range, but source arrays do not cross a
-    // separately placed composite field. Scalar metadata cannot describe it.
-    keleusma::verify::verify(&program).unwrap();
+    // Since option B of the array wire-slot design a data span names one field
+    // and may not be longer than it, so the verifier refuses this range, and
+    // the lowering, which verifies first, refuses it there. Before option B the
+    // verifier permitted the range and the lowering's own placement check
+    // refused it, with "crosses private scalar and body placements".
+    assert!(keleusma::verify::verify(&program).is_err());
     let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("crosses private scalar and body placements"),
+            .contains("references 3 element(s) of field 0"),
         "{error}"
     );
 }

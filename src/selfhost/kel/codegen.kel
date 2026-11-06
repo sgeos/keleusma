@@ -114,7 +114,7 @@
 // ops then `GetDataIndexed(base, len)` (IndexRead, kind 13), and `d.arr[i] = v`
 // lowers to the value ops, the index ops, then `SetDataIndexed(base, len)`
 // (IndexAssignIn, kind 14, with an IndexStore child, kind 15, sequencing value
-// then index). `base` is the element-0 data slot and `len` the array length, both
+// then index). `base` is the field index and `len` the array length, both
 // resolved by name by the input adapter and packed as base + len*65536. Single
 // dimension only; multi-dimensional arrays are a later increment.
 //
@@ -3670,7 +3670,7 @@ private data dcopy {
     open: [Word; 32], open_n: Word, c: Word, shift: Word,
 }
 
-// The flat byte size of private struct slot `slot`, or 0 when the slot is not one.
+// The flat byte size of private struct field `slot`, or 0 when the field is not one.
 fn dc_size_of(slot: Word) -> Word {
     dcopy.found = 0;
     for j in 0..ast.dc_count limit 64 {
@@ -3697,12 +3697,13 @@ fn dc_is_dead_end(w: Word, lo: Word) -> Word {
         orelse (tag == wire.setdata andalso opd != lo) { 1 } else { 0 }
 }
 
-// A hazard may write slot `lo`. It is an overlapping SetData or SetDataIndexed, a call or
-// a yield.
+// A hazard may write field `lo`. It is a SetData or a nonempty SetDataIndexed naming that
+// field, since a data operand names a field and an indexed span stays within it, a call or a
+// yield.
 fn dc_is_hazard(w: Word, lo: Word) -> Word {
     let tag = w % wire.radix; let opd = w / wire.radix;
     if (tag == wire.setdata andalso opd == lo)
-        orelse (tag == wire.setdataix andalso opd % 16777216 <= lo andalso lo < opd % 16777216 + opd / 16777216)
+        orelse (tag == wire.setdataix andalso opd % 16777216 == lo andalso opd / 16777216 > 0)
         orelse tag == wire.call orelse tag == wire.callnative orelse tag == wire.callext
         orelse tag == wire.yieldop { 1 } else { 0 }
 }
@@ -3897,11 +3898,13 @@ fn relocate_data_arg() -> Word {
         for i in 0..ast.relocate_count limit 1024 {
             let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
             if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {
-                if base >= start andalso base - start < length {
+                // A data operand names a field (option B of the array wire-slot design), so it
+                // matches a source field exactly, and the field's element count bounds the width.
+                if base == start {
                     relocate.hits = relocate.hits + 1;
-                    if width > length - (base - start) { relocate.bad = 1; } else {
+                    if width > length { relocate.bad = 1; } else {
                         let prefix = if indexed { (ast.relocate_arg / 16777216) * 16777216 } else { 0 };
-                        relocate.result = prefix + target + (base - start);
+                        relocate.result = prefix + target;
                     }
                 }
             }

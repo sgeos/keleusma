@@ -735,9 +735,221 @@ stays at 32 and that a private array of composites occupies its pool bodies alon
   `[Word;12]`, therefore hash alike, since they occupy the same slots. That representation is
   a choice within the ruling, not a ruling. The untyped `compute_schema_hash` keeps its
   per-slot form and values.
-- **Option B and S1.** Not done. Both change what a slot operand means and how private arrays
-  are stored, and option B changes the host's shared-slot index space, so every embedder's
-  `get_shared` and `set_shared` index changes with it.
+- **Option B.** Landed on 2026-11-05, recorded under "Option B as implemented" below. The host's
+  shared-slot index space did not change, by the operator's ruling of 2026-11-04, so no
+  embedder's `get_shared` or `set_shared` index changed with it.
+- **S1.** Landed on 2026-11-05 after option B, recorded under "Packed private storage as
+  implemented" below.
+
+## Option B as implemented, 2026-11-05
+
+Option B landed on branch `feat/v02-array-option-b-s1`, cut from `feat/v02-array-encoding-f` at
+`e5b6592f`, which carries Encoding F and H2. It follows ruling C3.6 and the operator's ruling of
+2026-11-04 on how a host addresses a shared slot, received first-hand by the commissioning session
+and relayed to this line by it. That ruling's item 4 was answered "A", keeping the host's
+element-indexed `get_shared` and `set_shared` and translating inside the virtual machine.
+`BYTECODE_VERSION` remains 2, the instruction set remains at 66 opcodes, and the format
+fingerprint is unchanged, by ruling C3.3.
+
+### No opcode was needed
+
+The question this increment had to settle first was whether an existing opcode can address an
+element within a field. It can. `GetDataIndexed(base, len)` and `SetDataIndexed(base, len)`
+already carried a base and a span length, and the compiler already emitted every array access
+through them with the field's first slot as the base and the field's whole element count as the
+length, a multi-dimensional array being one flat span with the per-level stride computed on the
+stack. Under option B the first operand names the field and the index selects the element within
+it. Every scalar field is read and written through `GetData` and `SetData`, which now address
+element zero of the field they name. A whole-array read or write was refused at compile time
+before this change and still is, so no access needed an element-space operand. This is a fact
+established by reading every emission site in `src/compiler.rs` and the self-hosted codegen.
+
+### What changed
+
+- **The operand.** A data operand is the index of a field in the layout, shared fields first.
+  A `GetData` or `SetData` operand is below the field count. A nonempty indexed span is no
+  longer than the named field's element count, so a span never crosses a field, and an empty
+  span is valid up to and including the field count, which restates the element-space rule.
+  `DataLayout::operand_slot`, `operand_span` and `element_addressed`, and
+  `DataLayoutTable::operand_slot` and `operand_span`, perform the translation in one place.
+- **The wire is unchanged.** The `DATA_FIELDS` record keeps its bytes. Its `first_slot` is
+  now specified as the element index of element zero in the host's index space, which is what
+  it already held. `docs/spec/WIRE_FORMAT.md` and `docs/spec/INSTRUCTION_SET.md` state the
+  operand's meaning.
+- **The compiler.** A field's operand is its position in the layout. The private-data
+  mutation check and the private composite alias analysis work over field indices, a read
+  covering its own field and a write hazarding it exactly when it names the same field, which
+  is the element-space rule restated, since a span never left its field.
+- **The virtual machine.** Each handler resolves its operand to the field's first element by
+  one record read, where it formerly used the operand as the element slot directly. The host
+  API is unchanged. `get_shared`, `set_shared`, `marshal_shared_into` and a hot swap's seeds
+  keep their element indices.
+- **The verifiers.** The structural verifier bounds a single operand by the field count and a
+  span by its field. The definite-initialization rule translates each operand to the element
+  slots it reaches before its element-space analysis. The typed verifier needed no change,
+  which is a fact established by reading it, since it treats every data read as `Top`, never
+  interprets a data operand, and validates the layout per field in element space.
+- **The self-hosted twin.** `parse.kel` assigns each field the next index in its partition
+  rather than the next element. `codegen.kel` relocates a data operand only when it is a
+  source field's index exactly, bounding an indexed width by the field's count, and its copy
+  pass treats a write as a hazard when it names the read's field. `verify_structural.kel`
+  bounds a span by the named field's element count, which the driver carries in the third
+  operand table. The driver reports private struct fields to the copy pass by field index,
+  bounds operands by the field count, resolves a data read's type by its field, and the
+  definite-initialization twin translates operands as the reference does.
+- **Other consumers.** The hosted interpreter's data table and the native backend's lowering
+  are written over element slots, and both translate each data op at the point they read it,
+  the hosted driver when it encodes an op and the native backend when it lowers or analyses
+  one. The native backend's changed files are `native_codegen/src/lib.rs` and
+  `native_codegen/src/coroutine/types.rs`.
+
+### Measured, size and memory
+
+Method. The scratch measurement program of this line, held outside the repository, compiles
+each of the fifteen stage sources with `keleusma::compiler::compile` at the default host target
+and reports the artifact length, the declared private data bytes,
+`required_persistent_capacity_for` and `auto_arena_capacity_for`. It was built with
+`RUSTC_WRAPPER=` empty against the branch point `e5b6592f` and against this increment.
+
+| Measure | Branch point, its sources | Branch point compiler, these sources | Option B, these sources |
+|---|---|---|---|
+| Artifact bytes, fifteen stages | 1,065,420 | 1,065,188 | 1,065,188 |
+| Declared private data bytes | 13,969,728 | 13,969,728 | 13,969,728 |
+| Persistent capacity | 13,969,728 | 13,969,728 | 13,969,728 |
+| `auto_arena_capacity_for`, summed | 47,320 | 47,320 | 47,320 |
+
+**What the table establishes, as fact.** Option B leaves every artifact the same size and
+every memory figure unchanged, since operands keep their twenty-four-bit encoding and no
+storage changed. The 232-byte difference between the first two columns is the three stage
+sources this increment edits, `parse.kel`, `codegen.kel` and `verify_structural.kel`, compiled
+by the same compiler.
+
+### The construct-support boundary
+
+`self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs` passed unchanged in
+the release self-host tier, so the Ok, Gap and RefRejects counts did not move.
+
+### The within-cycle hazard, narrowed
+
+An artifact compiled with element-space operands and loaded by this runtime is not refused by
+the fingerprint, by ruling C3.3, and option B changes no region, so nothing structural refuses
+it either. The structural verifier refuses many such artifacts, since an element index is often
+past the field count or a span longer than its field, but not all, and one it admits reads the
+wrong field. The exposure is narrower than it sounds, as an inference from the history. Every
+artifact built before Encoding F carries a retired region and is refused, so the only artifacts
+at risk are ones built with Encoding F but before option B, which exist only on the unmerged
+Encoding F branch and anything built from it. The question is recorded under "What remains
+open" below.
+
+### What remains open after option B
+
+1. **Whether to close the within-cycle hazard for artifacts built between Encoding F and
+   option B.** The rulings settle the fingerprint and the version, and the documents do not
+   settle whether a structural refusal is wanted for this narrower case.
+   - A. Accept it under ruling C3.3, since the artifacts at risk exist only on an unmerged
+     branch and the release rolls the fingerprint. Recommended.
+   - B. Add a structural marker that distinguishes field-space operands, which would be a wire
+     change needing its own authorization.
+   - C. Roll the fingerprint at landing, which ruling C3.3 declined for Encoding F.
+
+## Packed private storage as implemented, 2026-11-05
+
+S1 landed on the same branch as option B, in the increment after it, by ruling C3.5.
+
+### The rule
+
+A private field is packed when it has more than one element, when its elements do not start as
+`Unit`, and when its element is a fixed-width scalar, `bool`, `Byte`, `Word`, `Fixed` or `Float`,
+or a flat composite with a pool home. A packed scalar array lies at element width, little-endian
+at the module's widths, in a packed region after the private `Value` slots. A packed composite
+array keeps its bodies in the persistent composite pool and has no `Value` handles. Every other
+private field keeps one `Value` slot per element. `private_field_storage` in `src/bytecode.rs`
+decides from the field record alone, so the compiler's declared size, the self-hosted driver's,
+the runtime's placement and `required_persistent_capacity_for` apply one rule. No wire byte
+records the packing.
+
+Two choices within the ruling are recorded as choices. A one-element array is not packed, since
+the record does not distinguish `[Word; 1]` from `Word` and the record of this design keeps
+scalars as slots. A field whose elements start as `Unit` is not packed, since a packed element has
+no representation of `Unit` and an unwritten element must keep reading as `Unit` under the
+write-before-read contract.
+
+### What changed
+
+- **The declared size.** `private_data_bytes` is `VALUE_SLOT_SIZE_BYTES` per `Value` slot plus
+  the packed scalar bytes, by `DataLayout::private_data_bytes`, in the compiler and the
+  self-hosted driver alike.
+- **The runtime.** Each field's home, `Shared`, `Values`, `Scalars` or `Pool`, is resolved once
+  when an image is installed, and a data operand reaches its storage by one indexed read of that
+  table. A packed scalar is copied in and out through an eight-byte buffer, so no reference into
+  the arena is formed. A pool element is read as a handle to its body. A write of a value of
+  another kind into a packed scalar element, or of anything but a flat composite into a pool
+  element, is refused with `VmError::TypeError`, where a `Value` slot stored it before. Every
+  packed initialiser is encoded before any slot is written, and a hot swap places every seed by
+  the new plan before its commit point, so a seed a packed element cannot hold refuses the swap
+  and keeps the running module.
+- **Seeding.** A pool element is still canonicalised one element at a time through the arena's
+  top region, as its `Value` slot's seed was, so the seeding terms of `auto_arena_capacity_for`
+  are unchanged. Seeding once per field and copying the bytes would retire that term, and is
+  left as a possible improvement rather than done here.
+- **Ephemerality.** `Module::declares_private_data` replaces the test of a nonzero
+  `private_data_bytes`, in the compiler, the self-hosted driver and the input to `analyze.kel`,
+  since a module whose only private field is a composite array now declares zero bytes.
+- **The native backend.** Its private image stores each element in a word of its own and was
+  laid out after `required_persistent_capacity_for`, which packing made smaller than that image.
+  It now lays out after `native_region::native_private_base_bytes`, the element-slot figure, so
+  every native memory image and offset is unchanged. Its persistent supplement carries the gap
+  between the two figures, `native_region::native_private_gap_bytes`, so its published sizing
+  contract, the runtime's figure plus the supplement, sizes the same buffer as before. The first
+  gate run without the gap measured the hazard, a `SIGTRAP` and a `SIGSEGV` in two native tests
+  whose harness sized the buffer by that contract. The changed native sources are
+  `native_codegen/src/lib.rs`, `native_codegen/src/region.rs` and
+  `native_codegen/src/coroutine/types.rs`.
+
+### Measured, private data and memory
+
+Method as for option B, with the measurement program rebuilt against this increment.
+
+| Stage | Private elements | Before S1, bytes | S1, bytes | Record's computation, bytes |
+|---|---|---|---|---|
+| `analyze` | 9,904 | 316,928 | 80,384 | 80,384 |
+| `codegen` | 22,187 | 709,984 | 178,912 | 178,912 |
+| `lexer` | 340 | 10,880 | 3,200 | 2,912 |
+| `parse` | 52,942 | 1,694,144 | 432,824 | 425,760 |
+| `reconstruct` | 5,263 | 168,416 | 43,280 | 43,280 |
+| `template_scan` | 27 | 864 | 528 | 528 |
+| `verify_datalayout` | 0 | 0 | 0 | 0 |
+| `verify_depth` | 74,208 | 2,374,656 | 593,904 | 593,904 |
+| `verify_structural` | 32,775 | 1,048,800 | 262,368 | 262,368 |
+| `verify_typed` | 233,184 | 7,461,888 | 1,866,240 | 41,120 |
+| `verify_types` | 2,570 | 82,240 | 20,800 | 20,800 |
+| `verify_yield` | 2,827 | 90,464 | 22,880 | 22,880 |
+| `wire_debug` | 24 | 768 | 768 | 768 |
+| `wire_schema` | 174 | 5,568 | 5,568 | 5,568 |
+| `wire` | 129 | 4,128 | 4,128 | 4,128 |
+| **Total** | 436,554 | 13,969,728 | 3,515,784 | 1,683,312 |
+
+**What the table establishes, as fact.** On this tree S1 reduces the corpus's declared private
+data from 13,969,728 bytes to 3,515,784, 74.8 percent less, against the record's computed 74.7
+percent. Every stage whose sources are unchanged since the computation of 2026-11-02 measures
+exactly the computed figure. The three that differ, `lexer`, `parse` and `verify_typed`, gained
+private fields after that computation, `verify_typed` alone growing from 5,083 private elements to
+233,184, so their computed figures describe an older tree. The persistent figure equals the
+declared size for every stage, since no stage declares a private composite pool, and both rest on
+the 64-bit host target, the only one measured.
+
+| Measure, fifteen stages | Before S1 | S1 |
+|---|---|---|
+| Artifact bytes | 1,065,188 | 1,065,188 |
+| `required_persistent_capacity_for` | 13,969,728 | 3,515,784 |
+| `auto_arena_capacity_for`, summed | 47,320 | 47,320 |
+
+**The WCMU effect.** The persistent region a host provisions for the corpus falls by 10,453,944
+bytes, and the ephemeral arena figure does not move, which is a fact for these modules. For the
+`[P; 70000]` probe of `tests/private_composite_slot_cap.rs` the persistent figure falls from
+3,360,000 bytes to 1,120,000, the pool alone, and `auto_arena_capacity_for` stays 1,120,440.
+Both figures are pinned tight, the smallest admitted value running and one byte less refused, by
+`tests/private_composite_slot_cap.rs` and `tests/persistent_data.rs`.
 
 ## What was not verified
 
@@ -747,11 +959,10 @@ stays at 32 and that a private array of composites occupies its pool bodies alon
 - Whether the cost model charges the linear private composite scan at its worst case.
 - The owned decode heap, the schema hash buffer and the self-hosted stage time, which were read
   from code and not measured.
-- S1's WCMU effect as measured on an S1 build, since none exists. Encoding F's size was
-  measured on 2026-11-02, and S1's figure was computed from the measured field records, as
-  the section above records.
+- S1's WCMU effect on any target other than the 64-bit host. It was measured on an S1 build
+  on 2026-11-05 at that target only.
 - Any target other than the default host target.
 - Whether the `SharedSlotRecord` kind space can name every private element type, `Text` in
   particular, without extension.
-- The construct-support boundary counts under option B and S1. Under Encoding F they are
-  unchanged, `self_hosted_construct_support_boundary` passing on 2026-11-02.
+- The construct-support boundary counts were not re-derived by hand under option B and S1.
+  `self_hosted_construct_support_boundary` passed unchanged under each.

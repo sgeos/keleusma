@@ -57,7 +57,7 @@
 //! assumes nothing about a chunk's caller, since the host may enter any chunk,
 //! and so a read that only a caller's write protects is refused.
 
-use crate::bytecode::{Chunk, ConstValue, Module, Op, SlotVisibility};
+use crate::bytecode::{Chunk, ConstValue, DataLayout, Module, Op, SlotVisibility};
 use crate::verify::VerifyError;
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -269,11 +269,28 @@ fn callees_first(module: &Module) -> Vec<usize> {
     order
 }
 
+/// The element slot a field operand addresses, as a `u32`, or `None` when the
+/// operand names no field. The analysis runs in element space, since the unit
+/// slots are elements, and a data operand names a field under option B.
+fn operand_element(layout: Option<&DataLayout>, field: u32) -> Option<u32> {
+    layout?
+        .operand_slot(field)
+        .and_then(|s| u32::try_from(s).ok())
+}
+
 /// Apply one instruction's private-data writes to `set`.
-fn data_transfer(unit: &[u32], summaries: &[Bits], op: &Op, set: &mut Bits) {
+fn data_transfer(
+    layout: Option<&DataLayout>,
+    unit: &[u32],
+    summaries: &[Bits],
+    op: &Op,
+    set: &mut Bits,
+) {
     match op {
-        Op::SetData(s) => {
-            if let Ok(i) = unit.binary_search(s) {
+        Op::SetData(f) => {
+            if let Some(s) = operand_element(layout, *f)
+                && let Ok(i) = unit.binary_search(&s)
+            {
                 set.set(i);
             }
         }
@@ -301,6 +318,7 @@ fn data_transfer(unit: &[u32], summaries: &[Bits], op: &Op, set: &mut Bits) {
 /// across `Reset`, which ends a path here. `SetDataIndexed` writes one element
 /// at a run-time index and so definitely writes none.
 fn check_private_data(module: &Module) -> Result<(), VerifyError> {
+    let layout = module.data_layout.as_ref();
     let unit = unit_private_slots(module);
     if unit.is_empty() {
         return Ok(());
@@ -310,7 +328,7 @@ fn check_private_data(module: &Module) -> Result<(), VerifyError> {
     for c in callees_first(module) {
         let chunk = &module.chunks[c];
         let state = must_analysis(chunk, Bits::empty(width), |op, set| {
-            data_transfer(&unit, &summaries, op, set)
+            data_transfer(layout, &unit, &summaries, op, set)
         });
         let mut at_return: Option<Bits> = None;
         for (ip, set) in state.iter().enumerate() {
@@ -327,13 +345,26 @@ fn check_private_data(module: &Module) -> Result<(), VerifyError> {
     }
     for chunk in &module.chunks {
         let state = must_analysis(chunk, Bits::empty(width), |op, set| {
-            data_transfer(&unit, &summaries, op, set)
+            data_transfer(layout, &unit, &summaries, op, set)
         });
         for (ip, set) in state.iter().enumerate() {
             let Some(set) = set else { continue };
+            // An operand that names no field reads no unit slot. The
+            // structural verifier refuses such an operand before this runs.
             let read = match &chunk.ops[ip] {
-                Op::GetData(s) => unit_range(&unit, *s, 1),
-                Op::GetDataIndexed(base, len) => unit_range(&unit, *base, *len),
+                Op::GetData(f) => match operand_element(layout, *f) {
+                    Some(s) => unit_range(&unit, s, 1),
+                    None => continue,
+                },
+                Op::GetDataIndexed(f, len) => {
+                    match layout
+                        .and_then(|dl| dl.operand_span(*f, *len))
+                        .and_then(|s| u32::try_from(s).ok())
+                    {
+                        Some(s) => unit_range(&unit, s, *len),
+                        None => continue,
+                    }
+                }
                 _ => continue,
             };
             if let Some(i) = read.into_iter().find(|&i| !set.has(i)) {
