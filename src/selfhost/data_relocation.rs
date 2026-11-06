@@ -228,25 +228,27 @@ mod tests {
         check(&mut machine);
     }
 
+    /// A data operand names a field, option B of the array wire-slot design, so an operand
+    /// relocates only when it is a source field's index exactly, and an indexed operand's
+    /// width is bounded by that field's element count.
     #[test]
-    fn scalar_and_indexed_operands_preserve_offsets_and_counts() {
-        with_machine(&[0, 4], &[4, 2], &[2, 0], |machine| {
+    fn scalar_and_indexed_operands_relocate_by_field_and_keep_counts() {
+        with_machine(&[0, 1], &[4, 2], &[1, 0], |machine| {
             for kind in [11, 12] {
-                assert_eq!(machine.translate(kind, 0).unwrap(), 2);
-                assert_eq!(machine.translate(kind, 3).unwrap(), 5);
-                assert_eq!(machine.translate(kind, 5).unwrap(), 1);
+                assert_eq!(machine.translate(kind, 0).unwrap(), 1);
+                assert_eq!(machine.translate(kind, 1).unwrap(), 0);
+                // An index inside a field's element range is not a field index.
+                assert!(machine.translate(kind, 3).is_err());
             }
             for kind in [13, 14] {
-                assert_eq!(machine.translate(kind, 4 * SPACE).unwrap(), 4 * SPACE + 2);
-                assert_eq!(
-                    machine.translate(kind, 2 * SPACE + 1).unwrap(),
-                    2 * SPACE + 3
-                );
-                assert_eq!(machine.translate(kind, SPACE + 5).unwrap(), SPACE + 1);
+                assert_eq!(machine.translate(kind, 4 * SPACE).unwrap(), 4 * SPACE + 1);
+                assert_eq!(machine.translate(kind, 2 * SPACE + 1).unwrap(), 2 * SPACE);
+                assert!(machine.translate(kind, 3 * SPACE + 1).is_err());
+                assert!(machine.translate(kind, 5 * SPACE).is_err());
             }
         });
         with_machine(&[0], &[SPACE], &[0], |machine| {
-            assert_eq!(machine.translate(11, SPACE - 1).unwrap(), SPACE - 1);
+            assert_eq!(machine.translate(11, 0).unwrap(), 0);
             for kind in [13, 14] {
                 assert_eq!(
                     machine.translate(kind, (SPACE - 1) * SPACE).unwrap(),
@@ -265,13 +267,13 @@ mod tests {
         with_machine(&[0], &[4], &[8], |machine| {
             for kind in [13, 14] {
                 for scalar in [0, 2, 3] {
-                    let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
+                    let arg = scalar * SPACE * SPACE + 2 * SPACE;
                     assert_eq!(machine.translate(kind, arg).unwrap(), arg + 8);
                 }
                 for scalar in [1, 4, 255] {
-                    let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
+                    let arg = scalar * SPACE * SPACE + 2 * SPACE;
                     assert!(machine.translate(kind, arg).is_err());
-                    assert_eq!(machine.translate(11, 1).unwrap(), 9);
+                    assert_eq!(machine.translate(11, 0).unwrap(), 8);
                 }
             }
         });
@@ -280,7 +282,7 @@ mod tests {
     #[test]
     fn a_handled_write_root_relocates_its_operand_and_keeps_its_slot() {
         with_machine(&[0], &[4], &[8], |machine| {
-            let operand = 3 * SPACE * SPACE + 2 * SPACE + 1;
+            let operand = 3 * SPACE * SPACE + 2 * SPACE;
             let mut records = vec![(36, operand + 6 * STORE_ROOT_SLOT), (36, 5)];
             relocate_records(machine, &mut records).unwrap();
             assert_eq!(

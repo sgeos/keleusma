@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-11-01T22:28:45-08:00\n"
+"POT-Creation-Date: 2026-11-06T06:11:25-08:00\n"
 "PO-Revision-Date: \n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -8526,11 +8526,13 @@ msgid "GetData"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:48 src/INSTRUCTION_SET.md:49
-msgid "u24 slot"
+msgid "u24 field"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:48
-msgid "Push data segment slot value onto stack."
+msgid ""
+"Push the value of element zero of the data field the operand names by its "
+"layout index."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:49
@@ -8539,10 +8541,10 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:49
 msgid ""
-"Pop value and store into a data segment slot. A scalar stores inline; a flat "
-"composite copies its body into the persistent composite pool at the offset "
-"the module's private-composite layout table records for the slot (no "
-"dedicated composite-write opcode)."
+"Pop value and store into element zero of the data field the operand names. A "
+"scalar stores inline; a flat composite copies its body into the persistent "
+"composite pool at the offset the field's record gives (no dedicated "
+"composite-write opcode)."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50
@@ -8550,15 +8552,16 @@ msgid "GetDataIndexed"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50 src/INSTRUCTION_SET.md:51
-msgid "u24 base, u24 len"
+msgid "u24 field, u24 len"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50
 msgid ""
-"Pop a Word, Byte or Unit fallback and then a Word index. Read in range, "
-"otherwise use the supplied fallback. Push value, index, four Word byte limbs "
-"of the bound and an outcome flag. Invalid spans and operand types remain "
-"contract errors."
+"Pop a Word, Byte or Unit fallback and then a Word index. The span names one "
+"data field and its length is at most that field's element count. Read "
+"element `index` of the field in range, otherwise use the supplied fallback. "
+"Push value, index, four Word byte limbs of the bound and an outcome flag. "
+"Invalid spans and operand types remain contract errors."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:51 src/INSTRUCTION_SET.md:257
@@ -8567,10 +8570,10 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:51
 msgid ""
-"Pop value and Word index. A valid index writes one slot. An invalid index "
-"performs no write. Push the index, four Word byte limbs of the bound and "
-"flag zero for success or one for invalid. Invalid spans and storage-contract "
-"violations remain errors."
+"Pop value and Word index. The span is as for `GetDataIndexed`. A valid index "
+"writes one element of the field. An invalid index performs no write. Push "
+"the index, four Word byte limbs of the bound and flag zero for success or "
+"one for invalid. Invalid spans and storage-contract violations remain errors."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:52 src/INSTRUCTION_SET.md:240

@@ -216,12 +216,19 @@ fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
 /// A scalar field of the same name would be a single slot, which this would
 /// report as an array of length one. That is exactly what the caller wants: the
 /// base slot and the number of elements addressable from it.
+///
+/// The base is a field index, the number of fields that begin before this one,
+/// since a data operand names a field under option B of the array wire-slot
+/// design.
 fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) {
     let want = format!("{data}.{field}");
-    let base = data_slots
+    let pos = data_slots
         .iter()
         .position(|n| n == &want)
-        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+        .unwrap_or_else(|| panic!("no data slot named `{want}`"));
+    let base = (0..pos)
+        .filter(|&i| i == 0 || data_slots[i - 1] != data_slots[i])
+        .count() as i64;
     let len = data_slots.iter().filter(|n| *n == &want).count() as i64;
     (base, len)
 }
@@ -698,19 +705,14 @@ fn flatten(
             out.push((24, 0));
         }
         Expr::FieldAccess { object, field, .. } => {
-            // A scalar `data.field` read is a DataRead (kind 11) over the field's element-0
-            // slot in the flat data layout. The stage resolves it from its own accumulated
-            // table; the reference resolves it from the compiler's `data_layout.slots`.
+            // A scalar `data.field` read is a DataRead (kind 11) over the field's index in the
+            // data layout, the operand option B names. The stage resolves it from its own
+            // accumulated table; the reference resolves it from the compiler's layout.
             let data = match object.as_ref() {
                 Expr::Ident { name, .. } => name.as_str(),
                 other => panic!("a data read's object must be a block name, got {other:?}"),
             };
-            let name = format!("{data}.{field}");
-            let slot = data_slots
-                .iter()
-                .position(|n| n == &name)
-                .unwrap_or_else(|| panic!("no data slot named `{name}`"))
-                as i64;
+            let slot = array_base_len(data_slots, data, field).0;
             out.push((11, slot));
         }
         Expr::ArrayIndex { object, index, .. } => {
@@ -943,12 +945,7 @@ fn flatten_block(
                     enum_table,
                     out,
                 );
-                let name = format!("{data_name}.{field}");
-                let slot = data_slots
-                    .iter()
-                    .position(|n| n == &name)
-                    .unwrap_or_else(|| panic!("no data slot named `{name}`"))
-                    as i64;
+                let slot = array_base_len(data_slots, data_name, field).0;
                 stmt_nodes.push((12, slot));
             }
             Stmt::DataFieldIndexAssign {
@@ -1561,16 +1558,17 @@ fn a_scalar_data_read_resolves_its_slot() {
     assert_eq!(got.funcs[0].3, vec![(11, 1)]);
 }
 
-// A data read composes with the operator grammar and preceding array-field widths: the
-// base counter is a prefix-sum over field slot counts.
+// A data read composes with the operator grammar, and a preceding array field takes one
+// field index whatever its width: the operand names a field since option B of the array
+// wire-slot design, where it was a prefix-sum over field element counts before.
 #[test]
 fn data_reads_account_for_array_widths() {
     let src = "shared data d { xs: [Word; 3], n: Word } fn f(p: Word) -> Word { d.n + p }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // d.xs occupies slots 0..2, so d.n is slot 3; then p (slot 0), Add.
-    assert_eq!(got.funcs[0].3, vec![(11, 3), (2, 0), (3, 1)]);
+    // d.xs is field 0 with three elements, so d.n is field 1; then p (slot 0), Add.
+    assert_eq!(got.funcs[0].3, vec![(11, 1), (2, 0), (3, 1)]);
 }
 
 // A const data block carries no runtime slots, so it does not advance the base counter;
