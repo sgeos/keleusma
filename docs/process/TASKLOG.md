@@ -6,6 +6,19 @@ Current sprint source of truth.
 
 ---
 
+## 2026-11-06 Unification, the array design and the cryptography plan
+
+The operator directed two unifications through `main`. `v0.2.3` merged into `main` as
+`3e71844a`, V0.3.X followed as `badd3e5c`, and `main` merged back into `v0.2.3` as `7c76d771`.
+Continuous integration is unified, so the native backend gate now runs on `v0.2.3` under `CI
+result`. Into `v0.2.3` merged the arena sizing per route, callable trait impls on dimensioned
+types, the narrow-word text fixtures, five self-hosted coverage residuals, the C5 review and its
+two residuals, so that C5 is met for the corpus scope, Encoding F with the H2 schema hash, option B
+with S1 packed private storage, self-hosted `Text<N>` with the literal suffixes, and the whole C5
+corpus run in CI as sixteen partitions. Two design records carry open questions, the nested loop
+arenas, Q1 to Q7, and the self-hosted cryptography plan, C1 to C7, which makes cryptography a
+design goal of the language. Nothing is in flight at `7bc3a7f4`. Next is the ring buffer.
+
 ## 2026-10-31 Second consolidated list
 
 The operator answered a twenty-item list first-hand, confirmed four relayed rulings, and ruled
