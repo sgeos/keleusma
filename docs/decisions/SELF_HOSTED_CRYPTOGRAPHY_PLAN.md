@@ -18,6 +18,15 @@ candidates and to defer their implementation, and then ruled the following, verb
 > implies figuring out something like modules and dependencies so that the cryptographic
 > implementations can live in dedicate repositories.
 
+Later the same day the operator added, verbatim.
+
+> In theory, high quality cryptographic routines can be written with IFC and techniques that
+> defeat timing side channel vulnerabilities. In practice, the language might need to be
+> enhanced to the point where acceptable quality implementations can be written.
+
+The work therefore has two parts. The language is enhanced until an acceptable implementation is
+enforceable rather than merely possible, and the implementation is written against that.
+
 ## Part 1. Deferred until after the next public release
 
 ### Block bodies in match arms, then named states
