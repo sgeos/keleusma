@@ -1,6 +1,6 @@
 # Reverse prompt
 
-## V0.2.X state, 2026-11-04, after the fourth consolidated list
+## V0.2.X state, 2026-11-06, after the cryptography rulings
 
 This block is the `v0.2.3` line's own channel. On the operator's ruling of 2026-11-04, item 8
 below, each line tracks only its own material in the shared process files until they are
@@ -98,28 +98,80 @@ the primary checkout was fast-forwarded to `ff48e35c` and its build output linke
 `abcf810b`, and one journal sentence that repeated the flagged term is reworded. Items 1 and 2 are
 recorded in `GRAMMAR.md`.
 
+## Rulings received first-hand, 2026-11-06, verbatim
+
+Asked whether named states and constant-time selection fit the language, the operator accepted
+the recommendation to record both as design candidates and defer their implementation.
+
+> Recommendation accepted.
+
+The operator then ruled the following.
+
+> We can add this feature and rewrite the self hosted stages after the next public release.
+>
+> We will need our own crypographic routine to retire the Rust host in the future. Therefore, we
+> probably want an implementation written sooner than later. The self hosted cryptographic
+> implementation will need to get good enough to retire the Rust versions, and this likely
+> implies figuring out something like modules and dependencies so that the cryptographic
+> implementations can live in dedicate repositories.
+
+> In theory, high quality cryptographic routines can be written with IFC and techniques that
+> defeat timing side channel vulnerabilities. In practice, the language might need to be
+> enhanced to the point where acceptable quality implementations can be written.
+
+> Another couple comments. My understanding is that Keleusma is nominally a good language for
+> cryptographic work. Rust host retirement requires cryptographic work. Therefore, steps will need
+> to be taken to lean into the theoretical strengths to make sure sure the language is good for
+> cryptography in actual practice.
+
+> I think we need something like secure routines that destroy arena contents upon return or
+> RESET. It might make sense to have termination/reset strategies like leave-stale-data, zero, and
+> randomize.
+
+All of these are recorded in `docs/decisions/SELF_HOSTED_CRYPTOGRAPHY_PLAN.md` with the
+measurements behind them and questions C1 to C7. Checked on 2026-11-06, the LLVM constant-time
+select intrinsic `llvm.ct.select` has not landed, and the plan records how the native route
+proceeds without it.
+
+## Done, 2026-11-04 to 2026-11-06
+
+| Pull request | Merge | What it carries |
+|---|---|---|
+| 727 | `adaca192` | The two C5 soundness residuals, so C5 is met for the corpus scope |
+| 729 | `7a899120` | The fourth list of rulings, `GRAMMAR.md` agreeing with items 1 to 3, the shared-file rule |
+| 730 | `f437bc31` | `NESTED_LOOP_ARENAS.md`, measured sound today, with questions Q1 to Q7 |
+| 736 | `ce897a5b` | Item 12, the native gate folded into `ci.yml` under `CI result`, and three drifted native tests repaired |
+| 740 | `cc4e62a0` | Encoding F with the H2 schema hash, including V0.3.X's `native_codegen` adaptation |
+| 742 | `f372463d` | Self-hosted `Text<N>`, its five operations and the `Byte` and `Word` literal suffixes |
+| 744 | `cecd93db` | Option B with the element-indexed host API and S1 packed private storage, reviewed by V0.3.X |
+| 745 | `0061af1a` | `SELF_HOSTED_CRYPTOGRAPHY_PLAN.md` |
+| 746 | `7bc3a7f4` | Item 5, the whole C5 corpus run in CI as sixteen partitions across the self-host shards |
+
 ## In progress
 
-- Pull request 727, the two C5 soundness residuals closed, with the corpus at 0 unsound mutants.
-- Item 12, CI unification. `native.yml` is to run on `v0.2.3`, and three native tests that
-  drifted on `v0.2.3` are to be re-measured. They fail on plain `v0.2.3` at `ff48e35c` in both
-  float configurations, independently of Encoding F.
-- Encoding F with the H2 schema hash and V0.3.X's `native_codegen` adaptation, on
-  `feat/v02-array-encoding-f`. The native gate shows only the three drifted failures. It merges
-  after item 12.
-- Self-hosted `Text<N>` with the literal suffixes, on `feat/v02-selfhost-text-n`.
-- Item 2's arena design, a decision record with questions for the operator.
+Nothing is in flight on this line at `7bc3a7f4`.
 
 ## Next, in order
 
-1. Option B with the element-indexed host API, then packed private storage S1, after Encoding F.
-2. Item 5's sharding of the full C5 corpus, if a shard split is reasonable.
-3. The ring buffer, with the batch push and a required `overflow` arm.
-4. The nested-loop arena design's implementation, once the operator rules on its questions.
+1. The ring buffer, with the batch push and a required `overflow` arm, which needs no further
+   ruling.
+2. The cryptography work, ordered by the answers to C1 to C7.
+3. The nested-loop work, ordered by the answers to Q1 to Q7.
+4. After the next public release, block bodies in match arms, named states, and the rewrite of
+   the self-hosted stages.
 
 ## Decisions waiting on the operator
 
-None beyond the nested-loop arena questions, which follow the design record.
+- C1 to C7 in `SELF_HOSTED_CRYPTOGRAPHY_PLAN.md`.
+- Q1 to Q7 in `NESTED_LOOP_ARENAS.md`. Q4 and Q7 are hardening that can be built at once.
+- The native CI cost. The native suite reads `REVERSE_PROMPT.md` and the V0.3.X handoff, so a
+  process pull request that edits either starts the macOS native jobs, about 2.5 hours. The
+  recommendation is to ask V0.3.X to stop the suite reading `REVERSE_PROMPT.md`.
+- The interline checkpoint export, paused at kaizen's request until the operator rules on messages
+  between two lines that are not Keleusma lines.
+- Option B's narrow window. An artifact compiled after Encoding F and before option B is not
+  refused structurally. This line proceeds on option A, accepting it under ruling C3.3, unless the
+  operator says otherwise.
 
 ## Concerns
 
@@ -130,6 +182,9 @@ None beyond the nested-loop arena questions, which follow the design record.
   violations.
 - The native supplement formula in `src/native_region.rs` is a copy of the backend's, and the
   backend's differential test is what catches drift.
+- Files have disappeared from this session's scratchpad, including the disclosure-term guard
+  file on 2026-11-04 and the agent brief on 2026-11-06. The cause is not established. Both are
+  rebuilt, and copies are kept on the scratch volume.
 
 ---
 
