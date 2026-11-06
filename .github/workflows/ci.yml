@@ -379,6 +379,14 @@ jobs:
   # that the hashed run excludes exactly their union, and that every pinned name still
   # appears in the sources. Re-measure and reassign when a shard drifts well past the
   # others.
+  #
+  # THE WHOLE C5 MUTATION CORPUS RUNS AS SIXTEEN PARTITIONS, FOUR PINNED TO EACH SHARD.
+  # The operator ruled on 2026-11-04 to consider sharding it. `c5_corpus_partition_<p>` of
+  # tests/selfhost_validator/c5_corpus.rs judges every mutant whose index is p modulo 16,
+  # and shard k pins the partitions p with p modulo 4 equal to k minus 1. Each partition
+  # costs about what the one-in-sixteen sample it replaced cost, 183 seconds in run
+  # 42232522967. `tests/ci_shard_coverage.rs` checks that every partition is pinned once and
+  # that the shards hold equal shares.
   test-self-host:
     name: Test (self-host feature, shard ${{ matrix.shard }}/4)
     needs: [changes, test-self-host-build]
@@ -391,6 +399,10 @@ jobs:
     env:
       PINNED_1: >-
         test(=assembled_chunk_metadata_matches_the_reference) |
+        test(=c5_corpus::c5_corpus_partition_00) |
+        test(=c5_corpus::c5_corpus_partition_04) |
+        test(=c5_corpus::c5_corpus_partition_08) |
+        test(=c5_corpus::c5_corpus_partition_12) |
         test(=complete_auxiliary_values_and_opaque_debug_payloads_match) |
         test(=every_source_has_its_pinned_self_hosted_outcome::src_selfhost_kel_parse) |
         test(=every_stage_matches_complete_resource_admission::parse) |
@@ -402,6 +414,10 @@ jobs:
         test(=wire_kel_no_longer_fails_on_a_radix_literal)
       PINNED_2: >-
         test(=assembled_shared_layout_matches_the_reference) |
+        test(=c5_corpus::c5_corpus_partition_01) |
+        test(=c5_corpus::c5_corpus_partition_05) |
+        test(=c5_corpus::c5_corpus_partition_09) |
+        test(=c5_corpus::c5_corpus_partition_13) |
         test(=every_composed_handled_module_is_trap_free_in_both_analyses) |
         test(=every_stage_matches_complete_resource_admission::wire) |
         test(=framing_matches_every_current_stage_artifact) |
@@ -415,6 +431,10 @@ jobs:
         test(=assembled_data_slots_match_the_reference) |
         test(=assembled_schema_hash_matches_the_reference) |
         test(=assembled_signatures_match_the_reference) |
+        test(=c5_corpus::c5_corpus_partition_02) |
+        test(=c5_corpus::c5_corpus_partition_06) |
+        test(=c5_corpus::c5_corpus_partition_10) |
+        test(=c5_corpus::c5_corpus_partition_14) |
         test(=every_current_stage_completes_the_fallible_verifier) |
         test(=every_source_has_its_pinned_self_hosted_outcome::src_selfhost_kel_wire) |
         test(=every_stage_matches_complete_resource_admission::codegen) |
@@ -427,6 +447,10 @@ jobs:
       PINNED_4: >-
         test(=assembled_data_layout_matches_the_reference) |
         test(=assembled_enum_layouts_match_the_reference) |
+        test(=c5_corpus::c5_corpus_partition_03) |
+        test(=c5_corpus::c5_corpus_partition_07) |
+        test(=c5_corpus::c5_corpus_partition_11) |
+        test(=c5_corpus::c5_corpus_partition_15) |
         test(=every_current_stage_has_a_completed_matching_classification) |
         test(=every_uncovered_form_is_possibly_trapping_in_both_analyses) |
         test(=production_compiler_matches_complete_stage_artifact::codegen) |

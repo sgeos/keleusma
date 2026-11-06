@@ -17,7 +17,7 @@
 //! Both validators read the same host transport tables, such as `analyze_class` and
 //! `op_depth_effect`, so a defect in a shared table is invisible to this comparison.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use keleusma::bytecode::{
@@ -864,31 +864,36 @@ const FAMILIES: &[&str] = &[
 
 /// The counts one census measured, and the unsound mutants it found.
 struct Census {
+    /// Every mutant the generator produced, whether or not `select` kept it.
+    generated: usize,
+    /// The mutants `select` kept and the census judged.
     total: usize,
     counts: BTreeMap<(&'static str, &'static str), usize>,
     unsound: BTreeMap<String, String>,
+    /// The identities of the judged mutants.
+    judged: BTreeSet<String>,
 }
 
-/// Judge every mutant `select` keeps, given its position within its family, print the census,
-/// and fail on a panic or on an unsound mutant that `KNOWN_UNSOUND` does not name.
-/// Over-rejections and unavailable analyses are counted and printed, since they narrow the
-/// admitted language rather than widen it.
-fn census(select: impl Fn(usize, &Mutant) -> bool) -> Census {
+/// Judge every mutant `select` keeps, given its index in the order `mutants` generates them,
+/// print the census, and fail on a panic or on an unsound mutant that `KNOWN_UNSOUND` does not
+/// name. Over-rejections and unavailable analyses are counted and printed, since they narrow
+/// the admitted language rather than widen it.
+fn census(select: impl Fn(usize) -> bool) -> Census {
     let mut counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
     let mut unsound: BTreeMap<String, String> = BTreeMap::new();
+    let mut judged: BTreeSet<String> = BTreeSet::new();
     let mut over = Vec::new();
     let mut unavailable = Vec::new();
     let mut panics = Vec::new();
     let mut total = 0usize;
-    let mut position: BTreeMap<&str, usize> = BTreeMap::new();
-    for m in mutants() {
-        let index = position.entry(m.family).or_default();
-        let keep = select(*index, &m);
-        *index += 1;
-        if !keep {
+    let all = mutants();
+    let generated = all.len();
+    for (index, m) in all.into_iter().enumerate() {
+        if !select(index) {
             continue;
         }
         total += 1;
+        judged.insert(m.id.clone());
         let [rv, kv, ra, ka] = judge(&m.module);
         let mut count = |what| *counts.entry((m.family, what)).or_default() += 1;
         count("mutants");
@@ -921,7 +926,7 @@ fn census(select: impl Fn(usize, &Mutant) -> bool) -> Census {
             panics.push(format!("{} {rv:?} {kv:?} {ra:?} {ka:?}", m.id));
         }
     }
-    println!("C5 mutation census, {total} mutants");
+    println!("C5 mutation census, {total} of {generated} mutants");
     for ((family, what), n) in &counts {
         println!("  {family:>16} {what:>26} {n}");
     }
@@ -940,9 +945,11 @@ fn census(select: impl Fn(usize, &Mutant) -> bool) -> Census {
         new.len()
     );
     Census {
+        generated,
         total,
         counts,
         unsound,
+        judged,
     }
 }
 
@@ -950,38 +957,232 @@ fn count(c: &Census, family: &str, what: &str) -> usize {
     c.counts.get(&(family, what)).copied().unwrap_or(0)
 }
 
-fn pinned(m: &Mutant) -> bool {
-    repaired(&m.id) || KNOWN_UNSOUND.iter().any(|(id, _)| *id == m.id)
+/// THE NUMBER OF PARTITIONS CONTINUOUS INTEGRATION SPLITS THE WHOLE CORPUS INTO. Each partition
+/// is its own test, so that no single test holds the corpus's whole cost, and
+/// `.github/workflows/ci.yml` pins an equal share of them to each self-host shard, which
+/// `tests/ci_shard_coverage.rs` checks. Sixteen makes a partition cost about what the
+/// one-in-sixteen sample it replaced cost, 183 seconds in a shard of run 42232522967 on
+/// 2026-11-06, so no partition lengthens a shard's critical path. Changing it needs the test
+/// functions below, the pinned lists and `docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md`
+/// changed with it, and `c5_the_partitions_cover_the_whole_corpus_once` fails until they are.
+const PARTITIONS: usize = 16;
+
+/// Whether the mutant at `index`, its position in the order `mutants` generates them, belongs
+/// to partition `p`. The stride depends only on the index, and the generator is enumerative,
+/// so every test process computes the same partition of the same corpus.
+fn in_partition(p: usize, index: usize) -> bool {
+    index % PARTITIONS == p
 }
 
-/// THE C5 SOUNDNESS GATE, AS CONTINUOUS INTEGRATION RUNS IT. One mutant in every sixteen of each
-/// family, by its position in the family, so that every family is reached, and every mutant
-/// `REPAIRED` or `KNOWN_UNSOUND` names. The whole corpus cost 1,974 seconds in a release build on
-/// 2026-11-01, which is more than one test can spend in a shard, and this is the share it can.
-/// `c5_the_whole_mutation_corpus` runs the rest, and the review record gives its counts.
-#[test]
-fn c5_the_self_hosted_validator_accepts_no_sampled_mutant_the_reference_rejects() {
-    let c = census(|index, m| index % 16 == 0 || pinned(m));
-    for family in FAMILIES {
-        assert!(
-            count(&c, family, "mutants") >= 1,
-            "{family}: the sample reached no mutant"
-        );
-    }
+/// The number of the `generated` mutants that partition `p` holds under `in_partition`.
+fn partition_size(p: usize, generated: usize) -> usize {
+    generated / PARTITIONS + usize::from(p < generated % PARTITIONS)
+}
+
+/// One partition of THE C5 SOUNDNESS GATE, AS CONTINUOUS INTEGRATION RUNS IT. It judges every
+/// mutant `in_partition` assigns to `p` and fails on a panic, on an unsound mutant that
+/// `KNOWN_UNSOUND` does not name, and on a named mutant of this partition that is no longer
+/// unsound. The sixteen partitions together judge every mutant once, which
+/// `c5_the_partitions_cover_the_whole_corpus_once` proves without judging any.
+fn partition(p: usize) {
     assert!(
-        c.total >= 600,
-        "the sample collapsed to {} mutants",
-        c.total
+        p < PARTITIONS,
+        "partition {p} of {PARTITIONS} does not exist"
+    );
+    let c = census(|index| in_partition(p, index));
+    assert!(
+        c.generated >= 10_000,
+        "the corpus collapsed to {} mutants",
+        c.generated
+    );
+    assert_eq!(
+        c.total,
+        partition_size(p, c.generated),
+        "partition {p} judged a different number of mutants than its stride assigns it"
+    );
+    let gone: Vec<&str> = KNOWN_UNSOUND
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| c.judged.contains(*id) && !c.unsound.contains_key(*id))
+        .collect();
+    assert!(
+        gone.is_empty(),
+        "pinned unsound mutants are no longer unsound, so remove them from KNOWN_UNSOUND and \
+         record the repair: {gone:?}"
     );
 }
 
-/// THE C5 SOUNDNESS GATE OVER THE WHOLE CORPUS, which is the review's instrument. It is ignored
-/// in the default run for its cost, and the sampled gate above runs in its place. Run it with
+#[test]
+fn c5_corpus_partition_00() {
+    partition(0);
+}
+
+#[test]
+fn c5_corpus_partition_01() {
+    partition(1);
+}
+
+#[test]
+fn c5_corpus_partition_02() {
+    partition(2);
+}
+
+#[test]
+fn c5_corpus_partition_03() {
+    partition(3);
+}
+
+#[test]
+fn c5_corpus_partition_04() {
+    partition(4);
+}
+
+#[test]
+fn c5_corpus_partition_05() {
+    partition(5);
+}
+
+#[test]
+fn c5_corpus_partition_06() {
+    partition(6);
+}
+
+#[test]
+fn c5_corpus_partition_07() {
+    partition(7);
+}
+
+#[test]
+fn c5_corpus_partition_08() {
+    partition(8);
+}
+
+#[test]
+fn c5_corpus_partition_09() {
+    partition(9);
+}
+
+#[test]
+fn c5_corpus_partition_10() {
+    partition(10);
+}
+
+#[test]
+fn c5_corpus_partition_11() {
+    partition(11);
+}
+
+#[test]
+fn c5_corpus_partition_12() {
+    partition(12);
+}
+
+#[test]
+fn c5_corpus_partition_13() {
+    partition(13);
+}
+
+#[test]
+fn c5_corpus_partition_14() {
+    partition(14);
+}
+
+#[test]
+fn c5_corpus_partition_15() {
+    partition(15);
+}
+
+/// THE PARTITIONS ARE THE WHOLE CORPUS, EACH MUTANT IN EXACTLY ONE OF THEM. It judges no
+/// mutant, so it is cheap. It checks that the generator is deterministic across two calls,
+/// since separate test processes partition separate generations, that every index has exactly
+/// one owning partition and every partition the size its stride gives, that each partition
+/// has its test function, and the whole-corpus properties no single partition can see. Those
+/// are that the corpus and each family keep their size, that the reference rejects some
+/// mutant of every family, and that every `KNOWN_UNSOUND` mutant is still generated.
+#[test]
+fn c5_the_partitions_cover_the_whole_corpus_once() {
+    let all = mutants();
+    let again: Vec<String> = mutants().into_iter().map(|m| m.id).collect();
+    let ids: Vec<&str> = all.iter().map(|m| m.id.as_str()).collect();
+    assert!(
+        ids.iter().copied().eq(again.iter().map(String::as_str)),
+        "two generations of the corpus differ, so separate partitions would not partition it"
+    );
+    assert!(
+        all.len() >= 10_000,
+        "the corpus collapsed to {} mutants",
+        all.len()
+    );
+
+    let mut sizes = [0usize; PARTITIONS];
+    for (index, m) in all.iter().enumerate() {
+        let owners: Vec<usize> = (0..PARTITIONS)
+            .filter(|&p| in_partition(p, index))
+            .collect();
+        assert_eq!(
+            owners.len(),
+            1,
+            "mutant {index}, {}, is in partitions {owners:?}",
+            m.id
+        );
+        sizes[owners[0]] += 1;
+    }
+    assert_eq!(sizes.iter().sum::<usize>(), all.len());
+    for (p, n) in sizes.iter().enumerate() {
+        assert_eq!(*n, partition_size(p, all.len()), "partition {p}");
+    }
+    let (least, most) = (sizes.iter().min(), sizes.iter().max());
+    assert!(
+        most.zip(least).is_some_and(|(a, b)| a - b <= 1),
+        "the partitions are unbalanced: {sizes:?}"
+    );
+
+    let source = include_str!("c5_corpus.rs");
+    for p in 0..PARTITIONS {
+        let test =
+            format!("#[test]\nfn c5_corpus_partition_{p:02}() {{\n    partition({p});\n}}\n");
+        assert_eq!(
+            source.matches(&test).count(),
+            1,
+            "partition {p} needs exactly one test function of the form\n{test}"
+        );
+    }
+    assert_eq!(
+        source.matches("\nfn c5_corpus_partition_").count(),
+        PARTITIONS,
+        "a partition test exists for no partition"
+    );
+
+    for family in FAMILIES {
+        let n = all.iter().filter(|m| m.family == *family).count();
+        assert!(n >= 7, "{family}: reached only {n} mutants");
+        let rejected = all
+            .iter()
+            .filter(|m| m.family == *family)
+            .any(|m| keleusma::verify::verify(&m.module).is_err());
+        assert!(rejected, "{family}: the reference rejected none of {n}");
+    }
+    let missing: Vec<&str> = KNOWN_UNSOUND
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| !ids.contains(id))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "pinned unsound mutants are no longer generated: {missing:?}"
+    );
+}
+
+/// THE C5 SOUNDNESS GATE OVER THE WHOLE CORPUS IN ONE TEST, for a local check in one run.
+/// Continuous integration runs the same mutants as the sixteen partitions above, so this is
+/// ignored in the default run. Run it with
 /// `cargo test --release -p keleusma --features self-host --test selfhost_validator -- --ignored`.
 #[test]
-#[ignore = "the whole corpus costs about thirty minutes in a release build"]
+#[ignore = "the partitions run this corpus in continuous integration, and this one test costs \
+            about forty minutes"]
 fn c5_the_whole_mutation_corpus() {
-    let c = census(|_, _| true);
+    let c = census(|_| true);
+    assert_eq!(c.total, c.generated, "the whole corpus skipped a mutant");
     let gone: Vec<&str> = KNOWN_UNSOUND
         .iter()
         .map(|(id, _)| *id)
