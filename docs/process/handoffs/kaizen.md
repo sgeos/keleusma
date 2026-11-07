@@ -94,6 +94,10 @@ authority, so the startup-file positions reach them first-hand.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
 4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
+5. Spin up the proofs line once the operator confirms its proof language, recommended as
+   Rocq with Kani on the Rust verifier, and the wording a tracked record may use.
+6. Report the cheap metrics of [the metrics record](../kaizen/2026-11-07-metrics.md) in
+   one script once the operator picks them, and track bound tightness.
 
 ## Open with the operator
 
@@ -101,7 +105,8 @@ authority, so the startup-file positions reach them first-hand.
 list and the operator's ruling of that day. E4 asks whether the interline checkpoint
 keeps other projects' messages, and every line holds its export meanwhile, by sequences
 294 to 296. The signing key is the operator's to make, and V0.2.3's publication waits
-for it. The K-series checks are deferred.
+for it. The K-series checks are deferred. The proof language and the KPI set of
+2026-11-07 wait on the operator.
 
 ## Concerns
 

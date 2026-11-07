@@ -1,0 +1,7 @@
+# The same pin as examples/rtos, so that one toolchain bump moves both. A footprint is
+# comparable only between builds made by the same compiler, so scripts/footprint.sh
+# records the version beside every figure, and a bump is a deliberate re-baseline.
+[toolchain]
+channel = "1.92"
+components = ["rust-src", "llvm-tools", "rustfmt", "clippy"]
+targets = ["thumbv8m.main-none-eabihf"]
