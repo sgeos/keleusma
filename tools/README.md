@@ -12,13 +12,21 @@ Project-side development tooling. The contents of this directory support contrib
 
 ## Using `cloc.lang`
 
-Count Keleusma source across the project:
+[`scripts/loc.sh`](../scripts/loc.sh) counts the project with this definition, one block
+per category, such as the runtime library, the workspace crates, the examples and their
+documentation, the project documentation and the process records, followed by the total.
+It counts only tracked files and leaves out data such as lockfiles and the fuzz corpus.
 
 ```sh
-cloc --read-lang-def=tools/cloc.lang \
-     src/ keleusma-arena/src/ keleusma-macros/src/ \
-     keleusma-bench/src/ keleusma-cli/src/ \
-     examples/ tests/
+scripts/loc.sh                 # every category, then the total
+scripts/loc.sh runtime docs    # only the named categories
+scripts/loc.sh -l              # list the categories
+```
+
+For a count of your own choosing, pass the definition to cloc directly:
+
+```sh
+cloc --read-lang-def=tools/cloc.lang src/ tests/
 ```
 
 The definition recognises:
