@@ -98,7 +98,10 @@ def lines(_args):
             result[category] = {'files': 0, 'code': 0, 'comment': 0, 'blank': 0}
             continue
         # `.v` is ambiguous to cloc, Coq or Verilog, and every `.v` here is Rocq.
-        out = run(['cloc', '--json', '--quiet', '--read-lang-def=tools/cloc.lang',
+        # `--timeout 0` turns off cloc's per-file time guard. On the CI runner, cloc 2.06
+        # skipped test files that ran past it on 2026-11-08, which undercounted silently
+        # apart from a warning after the JSON.
+        out = run(['cloc', '--json', '--quiet', '--timeout', '0', '--read-lang-def=tools/cloc.lang',
                    '--force-lang=Linker Script,x', '--force-lang=Coq,v', f'--list-file={tmp}'])
         data, trailing = first_json(out)
         if trailing:
