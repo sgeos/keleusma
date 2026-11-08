@@ -32,7 +32,7 @@ cd "$(dirname "$0")/.."
 LANG_DEF=tools/cloc.lang
 # Directory and file names with no spaces, split on purpose below.
 CRATES="keleusma-macros keleusma-arena keleusma-wire keleusma-wire-derive keleusma-cli keleusma-bench"
-DETACHED="compiler native_codegen keleusma-lsp keleusma-wasm fuzz"
+DETACHED="compiler native_codegen keleusma-lsp keleusma-wasm fuzz footprint"
 TOOLING="scripts .github editors tools .cargo .cargo-husky .config .devcontainer flake.nix Cargo.toml book/book.toml book/ci"
 CATEGORIES="runtime crates tests detached tooling examples example-docs docs package-docs process translations"
 
@@ -43,7 +43,7 @@ title() {
     runtime) echo 'Runtime library, src/' ;;
     crates) echo 'Workspace crates' ;;
     tests) echo 'Integration tests, tests/' ;;
-    detached) echo 'Detached packages: compiler, native_codegen, LSP, WASM, fuzz' ;;
+    detached) echo 'Detached packages: compiler, native_codegen, LSP, WASM, fuzz, footprint' ;;
     examples) echo 'Examples, examples/' ;;
     example-docs) echo 'Example documentation' ;;
     docs) echo 'Documentation: root, docs/ without process, book source, changelog' ;;

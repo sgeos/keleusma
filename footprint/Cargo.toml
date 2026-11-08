@@ -1,0 +1,40 @@
+# The footprint probe: what embedding the Keleusma runtime costs in a bare-metal image.
+#
+# Standalone package with a detached [workspace], like fuzz/ and examples/rtos. It
+# builds one binary for the Cortex-M55 target, thumbv8m.main-none-eabihf, the core of
+# the STM32N6 board the RTOS example targets. Without the `probe` feature the binary is
+# the baseline, the same entry point, allocator and panic handler with no Keleusma
+# code. With it, the binary loads a module and calls its entry point. The difference in
+# section sizes is the runtime's footprint, which scripts/footprint.sh measures for each
+# configuration. It is excluded from the published keleusma tarball.
+[workspace]
+resolver = "2"
+
+[package]
+name = "keleusma-footprint"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+# The baseline has no features. `probe` links the runtime, and the others select the
+# runtime's own features, so each measured configuration names what it pays for.
+probe = ["dep:keleusma", "dep:keleusma-arena"]
+verify = ["probe", "keleusma/verify"]
+floats = ["probe", "keleusma/floats"]
+text = ["probe", "keleusma/text"]
+
+[dependencies]
+keleusma = { path = "..", default-features = false, optional = true }
+keleusma-arena = { path = "../keleusma-arena", optional = true }
+cortex-m-rt = "0.7"
+
+# Size, not speed, is what an embedder of a flash-limited part optimizes for, and the
+# whole program is optimized together so that unreachable runtime code is removed.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false

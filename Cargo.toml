@@ -77,6 +77,9 @@ exclude = [
     # contributors. tests/fuzz_corpus_replay.rs reads them, and like the other tests that
     # read excluded files it runs from a checkout rather than from the tarball.
     "fuzz/",
+    # The footprint probe, a detached bare-metal package that scripts/footprint.sh builds to
+    # measure what embedding the runtime costs. Contributor tooling, not runtime content.
+    "footprint/",
     # AI-agent and contributor operating instructions, not consumer
     # documentation (release audit v0.2.1: named as iffy for the tarball).
     "CLAUDE.md",

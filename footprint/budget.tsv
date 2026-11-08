@@ -1,0 +1,12 @@
+# Ceilings for scripts/footprint.sh --check, in bytes above the baseline image.
+#
+# Set on 2026-11-07 at 5 percent above the figures measured at a2cf8ada with rustc 1.92.0,
+# rounded up to a whole KiB. A change that needs more raises the ceiling in the same pull
+# request, so the growth is reviewed rather than discovered. A toolchain bump is a
+# re-baseline, recorded with the new figures. The custom configuration has no ceiling.
+#
+# configuration          flash_bytes  static_ram_bytes
+vm-trusted                    202752              1024
+vm-verify                     259072              1024
+vm-verify-floats              274432              1024
+vm-verify-floats-text         274432              1024

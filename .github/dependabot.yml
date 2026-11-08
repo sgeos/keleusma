@@ -65,7 +65,7 @@ updates:
   # merging it, run `cargo metadata --format-version 1 > /dev/null` at the root and
   # commit the refreshed Cargo.lock to the same pull request.
   - package-ecosystem: cargo
-    directories: ["/keleusma-lsp", "/keleusma-wasm", "/fuzz"]
+    directories: ["/keleusma-lsp", "/keleusma-wasm", "/fuzz", "/footprint"]
     target-branch: v0.2.3
     schedule:
       interval: weekly
