@@ -645,6 +645,13 @@ jobs:
           }
           shellcheck --version
           shellcheck scripts/*.sh
+      # scripts/test_loc.py runs the real cloc once, end to end, and the step below
+      # forbids skipped tests, so the tool is installed rather than the test skipped.
+      - name: Install cloc for the line-count test
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloc
+          cloc --version
       - name: Run the scripts/ unit tests
         if: ${{ !cancelled() }}
         run: |
