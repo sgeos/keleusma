@@ -667,6 +667,54 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -B scripts/changelog_fragments.py check
 
+  # WHAT EMBEDDING THE RUNTIME COSTS IN A BARE-METAL IMAGE.
+  #
+  # The operator asked on 2026-11-07 for the virtual machine's footprint to be tracked
+  # rather than measured once. scripts/footprint.sh builds the probe in footprint/ for the
+  # Cortex-M55 target as a baseline and once per runtime configuration, and fails when a
+  # configuration exceeds its ceiling in footprint/budget.tsv. The table goes to the job
+  # summary and the JSON report is kept as an artifact, which is the run-by-run history.
+  # See docs/process/kaizen/2026-11-07-metrics.md. The probe pins its own toolchain, so
+  # every figure is comparable with the ceilings, which were set under the same pin.
+  footprint:
+    name: Runtime footprint
+    needs: changes
+    if: needs.changes.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the probe's pinned toolchain
+        run: |
+          cd footprint
+          rustup toolchain install
+          rustc -V
+      - name: Lint the probe in its baseline and verified configurations
+        run: |
+          cd footprint
+          cargo fmt --check
+          cargo clippy --release --locked -- -D warnings
+          cargo clippy --release --locked --features verify,floats,text -- -D warnings
+      - name: Measure the footprint and check it against its ceilings
+        run: |
+          status=0
+          scripts/footprint.sh --check > footprint.txt 2>&1 || status=$?
+          cat footprint.txt
+          {
+            echo '### Runtime footprint'
+            echo '```'
+            cat footprint.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Keep the footprint report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: footprint
+          path: footprint/target/footprint.json
+          if-no-files-found: error
+          retention-days: 90
+
   # THE HOST HALF OF THE RTOS EXAMPLE, WHICH NOTHING BUILT, AND THE N6 CROSS-BUILD.
   #
   # `three-task-std`, the host binary that `CLAUDE.md`, `examples/rtos/README.md`
@@ -1037,7 +1085,7 @@ jobs:
   # `skipped`, which this condition would otherwise accept.
   certify:
     name: Certify the tested tree
-    needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux]
+    needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.mode == 'full' && needs.changes.outputs.draft != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
@@ -1073,7 +1121,7 @@ jobs:
   # job. Branch protection on `main` and on `v0.2.3` requires it, measured 2026-11-04.
   ci-result:
     name: CI result
-    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux, certify]
+    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux, certify]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
