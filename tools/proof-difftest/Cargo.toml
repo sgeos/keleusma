@@ -1,0 +1,20 @@
+# The differential test between increment A's Rocq model and the shipping Rust verifier.
+#
+# A standalone package with a detached [workspace], like compiler/ and examples/rtos/. It is
+# not a member of the parent workspace and lives under tools/, which the published keleusma
+# tarball excludes. It depends on the parent runtime by path and changes nothing in it.
+[package]
+name = "keleusma-proof-difftest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Differential test of the Keleusma verifier against the extracted Rocq core model."
+license = "0BSD"
+
+[workspace]
+
+[profile.release]
+debug = "line-tables-only"
+
+[dependencies]
+keleusma = { path = "../..", default-features = false, features = ["compile", "verify"] }

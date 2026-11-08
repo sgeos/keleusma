@@ -9,6 +9,7 @@ Project-side development tooling. The contents of this directory support contrib
 | File | Purpose |
 |------|---------|
 | [`cloc.lang`](./cloc.lang) | Language definition for [cloc](https://github.com/AlDanial/cloc) so the line-count tool recognises `.kel` files as Keleusma source. |
+| [`proof-difftest/`](./proof-difftest/README.md) | The differential test of the shipping Rust verifier against the extracted Rocq core model of increment A, a detached package with its own workspace. |
 
 ## Using `cloc.lang`
 
