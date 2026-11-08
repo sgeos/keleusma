@@ -129,8 +129,18 @@ and its fuller sources are held privately.
 Measured 2026-11-07. Kani 0.68.0 with CBMC 6.11.0 is installed through Cargo and works inside
 the agent sandbox, proving a true harness and refuting a planted false one. Rocq is **not**
 installed. The MacPorts port `rocq` 9.2.0 fails at configure because MacPorts ships dune 3.24,
-which removed the `coq` extension that the Rocq build uses. The recommended route is opam with
-exact pinned versions, which continuous integration can also reproduce.
+which removed the `coq` extension that the Rocq 9.2.0 build uses.
+
+Measured later on 2026-11-07. The operator installed Rocq through opam, in the switch `rocq`
+on OCaml 5.2.1, with `rocq-core` and `rocq-runtime` 9.3.0, `rocq-stdlib` 9.2.0, and dune
+3.24.2. Activate it with `eval $(opam env --switch=rocq)`. `rocq compile` builds a true
+theorem and refuses a false one, and the standalone checker `rocqchk` accepts the compiled
+true theorem and refuses a tampered compiled file. **Two facts govern how the trusted base is
+stated.** `rocqchk -o` lists every axiom in the loaded environment, including internal axioms
+of the standard library, not the axioms one theorem uses. `Print Assumptions` gives the axioms
+of one theorem, reporting a clean theorem as closed under the global context and naming a
+planted axiom. State each theorem's trusted base with `Print Assumptions`, and use `rocqchk`
+as the independent recheck. Pin these versions in continuous integration.
 
 ## THE EXPORT HOLD ON THE INTERLINE CHECKPOINT
 
@@ -151,10 +161,14 @@ its `main` merge on 2026-11-01.
    so adoption should be per-site by comparing both bounds.
 2. **B2 adoption**, explicitly unruled, a proved specification with seven named obligations in
    the proof's Appendix C.
-3. **The first Rocq increment and the line's shape.** Mechanization is commissioned. Under
-   discussion on 2026-11-07 are the order of the work, the existing proof's correspondence
-   argument against Kaizen's proposed small-core bound theorem, and whether Kani work becomes
-   a separate line. Record the operator's answers verbatim when given.
+3. **Ruled 2026-11-07, first-hand in this line's session, verbatim** "1 B1-A-B2, 3 A".
+   The order is B1, mechanizing Part I of the existing proof with its nine axioms as a Rocq
+   interface, then A, a small-core semantics with Kaizen's proposed bound theorem, then B2,
+   discharging the nine axioms against that semantics, which is the mechanized
+   correspondence. This line keeps both kinds of work, on separate `proof/rocq-*` and
+   `proof/kani-*` branches, and the V0.2.X line reviews any change to code it owns. Work that
+   touches the release path, a new job in `.github/workflows/ci.yml` or a change to
+   `src/verify.rs`, waits for the release or is agreed with the V0.2.X line first.
 4. **The floating-point application binary interface question**, which predates this line.
    This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
    2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
