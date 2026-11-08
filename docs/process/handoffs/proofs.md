@@ -11,20 +11,17 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > Before this line's previous resume, `v0.2.3` had moved 1112 commits past this file's prior
 > stamp. Treat every commit, line reference, branch, worktree, file path, peer request, and
 > open item below as a claim to re-measure, not as current fact. Measure how far `v0.2.3`,
-> `v0.3.0`, and `main` have moved since `208df9e9`, read the peer handoffs and the mailbox, and
+> `v0.3.0`, and `main` have moved since `003f25c6`, read the peer handoffs and the mailbox, and
 > report what changed before acting on anything here.
 
-> **REFRESHED 2026-11-01, fourth stamp, describing the line in a holding state after its
-> release.** The operator released the branch, a ruling relayed by the V0.2.X line on
-> 2026-10-30 and confirmed first-hand in this line's session on 2026-10-31. This line merged
-> `origin/v0.2.3` at `364e33fa` into `proofs` at `5921a7c5`, which replaced the five lines in
-> four files that matched the kept private term list, scanned to zero at the merged tip, and
-> landed the Appendix E correction at `dc1b784b`. The V0.2.X line merged pull request 708 into
-> `v0.2.3` as `b24d05c1` on 2026-11-01, on the operator's direction, so every commit of this
-> line up to `dc1b784b` is on `v0.2.3`. This stamp's own commit, which refreshes this file and
-> exports the interline checkpoint, is held on `proofs` with no pull request, for the reason
-> under the hold below. The interline mailbox is this line's message channel, read with
-> `interline inbox --line proofs`, and it was empty when this stamp was written.
+> **REFRESHED 2026-11-07, fifth stamp, describing the spin-up of the mechanization effort.**
+> The operator confirmed first-hand in this line's session on 2026-11-07 that the line continues
+> with Rocq and Kani, a decision first ruled in the Kaizen line's session and recorded in
+> `docs/process/kaizen/2026-11-07-proof-language.md`. This line merged `origin/v0.2.3` at
+> `003f25c6` into `proofs` at `7af11aa1`, taking the checkpoint of `v0.2.3` unchanged rather
+> than exporting a new one, under the export hold below. The two commits held since
+> 2026-11-01 land with this refresh. The first increment and the line's shape are under
+> discussion with the operator and are recorded below as open.
 
 ## Validity
 
@@ -32,7 +29,7 @@ Validate by ancestry and by content, never by a hash match.
 
 ```sh
 # Ancestry. All four must succeed. They detect a reset, not staleness, so also measure
-# how far v0.2.3 has moved past 208df9e9, as the warning at the top of this file asks.
+# how far v0.2.3 has moved past 003f25c6, as the warning at the top of this file asks.
 git merge-base --is-ancestor 8414a1a1 origin/v0.2.3     # the proof's landing merge
 git merge-base --is-ancestor f779be7d origin/v0.2.3     # the CLEAN-verdict tip, its own branch pruned 2026-10-31
 git merge-base --is-ancestor 613a2b98 origin/proofs     # the no-ff merge into this line
@@ -53,7 +50,7 @@ ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | level with `v0.2.3` at `208df9e9` except this stamp's held commit |
+| `proofs` | top-level integration branch | level with `v0.2.3` at `003f25c6` plus this stamp's refresh |
 | `proof/composite-region-reuse` | the first proof's feature branch | complete and merged at tip `f779be7d`, its remote branch pruned by the V0.2.X line and its local branch and worktree removed by this line on 2026-10-31 |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
@@ -121,22 +118,28 @@ ruling it is and how it arrived.**
   would only strengthen with dispatch scopes included. Measured, it existed only because of
   them.
 
-## THE HOLD ON MERGES INTO V0.2.3
+## THE PROOF-LANGUAGE RULING AND THE TOOLCHAIN
 
-On 2026-11-01 the V0.2.X line asked this line to hold further merges into `v0.2.3` until that
-line reports its merge of `v0.2.3` into `main`, because each move of `v0.2.3` restarts that
-merge's gates. The request arrived as peer message `v02-20261101-708-merged`, which states
-that the V0.2.X operator directed the `main` merge. It is a peer request, not a ruling of this
-line's operator, and this line honors it as coordination. Check the mailbox and `origin/main`
-for that report before opening any pull request into `v0.2.3`.
+Rocq is the proof assistant, with its standalone checker as the independently checked
+artefact. A Rocq model is linked to the Rust verifier by differential testing on generated
+modules, not by a proof of the Rust code. Kani, a bounded model checker for Rust, is applied
+to the Rust verifier's core. The certification reasoning is in the Kaizen record named above,
+and its fuller sources are held privately.
 
-## QUEUED FOR THE NEXT LANDING
+Measured 2026-11-07. Kani 0.68.0 with CBMC 6.11.0 is installed through Cargo and works inside
+the agent sandbox, proving a true harness and refuting a planted false one. Rocq is **not**
+installed. The MacPorts port `rocq` 9.2.0 fails at configure because MacPorts ships dune 3.24,
+which removed the `coq` extension that the Rocq build uses. The recommended route is opam with
+exact pinned versions, which continuous integration can also reproduce.
 
-One commit, this stamp's, held on `proofs`. It refreshes this file and exports
-`docs/process/interline/checkpoint.json`. Every line exports that shared checkpoint, so it
-will likely conflict when this line next merges `v0.2.3`. Resolve such a conflict by exporting
-the checkpoint again from the live store after the merge, not by combining the two JSON files
-by hand.
+## THE EXPORT HOLD ON THE INTERLINE CHECKPOINT
+
+On 2026-11-04 the Kaizen line asked every line not to export the interline checkpoint into a
+tracked file until the operator rules, because the shared store then held messages between two
+lines outside Keleusma that match a kept private term. It is a peer request, and this line
+honors it as coordination. On a merge conflict in `docs/process/interline/checkpoint.json`,
+take the version of `v0.2.3` unchanged. The V0.2.X hold on merges into `v0.2.3` ended with
+its `main` merge on 2026-11-01.
 
 ## OPEN, ALL WITH THE OPERATOR
 
@@ -148,8 +151,10 @@ by hand.
    so adoption should be per-site by comparing both bounds.
 2. **B2 adoption**, explicitly unruled, a proved specification with seven named obligations in
    the proof's Appendix C.
-3. **Mechanization**, the recorded follow-on that upgrades the proof from audited prose to
-   checked proof, its cost much reduced by the axiomatization the audits forced.
+3. **The first Rocq increment and the line's shape.** Mechanization is commissioned. Under
+   discussion on 2026-11-07 are the order of the work, the existing proof's correspondence
+   argument against Kaizen's proposed small-core bound theorem, and whether Kani work becomes
+   a separate line. Record the operator's answers verbatim when given.
 4. **The floating-point application binary interface question**, which predates this line.
    This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
    2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
@@ -185,7 +190,7 @@ by hand.
 
 ## Owed by this line
 
-Nothing to any peer line. This line honors the V0.2.X hold above.
+Nothing to any peer line. This line honors the Kaizen export hold above.
 
 ## Owed to this line
 
@@ -195,12 +200,9 @@ Nothing.
 
 Assume the project has changed, as the warning at the top of this file says. Fetch, run the
 validity block, and measure how far `v0.2.3`, `v0.3.0`, and `main` have moved since
-`208df9e9`. Read and acknowledge `interline inbox --line proofs`, and check whether the V0.2.X
-line has reported its `main` merge, which ends the hold. Read the peer handoffs,
+`003f25c6`. Read and acknowledge `interline inbox --line proofs`, and check whether the Kaizen
+line has reported the operator's ruling on the checkpoint export. Read the peer handoffs,
 `git show origin/v0.2.3:docs/process/handoffs/v0.2.3.md` and
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`, for anything addressed to this
-line. Read the three audit records and the proof's Appendix E when the next task touches the
-proof. Report the differences you found, then wait for the operator. Nothing was in flight when
-this stamp was written. The line's next action is whichever the operator commissions, landing
-the held commit once the hold ends, a second proof cut as a feature branch from `proofs`, or the
-mechanization effort.
+line. Check whether Rocq is installed. Report the differences you found, then wait for the
+operator unless an increment is already commissioned with its scope recorded above.
