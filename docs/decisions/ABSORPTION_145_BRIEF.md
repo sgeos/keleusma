@@ -22,7 +22,7 @@ Made with `RUSTC_WRAPPER=` on the merge. The change is documentation only.
 
 | Check | Result |
 |---|---|
-| Root `documentation_links`, `comment_citations` and `state_file_budget` | 7 passed, 1 failed |
+| Root `documentation_links`, `comment_citations` and `state_file_budget` | 10 passed |
 | Native `handoff_figures` | 6 passed |
 
 The hosted run on the pull request covers the rest.
