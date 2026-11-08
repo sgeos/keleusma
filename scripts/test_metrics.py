@@ -175,6 +175,34 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(gate['peak_resident'], 1200)
         self.assertEqual(gate['last_status'], 3)
 
+    def test_text_after_the_cloc_json_is_kept_as_a_note(self):
+        cloc = self.bin / 'cloc'
+        cloc.write_text(FAKE_CLOC + 'echo "1 file ignored."\n')
+        self.run_metrics()
+        lines = self.values('lines')
+        self.assertEqual(lines['runtime']['files'], 2)
+        self.assertEqual(lines['cloc_notes']['runtime'], '1 file ignored.')
+
+    def test_a_collector_defect_is_recorded_and_the_rest_still_run(self):
+        (self.repo / 'docs' / 'process' / 'handoffs' / 'kaizen.md').write_bytes(b'\xff\xfe not utf-8')
+        cloc = self.bin / 'cloc'
+        cloc.write_text('#!/bin/sh\necho "{ not json"\n')
+        result = self.run_metrics('--require', 'lines')
+        self.assertEqual(result.returncode, 1)
+        report = self.report()
+        self.assertEqual(report['lines']['status'], 'unavailable')
+        self.assertIn('not JSON', report['lines']['reason'])
+        self.assertEqual(report['tests']['status'], 'ok')
+
+    def test_an_unexpected_exception_is_an_error_entry_not_a_crash(self):
+        (self.repo / 'src' / 'bytecode.rs').unlink()
+        result = self.run_metrics('--require', 'invariants')
+        self.assertEqual(result.returncode, 1)
+        entry = self.report()['invariants']
+        self.assertEqual(entry['status'], 'error')
+        self.assertIn('FileNotFoundError', entry['reason'])
+        self.assertEqual(self.report()['documentation']['status'], 'ok')
+
     def test_unavailable_collectors_carry_a_reason(self):
         self.run_metrics()
         report = self.report()
