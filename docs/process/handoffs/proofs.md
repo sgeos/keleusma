@@ -6,25 +6,34 @@ The proof line's mailbox and its self-contained resume prompt in one file, follo
 per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 `git show origin/proofs:docs/process/handoffs/proofs.md`.
 
-> **REFRESHED 2026-10-31, third stamp, describing the release of this line into V0.2.X.**
-> The operator released the branch, a ruling relayed by the V0.2.X line on 2026-10-30 and
-> confirmed first-hand in this line's session on 2026-10-31. This line merged `origin/v0.2.3`
-> at `364e33fa` into `proofs` at `5921a7c5`, which replaced the five lines in four files that
-> matched the kept private term list, scanned to zero at the merged tip. The queued Appendix E
-> correction is folded in. A pull request from `proofs` into `v0.2.3` carries this file and
-> the correction, the only work of this line not already on `v0.2.3`. The interline mailbox is
-> this line's message channel, `interline inbox --line proofs`, and its five notices up to
-> 2026-11-01 were read and acknowledged on 2026-10-31.
+> **THE PROJECT MAY BE VERY DIFFERENT FROM WHAT THIS FILE DESCRIBES.** This file records the
+> state on 2026-11-01. This line works in long idle stretches, and the other lines keep moving.
+> Before this line's previous resume, `v0.2.3` had moved 1112 commits past this file's prior
+> stamp. Treat every commit, line reference, branch, worktree, file path, peer request, and
+> open item below as a claim to re-measure, not as current fact. Measure how far `v0.2.3`,
+> `v0.3.0`, and `main` have moved since `003f25c6`, read the peer handoffs and the mailbox, and
+> report what changed before acting on anything here.
+
+> **REFRESHED 2026-11-07, fifth stamp, describing the spin-up of the mechanization effort.**
+> The operator confirmed first-hand in this line's session on 2026-11-07 that the line continues
+> with Rocq and Kani, a decision first ruled in the Kaizen line's session and recorded in
+> `docs/process/kaizen/2026-11-07-proof-language.md`. This line merged `origin/v0.2.3` at
+> `003f25c6` into `proofs` at `7af11aa1`, taking the checkpoint of `v0.2.3` unchanged rather
+> than exporting a new one, under the export hold below. The two commits held since
+> 2026-11-01 land with this refresh. The first increment and the line's shape are under
+> discussion with the operator and are recorded below as open.
 
 ## Validity
 
 Validate by ancestry and by content, never by a hash match.
 
 ```sh
-# Ancestry. All three must succeed.
+# Ancestry. All four must succeed. They detect a reset, not staleness, so also measure
+# how far v0.2.3 has moved past 003f25c6, as the warning at the top of this file asks.
 git merge-base --is-ancestor 8414a1a1 origin/v0.2.3     # the proof's landing merge
 git merge-base --is-ancestor f779be7d origin/v0.2.3     # the CLEAN-verdict tip, its own branch pruned 2026-10-31
 git merge-base --is-ancestor 613a2b98 origin/proofs     # the no-ff merge into this line
+git merge-base --is-ancestor dc1b784b origin/v0.2.3     # the release commit, landed by pull request 708
 
 # Content, measured at 391f0b51. If any differs, say so rather than acting on the state below.
 P=docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md
@@ -41,8 +50,8 @@ ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | `v0.2.3` merged in at `5921a7c5`, then the release commit |
-| `proof/composite-region-reuse` | the first proof's feature branch | complete, tip `f779be7d`, merged, remote branch pruned by the V0.2.X line on 2026-10-31 |
+| `proofs` | top-level integration branch | level with `v0.2.3` at `003f25c6` plus this stamp's refresh |
+| `proof/composite-region-reuse` | the first proof's feature branch | complete and merged at tip `f779be7d`, its remote branch pruned by the V0.2.X line and its local branch and worktree removed by this line on 2026-10-31 |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
 proofs are cut from `proofs` as feature branches and merged back with no-fast-forward merges.
@@ -109,30 +118,61 @@ ruling it is and how it arrived.**
   would only strengthen with dispatch scopes included. Measured, it existed only because of
   them.
 
-## QUEUED FOR THE NEXT LANDING
+## THE PROOF-LANGUAGE RULING AND THE TOOLCHAIN
 
-Nothing. The Appendix E correction to the attributed three-ruling form landed with the
-release commit on 2026-10-31.
+Rocq is the proof assistant, with its standalone checker as the independently checked
+artefact. A Rocq model is linked to the Rust verifier by differential testing on generated
+modules, not by a proof of the Rust code. Kani, a bounded model checker for Rust, is applied
+to the Rust verifier's core. The certification reasoning is in the Kaizen record named above,
+and its fuller sources are held privately.
+
+Measured 2026-11-07. Kani 0.68.0 with CBMC 6.11.0 is installed through Cargo and works inside
+the agent sandbox, proving a true harness and refuting a planted false one. Rocq is **not**
+installed. The MacPorts port `rocq` 9.2.0 fails at configure because MacPorts ships dune 3.24,
+which removed the `coq` extension that the Rocq build uses. The recommended route is opam with
+exact pinned versions, which continuous integration can also reproduce.
+
+## THE EXPORT HOLD ON THE INTERLINE CHECKPOINT
+
+On 2026-11-04 the Kaizen line asked every line not to export the interline checkpoint into a
+tracked file until the operator rules, because the shared store then held messages between two
+lines outside Keleusma that match a kept private term. It is a peer request, and this line
+honors it as coordination. On a merge conflict in `docs/process/interline/checkpoint.json`,
+take the version of `v0.2.3` unchanged. The V0.2.X hold on merges into `v0.2.3` ended with
+its `main` merge on 2026-11-01.
 
 ## OPEN, ALL WITH THE OPERATOR
 
-1. **`src/verify.rs:1337`**, the loop accounting the proof's Appendix E cites, adopting confined-site accounting, explicitly unruled, lowering a
-   published worst-case-memory-usage figure. The V0.2.X line's landed `src/confine.rs`
+1. **`src/verify.rs:1337`**, the loop accounting the proof's Appendix E cites, adopting
+   confined-site accounting, explicitly unruled, lowering a published worst-case-memory-usage
+   figure. The line number was taken from Appendix E as `v0.2.3` updated it and will drift. The V0.2.X line's landed `src/confine.rs`
    analysis is assembling the measured consequence, and the proof's Theorem C remark is the
    piece to read first, footprint can exceed the branch-max bound on branch-dominated shapes,
    so adoption should be per-site by comparing both bounds.
 2. **B2 adoption**, explicitly unruled, a proved specification with seven named obligations in
    the proof's Appendix C.
-3. **Mechanization**, the recorded follow-on that upgrades the proof from audited prose to
-   checked proof, its cost much reduced by the axiomatization the audits forced.
-4. **The floating-point application binary interface question** in
-   `docs/process/REVERSE_PROMPT.md`, predating this line entirely, still awaiting one word.
+3. **The first Rocq increment and the line's shape.** Mechanization is commissioned. Under
+   discussion on 2026-11-07 are the order of the work, the existing proof's correspondence
+   argument against Kaizen's proposed small-core bound theorem, and whether Kani work becomes
+   a separate line. Record the operator's answers verbatim when given.
+4. **The floating-point application binary interface question**, which predates this line.
+   This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
+   2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
+   was answered or dropped is unverified, so ask the operator before treating it as open.
 
 ## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
 
-- **Work in a worktree.** This session operates in `../keleusma-worktrees/proofs` and
-  `../keleusma-worktrees/composite-region-reuse`. The main checkout belongs to the V0.2.X
+- **Work in a worktree.** This line operates in `../keleusma-worktrees/proofs`, with each new
+  proof in a sibling worktree on a `proof/*` branch. The main checkout belongs to the V0.2.X
   session. A shared checkout silently changes what a long-running command measures.
+- **A merged pull request from `proofs` deletes `origin/proofs`.** The repository sets
+  `delete_branch_on_merge`, so pull request 708 deleted the branch on 2026-11-01, and the next
+  push recreated it at `d348846a`. After a landing, expect the remote branch to be gone. An
+  ancestry check against `origin/proofs` then fails for that reason, not because of a reset.
+- **Build output lives on the scratch volume.** The worktree's `target` is a link to
+  `/Volumes/Scratch/keleusma/proofs/target`. A `cargo clean` deletes the link, so run
+  `scratch.sh link target` again before building. Inside the agent sandbox the global
+  `sccache` wrapper is refused, so build with `RUSTC_WRAPPER=` set to empty.
 - **A pull request based on anything but `main` or `v*` triggers no continuous integration,
   silently.** Merge on a green run at the commit it ran, reading the conclusion field.
 - **Nothing is promoted from read to executed without an execution**, and rows carry their
@@ -150,7 +190,7 @@ release commit on 2026-10-31.
 
 ## Owed by this line
 
-Nothing to either peer line.
+Nothing to any peer line. This line honors the Kaizen export hold above.
 
 ## Owed to this line
 
@@ -158,10 +198,11 @@ Nothing.
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-Run the validity block. Read the three audit records and the proof's Appendix E, which carry
-the full provenance. Check both peer mailboxes,
+Assume the project has changed, as the warning at the top of this file says. Fetch, run the
+validity block, and measure how far `v0.2.3`, `v0.3.0`, and `main` have moved since
+`003f25c6`. Read and acknowledge `interline inbox --line proofs`, and check whether the Kaizen
+line has reported the operator's ruling on the checkpoint export. Read the peer handoffs,
 `git show origin/v0.2.3:docs/process/handoffs/v0.2.3.md` and
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`, for anything addressed to this
-line. Then wait for the operator. Nothing is blocked, no work is in flight, and the line's
-next action is whichever the operator commissions, a second proof cut as a feature branch from
-`proofs`, the queued Appendix E correction folded into it, or the mechanization effort.
+line. Check whether Rocq is installed. Report the differences you found, then wait for the
+operator unless an increment is already commissioned with its scope recorded above.
