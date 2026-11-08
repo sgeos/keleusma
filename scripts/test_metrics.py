@@ -183,6 +183,15 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(lines['runtime']['files'], 2)
         self.assertEqual(lines['cloc_notes']['runtime'], '1 file ignored.')
 
+    def test_cloc_runs_without_its_timeout_guard(self):
+        # cloc 2.06 skipped slow files on a CI runner and warned after its JSON. The
+        # stand-in does the same unless asked for --timeout 0.
+        cloc = self.bin / 'cloc'
+        cloc.write_text(FAKE_CLOC.replace('#!/bin/sh\n', '#!/bin/sh\ncase " $* " in *" --timeout 0 "*) ;; '
+                                          '*) trap \'echo "One or more files took longer"\' EXIT ;; esac\n', 1))
+        self.run_metrics()
+        self.assertNotIn('cloc_notes', self.values('lines'))
+
     def test_a_collector_defect_is_recorded_and_the_rest_still_run(self):
         (self.repo / 'docs' / 'process' / 'handoffs' / 'kaizen.md').write_bytes(b'\xff\xfe not utf-8')
         cloc = self.bin / 'cloc'
