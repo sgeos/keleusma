@@ -156,9 +156,11 @@ a function are rejected, for which there is no separate control.
 
 ## What is not covered
 
-1. **The formal instantiation of B1.** As stated at the top. Nothing here constructs B1's trace
-   model or flow certificate, so B1's theorems are not applied to this machine, and the relation
-   is the per-axiom argument above.
+1. **The formal instantiation of B1.** As stated at the top, nothing in this directory constructs
+   B1's records. The later directory [`../instance/`](../instance/README.md), added on
+   2026-11-08, instantiates B1's trace model with this core, discharges B1's per-slot obligation
+   from this checker, and rederives `reuse_sound` from B1's theorem. It builds no flow
+   certificate, so B1's flow-level theorems are still not applied to this machine.
 2. **Keleusma itself.** The region core is a model. Its handles name regions by index, while the
    shipping virtual machine's handles carry offsets, so address opacity, M8, holds here by
    construction. Nothing relates this core to the shipping virtual machine or verifier.

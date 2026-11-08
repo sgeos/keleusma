@@ -21,8 +21,10 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > with no injectivity premise. **The differential test** of the Rust verifier against
 > increment A's model is in `tools/proof-difftest/`, and reported two findings to the V0.2.X
 > line, the compiler accepting recursion against its documentation and the stream figure
-> counting no callee bodies. **The formal instantiation of B1** and **the Kani work** were in
-> progress on `proof/rocq-b1-instance` and `proof/kani-verifier` when this stamp was written.
+> counting no callee bodies. These two landed on `v0.2.3` at `f13b6fab`. **The formal
+> instantiation of B1** is in `docs/proofs/rocq/instance/`, instantiating B1's trace model with
+> B2's core and rederiving B2's theorem from B1's, without a flow certificate. **The Kani work**
+> was in progress on `proof/kani-verifier` when this stamp was written.
 > None of these relates any model to the shipping verifier by proof. The interline export hold
 > below still stands.
 
@@ -51,6 +53,7 @@ ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
 ls docs/proofs/rocq/core_bounds/*.v | wc -l    # 6, increment A
 ls docs/proofs/rocq/region_core/*.v | wc -l    # 6, increment B2
 ls docs/proofs/rocq/shared_slots/*.v | wc -l   # 8, shared slots
+ls docs/proofs/rocq/instance/*.v | wc -l       # 8, the instantiation of B1
 ```
 
 ## Structure of the line
