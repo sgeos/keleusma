@@ -165,6 +165,20 @@ class LocTests(unittest.TestCase):
                                  'examples', 'example-docs', 'docs', 'package-docs',
                                  'process', 'translations', 'total'])
 
+    def test_files_prints_one_category_without_cloc(self):
+        empty = self.tmp / 'no-cloc-bin'
+        empty.mkdir()
+        for tool in ('git', 'dirname', 'sort'):
+            (empty / tool).symlink_to(shutil.which(tool))
+        result = self.run_loc('--files', 'example-docs', path=str(empty))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ['examples/rtos/README.md'])
+
+    def test_files_refuses_an_unknown_category(self):
+        result = self.run_loc('--files', 'nonesuch')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown category 'nonesuch'", result.stderr)
+
     @unittest.skipUnless(shutil.which('dash'), 'dash is not installed')
     def test_it_runs_under_dash(self):
         result = self.run_loc('runtime', shell='dash')
