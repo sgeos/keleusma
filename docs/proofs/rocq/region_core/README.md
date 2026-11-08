@@ -31,7 +31,8 @@ docs/proofs/rocq/region_core/check.sh
 The script is increment A's hardened script with this directory's modules and results,
 strengthened after this increment's audit. It fails unless all of the following hold.
 
-1. No source holds an admitted or assumed proof or a command or attribute silencing warnings,
+1. No source holds an admitted or assumed proof, a command or attribute of either spelling
+   silencing warnings, or a `Redirect`,
    by a scan of each source with its comments removed and its whitespace collapsed, so a
    construct split across lines or by a comment is still found.
 2. `Statements.v` and `Controls.v` open no section and declare no hypothesis, variable or
@@ -162,7 +163,8 @@ a function are rejected, for which there is no separate control.
    shipping virtual machine's handles carry offsets, so address opacity, M8, holds here by
    construction. Nothing relates this core to the shipping virtual machine or verifier.
 3. **Arm groups, Theorem A2 and Corollary A3.** A plan must give distinct sites distinct slots,
-   so sharing one slot between the arms of a conditional is excluded.
+   so sharing one slot between the arms of a conditional is excluded here. The extension in
+   [`../shared_slots/`](../shared_slots/README.md), added on 2026-11-08, covers it.
 4. **Refined confinement, Theorem B1r.** A handle may not be stored to a local at all, so the
    boundary-dead slots of Definition 7 are not modelled.
 5. **The escape-copy discipline, Theorem B2 of Part I.** A handle may not escape at all, so no

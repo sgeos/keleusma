@@ -32,7 +32,8 @@ The script fails unless all of the following hold.
 
 1. No source contains `Admitted`, `admit`, `Admit`, `Abort`, `Axiom`, `Parameter`,
    `Conjecture`, their plurals, `bypass_check`, a command unsetting guard, positivity or
-   universe checking, a `Set Warnings` command, or a `warnings` attribute, scanned with the
+   universe checking, a `Set Warnings` command, a `warning` or `warnings` attribute, or a
+   `Redirect`, scanned with the
    comments removed and the whitespace collapsed so a construct split across lines or by a
    comment is still found, and `Controls.v` opens no section and declares no hypothesis,
    variable or context. These were added on 2026-11-08 after the audits of increments A and
