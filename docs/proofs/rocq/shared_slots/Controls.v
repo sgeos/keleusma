@@ -105,6 +105,24 @@ Theorem choose_sound : forall host fuel n,
   end.
 Proof. exact (reuse_sound_arm Pshare choose [] (proj2 choose_needs_join)). Qed.
 
+(** A handle joined from two arms, live while a site sharing one of its
+    possible sites' slots allocates.  The join checker rejects it because the
+    conflict rule considers every possible site, and its reuse run really
+    diverges, so that rule does work. *)
+Definition joined_live : module :=
+  mkmodule [] (blk [Const 0; If (blk [Const 3; New 2]) (blk [Const 4; New 1]);
+                    Const 5; New 0; Get; Yield; Store 1; Get; Yield; Store 1]).
+
+Definition P012 : plan := fun s => match s with 0 => Some 0 | 1 => Some 0 | _ => None end.
+
+Example joined_live_rejected_and_diverges :
+  region_checkA P012 joined_live = None /\ log_of P012 joined_live <> log_of baseline joined_live.
+Proof. vm_compute. split; [reflexivity|discriminate]. Qed.
+
+(** The join checker accepts [arms] as well, which [arm_generalises] gives. *)
+Example arms_accepted_by_join : region_checkA Pshare arms = Some [].
+Proof. vm_compute. reflexivity. Qed.
+
 (** The join checker still rejects the co-live module. *)
 Example co_live_rejected_by_join : region_checkA Pshare two_sites = None.
 Proof. vm_compute. reflexivity. Qed.

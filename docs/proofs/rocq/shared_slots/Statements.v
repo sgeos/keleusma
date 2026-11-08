@@ -39,6 +39,10 @@ Proof.
   split; [exact (proj2 co_live_rejected)|exact co_live_diverges].
 Qed.
 
+Lemma pin_joined_live :
+  region_checkA P012 joined_live = None /\ log_of P012 joined_live <> log_of baseline joined_live.
+Proof. exact joined_live_rejected_and_diverges. Qed.
+
 Definition pin_reuse_sound_arm : forall P m ft, region_checkA P m = Some ft ->
   forall host fuel n,
   match cycles P host m fuel n init, cycles baseline host m fuel n init with

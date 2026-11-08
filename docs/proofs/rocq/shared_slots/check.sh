@@ -39,7 +39,7 @@ root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/shared_slots}"
 deps=(Core Shape Sim Reuse Controls)
 modules=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls Statements)
-pins_expected=7
+pins_expected=8
 results=(
     SharedSim.shape_false_eq SharedSim.existsb_false_all SharedSim.cells_differ_shared
     SharedSim.simulation_shared
@@ -48,7 +48,7 @@ results=(
     Controls.Pshare_not_injective Controls.arms_accepted Controls.arms_agree Controls.arms_one_slot
     Controls.arms_sound Controls.sequential_accepted_and_agrees Controls.co_live_rejected
     Controls.co_live_diverges Controls.choose_needs_join Controls.choose_agrees Controls.choose_sound
-    Controls.co_live_rejected_by_join
+    Controls.co_live_rejected_by_join Controls.joined_live_rejected_and_diverges Controls.arms_accepted_by_join
     ArmSim.ajoin_sound_l ArmSim.ajoin_sound_r ArmSim.step_popA ArmSim.simulation_arm
     Arm.region_checkA_wf Arm.reuse_sound_arm Arm.shape_embed Arm.arm_generalises Arm.arm_contains_b2
     Statements.pin_arm_group_covered Statements.pin_co_live_rejected Statements.pin_choose_covered

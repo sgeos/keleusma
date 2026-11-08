@@ -57,8 +57,8 @@ checks this directory's eight modules. It fails unless no source holds an admitt
 proof, a warning silencer of either attribute spelling, or a `Redirect`, scanned with comments
 removed and whitespace collapsed, the pin
 and control files open no section and declare no hypothesis, variable or context, every
-module compiles with no output, `rocqchk` reports no axiom and no unsafe construct, all 34 named
-results are closed, and `Statements.v` holds the seven expected pins. Three planted defects were
+module compiles with no output, `rocqchk` reports no axiom and no unsafe construct, all 36 named
+results are closed, and `Statements.v` holds the eight expected pins. Three planted defects were
 run against it on 2026-11-08, a premise added to `reuse_sound_shared`, which its pin refused, an
 `Admitted` lemma, and an unlisted theorem using the classical axiom, and it refused each. No log
 is kept in the tree. Continuous integration does not yet run the script, under the operator's
@@ -80,13 +80,18 @@ choose-then-use and co-live controls. They do not fix the definitions they menti
   The plan-aware checker rejects it and the join checker accepts it. Its reuse run agrees with
   the baseline, both sites allocate into the one slot, and `choose_sound` applies the headline
   theorem to it.
-- `arms` allocates and consumes a handle inside each arm. Both checkers accept it, it agrees,
+- `arms` allocates and consumes a handle inside each arm. Both checkers accept it, the join
+  checker through `arms_accepted_by_join`, it agrees,
   and `arms_one_slot` shows both sites allocating into the slot and no bump cell written.
 - `sequential` lets site 1 reuse site 0's slot after site 0's handle has died. It is accepted
   and agrees.
 - B2's `two_sites`, whose two handles are live together, is rejected by both checkers under
   `Pshare` while B2's checker accepts it, and `co_live_diverges` shows that its reuse run really
   diverges under `Pshare` itself.
+- `joined_live` joins a handle of site 2 or site 1 from two arms and allocates site 0 while it is
+  live, under a plan sharing sites 0 and 1. The join checker rejects it because the conflict rule
+  considers every possible site of a joined handle, and its reuse run really diverges, so that
+  rule does work.
 - `Pshare` is proved not injective, so B2's theorem cannot cover any of these.
 
 The audit ran an exhaustive search on the plan-aware checker, every instruction word up to
@@ -102,5 +107,7 @@ of refined confinement, of the escape-copy discipline, of sites in called functi
 accounting and of termination, and the absence of any relation to the shipping virtual machine
 or verifier. The bound side of Theorem A2, that the shared slot is provisioned once at the size
 of its largest member, is not modelled, since a region here holds one number. A loop body must
-still restore its abstract stack exactly, so a loop whose iterations join different sites into
-one entry is rejected, which is conservative.
+still restore its abstract stack exactly, compared as lists, and the join keeps site lists in
+the order the arms give without removing repeats. So whether a loop that re-chooses a joined
+handle is accepted depends on that order. The delta audit found one such loop accepted and the
+same loop with its arms swapped rejected. This is conservative, and neither case is unsound.
