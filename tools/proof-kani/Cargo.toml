@@ -1,0 +1,17 @@
+[package]
+name = "keleusma-proof-kani"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Kani bounded model checking harnesses for the Keleusma verifier core and the keleusma-wire trust path"
+license = "0BSD"
+
+# A detached workspace, so the root workspace neither builds nor tests this package.
+[workspace]
+
+[dependencies]
+keleusma = { path = "../.." }
+keleusma-wire = { path = "../../keleusma-wire", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

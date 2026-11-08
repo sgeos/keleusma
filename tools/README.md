@@ -9,6 +9,7 @@ Project-side development tooling. The contents of this directory support contrib
 | File | Purpose |
 |------|---------|
 | [`cloc.lang`](./cloc.lang) | Language definition for [cloc](https://github.com/AlDanial/cloc) so the line-count tool recognises `.kel` files as Keleusma source. |
+| [`proof-kani/`](./proof-kani/README.md) | Kani bounded model checking harnesses for the verifier core and the wire-format trust path, a detached package with its own workspace. Run `tools/proof-kani/check.sh`. |
 
 ## Using `cloc.lang`
 
