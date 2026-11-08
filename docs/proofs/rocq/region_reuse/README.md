@@ -31,8 +31,10 @@ docs/proofs/rocq/region_reuse/check.sh
 The script fails unless all of the following hold.
 
 1. No source contains `Admitted`, `admit`, `Admit`, `Abort`, `Axiom`, `Parameter`,
-   `Conjecture`, their plurals, `bypass_check`, or a command unsetting guard, positivity or
-   universe checking.
+   `Conjecture`, their plurals, `bypass_check`, a command unsetting guard, positivity or
+   universe checking, a `Set Warnings` command, or a `warnings` attribute. The last two were
+   added on 2026-11-08 after increment A's audit and delta check showed that each could silence
+   the next step.
 2. All five modules compile with no output at all, so any warning fails.
 3. The standalone checker `rocqchk` re-verifies every compiled module, and its context summary
    reports no axiom, no unsafe fixpoint, no type-in-type and no assumed positivity. The summary
@@ -53,7 +55,10 @@ positivity unset split across lines, and the summary check refused each. No log 
 is kept in the tree, so they are evidence of this session, reproducible by planting the same
 defects in a copy under the ignored `tmp/`. The marker file guards against accident, not
 against an adversary, and the script cannot detect a named result redefined to a trivial
-statement, which is why the statements are in the trusted base. The script is not yet run by continuous integration, because the operator ruled on
+statement, which is why the statements are in the trusted base. Increment A's audit of
+2026-11-08 confirmed this by execution, and increment A pins its headline statements for that
+reason. **This directory's statements are not yet pinned**, which is an open item of the proof
+line. The script is not yet run by continuous integration, because the operator ruled on
 2026-11-07 that a new continuous-integration job waits for the release or for agreement with the
 V0.2.X line.
 
