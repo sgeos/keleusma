@@ -2,20 +2,29 @@
 # Runs every Kani harness in this package and fails unless each one gives its
 # expected result.
 #
-# Expected to verify. Every harness in PASSING must report VERIFICATION
-# SUCCESSFUL with no unsatisfiable cover statement, and the number that do
-# must equal the length of PASSING.
+# Expected to verify. Every selected harness of LIGHT or HEAVY must report
+# VERIFICATION SUCCESSFUL with no unsatisfiable cover statement, and the
+# number that do must equal the number selected.
 #
 # Expected to fail. Every harness in FAILING must report VERIFICATION FAILED
 # with each of the failure descriptions listed for it. These are the finding
 # harnesses and the negative control described in README.md. They are
 # excluded from the pass count.
 #
-# The two lists together must name every `#[kani::proof]` in src/, so that a
+# LIGHT, HEAVY and FAILING together must name every `#[kani::proof]` in src/, so that a
 # harness added without being listed fails this script instead of being
 # silently skipped.
 #
-# Usage: tools/proof-kani/check.sh
+# Usage: tools/proof-kani/check.sh [--tier light|heavy|all] [--jobs N] [--only NAME]
+#   --tier light  the default. The harnesses measured to finish quickly with a
+#                 small footprint, and every expected failure.
+#   --tier heavy  the instruction-walk and module harnesses, whose footprint is
+#                 large or not yet measured. One of them held about thirty
+#                 gigabytes for more than thirty minutes without finishing.
+#   --tier all    both tiers.
+#   --jobs N      how many harnesses run at once, overriding KANI_JOBS.
+#   --only NAME   runs the one named harness, from whichever list holds it, so
+#                 a heavy harness can be measured alone.
 # Environment: KANI_JOBS sets how many harnesses run at once, default 1.
 # One harness can hold about eight gigabytes of memory while the model checker
 # runs, and the development machine is shared, so serial is the safe default.
@@ -140,8 +149,19 @@ if [ "${1:-}" = "--one" ]; then
     exit 0
 fi
 
-PASSING=(
+# Expected to verify, measured light. Each finished in under three minutes,
+# the largest measured peak being 336 megabytes.
+LIGHT=(
     verifier_harnesses::op_tables_are_total_and_agree
+    wire_harnesses::maj3_is_bitwise_majority
+    wire_harnesses::crc32_detects_bit_errors_in_four_bytes
+    wire_harnesses::secded_corrects_single_bit_errors
+    wire_harnesses::secded_detects_double_bit_errors
+)
+
+# Expected to verify, heavy or not yet measured. None has a recorded green run
+# in its committed form, so a run of this tier establishes their standing.
+HEAVY=(
     verifier_harnesses::wcet_stream_single_op
     verifier_harnesses::wcet_stream_if_region
     verifier_harnesses::wcet_stream_loop_region
@@ -154,10 +174,6 @@ PASSING=(
     verifier_harnesses::module_call_depth_is_bounded
     verifier_harnesses::module_wcmu_does_not_panic
     verifier_harnesses::verify_does_not_panic
-    wire_harnesses::maj3_is_bitwise_majority
-    wire_harnesses::crc32_detects_bit_errors_in_four_bytes
-    wire_harnesses::secded_corrects_single_bit_errors
-    wire_harnesses::secded_detects_double_bit_errors
 )
 
 # Each entry is a harness name followed by the failure descriptions its log
@@ -170,16 +186,59 @@ FAILING=(
     "verifier_harnesses::negative_control_false_wcet_bound|in verifier_harnesses::negative_control_false_wcet_bound::{closure#0}"
 )
 
-log_dir="${KANI_LOG_DIR:-$(mktemp -d)}"
-mkdir -p "$log_dir"
+tier="light"
 jobs="${KANI_JOBS:-1}"
+only=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --tier) tier="${2:?--tier needs light, heavy or all}"; shift 2 ;;
+        --jobs) jobs="${2:?--jobs needs a number}"; shift 2 ;;
+        --only) only="${2:?--only needs a harness name}"; shift 2 ;;
+        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+        *) echo "error: unknown option $1, see --help" >&2; exit 2 ;;
+    esac
+done
+case "$jobs" in
+    ''|*[!0-9]*|0) echo "error: --jobs needs a positive whole number" >&2; exit 2 ;;
+esac
 
 declared="$(grep -c '#\[kani::proof\]' src/*.rs | awk -F: '{ s += $2 } END { print s }')"
-listed=$(( ${#PASSING[@]} + ${#FAILING[@]} ))
+listed=$(( ${#LIGHT[@]} + ${#HEAVY[@]} + ${#FAILING[@]} ))
 if [ "$declared" -ne "$listed" ]; then
     echo "error: src/ declares $declared harnesses but this script lists $listed" >&2
     exit 1
 fi
+
+# The selection. PASSING holds the expected successes to run, and FAILING
+# the expected failures to run.
+all_failing=("${FAILING[@]}")
+case "$tier" in
+    light) PASSING=("${LIGHT[@]}") ;;
+    heavy) PASSING=("${HEAVY[@]}"); FAILING=() ;;
+    all) PASSING=("${LIGHT[@]}" "${HEAVY[@]}") ;;
+    *) echo "error: --tier must be light, heavy or all" >&2; exit 2 ;;
+esac
+if [ -n "$only" ]; then
+    PASSING=()
+    FAILING=()
+    for name in "${LIGHT[@]}" "${HEAVY[@]}"; do
+        if [ "$name" = "$only" ]; then PASSING=("$name"); fi
+    done
+    for entry in "${all_failing[@]}"; do
+        if [ "${entry%%|*}" = "$only" ]; then FAILING=("$entry"); fi
+    done
+    if [ $(( ${#PASSING[@]} + ${#FAILING[@]} )) -ne 1 ]; then
+        echo "error: no harness named $only" >&2
+        exit 2
+    fi
+    tier="only"
+fi
+if [ "$tier" = "heavy" ] || [ "$tier" = "all" ]; then
+    echo "note: the heavy tier can hold tens of gigabytes per harness, running $jobs at a time" >&2
+fi
+
+log_dir="${KANI_LOG_DIR:-$(mktemp -d)}"
+mkdir -p "$log_dir"
 
 # Build once, so that the parallel runs below find the build up to date.
 if ! cargo kani --only-codegen > "$log_dir/build.log" 2>&1; then
@@ -187,8 +246,9 @@ if ! cargo kani --only-codegen > "$log_dir/build.log" 2>&1; then
     exit 1
 fi
 
-names=("${PASSING[@]}")
-for entry in "${FAILING[@]}"; do
+names=()
+if [ "${#PASSING[@]}" -gt 0 ]; then names=("${PASSING[@]}"); fi
+for entry in "${FAILING[@]+"${FAILING[@]}"}"; do
     names+=("${entry%%|*}")
 done
 
@@ -208,7 +268,7 @@ verdict_of() {
     fi
 }
 
-for name in "${PASSING[@]}"; do
+for name in "${PASSING[@]+"${PASSING[@]}"}"; do
     verdict="$(verdict_of "$name")"
     if [ "$verdict" = "SUCCESSFUL" ]; then
         passed=$(( passed + 1 ))
@@ -218,7 +278,7 @@ for name in "${PASSING[@]}"; do
     fi
 done
 
-for entry in "${FAILING[@]}"; do
+for entry in "${FAILING[@]+"${FAILING[@]}"}"; do
     IFS='|' read -r -a parts <<< "$entry"
     name="${parts[0]}"
     log="$log_dir/${name##*::}.log"
@@ -236,7 +296,7 @@ for entry in "${FAILING[@]}"; do
     done
 done
 
-echo "verified $passed of ${#PASSING[@]} expected, checked ${#FAILING[@]} expected failures, $(( end - start ))s wall time, logs in $log_dir"
+echo "tier $tier, $jobs at a time: verified $passed of ${#PASSING[@]} expected, checked ${#FAILING[@]} expected failures, $(( end - start ))s wall time, logs in $log_dir"
 
 if [ "$passed" -ne "${#PASSING[@]}" ]; then
     echo "error: pass count $passed differs from the expected ${#PASSING[@]}" >&2

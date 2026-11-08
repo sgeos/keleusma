@@ -9,10 +9,23 @@ The package is detached. It has its own `[workspace]`, so the root workspace nei
 ## Running
 
 ```sh
-tools/proof-kani/check.sh
+tools/proof-kani/check.sh                       # the light tier, one harness at a time
+tools/proof-kani/check.sh --tier light --jobs 2 # the light tier, two at a time
+tools/proof-kani/check.sh --tier heavy          # the heavy tier, see the warning below
+tools/proof-kani/check.sh --only NAME           # one harness alone, to measure it
 ```
 
-The script runs every harness, one at a time by default, and fails unless each gives its expected result. It fails when a harness expected to verify does not verify, when such a harness verifies with an unsatisfiable cover statement and is therefore vacuous, when a harness expected to fail does not fail with each of its listed failure descriptions, when the number of verified harnesses differs from the expected number, or when the number of `#[kani::proof]` attributes in `src/` differs from the number of harnesses the script lists.
+The harnesses are split into two tiers so that the default run is safe on a shared machine.
+`--tier light`, the default, runs the five harnesses expected to verify that were measured to
+finish quickly with a small footprint, and every expected failure. `--tier heavy` runs the
+instruction-walk and module harnesses, whose footprint is large or not yet measured, and
+`--tier all` runs both. **The heavy tier can hold tens of gigabytes per harness.** One of its
+harnesses held about thirty gigabytes for more than thirty minutes without finishing, so run
+it one harness at a time, and only where the memory is to spare. `--jobs N` sets how many
+harnesses run at once, overriding `KANI_JOBS`, and `--only NAME` runs one named harness from
+whichever list holds it.
+
+The script runs the selected harnesses and fails unless each gives its expected result. It fails when a harness expected to verify does not verify, when such a harness verifies with an unsatisfiable cover statement and is therefore vacuous, when a harness expected to fail does not fail with each of its listed failure descriptions, when the number of verified harnesses differs from the number selected, or when the number of `#[kani::proof]` attributes in `src/` differs from the number of harnesses the script lists in its two tiers and its expected failures together.
 
 `KANI_JOBS` sets how many harnesses run at once and defaults to one. **Serial is the safe default.** One harness can hold about eight gigabytes of memory while the model checker runs, and on 2026-11-08 eight harnesses run at once held about 63 gigabytes and nearly exhausted the swap of a shared 32 gigabyte machine. Raise it only on a machine with the memory to spare.
 
@@ -36,7 +49,16 @@ Times are wall-clock seconds measured on 2026-11-08 at base commit `502d2385`, o
 
 ## Status
 
-**`check.sh` has not produced a complete green run, and it cannot pass in the committed state.** Of the 23 harnesses expected to verify, five verified in their committed form and one verified in an earlier, larger form. The first chunk-walk harness, `wcet_stream_single_op`, ran for more than 30 minutes, reached about 30 gigabytes, and was stopped. The remaining walk and module harnesses were not run, because the machine reported elevated memory pressure and starting them would have added load. The three expected failures all failed as required.
+**The light tier is green.** On 2026-11-08 `check.sh --tier light --jobs 1` verified all five
+light harnesses and found all three expected failures failing for their listed reasons, in 238
+seconds with the machine monitor at ok throughout. The same tier run two at a time took 178
+seconds, and `--only` ran one harness in one second. The peaks were recorded as unknown,
+because `/usr/bin/time -l` is refused inside the sandbox the runs were made from.
+
+**The heavy tier has no green run.** Of its twelve harnesses, `wcet_straight_line_is_exact`
+verified in an earlier, larger form, and `wcet_stream_single_op` ran for more than 30 minutes,
+reached about 30 gigabytes, and was stopped. The other ten were never run, because the machine
+reported elevated memory pressure and starting them would have added load.
 
 The cause of the blow-up in `wcet_stream_single_op` is not established. A hypothesis is that 33 concrete shapes in one harness, together with a symbolic cost model and symbolic text-byte cost, grow the formula faster than the five seconds per shape measured on small harnesses would suggest. The 81-shape `wcet_straight_line_is_exact`, which has a concrete cost model, completed in 521 seconds. The next step is to split each enumeration into one harness per instruction selector, measure one such harness alone, and only then restore the full list.
 
