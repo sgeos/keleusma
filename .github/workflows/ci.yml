@@ -676,11 +676,23 @@ jobs:
   # summary and the JSON report is kept as an artifact, which is the run-by-run history.
   # See docs/process/kaizen/2026-11-07-metrics.md. The probe pins its own toolchain, so
   # every figure is comparable with the ceilings, which were set under the same pin.
+  #
+  # The same job then writes the tracked-metrics report, scripts/metrics.py, which the
+  # operator asked for on 2026-11-07 when ruling that all reasonable metrics are tracked.
+  # It reads the footprint report this job has just written, so the two describe one
+  # commit. Every collector that can run here is required, so a collector that stops
+  # working fails the job rather than leaving a gap in the history. The token reads runs
+  # and pull requests for the delivery figures. It cannot read Dependabot alerts, which
+  # the report records as unavailable with the reason.
   footprint:
-    name: Runtime footprint
+    name: Runtime footprint and metrics
     needs: changes
     if: needs.changes.outputs.mode == 'full'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the probe's pinned toolchain
@@ -694,24 +706,48 @@ jobs:
           cargo fmt --check
           cargo clippy --release --locked -- -D warnings
           cargo clippy --release --locked --features verify,floats,text -- -D warnings
+      # The captured output goes outside the checkout, so both reports see a clean tree.
       - name: Measure the footprint and check it against its ceilings
         run: |
           status=0
-          scripts/footprint.sh --check > footprint.txt 2>&1 || status=$?
-          cat footprint.txt
+          scripts/footprint.sh --check > "$RUNNER_TEMP/footprint.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/footprint.txt"
           {
             echo '### Runtime footprint'
             echo '```'
-            cat footprint.txt
+            cat "$RUNNER_TEMP/footprint.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
-      - name: Keep the footprint report
+      - name: Install cloc for the line counts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloc
+          cloc --version
+      - name: Write the tracked-metrics report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status=0
+          python3 -B scripts/metrics.py --github "$GITHUB_REPOSITORY" \
+            --require lines,tests,unsafe,invariants,footprint,documentation,process,dependencies,proofs,github \
+            > "$RUNNER_TEMP/metrics.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/metrics.txt"
+          {
+            echo '### Tracked metrics'
+            echo '```'
+            cat "$RUNNER_TEMP/metrics.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Keep the footprint and metrics reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: footprint
-          path: footprint/target/footprint.json
+          name: footprint-and-metrics
+          path: |
+            footprint/target/footprint.json
+            target/metrics/metrics.json
           if-no-files-found: error
           retention-days: 90
 

@@ -5,6 +5,7 @@
 #   scripts/loc.sh                 # every category, then the total
 #   scripts/loc.sh runtime docs    # only the named categories
 #   scripts/loc.sh -l              # list the categories
+#   scripts/loc.sh --files docs    # print one category's files, for other tools
 #
 # WHAT IS COUNTED. Only files git tracks, read with `git ls-files`, so build output,
 # node_modules, tmp/, secret/ and nested worktrees never enter a count, whatever a
@@ -112,13 +113,21 @@ count() {
 }
 
 if [ "${1:-}" = -h ] || [ "${1:-}" = --help ]; then
-  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 if [ "${1:-}" = -l ]; then
   for category in $CATEGORIES total; do
     printf '%-14s %s\n' "$category" "$(title "$category")"
   done
+  exit 0
+fi
+
+# The file list alone, which scripts/metrics.py counts with cloc's JSON output.
+if [ "${1:-}" = --files ]; then
+  [ "$#" -eq 2 ] || die 'usage: scripts/loc.sh --files CATEGORY'
+  title "$2" >/dev/null || die "unknown category '$2'. Run scripts/loc.sh -l"
+  files "$2"
   exit 0
 fi
 

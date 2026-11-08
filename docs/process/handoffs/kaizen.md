@@ -96,8 +96,9 @@ authority, so the startup-file positions reach them first-hand.
 4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
 5. Spin up the proofs line once the operator confirms its proof language, recommended as
    Rocq with Kani on the Rust verifier, and the wording a tracked record may use.
-6. Report the cheap metrics of [the metrics record](../kaizen/2026-11-07-metrics.md) in
-   one script once the operator picks them, and track bound tightness.
+6. `scripts/metrics.py` tracks every reasonable metric, by
+   [the metrics record](../kaizen/2026-11-07-metrics.md). Add the tightness runner to CI
+   when V0.2.X provides it, asked in sequence 379.
 
 ## Open with the operator
 
