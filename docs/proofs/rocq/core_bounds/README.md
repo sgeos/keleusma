@@ -29,7 +29,8 @@ The script is B1's hardened script with this directory's modules and results, st
 this increment's audit. It fails unless all of the following hold.
 
 1. No source contains an admitted or assumed proof, a command unsetting guard, positivity or
-   universe checking, or a `Set Warnings` command or `warnings` attribute that could silence
+   universe checking, a `Set Warnings` command, a `warning` or `warnings` attribute, or a
+   `Redirect`, any of which could silence
    the next step, scanned with comments removed and whitespace collapsed, and `Statements.v` and `Controls.v`
    open no section and declare no hypothesis, variable or context. The last two checks were
    added after increment B2's audit.

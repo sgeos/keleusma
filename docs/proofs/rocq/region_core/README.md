@@ -31,7 +31,8 @@ docs/proofs/rocq/region_core/check.sh
 The script is increment A's hardened script with this directory's modules and results,
 strengthened after this increment's audit. It fails unless all of the following hold.
 
-1. No source holds an admitted or assumed proof or a command or attribute silencing warnings,
+1. No source holds an admitted or assumed proof, a command or attribute of either spelling
+   silencing warnings, or a `Redirect`,
    by a scan of each source with its comments removed and its whitespace collapsed, so a
    construct split across lines or by a comment is still found.
 2. `Statements.v` and `Controls.v` open no section and declare no hypothesis, variable or
