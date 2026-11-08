@@ -14,14 +14,16 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > `v0.3.0`, and `main` have moved since `003f25c6`, read the peer handoffs and the mailbox, and
 > report what changed before acting on anything here.
 
-> **REFRESHED 2026-11-07, fifth stamp, describing the spin-up of the mechanization effort.**
-> The operator confirmed first-hand in this line's session on 2026-11-07 that the line continues
-> with Rocq and Kani, a decision first ruled in the Kaizen line's session and recorded in
-> `docs/process/kaizen/2026-11-07-proof-language.md`. This line merged `origin/v0.2.3` at
-> `003f25c6` into `proofs` at `7af11aa1`, taking the checkpoint of `v0.2.3` unchanged rather
-> than exporting a new one, under the export hold below. The two commits held since
-> 2026-11-01 land with this refresh. The first increment and the line's shape are under
-> discussion with the operator and are recorded below as open.
+> **REFRESHED 2026-11-08, sixth stamp, describing increment B1 complete on its branch.**
+> The operator confirmed Rocq and Kani first-hand on 2026-11-07 and ruled the order B1, A, B2.
+> B1, the Rocq mechanisation of Part I of the existing proof, is on the branch
+> `proof/rocq-region-reuse-theory` under `docs/proofs/rocq/region_reuse/`, checked by its
+> `check.sh` with every named result closed under the global context, audited by two fresh
+> contexts with every finding repaired or disclosed in its `AUDIT_2026-11-07.md`. **Its most
+> important limit is that the reuse theorems take the flow model as a certificate the caller
+> supplies**, so increment B2 must build that certificate from the machine's semantics, not
+> merely show that one exists. The README there states every limit. The interline export hold
+> below still stands.
 
 ## Validity
 
@@ -43,14 +45,16 @@ grep -c '^\*\*Lemma' $P             # 5
 grep -c '^\*\*Theorem' $P           # 7
 grep -c '^\*\*Corollary' $P         # 4
 grep -c 'blacksquare' $P            # 15, one per proof block
-ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
+ls docs/proofs/ | wc -l             # 5, the proof, three AUDIT records, and rocq/
+ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
 ```
 
 ## Structure of the line
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | level with `v0.2.3` at `003f25c6` plus this stamp's refresh |
+| `proofs` | top-level integration branch | B1 merged in with a no-fast-forward merge |
+| `proof/rocq-region-reuse-theory` | increment B1, the Rocq mechanisation of Part I | complete and audited, merged into `proofs` |
 | `proof/composite-region-reuse` | the first proof's feature branch | complete and merged at tip `f779be7d`, its remote branch pruned by the V0.2.X line and its local branch and worktree removed by this line on 2026-10-31 |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
@@ -168,7 +172,10 @@ its `main` merge on 2026-11-01.
    correspondence. This line keeps both kinds of work, on separate `proof/rocq-*` and
    `proof/kani-*` branches, and the V0.2.X line reviews any change to code it owns. Work that
    touches the release path, a new job in `.github/workflows/ci.yml` or a change to
-   `src/verify.rs`, waits for the release or is agreed with the V0.2.X line first.
+   `src/verify.rs`, waits for the release or is agreed with the V0.2.X line first. **B1 is
+   complete.** The next increment is A. Running `check.sh` in continuous integration is
+   deferred under the same rule. B2 inherits B1's recorded obligations, the certificate's
+   construction from the machine's semantics first among them.
 4. **The floating-point application binary interface question**, which predates this line.
    This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
    2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
