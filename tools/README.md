@@ -10,6 +10,7 @@ Project-side development tooling. The contents of this directory support contrib
 |------|---------|
 | [`cloc.lang`](./cloc.lang) | Language definition for [cloc](https://github.com/AlDanial/cloc) so the line-count tool recognises `.kel` files as Keleusma source. |
 | [`proof-difftest/`](./proof-difftest/README.md) | The differential test of the shipping Rust verifier against the extracted Rocq core model of increment A, a detached package with its own workspace. |
+| [`proof-kani/`](./proof-kani/README.md) | Kani bounded model checking harnesses for the verifier core and the wire-format trust path, a detached package with its own workspace. Run `tools/proof-kani/check.sh`, which takes `--tier light` by default. |
 
 ## Using `cloc.lang`
 
