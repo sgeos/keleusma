@@ -398,6 +398,27 @@ defaults to `v0.2.3` and is overridable with `KEL_TRUNK`. Branch names follow th
 [`GIT_STRATEGY.md`](./GIT_STRATEGY.md) scope convention (`feat/`, `fix/`, `docs/`,
 `refactor/`, `test/`, `chore/`).
 
+### Sharing the machine
+
+Many sessions share one machine, and any heavy job can exhaust its memory, swap or disk,
+as one did on 2026-11-08. The operator asked for one abstract playbook in place of rules
+about particular jobs. The admin line owns the machine monitor, `machine-status`, whose
+samples name the playbook, and it works inside agent sandboxes. The playbook says to
+observe before and during heavy work, to act only on one's own work, to prefer waiting,
+pausing and lowering parallelism over killing, which is the operator's decision, to report
+what was seen and done, and to record peak footprints.
+
+[`scripts/machine-guard.sh`](../../scripts/machine-guard.sh) applies it to Keleusma's
+tooling. Each step of `release-gate.sh` and `fast-check.sh`, and each build of
+`footprint.sh`, waits while the level is elevated, critical or stale, reporting as it
+waits, and starts at ok. Where no monitor exists, as on a CI runner, it proceeds.
+`KEL_MACHINE_GUARD=off` skips the waits, as the operator's explicit choice.
+`scripts/machine-guard.sh run LABEL CMD...` also records a command's peak footprint in
+`target/machine-guard/peaks.tsv`, which `scripts/metrics.py` summarises. The helper never
+signals a process. Pausing running work needs process control that some sessions'
+permissions refuse and that the operator has not ruled on, so the wait between steps is
+its only lever. A new heavy script sources the helper and waits before each heavy step.
+
 ### Build output on a scratch volume
 
 A machine may keep build output on a separate volume, so that it fills that volume
