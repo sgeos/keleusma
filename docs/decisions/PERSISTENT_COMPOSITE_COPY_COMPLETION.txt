@@ -1,0 +1,51 @@
+COMPLETION CONDITION — the persistent composite copy
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. A COMPOSITE WRITTEN TO A PRIVATE DATA SLOT IS COPIED, NOT ALIASED.
+   A subject that writes a composite into a private slot on one loop iteration,
+   then rebuilds the SAME construction site at least twice more before reading
+   the slot back, yields the same sequence natively as on the virtual machine.
+   The value read back is the body stored at the write, not the last body built
+   at that site.
+
+2. THE COPY SURVIVES A STREAM RESET.
+   Some subject reads a composite slot in a later stream iteration than the one
+   that wrote it and agrees with the virtual machine.
+
+3. THE POOL PLACEMENT CANNOT SILENTLY COLLIDE.
+   The backend's persistent pool base is derived from its own private-slot width
+   rather than written as a literal, and something in the tree fails if the pool
+   would overlap the stream resume-state word or exceed the persistent capacity a
+   host is told to allocate.
+
+4. A DERIVED BODY SIZE IS VALIDATED BEFORE IT IS USED.
+   The size taken from the module's private composite layout is checked to come
+   from a table that partitions the pool -- ascending offsets, no overlap, ending
+   exactly at the declared pool size -- and a table failing that check causes a
+   refusal rather than a copy. A write whose operand width is unknown, or
+   disagrees with the derived size, is refused.
+
+5. THE UNIMPLEMENTED CASE IS REFUSED WITH A REASON.
+   An indexed composite data slot either lowers correctly or is refused with a
+   stated reason; it does not silently take the direct path.
+
+6. THE CORPUS SUBJECT RUNS AGAIN.
+   The corpus module that homes a composite in a private slot is no longer
+   refused, and it executes in the corpus differential rather than merely
+   lowering.
+
+7. THE DISCRIMINATING SUBJECT IS STILL PRESENT AND STILL DISCRIMINATES.
+   The test that separates a copy from an alias exists and asserts agreement; the
+   runtime's expected answer for it remains pinned independently of the backend.
+
+8. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+9. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.
+
+10. WHAT THE NEW LOWERING STILL CANNOT DO IS WRITTEN DOWN next to it.

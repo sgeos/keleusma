@@ -1,0 +1,47 @@
+COMPLETION CONDITION — Order-1 stream strength correction
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The Order-1 gate report states, from a run, how many result
+   comparisons its agreeing stages received, and states that the
+   argument-vector count is not the strength measure for a stage whose
+   entry is a stream.
+
+2. Both figures are present. The vector count is retained rather than
+   replaced, since it explains why seed widening does not apply.
+
+3. No text in the tree says or implies that the agreeing stages were
+   compared once each, or at a single point.
+
+4. The earlier claim to that effect is recorded as having been made and
+   as wrong, rather than silently overwritten, and the record says the
+   error understated the gate.
+
+5. The residual limit is stated: whatever the comparison count, each
+   stage receives one input program and one seeded segment, so the
+   variation is in position within a run rather than in input.
+
+6. The tree does not claim the Order-1 gate is met.
+
+7. A guard fails if an agreeing stage was compared at zero points. No
+   guard pins the comparison count to a constant, which would fail on
+   ordinary corpus growth.
+
+8. Any other report that treats an argument-vector count as the
+   strength measure for a stream-entry module is either corrected or
+   recorded as checked and sound.
+
+9. Every figure stated in the resume document for this line matches a
+   run.
+
+10. The files recorded as owned by the other line are unmodified.
+
+11. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+12. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.

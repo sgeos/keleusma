@@ -1,0 +1,64 @@
+COMPLETION CONDITION — the reachable unexercised arms are witnessed
+
+Ordering is NOT a completion criterion. No particular sequence of steps, branch,
+commit shape, or process is required. Judge the end state only.
+
+Complete when ALL of the following hold.
+
+1. THE REACHABLE ARMS ARE SPLIT FROM THE REFUSED ONES
+   The tree distinguishes, among the kind-discriminated lowering arms nothing
+   exercises, those reachable from ordinary source from those the backend
+   refuses. The split is recorded, not merely acted on.
+
+2. EACH REACHABLE ARM IS WITNESSED OR ITS OBSTACLE IS NAMED
+   For every combination in the reachable group there is either a test that
+   executes it and compares native execution against the virtual machine, or a
+   recorded statement of what prevented one. No such combination is silently
+   left out.
+
+3. THE WITNESSES DISCRIMINATE
+   Values are chosen so a plausible wrong lowering fails: narrow-integer cases
+   use values above 127, where zero-extension and sign-extension disagree, and
+   fixed-point cases use values whose bit pattern differs from their integer
+   reading. A witness using only values that agree under the wrong lowering does
+   not satisfy this.
+
+4. AT LEAST ONE WITNESS IS SHOWN ABLE TO FAIL
+   The transcript records a mutation of the relevant lowering, confirmed applied
+   by showing the changed line, causing at least one newly added test to fail.
+
+5. THE CENSUS TABLE AGREES WITH THE TREE
+   The kind-arm accounting attributes each newly witnessed combination to the
+   test that covers it, and no attribution names a test that does not exist.
+
+6. THE REMAINDER IS STATED, NOT IMPLIED CLOSED
+   Combinations still unexercised after this work are named with the reason each
+   stays open. No document claims or implies the residue is closed when it is
+   not.
+
+7. NO CONTRIVED WITNESSES
+   No test is added whose only purpose is to move a count. A combination the
+   backend refuses is recorded as refused rather than given a witness.
+
+8. NOTHING AMBIGUOUS WAS DECIDED
+   The open operator questions stay untouched: the Fixed, Text, Opaque and Unit
+   shared-slot representations remain unimplemented, and the region planner's
+   soundness obligation is not discharged or restated as discharged.
+
+9. THE SUITE IS GREEN AND THE COUNT RECONCILES
+   The native_codegen suite passes with zero failures, read from cargo's own
+   exit status AND from the summed per-binary counts, with the two agreeing and
+   the binary count matching expectation. The total is accounted for as the
+   previous total plus exactly the tests added.
+
+10. QUALITY GATES
+    Formatting, clippy at deny-warnings over tests as well as the library, and
+    the documentation build at deny-warnings are all clean.
+
+11. NO DEAD CITATIONS AND NO EXPIRED CLAIMS
+    Nothing added or changed names a test, file, function, or identifier that
+    does not exist, and no document left in the tree asserts a state this work
+    has made false.
+
+If any item cannot be satisfied, say so explicitly with what was measured and
+why it blocks, and satisfy every other item in full.

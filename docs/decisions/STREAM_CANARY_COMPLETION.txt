@@ -1,0 +1,38 @@
+COMPLETION CONDITION — overrun detection in the stream driver
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. The helper that drives resumable streams natively plants a detectable sentinel
+   past the end of each buffer it passes to the lowered entry, and checks every
+   sentinel after the run.
+
+2. A sentinel that has been overwritten fails the run with a message naming which
+   buffer was overrun.
+
+3. Every buffer size is derived from a published contract figure rather than from
+   a literal, and any slack retained beyond that figure is accompanied by a stated
+   reason.
+
+4. A deep run — substantially more ticks than this package drove before — is
+   covered by the sentinel check, so a small per-tick overrun cannot be absorbed
+   silently.
+
+5. The tree contains evidence that the sentinel check fails when a buffer is
+   actually overrun, rather than only evidence that it passes.
+
+6. No claim is made that the arena is statically bounded on the strength of a
+   surviving sentinel; what is claimed is limited to what was observed over the
+   ticks driven.
+
+7. Existing stream comparisons continue to pass, and no stream shape previously
+   covered is dropped.
+
+8. The recorded test population figures and the handoff's state-table figures
+   agree with the tree, and the backend gate passes in both float configurations.
+
+9. Files under src/ and tests/ at the repository root carry no changes originating
+   from this line.

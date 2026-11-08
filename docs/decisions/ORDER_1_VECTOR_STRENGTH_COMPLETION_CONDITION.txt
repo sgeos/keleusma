@@ -1,0 +1,45 @@
+COMPLETION CONDITION — Order-1 gate vector strength
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The Order-1 gate report states how many argument vectors its
+   agreeing stages were driven at, derived from the runs actually
+   performed rather than from a constant or an assumption.
+
+2. If those stages received only one vector each, the tree says so
+   plainly. A weak result is reported as weak and is not softened,
+   omitted, or described in terms implying many vectors.
+
+3. No figure in that report can be read as qualifying a population it
+   did not measure. Every count names the set it was taken over, so a
+   reader does not depend on proximity or on a relative word to tell
+   which report a number belongs to.
+
+4. A guard fails if the stage-vector figure is derived from an empty
+   stage set, or if the classification skips stages it claims to cover.
+   The guard does not pin the figure to a constant, which would fail on
+   ordinary corpus growth.
+
+5. No guard asserts merely that two reported numbers differ. Distinct
+   populations may legitimately share a value.
+
+6. The resume document for this line, wherever it quotes the Order-1
+   gate, is consistent with what the report measures, and states the
+   gate's strength rather than only its headline count.
+
+7. The tree does not claim the Order-1 gate is met.
+
+8. Any claim that a figure changed is supported by a recorded
+   measurement of both the before and after values, not by inference.
+
+9. The files recorded as owned by the other line are unmodified.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.

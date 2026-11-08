@@ -1,0 +1,28 @@
+COMPLETION CONDITION — verification after the toolchain is restored
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Every commit on this branch that is not present on the remote has been
+   exercised by a full verification gate in both float configurations, each run as
+   a whole rather than assembled from separately read phase summaries, with the
+   gate's own exit status read rather than a pipeline's.
+
+2. No document in the tree states or implies that a commit is gate-verified when
+   it was verified only by checks that do not execute tests.
+
+3. The guards that read documentation from disk pass against the documentation as
+   it now stands.
+
+4. The handoff's figures either match the tree or name the commit they were
+   measured at, and nothing in it describes the toolchain as blocked once it is
+   not.
+
+5. The branch on the remote matches the local branch, established by querying the
+   remote rather than by a local push reporting success.
+
+6. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+7. The working tree is clean.

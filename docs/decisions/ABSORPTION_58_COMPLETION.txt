@@ -1,0 +1,27 @@
+COMPLETION CONDITION — absorption 58
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE PREDICTION IS RECORDED BEFORE ITS OUTCOME, AND THE TWO ARE CONSISTENT.
+   A document states, in advance of the merge, what was expected of the conflict
+   set, the ownership boundary and the suite -- and states why the risk it names
+   is compatible with the suite outcome it predicts. The outcome is recorded
+   beside it, naming any clause that missed.
+
+2. THE OWNERSHIP BOUNDARY IS VERIFIED, NOT ASSUMED.
+   After absorbing, the repository-root src/ and tests/ are byte-identical to the
+   other line's branch, checked rather than asserted, and the check is shown to
+   be non-vacuous.
+
+3. THE CORPUS IS SHOWN UNCHANGED RATHER THAN HOPED TO BE.
+   The claim that no corpus subject changed is established from the incoming
+   file set, not from the suite passing.
+
+4. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.
+
+5. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT BEYOND WHAT THE ABSORPTION BRINGS IN.

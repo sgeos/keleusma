@@ -1326,7 +1326,10 @@ pub struct WireChunk {
 /// Wire-format auxiliary body. Mirrors [`Module`] but carries
 /// [`WireChunk`] metadata (ops live in the opcode stream
 /// section).
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+///
+/// No longer archived. The flat container of `crate::wire_schema` encodes it,
+/// and the data layout it carries is field-based and has no archived form.
+#[derive(Debug, Clone)]
 pub struct WireAuxBody {
     /// Chunk metadata for the module's chunks.
     pub chunks: Vec<WireChunk>,

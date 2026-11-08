@@ -1,0 +1,72 @@
+COMPLETION CONDITION — absorption 13 and the verify_yield seeding
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The branch contains the v0.2.3 work carrying the radix-literal lexer change,
+   with nothing from that line left unabsorbed.
+
+2. Every census figure quoted as current was re-derived against the present tree
+   rather than carried from before the absorption. Where a figure moved, what
+   moved it is stated. Where a figure held, that it was re-derived is evident.
+
+3. Absorption 13 and any seeding change are separately attributable: for each
+   figure that moved, the record says which of the two moved it, and that
+   attribution rests on a measurement taken between them rather than on
+   reasoning after the fact.
+
+4. Either verify_yield.kel is driven by a seed, or a document states what
+   blocked it. If it is driven, all of the following hold:
+     - the stage reaches a verdict rather than exiting early, and the harness
+       REQUIRES that rather than assuming it
+     - the verdict OBSERVABLY MOVES from what the unseeded buffer already held,
+       so a subject whose answer the buffer already contains does not count
+     - the count of unseeded stages in the Order-1 gate report reflects reality
+   If it is not driven, the obstacle is named specifically enough that the next
+   attempt starts from it.
+
+5. Any subject tried and rejected is reported with its cause, not silently
+   replaced by one that works.
+
+6. If a shared seeding helper was widened, the stages already depending on it
+   still have current, re-derived figures rather than assumed-unchanged ones.
+
+7. No file under src/selfhost/, and none of src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, or .github/workflows/, differs from the
+   v0.2.3 commit the branch has absorbed.
+
+8. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so that a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   Any suite figure reported names the command that produced it.
+
+9. The handoff validates against the tree: its ancestry checks pass, and its
+   stated suite and census figures match a fresh run.
+
+10. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Seeding analyze.kel or codegen.kel.
+- Declaring the Order-1 gate met.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Repairing rc_range_arity, or the codegen tag-table check; both need files this
+  line does not own.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A stage reported as seeded whose observable did not move, or whose run stopped
+  early.
+- A green reached by narrowing a population, dropping a subject, or relaxing an
+  assertion, unless what was excluded is still reported with its cause.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A figure carried across a change capable of moving it.
+- A suite result read from a pipeline's exit status rather than the command's.

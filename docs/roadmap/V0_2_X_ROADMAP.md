@@ -508,10 +508,31 @@ library entry. Capacity and protocol failures remain distinct from invalid-sourc
 The command-line tests assert independent rejection without an output artifact and valid artifact
 execution returning seven. These results do not complete Keleusma wire serialization or final gates.
 
-## Current construct-support boundary, 2026-10-31
+## Current construct-support boundary, 2026-11-02
 
-The executable table in `tests/selfhost_codegen.rs` contains 127 cases with
-121 SOk / 2 Refuses / 2 Diverges / 2 RefRejects. The operator's ruling of 2026-10-31 on
+The executable table in `tests/selfhost_codegen.rs` contains 152 cases with
+142 SOk / 4 Refuses / 2 Diverges / 4 RefRejects. The literal suffixes of 2026-11-02 added four
+`suffix` cases. Three are SOk, a `Byte` literal in byte arithmetic, a tuple mixing a word and a
+byte, and a byte array beside a `Word`-suffixed literal. One is the reference's rejection of a
+`Byte` literal above 255. The capacity-bounded text increment of
+2026-11-02 added ten `text_n` cases. Nine are SOk, the literal cast, escapes with a UTF-8
+character, an annotated `let`, a parameter with a call, a tuple element, an array element,
+a struct field, an enum payload with a match and two branches. One is the reference's
+rejection of a literal longer than its capacity. The uses of `Text<N>` the stages do not
+lower, a data field, an `Option` payload, a capacity that is not a literal or exceeds
+65527, a trait, an impl and a newtype, are refused by the shipping entry before any stage
+runs. This table does not exercise that entry, so those refusals are pinned in
+`capacity_bounded_text_has_its_pinned_outcomes` in `tests/selfhost_full_language.rs`. The five
+operations, which the stages lower since the same day, need the `text` feature, which the
+isolated self-host run leaves off, so they are not in this table and are pinned by
+`the_self_hosted_compiler_lowers_the_operations_byte_identically` in `tests/text_ops.rs`. The coverage residuals of 2026-11-01 moved
+the typed destructuring pattern from Refuses to SOk and added eleven cases. Eight are SOk, a
+typed nested pattern, a typed struct pattern, two matches on an enum-typed payload field, a
+destructuring `let` through an enum-typed payload, a tuple holding a range induction variable,
+and two generic calls on a resume value, one typed by a later annotated `let` and one by the
+`loop main` parameter. Three Refuse, a payload enum declared after the enum that holds it, an
+equality of enums whose payload is an enum, and a generic call on a resume value of a tuple
+type. The operator's ruling of 2026-10-31 on
 `let` patterns moved the nested destructuring `let` from Refuses to SOk and added four cases
 that are SOk, a nested struct pattern, a struct pattern inside a tuple pattern, a tuple pattern
 inside a struct pattern and a single-variant enum pattern, with a typed destructuring pattern,

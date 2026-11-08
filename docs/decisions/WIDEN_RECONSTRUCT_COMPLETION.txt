@@ -1,0 +1,72 @@
+COMPLETION CONDITION — widening reconstruct.kel's subject set
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. reconstruct.kel is driven at more than one subject in the Order-1 gate, or a
+   document names specifically what blocked widening it.
+
+2. Every subject counted as seeded is one the stage actually consumed: it
+   returns a real result rather than a refusal tag. A refused subject appears as
+   a decline, with its cause, and is not counted as coverage.
+
+3. The multi-head entry point is still exercised. Both entry points reconstruct
+   offers are reached, not one at the expense of the other.
+
+4. Any subject tried and refused is reported with its cause rather than silently
+   replaced by one that works. How subjects were chosen is stated, and it is a
+   stated property rather than trying candidates until something passed.
+
+5. Every gate and census figure quoted as current was re-derived against the
+   present tree after the last change capable of moving it. Where a figure
+   moved, what moved it is stated.
+
+6. The gate's own description of its residual weakness matches what the gate now
+   measures. A residual that has been addressed is not still described as open,
+   and one that remains is still named.
+
+7. Any observable asserted on has had its unseeded baseline measured, so that a
+   value the stage would produce regardless of input is not mistaken for a
+   response to one.
+
+8. No file under src/selfhost/, and none of src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, or .github/workflows/, differs from the
+   v0.2.3 commit the branch has absorbed.
+
+9. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   The two are not run concurrently with each other, because the workspace
+   carries a wall-clock guard that concurrent load makes fail.
+
+10. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+11. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Reaching any particular subject count. Matching what comparable stages carry
+  is the aim; more is not better if the added subjects are not consumed.
+- Declaring the Order-1 gate met. A residual moving does not make it met.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Repairing anything needing a file this line does not own.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A subject counted as seeded whose stage refused it, or whose result was never
+  checked.
+- Removing or weakening the existing multi-head subject to make room.
+- A green reached by narrowing a population, dropping a subject, or relaxing an
+  assertion, unless what was excluded is still reported with its cause.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A figure carried across a change capable of moving it.
+- A suite result read from a pipeline's exit status rather than the command's.

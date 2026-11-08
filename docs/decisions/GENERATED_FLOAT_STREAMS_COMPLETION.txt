@@ -1,0 +1,49 @@
+COMPLETION CONDITION — generated breadth over float streams
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Something in the tree generates float-carrying stream programs, in quantity
+   rather than as a handful of named cases, drives each through several
+   suspensions, and compares the whole sequence of yielded values against the
+   reference implementation rather than only a final value.
+
+2. Every float value such a comparison relies on, arguments and replies and
+   yielded values alike, is exactly representable in a four byte float, and
+   something in the tree fails if that stops being true. Agreement is decided by
+   exact comparison, not by a tolerance.
+
+3. The magnitude bound that keeps generated values exact accounts for the fact
+   that a stream feeds its own output back, so a bound derived for straight line
+   expressions alone is insufficient. That bound is enforced or checked in the
+   tree, not only argued in a comment.
+
+4. The generated population is asserted, not assumed. A run that silently
+   produced no stream programs, produced programs that never suspend, or drove
+   only one suspension each, fails rather than passes.
+
+5. The native entry point is called through a signature checked against the
+   lowered function's own parameter and return kinds before the call is made.
+
+6. If any generated program diverges between the two implementations, the tree
+   records it as a finding with its source and its sequence, or the emitter is
+   changed so it no longer diverges. A divergence is not resolved by loosening
+   the comparison or by deleting the program that exposed it.
+
+7. Any program the backend refuses rather than lowers is either outside the
+   generator's stated set, with the generator narrowed and the exclusion stated,
+   or recorded as a capability gap. A refusal is not reported as a divergence.
+
+8. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+9. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries or on one run assumed to cover both.
+
+10. The handoff state table agrees with the tree, figures that cannot be
+    re-derived name the commit they were measured at, and the guards that check
+    it pass.
+
+11. The working tree is clean and the branch is pushed.

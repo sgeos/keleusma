@@ -1,0 +1,51 @@
+COMPLETION CONDITION — absorption 48 (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. A PREDICTION EXISTS THAT PRECEDES THE MERGE.
+   The expected effect is recorded before the absorption is performed, in terms
+   specific enough to be wrong, and the transcript shows it was written first.
+
+2. THE PREDICTION COVERS MORE THAN A TEST COUNT.
+   It says whether the tree still builds and whether coverage outside the
+   backend package is affected, because a count alone cannot express either.
+
+3. THE ABSORPTION IS MEASURED WITHOUT OTHER EDITS IN FLIGHT.
+   The measurement runs against a tree that is not being modified while it runs.
+   If that was not achieved, it is stated plainly rather than presented as a
+   clean measurement.
+
+4. THE OUTCOME IS COMPARED TO THE PREDICTION EXPLICITLY.
+   Each predicted item is marked hit or missed. A missed prediction is reported
+   as a miss, with what the wrong expectation was, and is not reworded to match
+   the result.
+
+5. WORKSPACE COVERAGE STALENESS IS ADDRESSED, NOT ASSUMED.
+   Whether this absorption invalidates coverage outside the backend package is
+   determined by running the check rather than by judgement, and the answer is
+   recorded with what it was checked against.
+
+6. FIGURES CARRY POPULATION AND QUESTION.
+   Every count states which package or workspace and which configuration it
+   ranges over, and which question it answers. A partial run is not called a
+   gate.
+
+7. CHANGES ORIGINATING ON THE OTHER LINE ARE ATTRIBUTED.
+   Where absorbed work responds to something this line reported, that is stated,
+   and this line does not present the other line's work as its own.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and every pass or fail claim corresponds to output in the
+   transcript. Carried figures are marked as carried.
+
+9. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test or broken build is named with its cause, and with a
+   statement of whether that cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed or pushed, how many commits were made, the order of the properties
+above, or whether any other goal advanced.

@@ -405,9 +405,9 @@ instead of the system disk. When `SCRATCH_BASE` names the volume, `worktree.sh n
 moves the `target` of every package present in the new tree, the root's and the
 nested ones listed in the script, to `$SCRATCH_BASE/keleusma/<leaf>/` through
 [`scripts/scratch.sh`](../../scripts/scratch.sh) and leaves symbolic links. `rm`
-deletes that folder once the tree is gone, and `list` reports any folder no tree
-uses, deleting none, because the operator decides deletions. Without `SCRATCH_BASE`
-nothing changes. An existing tree is moved with `scripts/scratch.sh link` from
+deletes that folder once the tree is gone, and `list` reports any folder that no tree
+is named after or links into, deleting none, because the operator decides deletions.
+Without `SCRATCH_BASE` nothing changes. An existing tree is moved with `scripts/scratch.sh link` from
 inside it, one directory at a time, when nothing is building there.
 
 - **A clean deletes the link.** `cargo clean` removes the link, not the copy, and the
@@ -426,8 +426,12 @@ inside it, one directory at a time, when nothing is building there.
 - **Trees made elsewhere are reported, not linked.** Claude Code creates its agent
   trees under `.claude/worktrees/` with `git worktree add`, so their output stays on
   the system disk. With `SCRATCH_BASE` set, `list` names every package `target` of a
-  live tree that is a directory rather than a link, with its size, and changes
-  nothing.
+  live tree that is a directory of 1 MB or more rather than a link, with its size,
+  and changes nothing. A line that links an agent tree by hand, to a scratch folder
+  named after its branch, is recognized by the link. When Claude Code removes such a
+  tree its scratch folder stays, and the line that made it removes it once `list`
+  names it as used by no tree, keeping first anything it needs. That is the kaizen
+  line's reading of the operator's ruling of 2026-11-04 that everything stale be removed.
 - **`scratch.sh` is vendored unchanged** from `sgeos/project-template` v1.0.8, so
   that it can be compared with the template's copy. Change it there first.
 

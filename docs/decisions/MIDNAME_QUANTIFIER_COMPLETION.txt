@@ -1,0 +1,51 @@
+COMPLETION CONDITION — the last defined name class
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE CLASS IS DEFINED AND ITS TREATMENT IS STATED
+   The tree states the rule that selected this class, how many members it has,
+   and which members were read individually as against triaged mechanically. No
+   member is silently omitted.
+
+2. THE TRIAGE IS DESCRIBED AS A FILTER, NOT A VERDICT
+   Where a mechanical signal narrowed the reading set, the tree says so and
+   acknowledges that the signal has false positives, so its output is not
+   reported as a defect count.
+
+3. EVERY MEMBER OF THE REVIEW SET IS CLASSIFIED
+   Each test read is recorded as demonstrating its name's claim or not, with the
+   discrepancy described where there is one. A passing test is not treated as
+   evidence that its name is accurate.
+
+4. THE CUMULATIVE RATE IS STATED WITH ITS BLIND SPOT
+   The tree gives the running total across audited classes and names what remains
+   outside any rule, so the figure is not read as covering the suite.
+
+5. CORRECTIONS CHOOSE THEIR DIRECTION AND KEEP CITATIONS VALID
+   Where name and body disagree, the tree says whether the name was narrowed or
+   the body strengthened and why. Any renamed identifier is no longer cited as if
+   it existed.
+
+6. A DECISION IS RECORDED ABOUT CONTINUING
+   The tree states whether further name auditing is warranted, on the evidence of
+   the hit rates observed, rather than leaving the question open by default.
+
+7. FIGURES CARRY THEIR POPULATION AND ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed, and every figure names the set it was measured over.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's state
+   is recorded, either from a run or with a stated reason why the change could
+   not affect it.
+
+9. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree says
+   why not. Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs,
+   and the CI workflow directory.

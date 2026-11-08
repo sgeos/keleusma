@@ -1,0 +1,67 @@
+COMPLETION CONDITION — negative-sentinel audit and last-three-stage requirements
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, on any branch, in any number of commits. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Every site in native_codegen/tests/ that consumes an integer yielded by a
+   self-hosted stage is classified as either (a) distinguishing an error
+   sentinel from a valid result, or (b) structurally unable to receive one.
+   Each classification carries its reason at the site. No site is left
+   unexamined, and the classification is recorded somewhere a reader can find
+   from the handoff.
+
+2. A test exists that fails if the sentinel-decoding logic and the stage's own
+   sentinel constants disagree. It is not vacuous: its ability to fail is
+   demonstrated, not asserted.
+
+3. Any weak site found is either strengthened, or documented at the site with
+   the reason it stays weak. A site whose predicate is weaker than the property
+   named in its own failure message does not remain silently so.
+
+4. A document states, per stage, for analyze.kel, codegen.kel and
+   verify_yield.kel: the input shape each requires, and whether a shared slot
+   resolved by name from the module's own data layout can supply it. Each
+   verdict is supported by something measured against the tree rather than
+   inferred from the other stages. Where a stage requires something only the
+   v0.2.3 line can provide, that is stated plainly as the finding.
+
+5. No file under src/selfhost/, and none of src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, or .github/workflows/, differs from the
+   v0.2.3 commit the branch has absorbed.
+
+6. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run with --no-fail-fast
+     - native_codegen, run with --no-fail-fast, which continuous integration
+       does not build and whose local run is therefore its only gate
+   Any figure reported as a suite result names the command that produced it.
+
+7. Every census figure quoted anywhere as current was re-derived against the
+   present tree, not carried. Where a figure moved, the change is attributed.
+
+8. No count is presented as evidence without the command that produces it being
+   recoverable from the surrounding text.
+
+9. The handoff validates against the tree: its ancestry checks pass, and its
+   stated suite and census figures match a fresh run.
+
+NOT REQUIRED
+
+- Seeding any of the three stages. Establishing requirements is the goal;
+  a working seed is optional and a partially-working seed that reports as
+  seeded is a defect, not partial credit.
+- Resolving the Fixed shared-slot ABI or the float entry ABI. Both are held by
+  the operator.
+- Repairing rc_range_arity. That code belongs to the v0.2.3 line.
+- Any particular commit count, branch name, pull request, or merge.
+
+DISQUALIFYING
+
+- A green reached by narrowing a population, dropping a subject, or relaxing an
+  assertion, unless what was excluded is still reported with its cause.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- An audit whose population includes its own output.
+- A suite result read from a pipeline's exit status rather than the command's.

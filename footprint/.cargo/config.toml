@@ -1,0 +1,6 @@
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.thumbv8m.main-none-eabihf]
+# cortex-m-rt's link.x places the vector table and includes memory.x.
+rustflags = ["-C", "link-arg=-Tlink.x"]

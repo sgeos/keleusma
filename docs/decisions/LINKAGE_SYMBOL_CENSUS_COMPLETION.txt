@@ -1,0 +1,67 @@
+COMPLETION CONDITION — linkage symbol census (V0.3.X, native_codegen)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. EXTERNAL SYMBOLS ARE NAMED, NOT COUNTED.
+   The tree contains a test that emits at least one real object file from a
+   lowered Keleusma module and reads the UNDEFINED symbols out of the emitted
+   OBJECT. Its output or assertions name the symbols individually. A bare count
+   does not satisfy this.
+
+2. THE READER IS AT OBJECT LEVEL, AND THIS IS EXPLICIT.
+   The record states that an IR-level census would miss compiler-runtime symbols
+   because those are synthesised during code generation, and that this is why the
+   object is read instead. If the implementation reads IR, this condition fails.
+
+3. THE SYMBOLS ARE PARTITIONED.
+   Every undefined symbol found is placed in one of: host-registered natives;
+   compiler-runtime or C-library symbols; unclassified. An unclassified symbol is
+   reported as unclassified. No symbol is assigned to a category merely to empty
+   the third one.
+
+4. NON-VACUITY IS ESTABLISHED BEFORE ABSENCE IS CLAIMED.
+   The tree contains an assertion that fails if no object was emitted, or if no
+   symbols were read from it. Any claim of the form "no unexpected symbols" is
+   accompanied by evidence that the instrument can see symbols at all.
+
+5. THE INSTRUMENT IS DEMONSTRATED, NOT ASSUMED.
+   The transcript shows the symbol reader producing a positive result on input
+   known to contain the thing it looks for. A demonstration that perturbs which
+   Keleusma program is compiled does not satisfy this; the demonstration must
+   bear on the reader.
+
+6. THE PREDICTION IS RESOLVED IN WRITING.
+   A prediction about the compiler-runtime category was recorded before
+   measuring. The record states whether it held or failed, using the measured
+   result. If it failed, the record says so plainly and does not restate the
+   prediction to match what was found.
+
+7. THE f16 CONSEQUENCE IS STATED.
+   The record says what the measured symbol set implies for the floating-point
+   ladder: specifically whether a compiler-runtime dependency already exists at
+   the shipped rung, or whether a narrower rung would introduce the first one.
+   "Worth checking later" is not an answer to this.
+
+8. THE LIMIT OF THE MEASUREMENT IS STATED.
+   The record names the target and machine measured, and states that the result
+   does not generalise to targets without hardware floating point. Generality is
+   not implied or left to inference.
+
+9. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every test count, symbol name, and pass/fail claim in the record corresponds
+   to a command whose output appears in the transcript. Figures carried from an
+   earlier state are marked as carried and dated.
+
+10. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+    The native_codegen suite passes, or each failure is named with its cause and
+    with a statement of whether the cause belongs to this package. A failure
+    whose cause lies outside this package is acceptable and must be identified as
+    such rather than worked around or hidden.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the ten properties above, or
+whether any other goal in the same session advanced.

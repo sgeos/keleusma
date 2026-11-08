@@ -1,0 +1,51 @@
+COMPLETION CONDITION — the shared corpus announces its own change
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. A CHANGE TO THE SHARED INPUTS PRODUCES A FAILURE
+   An executable check in the tree fails if the set or the contents of the corpus
+   sources that this line's figures are derived from changes. Its expectation is
+   a fixed value recorded in the tree, not something recomputed from the same
+   scan it is checking.
+
+2. THE FAILURE SAYS WHAT MOVED AND WHAT TO DO
+   When it fails it names which files were added, removed or modified, and states
+   that figures derived from the corpus must be re-derived. A message consisting
+   only of two numbers does not satisfy this.
+
+3. THE FINGERPRINT IS STABLE FOR THE RIGHT REASONS
+   The value depends only on the corpus inputs, and is computed by a method whose
+   output is fixed by its own definition rather than by the toolchain version, so
+   the only thing that can move it is the corpus.
+
+4. IDENTITY AS WELL AS CONTENT IS COVERED
+   The check distinguishes a change of file identity from a change of file
+   contents, so an addition paired with a removal cannot pass unnoticed.
+
+5. THE GUARD IS SHOWN TO BE ABLE TO FAIL
+   Evidence in the tree distinguishes the check detecting a change from the check
+   being unable to: at least one case it reports as unchanged and one closely
+   related case it reports as changed, demonstrated without editing the corpus.
+
+6. SCOPE IS HONEST
+   The tree states which inputs are covered and which are not, and does not
+   describe the guard as protecting figures whose inputs it does not read.
+
+7. FIGURES ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   moved.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with both the runner's exit status and the summed pass, fail and binary
+   counts agreeing. A run that ended early is not reported as a result. The main
+   workspace suite's state is likewise recorded from a run.
+
+9. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree
+   records that it does not and why. Files owned by the v0.2.3 line are
+   unmodified: src/verify.rs, src/bytecode.rs, src/vm.rs, src/wire_schema.rs,
+   src/selfhost/, src/confine.rs, and the CI workflow directory.

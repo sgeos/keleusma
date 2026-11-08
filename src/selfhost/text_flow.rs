@@ -47,11 +47,7 @@ impl<'a> Machine<'a> {
             .ok_or_else(|| error("missing stage layout"))?;
         let mut slots = [0; 17];
         for (i, field) in FIELDS.iter().enumerate() {
-            slots[i] = layout
-                .slots
-                .iter()
-                .position(|s| s.name == *field)
-                .ok_or_else(|| error(field))?;
+            slots[i] = layout.slot_of(field).ok_or_else(|| error(field))?;
         }
         let vm = stage_vm(module, arena).map_err(error)?;
         let shared = vec![0; vm.shared_data_bytes()];
@@ -219,7 +215,10 @@ pub(super) fn ephemeral_flag(module: &Module, source_flags: i64) -> Result<u8, S
     machine.set(5, source_flags & 1)?;
     machine.set(6, (source_flags / 2) & 1)?;
     machine.set(9, i64::from(entry.is_some()))?;
-    machine.set(10, i64::from(module.private_data_bytes))?;
+    // The stage tests this figure against zero only. It is whether the module declares any
+    // private element, which packed private storage no longer equates with a nonzero
+    // `private_data_bytes`.
+    machine.set(10, i64::from(module.declares_private_data()))?;
     let flag = machine.command(4)?;
     u8::try_from(flag)
         .ok()

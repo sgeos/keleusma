@@ -113,12 +113,9 @@ fn b6_shared_slot_offset_overrun_rejected() {
 
     let buffer = m.shared_data_bytes;
     let layout = m.data_layout.as_mut().expect("a shared data layout");
-    assert!(
-        !layout.shared_layout.is_empty(),
-        "expected a shared-slot layout entry"
-    );
-    // Push the first slot's offset past the end of the shared-data buffer.
-    layout.shared_layout[0].offset = buffer + 8;
+    assert!(!layout.fields.is_empty(), "expected a shared field");
+    // Push the first field's offset past the end of the shared-data buffer.
+    layout.fields[0].offset = Some(buffer + 8);
     assert!(
         rejected_by_typed_pass(&m),
         "a shared-slot offset past the buffer must be rejected by the typed pass"

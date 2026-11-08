@@ -1,0 +1,282 @@
+//! Explicit host dialogue contracts, indexed by verified bytecode yield sites.
+use super::error;
+use crate::LowerError;
+use keleusma::bytecode::{BlockType, Module, Op, TypeTag, WireShape};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// A yield instruction in the supplied bytecode module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct YieldSite {
+    pub chunk: u32,
+    pub instruction: u32,
+}
+impl YieldSite {
+    /// Identifier returned by the emitted host yield-site query.
+    pub const fn id(self) -> u64 {
+        ((self.chunk as u64) << 32) | self.instruction as u64
+    }
+}
+
+/// Packed output and reply shapes for one suspension boundary.
+/// The host must supply the declared reply representation and readable extent.
+/// The completion shape remains the entry function's return signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dialogue {
+    pub yielded: WireShape,
+    pub reply: WireShape,
+}
+
+/// Storage semantics of a native function's declared flat result.
+/// The function returns an i64 address of exactly its declared packed body.
+/// These are host obligations, just like readable flat argument extents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeBodyReturn {
+    /// An immutable value. The backend copies the bytes before another native
+    /// call or suspension. The host keeps them readable and unchanged until the
+    /// next native call or the enclosing start/resume returns, whichever is first.
+    /// Returning a pointer into an ended native machine-stack frame is invalid.
+    Snapshot,
+    /// A view into this instance's shared, private or composite region, with
+    /// the declared extent wholly inside that live reservation. Mutations through
+    /// other aliases remain visible. The region must outlive every use, including
+    /// reading a completed result. Continuation-frame or transient host addresses
+    /// do not satisfy this contract. This adds no external memory reservation.
+    InstanceBorrow,
+}
+
+/// Host representations and lifetimes which bytecode does not fully describe.
+#[derive(Clone, Debug, Default)]
+pub struct HostContracts {
+    /// None selects the uniform dialogue used by `lower`.
+    pub dialogues: Option<BTreeMap<YieldSite, Dialogue>>,
+    /// Keys index Module::native_names and Module::native_return_shapes.
+    /// Each named result must have a bounded flat signature in the module.
+    /// A native flat result without an entry remains refused when called.
+    pub native_body_returns: BTreeMap<u16, NativeBodyReturn>,
+    /// Keys index Module::native_names. Each named native may fail softly.
+    ///
+    /// Its symbol returns `{i64 value, i64 failed}` instead of `i64`. A zero
+    /// `failed` word is success with `value` as the result. Any other word is
+    /// a soft failure with `value` as the host's error code, which a
+    /// `host_error` arm binds and which otherwise reaches the default
+    /// `Trap(HostError)`. That is the virtual machine's
+    /// `VmError::NativeErrorCode` contract. A native without an entry cannot
+    /// fail, as before. A fallible native returning a flat body is refused.
+    pub fallible_natives: BTreeSet<u16>,
+    /// Keys index Module::native_names. The opaque type names of a native's
+    /// parameters and result, which the module does not record.
+    ///
+    /// They change no code. The generated header and Rust bindings declare a
+    /// distinct incomplete type per name and type those positions as a pointer
+    /// to it, by the operator's ruling on question 14 of 2026-10-28. A native
+    /// without an entry keeps `int64_t` throughout. [`crate::opaque`] derives
+    /// the entries from the source program.
+    pub opaque_natives: BTreeMap<u16, NativeOpaque>,
+}
+
+/// The opaque type names in one native's signature, in declaration order.
+///
+/// `None` marks a position that is not opaque. An opaque value is the host's
+/// pointer, carried as a word and never dereferenced by native code. The host
+/// keeps it valid for as long as the instance can hold it, because native code
+/// cannot detect a stale or wrong pointer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeOpaque {
+    /// One entry per declared parameter.
+    pub params: Vec<Option<String>>,
+    /// The result's opaque type, if it has one.
+    pub ret: Option<String>,
+}
+
+impl NativeOpaque {
+    /// Whether any position is opaque.
+    pub fn any(&self) -> bool {
+        self.ret.is_some() || self.params.iter().any(Option::is_some)
+    }
+}
+
+pub(crate) struct Plan {
+    pub sites: Vec<BTreeMap<usize, (u64, Dialogue)>>,
+    pub reachable: Vec<bool>,
+    pub native_calls: std::collections::BTreeSet<u16>,
+    pub owns_bodies: bool,
+    pub metadata_offset: Option<u32>,
+    /// The aligned word below the dialogue metadata, or below the end of the
+    /// reservation, which records a trap. See `crate::coroutine::TRAP_CONTRACT`.
+    pub trap_offset: u32,
+    pub native_body_returns: BTreeMap<u16, NativeBodyReturn>,
+    pub fallible_natives: BTreeSet<u16>,
+}
+
+pub(crate) fn tag(shape: WireShape) -> TypeTag {
+    match shape {
+        WireShape::Scalar { kind: 0 } => TypeTag::Unit,
+        WireShape::Scalar { kind: 1 } => TypeTag::Bool,
+        WireShape::Scalar { kind: 2 } => TypeTag::Byte,
+        WireShape::Scalar { kind: 3 } => TypeTag::Word,
+        WireShape::Scalar { kind: 4 } => TypeTag::Fixed,
+        WireShape::Scalar { kind: 5 } => TypeTag::Float,
+        _ => TypeTag::Composite,
+    }
+}
+fn supported(shape: WireShape) -> bool {
+    matches!(
+        shape,
+        WireShape::Scalar { kind: 0..=5 } | WireShape::Flat { kind: 0..=3, .. }
+    )
+}
+fn reachable_chunks(m: &Module, entry: usize) -> Vec<bool> {
+    let mut reachable = vec![false; m.chunks.len()];
+    let mut pending = vec![entry];
+    while let Some(index) = pending.pop() {
+        if reachable[index] {
+            continue;
+        }
+        reachable[index] = true;
+        for op in &m.chunks[index].ops {
+            if let Op::Call(target, _) = op {
+                pending.push(*target as usize);
+            }
+        }
+    }
+    reachable
+}
+
+impl Plan {
+    pub fn new(
+        m: &Module,
+        entry: usize,
+        explicit: Option<&BTreeMap<YieldSite, Dialogue>>,
+        frame_bytes: u32,
+        native_body_returns: &BTreeMap<u16, NativeBodyReturn>,
+        fallible_natives: &BTreeSet<u16>,
+    ) -> Result<Self, LowerError> {
+        for &index in fallible_natives {
+            if usize::from(index) >= m.native_names.len() {
+                return Err(error(format!(
+                    "fallible native {index} is not in the module's native table"
+                )));
+            }
+            if native_body_returns.contains_key(&index) {
+                return Err(error(format!(
+                    "fallible native {index} returns a flat body, whose failure code has no \
+                     defined storage"
+                )));
+            }
+        }
+        for &index in native_body_returns.keys() {
+            if usize::from(index) >= m.native_names.len()
+                || !matches!(
+                    m.native_return_shapes.get(usize::from(index)),
+                    Some(WireShape::Flat { kind: 0..=3, .. })
+                )
+            {
+                return Err(error(format!(
+                    "native body contract {index} needs a bounded flat return signature"
+                )));
+            }
+        }
+        let reachable = reachable_chunks(m, entry);
+        let native_calls: std::collections::BTreeSet<u16> = m
+            .chunks
+            .iter()
+            .zip(&reachable)
+            .filter(|(_, live)| **live)
+            .flat_map(|(chunk, _)| &chunk.ops)
+            .filter_map(|op| match op {
+                Op::CallVerifiedNative(index, _) | Op::CallExternalNative(index, _) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        let signature = &m.signatures[entry];
+        let default = Dialogue {
+            yielded: signature.ret,
+            reply: signature
+                .params
+                .first()
+                .copied()
+                .unwrap_or(WireShape::Scalar { kind: 0 }),
+        };
+        let mut sites = vec![BTreeMap::new(); m.chunks.len()];
+        let mut owns_bodies = signature
+            .params
+            .iter()
+            .any(|s| matches!(s, WireShape::Flat { .. }));
+        owns_bodies |= native_body_returns.iter().any(|(index, contract)| {
+            native_calls.contains(index) && *contract == NativeBodyReturn::Snapshot
+        });
+        for (ci, chunk) in m.chunks.iter().enumerate() {
+            if !reachable[ci] {
+                continue;
+            }
+            for (ip, op) in chunk.ops.iter().enumerate() {
+                if !matches!(op, Op::Yield) {
+                    continue;
+                }
+                let site = YieldSite {
+                    chunk: u32::try_from(ci)
+                        .map_err(|_| error("yield chunk identifier overflow"))?,
+                    instruction: u32::try_from(ip)
+                        .map_err(|_| error("yield instruction identifier overflow"))?,
+                };
+                let contract = match explicit {
+                    Some(map) => *map
+                        .get(&site)
+                        .ok_or_else(|| error(format!("missing dialogue for {site:?}")))?,
+                    None => default,
+                };
+                if !supported(contract.yielded) || !supported(contract.reply) {
+                    return Err(error("dialogue requires scalar or bounded flat shapes"));
+                }
+                if m.chunks[entry].block_type == BlockType::Stream
+                    && let Some(input) = signature.params.first()
+                    && !matches!(
+                        m.chunks[entry].param_types.first(),
+                        Some(TypeTag::Composite)
+                    )
+                    && contract.reply != *input
+                {
+                    return Err(error(
+                        "stream dialogue reply must match the first parameter shape",
+                    ));
+                }
+                owns_bodies |= matches!(contract.reply, WireShape::Flat { .. });
+                sites[ci].insert(ip, (site.id(), contract));
+            }
+        }
+        if explicit.is_some_and(|map| {
+            map.keys().any(|site| {
+                !matches!(
+                    m.chunks
+                        .get(site.chunk as usize)
+                        .and_then(|chunk| chunk.ops.get(site.instruction as usize)),
+                    Some(Op::Yield)
+                )
+            })
+        }) {
+            return Err(error("dialogue contract names a non-yield site"));
+        }
+        let metadata_offset = if explicit.is_some() {
+            Some(
+                frame_bytes
+                    .checked_sub(8)
+                    .ok_or_else(|| error("frame is too small for dialogue metadata"))?
+                    & !7,
+            )
+        } else {
+            None
+        };
+        let trap_offset = super::trap_offset(frame_bytes, explicit.is_some())
+            .ok_or_else(|| error("frame is too small for its trap record"))?;
+        Ok(Self {
+            sites,
+            reachable,
+            native_calls,
+            owns_bodies,
+            metadata_offset,
+            trap_offset,
+            native_body_returns: native_body_returns.clone(),
+            fallible_natives: fallible_natives.clone(),
+        })
+    }
+}

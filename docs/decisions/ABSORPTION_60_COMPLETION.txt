@@ -1,0 +1,40 @@
+COMPLETION CONDITION — absorption 60
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. This line's branch contains the other line's work as an ancestor, with no
+   commits from the other line left unmerged at the point the work concludes, and
+   no conflict markers anywhere in the tree.
+
+2. The absorption brief for this absorption records both the commit it was
+   computed against and the size of the backlog at that moment, and the guard that
+   enforces this passes.
+
+3. Every figure the brief predicted is either confirmed, or the tree records what
+   it actually turned out to be and why it moved. A prediction that missed is
+   recorded as having missed rather than silently revised.
+
+4. Where the merged content changes a population that an instrument pins, the new
+   value is accompanied by an account of what changed it. A pinned figure is not
+   edited to match a run without that account.
+
+5. The outgoing channel to the other line retains this line's open reports and the
+   other line's own content. Neither side's material is dropped in resolving any
+   conflict.
+
+6. Any behaviour difference introduced by the merged work is either covered by an
+   assertion that runs, or recorded as a known gap with a reason.
+
+7. The backend gate passes in both float configurations on the merged tree, and
+   the tree was not edited while a gate run that is being relied upon was in
+   flight.
+
+8. The recorded test population figures and the handoff's state-table figures
+   agree with the merged tree.
+
+9. Files under src/ and tests/ at the repository root carry only the other line's
+   changes, with none originating from this line.

@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor b24d05c1 HEAD     # the merge of PR 708 into v0.2.3
+git merge-base --is-ancestor be96737a HEAD     # the merge of PR 711 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -39,63 +39,39 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-11-01
+## State on 2026-11-04
 
-- **Merged.** Into `v0.2.3`, PRs 620, 625, 626, 624, 630, 633, 647, 649, 654 and 656,
-  PR 660, `main` merged back after PR 655, as `1ea45456`, and PR 675, the nightly fuzz
-  workflow and the fuzz lockfile check, as `b5762e2e`. Into `main`, PR 619, the
-  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82`, PR 655 as
-  `430b2625` and PR 676, the fuzz workflow and the `/fuzz` Dependabot entry, as
-  `694783ab`. PR 688 merges `main` back into `v0.2.3` with an identical tree. PRs 689,
-  693, 696 to 699 and 703 merged into `v0.2.3` on 2026-10-31 and 2026-11-01.
-- **Operator rulings of 2026-10-29.** Changelog entries are fragments under
-  `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
-  [the report](../kaizen/2026-10-29-changelog-fragments.md).
-- **Operator rulings of 2026-10-30.** First-hand in this session, recorded verbatim in
-  [the open decisions](../kaizen/2026-10-30-open-decisions.md). K1 to K13 are ruled and
-  K14 is held. PR 649 applied K2, K5 and K8. V0.2.X landed K7 in PR 658 and K3 with
-  K4a in PR 662. Also first-hand, "Yes. I pre-authorize merging green security-only
-  pull requests into `main`." and "Yes. Add a Dependabot ignore entry for
-  `dtolnay/rust-toolchain`."
-- **Operator ruling of 2026-10-31.** First-hand in this session, "Accept obvious
-  choices, take appropriate action, then give me the updated list of questions and
-  obvious choices.", recorded with each disposition in
-  [the open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md). It
-  adopted N1 to N5 and C7 D2, D3, D5, D6 and D7, applied in PRs 675 and 676.
-- **Second operator ruling of 2026-10-31.** First-hand in this session, recorded
-  verbatim in the same file. V0.2.X's record is the source of truth for its item 4,
-  now (b), and for its other questions, for those items only. N6 is (a). The
-  obvious choices O1 to O7 are adopted. The operator's checks stay open.
-- **Third operator ruling of 2026-10-31.** "Accept all obvious choices and address all
-  open concerns that need no further input from me.", recorded with dispositions in the
-  same file.
-- **Shard balance, N6.** PR 689, `843a6dbf`, pins 43 self-host tests to shards by
-  measured duration, guarded in `tests/ci_shard_coverage.rs`. Over 19 runs after it the
-  longest shard's median was 35.9 minutes against 37.4 over 47 before, not clearly
-  shorter, so keeping the lists is decision D1 of
-  [the open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md).
+- **Rulings.** Every operator ruling to this line is recorded verbatim with its
+  dispositions in the dated open-decision lists under [`../kaizen/`](../kaizen/README.md),
+  from 2026-10-30 to [2026-11-04](../kaizen/2026-11-04-open-decisions.md), and the
+  changelog-fragment rulings of 2026-10-29 in
+  [their report](../kaizen/2026-10-29-changelog-fragments.md). Standing ones are that
+  green security-only PRs into `main` are pre-authorized, branch runs stay
+  uncancelled, the pinned shard lists of PR 689 stay, and release signing begins at
+  the first release after the operator makes a key.
+- **Merged.** This line's PRs into `v0.2.3` through PR 711, `be96737a`, on 2026-11-01.
+  V0.2.X merged `v0.2.3` into `main` as `3e71844a`, and V0.3.X merged `v0.3.0` into
+  `main` as `badd3e5c`, both before a release with no tag.
 - **Scratch volume.** This worktree's `target` links to
   `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
-  target` after any `cargo clean`. PR 697 made `worktree.sh` link and remove build
-  output, the notices went out in sequences 213 to 215, and PR 703 moved the gate's
-  output there. The redacted checkpoint merged in PR 698.
-- **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
-  so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
-  Applying it is the operator's decision.
-- **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
-  at most. The blog's Pages build holds one shared runner for most of a busy day, by
-  the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
+  target` after any `cargo clean`. On 2026-11-05 the volume had 40 GiB free after the
+  E1 removals.
+- **Fuzz.** The nightly run passes and starts six to ten hours after its 10:17 UTC
+  cron time. The crash path's logic passed a local simulation on 2026-11-05. The
+  artifact upload is untested, and a job stopped by its time limit would not upload.
+- **Idle compaction.** False from 05:42 UTC on 2026-11-01, D2 of 2026-11-01.
+- **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner. The
+  blog's Pages build holds a shared runner much of a busy day, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
   count the pruned list. A backup is outside the repository.
-- **Propagation.** The proofs line merged into `v0.2.3` as PR 708 on 2026-11-01 and its
-  remote branch is gone, closing K13. On this line's scans, `v0.2.3` at `b24d05c1` on
-  2026-11-01 and `main` on 2026-10-31 match no term. V0.3.X confirmed that `v0.3.0`
-  matches no term.
+- **Propagation.** K13 closed when the proofs line merged as PR 708. On this line's
+  scans, `v0.2.3` at `b24d05c1` and `main` on 2026-10-31 match no term, and V0.3.X
+  confirmed `v0.3.0`.
 - **Pydromon.** The operator holds the changeover. The proposal's labeller uses
   `fresh_session_each_turn`, from pydromon `5ef0fd7`.
-- **Jev selection cohort.** The three cases were evaluated and labelled blind. The
-  comparison opens when each task is finished.
+- **Jev selection cohort.** Closed on 2026-11-05. All three tasks finished, the
+  comparison was read, and the result is in the open decisions of 2026-11-04.
 
 ## Operator positions, stated first-hand in this line's session on 2026-10-25
 
@@ -112,34 +88,34 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and keep the
-   shard evidence current until D1 is ruled.
-2. `worktree.sh list` now reports agent trees' unlinked output. If D5 is (a), write
-   and test the `WorktreeCreate` and `WorktreeRemove` hook scripts for the operator to
-   apply.
-3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
-   about two weeks later and compare with the trial report.
-4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+1. Supply the release manifest when V0.2.X cuts V0.2.3, once the operator has made
+   the signing key, E3 of 2026-11-04.
+2. Run `context_quality.py` again on about 2026-11-15 and compare with the trial report.
+3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-5. Finish the three selection tasks, record their outcomes, and read the comparison.
-6. A state-file budget guard, once the owning lines have converted their files.
-7. Measure branch-run cost again once changelog fragments are in use.
+4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
+5. The proofs line resumes when the operator starts its session, with Rocq and Kani as
+   ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
+   was sent in the interline mailbox. Public records use the coded vocabulary of that file.
+6. Report the cheap metrics of [the metrics record](../kaizen/2026-11-07-metrics.md) in
+   one script once the operator picks them, and track bound tightness.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-01](../kaizen/2026-11-01-open-decisions.md) record the
-operator's ruling of that day. D1 keeps the pinned lists. D2 waits on the operator
-adding `"idleCompaction": false` to the global settings. D3 closed K13. D4 (a) broke
-the language client and was abandoned, so Dependabot alert 6 stays open. D5, a
-worktree hook, is new. The K-series checks K6, K9, K10 and K11 remain, and K14 is held.
+[The open decisions of 2026-11-04](../kaizen/2026-11-04-open-decisions.md) hold the
+list and the operator's ruling of that day. E4 asks whether the interline checkpoint
+keeps other projects' messages, and every line holds its export meanwhile, by sequences
+294 to 296. The signing key is the operator's to make, and V0.2.3's publication waits
+for it. The K-series checks are deferred. The operator ruled on 2026-11-07 that all
+reasonable metrics are tracked.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
-- The fuzz workflow ran only locally. Its crash path and artifact upload are untested.
-- Dependabot alert 6 has no compatible fix. Recheck `vscode-languageclient` weekly.
-- Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
-  They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
+- `minimatch` 10.2.6 stays in the extension. GitHub withdrew alert 6, but the advisory
+  still covers that version and no client release accepts the fix.
+- A scratch folder outlives its tree whenever Claude Code removes the tree, so E1 recurs
+  without a rule.
 
 ## Mailbox and pilot
 
@@ -152,7 +128,7 @@ Pilot judgments never change gates.
 | Checkpoint | SHA-256 |
 |---|---|
 | [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
-| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
+| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `8efbc7acda0987da71408c436dd77413f4db812eccd174aba02b3f6860aee580`, 3 samples evaluated and labelled and 3 task outcomes, exported on 2026-11-05, restored into a fresh store and re-exported byte-identical |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
 ## Environment

@@ -300,7 +300,47 @@ These remain unresolved after the 2026-05-21 research pass.
 
 3. **Retcon-once optimisation.** Whether any subset of sub-coroutines benefits from the `@llvm.coro.id.retcon.once` form (for one-shot coroutines that yield exactly once before completing) is an optimisation question. Profile-driven.
 
-4. **R4.1 milestone M1 execution.** The empirical validation of the retcon allocator hook in a small standalone IR fragment has not been performed. This is the single highest-risk technical item in V0.4.0 and should be executed before broader IR generator implementation begins.
+4. ~~**R4.1 milestone M1 execution.**~~ **DONE 2026-08-16.** `native_codegen/tests/retcon_m1.rs` builds a minimal fragment on `llvm.coro.id.retcon` whose frame is served by a named `kel_arena_alloc`/`kel_arena_free` pair. It parses through the bindings, verifies, splits into `@kel_stream` plus `@kel_stream.resume.0`, and the split output calls the allocator with a **compile-time literal size**, `call ptr @kel_arena_alloc(i32 36)`, returning it through the deallocator. Both layers are reported, and the pass pipeline carries a control that fails on a nonexistent pass so its success is not vacuous.
+
+   **One finding changes how the sentence above this list should be read.** The arena is the **overflow path, not the default**: `coro.id.retcon`'s first argument sizes a CALLER-PROVIDED buffer, and when the frame fits it, `coro-split` uses the buffer and never calls the allocator. A 256-byte buffer produces zero allocator calls, pinned as the must-not-fire half. So "size and alignment surface through `coro.id.retcon`'s size and align arguments" is true of the inline buffer; the arena serves frames too large for it. Frame accounting must not assume every coroutine allocates.
+
+   **M2 IS ALSO DONE, 2026-08-16.** `native_codegen/tests/retcon_m2.rs` emits the split fragment to a real object file, links it against a C host with the system linker, and runs it as a separate process. The coroutine **spawns, resumes twice, and releases**: it produces `7 8 9` across two resumptions, and the release call returns a null continuation. The host protocol was read off the split intermediate representation rather than assumed — the ramp stores the frame pointer into the caller's buffer and returns a continuation; the continuation takes that same buffer plus an unwind flag, returns itself while resuming, and on unwind calls the deallocator and returns null.
+
+   **The buffer-versus-arena distinction is confirmed at RUN TIME, not only in the emitted code.** With an 8-byte buffer the run reports one allocation and one release; with a 256-byte buffer it reports none, while still producing the same three values. That pair is what makes the arena result mean something.
+
+   **M3 IS HALF DONE, 2026-08-17, and the halves are not equally trustworthy.**
+
+   The **memory half is measured** in `native_codegen/tests/retcon_m3.rs`. Per-coroutine cost is not one number: it splits between the caller-provided buffer, which the caller supplies whether or not it is filled, and the arena frame, requested only when the live state overflows that buffer. Measuring the arena frame against live state under an 8-byte buffer gives `0, 12, 20, 36, 68` bytes for `0, 1, 2, 4, 8` live 64-bit values — **4 bytes of base plus 8 per live word**, every figure a compile-time literal recoverable without executing anything, which is the input Workstream E needs. The crossover is located rather than assumed: with no live state the frame fits the buffer and the coroutine costs **zero** arena bytes.
+
+   The **timing half is now measured too, 2026-08-17**, in `native_codegen/tests/retcon_m3_timing.rs`. The earlier deferral rested on an untested assumption about machine contention, and this project had already solved that problem: `keleusma-bench` warms up, inlines repetitions to amortise counter resolution, and takes the **minimum across measurement passes**. The minimum is the right estimator for a structural reason — contention only ADDS time, so the least sample is the least contaminated.
+
+   Against a baseline that is the coroutine's own body written as a direct call, with the same state, the same arithmetic and the same two external calls, over 2,000,000 repetitions, 3 warmup and 15 measurement passes:
+
+   | | minimum per pass | per operation |
+   |---|---|---|
+   | coroutine | 4,961,000 ns | **2.4805 ns** |
+   | baseline A | 4,660,000 ns | 2.3300 ns |
+   | baseline B | 4,661,000 ns | 2.3305 ns |
+
+   **The noise floor is measured, not assumed**, by timing the baseline twice as two identical workloads. Their minima differ by one clock tick when the host is quiet.
+
+   **Five runs, and the picture is better than any single one of them.** The estimate is stable; what varies is the floor:
+
+   | run | noise floor, ns per pass | effect, ns per pass | ns per resumption | verdict |
+   |---|---|---|---|---|
+   | 1 | 1,000 | 300,500 | 0.1502 | resolvable |
+   | 2 | **150,000** | 281,000 | 0.1405 | **declined** |
+   | 3 | 1,000 | 316,500 | 0.1583 | resolvable |
+   | 4 | 1,000 | 316,500 | 0.1583 | resolvable |
+   | 5 | 0 | 320,000 | 0.1600 | resolvable |
+
+   So a resumption costs roughly **0.14 to 0.16 ns more than an equivalent direct call, about 6 percent**, and the instrument **declined once**, when the floor rose 150-fold on a busy moment. That refusal is the guard working rather than a gap: the effect estimate that run produced, 0.1405, sits inside the range the other four give, so the instrument was conservative rather than wrong.
+
+   **The floor is a property of the moment, not of the host.** A single run is therefore not enough to certify this figure, which is why five are recorded.
+
+   **The clock's tick was measured rather than assumed**: `CLOCK_MONOTONIC` reports in nanoseconds but ticks at **1,000 ns** on this host, which is why the repetition count is what it is.
+
+   **Limits.** One host, one coroutine shape, and the arena-resident buffer configuration. The figure is **per resumption**; spawn and release happen once per pass and are amortised to near nothing by it, so this says nothing about their cost. The roadmap already expects per-platform calibration.
 
 5. **Native-side WCET cost models.** The bytecode WCET model in V0.2.0 does not translate to native execution. New cost models need calibration on each Tier 1 platform, analogous to what `keleusma-bench` did for the VM. Not in any R-doc; surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 

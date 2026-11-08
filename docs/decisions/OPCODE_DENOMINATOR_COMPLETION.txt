@@ -1,0 +1,51 @@
+COMPLETION CONDITION — a denominator for the backend support census
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, in any number of commits, on any branch. No process, sequence, or
+branch state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test in native_codegen/tests/ derives the set of bytecode opcode names from
+   the runtime crate's own instruction-set source at test time, rather than from a
+   list transcribed into the test file. If the derivation yields fewer names than
+   a recorded floor, the test fails as a broken probe rather than passing on an
+   empty set.
+
+2. That test assigns EVERY derived opcode to exactly one recorded class, where the
+   classes distinguish at least:
+     - the backend was observed to lower it,
+     - it was observed in compiled bytecode but the lowering did not reach it,
+     - this corpus produced no occurrence of it, so the test has no evidence.
+   An opcode that is unclassified, or whose observed class differs from its
+   recorded class, fails the test.
+
+3. The failure message for an unclassified or reclassified opcode asks for the
+   opcode to be classified and for the change to be explained. It does not
+   instruct the reader to update a number.
+
+4. The eight operand variants of the composite-construction opcode (two forms
+   times four composite kinds) are enumerated and classified individually, so that
+   a variant is not reported through its opcode name. The record states which
+   variants this corpus exercises and which it does not.
+
+5. Any opcode or variant found in the "observed but not lowered" class is either
+   (a) accompanied by a recorded explanation of why the lowering does not reach
+   it, or (b) accompanied by a test demonstrating the behaviour. A bare entry with
+   no account is not sufficient.
+
+6. If the work uncovers a lowering defect, a refusal that is actually a gap, or a
+   record that outlived its subject, the tree contains both the correction and a
+   test that would have caught it.
+
+7. backend_support_census.rs no longer presents itself as answering a question
+   about the whole instruction set without stating its own coverage, either by
+   carrying the denominator or by pointing to the test that does.
+
+8. Every claim added to the tree about what the backend supports is backed by an
+   assertion that runs. No new prose asserts coverage that no test observes.
+
+9. The backend gate passes in both float configurations, and the recorded test
+   population figures agree with the tree.
+
+10. Files under src/ and tests/ at the repository root are unmodified.

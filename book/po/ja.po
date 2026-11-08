@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-10-31T03:58:58-07:00\n"
+"POT-Creation-Date: 2026-11-06T06:11:25-08:00\n"
 "PO-Revision-Date: 2026-07-08T21:49:53-07:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -8592,7 +8592,7 @@ msgstr ""
 "を呼ぶ。これがオペランドスタック、コールフレーム、アリーナをクリアしつつ、"
 "データセグメントは保持します。"
 
-#: src/34_coroutine_protocol.md:84 src/EMBEDDING.md:352
+#: src/34_coroutine_protocol.md:84 src/EMBEDDING.md:354
 msgid "\"script error: {}\""
 msgstr "\"script error: {}\""
 
@@ -8737,21 +8737,20 @@ msgstr ""
 
 #: src/35_arena_sizing.md:51
 msgid ""
-"The figure also includes the region a native compilation of the module "
-"reserves, so that one capacity works whether the module runs on the virtual "
-"machine or as native code. A host that runs only the virtual machine is "
-"therefore over-provisioned by that region, which "
-"`keleusma::native_region::native_region_supplement_bytes` reports, and a "
-"host that used to add the native figure itself should stop, or it counts the "
-"region twice."
+"The figure is the virtual machine's alone. A host that runs the module as "
+"native code sizes its buffers from "
+"`keleusma::native_region::native_route_buffers_for` instead, which reports "
+"the native composite region, the private buffer and the shared buffer. A "
+"host that keeps one arena able to serve either route uses "
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`, which adds the native "
+"region once, and must not add it again."
 msgstr ""
-"この値には、モジュールをネイティブコードへコンパイルしたときに確保される領域も"
-"含まれます。そのため、モジュールを仮想マシンで実行する場合とネイティブコード"
-"として実行する場合のどちらでも、一つの容量で動作します。仮想マシンだけを実行"
-"するホストには、その領域の分だけ余分に割り当てられます。その大きさは "
-"`keleusma::native_region::native_region_supplement_bytes` が返します。以前に"
-"ネイティブ用の値を自分で加えていたホストは、それをやめてください。そうしない"
-"と、その領域を二重に数えることになります。"
+"この値は仮想マシンだけのものです。モジュールをネイティブコードとして実行する"
+"ホストは、代わりに`keleusma::native_region::native_route_buffers_for`からバッ"
+"ファの大きさを決めます。この関数は、ネイティブの複合値領域、プライベートバッ"
+"ファ、共有バッファを返します。どちらの経路にも使える一つのアリーナを持つホス"
+"トは`keleusma::vm::auto_arena_capacity_for_vm_and_native`を使います。この関数"
+"はネイティブ領域を一度だけ加えるので、それをさらに加えてはいけません。"
 
 #: src/35_arena_sizing.md:59
 msgid "Option C: a static buffer"
@@ -8866,7 +8865,7 @@ msgstr ""
 "`keleusma compile`やビルドパイプラインから出てきた`.kel.bin`ファイルをホスト"
 "が持っている場合、字句解析、構文解析、コンパイルの各段階を飛ばせます。"
 
-#: src/36_loading_bytecode.md:15 src/EMBEDDING.md:37 src/EMBEDDING.md:415
+#: src/36_loading_bytecode.md:15 src/EMBEDDING.md:37 src/EMBEDDING.md:417
 msgid "\"script.kel.bin\""
 msgstr "\"script.kel.bin\""
 
@@ -8911,7 +8910,7 @@ msgstr ""
 "`Vm::load_signed_bytes`で読み込みます。これは信頼する公開鍵のスライスを取りま"
 "す。"
 
-#: src/36_loading_bytecode.md:34 src/EMBEDDING.md:423
+#: src/36_loading_bytecode.md:34 src/EMBEDDING.md:425
 msgid "\"pub.bin\""
 msgstr "\"pub.bin\""
 
@@ -9062,7 +9061,7 @@ msgstr ""
 "ホストはドライブループの中で`Reset`を見張って`Vm::replace_module`を呼びます。"
 "ホストはドライブループの中で`Reset`を見張って`Vm::replace_module`を呼びます。"
 
-#: src/37_hot_swap_host.md:30 src/EMBEDDING.md:398
+#: src/37_hot_swap_host.md:30 src/EMBEDDING.md:400
 msgid "/* ... */"
 msgstr "/* ... */"
 
@@ -10736,13 +10735,26 @@ msgstr ""
 
 #: src/EMBEDDING.md:329
 msgid ""
+"The bound is the virtual machine's alone. A host that runs the module as "
+"native code sizes its buffers from "
+"`keleusma::native_region::native_route_buffers_for`, and a host that keeps "
+"one arena for either route uses "
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`."
+msgstr ""
+"この上界は仮想マシンだけのものです。モジュールをネイティブコードとして実行す"
+"るホストは`keleusma::native_region::native_route_buffers_for`からバッファの大"
+"きさを決め、どちらの経路にも使える一つのアリーナを持つホストは"
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`を使います。"
+
+#: src/EMBEDDING.md:331
+msgid ""
 "**Option C. Provide a static buffer.** The arena can run from a host-owned "
 "buffer in `.bss` for embedded targets without a heap."
 msgstr ""
 "**選択肢C. 静的バッファを提供する。** ヒープを持たない組み込みターゲットで"
 "は、アリーナを`.bss`内のホスト所有バッファから動かせます。"
 
-#: src/EMBEDDING.md:338
+#: src/EMBEDDING.md:340
 msgid ""
 "If the chosen capacity is below the analyzed WCMU, `Vm::new` returns "
 "`VmError::VerifyError`. The error is surfaceable before any code runs."
@@ -10750,11 +10762,11 @@ msgstr ""
 "選んだ容量が解析されたWCMUより小さい場合、`Vm::new`は`VmError::VerifyError`を"
 "返します。エラーはコードが走る前に表面化されます。"
 
-#: src/EMBEDDING.md:340
+#: src/EMBEDDING.md:342
 msgid "Error Recovery"
 msgstr "エラー回復"
 
-#: src/EMBEDDING.md:342
+#: src/EMBEDDING.md:344
 msgid ""
 "Errors during `call` or `resume` return `Err(VmError)`. The VM is not "
 "automatically reset; volatile state may remain on the operand stack and in "
@@ -10764,7 +10776,7 @@ msgstr ""
 "トされません。揮発性の状態がオペランドスタックとアリーナに残っているかもしれ"
 "ません。2つの経路があります。"
 
-#: src/EMBEDDING.md:344
+#: src/EMBEDDING.md:346
 msgid ""
 "**Path 1. Discard the VM.** Drop and reconstruct. The arena resets when the "
 "new VM is constructed against it."
@@ -10772,7 +10784,7 @@ msgstr ""
 "**経路1. VMを捨てる。** ドロップして再構築します。それに対して新しいVMが構築"
 "されると、アリーナはリセットされます。"
 
-#: src/EMBEDDING.md:346
+#: src/EMBEDDING.md:348
 msgid ""
 "**Path 2. Recover and continue.** Call `Vm::reset_after_error` to clear "
 "volatile state while preserving the data segment."
@@ -10780,7 +10792,7 @@ msgstr ""
 "**経路2. 回復して続ける。** `Vm::reset_after_error`を呼んで、データセグメント"
 "を保持しながら揮発性状態をクリアします。"
 
-#: src/EMBEDDING.md:359
+#: src/EMBEDDING.md:361
 msgid ""
 "The data segment, if declared, persists across error events. Long-running "
 "streams that accumulate state should rely on the data segment rather than "
@@ -10790,111 +10802,111 @@ msgstr ""
 "ラーを生き残らなければならない状態を累積する長時間動くストリームは、ローカル"
 "束縛ではなくデータセグメントに依存すべきです。"
 
-#: src/EMBEDDING.md:361
+#: src/EMBEDDING.md:363
 msgid "Error Variants"
 msgstr "エラーヴァリアント"
 
-#: src/EMBEDDING.md:363
+#: src/EMBEDDING.md:365
 msgid "`VmError` enumerates the runtime error conditions."
 msgstr "`VmError`は実行時のエラー条件を列挙しています。"
 
-#: src/EMBEDDING.md:365
+#: src/EMBEDDING.md:367
 msgid "Variant"
 msgstr "ヴァリアント"
 
-#: src/EMBEDDING.md:365
+#: src/EMBEDDING.md:367
 msgid "Condition"
 msgstr "条件"
 
-#: src/EMBEDDING.md:367
+#: src/EMBEDDING.md:369
 msgid "`StackUnderflow`"
 msgstr "`StackUnderflow`"
 
-#: src/EMBEDDING.md:367
+#: src/EMBEDDING.md:369
 msgid "Empty operand stack on pop"
 msgstr "popで空のオペランドスタック"
 
-#: src/EMBEDDING.md:368
+#: src/EMBEDDING.md:370
 msgid "`TypeError(msg)`"
 msgstr "`TypeError(msg)`"
 
-#: src/EMBEDDING.md:368
+#: src/EMBEDDING.md:370
 msgid "Operand type does not match the operation"
 msgstr "オペランド型が操作と一致しない"
 
-#: src/EMBEDDING.md:369
+#: src/EMBEDDING.md:371
 msgid "`DivisionByZero`"
 msgstr "`DivisionByZero`"
 
-#: src/EMBEDDING.md:369
+#: src/EMBEDDING.md:371
 msgid "Integer or modulo by zero"
 msgstr "ゼロでの整数除算または剰余"
 
-#: src/EMBEDDING.md:370
+#: src/EMBEDDING.md:372
 msgid "`IndexOutOfBounds(idx, len)`"
 msgstr "`IndexOutOfBounds(idx, len)`"
 
-#: src/EMBEDDING.md:370
+#: src/EMBEDDING.md:372
 msgid "Array or tuple index out of range"
 msgstr "配列またはタプルのインデックスが範囲外"
 
-#: src/EMBEDDING.md:371
+#: src/EMBEDDING.md:373
 msgid "`FieldNotFound(struct, field)`"
 msgstr "`FieldNotFound(struct, field)`"
 
-#: src/EMBEDDING.md:371
+#: src/EMBEDDING.md:373
 msgid "Field access on a struct that does not declare the field"
 msgstr "フィールドを宣言していない構造体でのフィールドアクセス"
 
-#: src/EMBEDDING.md:372
+#: src/EMBEDDING.md:374
 msgid "`NoMatch(value)`"
 msgstr "`NoMatch(value)`"
 
-#: src/EMBEDDING.md:372
+#: src/EMBEDDING.md:374
 msgid "No match arm or multiheaded function head matched"
 msgstr "matchアームまたは多頭関数の頭が一致しなかった"
 
-#: src/EMBEDDING.md:373
+#: src/EMBEDDING.md:375
 msgid "`NativeError(msg)`"
 msgstr "`NativeError(msg)`"
 
-#: src/EMBEDDING.md:373
+#: src/EMBEDDING.md:375
 msgid "Native function returned `Err`"
 msgstr "ネイティブ関数が`Err`を返した"
 
-#: src/EMBEDDING.md:374
+#: src/EMBEDDING.md:376
 msgid "`InvalidBytecode(msg)`"
 msgstr "`InvalidBytecode(msg)`"
 
-#: src/EMBEDDING.md:374
+#: src/EMBEDDING.md:376
 msgid "Bytecode shape unexpected at runtime"
 msgstr "実行時にバイトコードの形が予期外"
 
-#: src/EMBEDDING.md:375
+#: src/EMBEDDING.md:377
 msgid "`Trap(msg)`"
 msgstr "`Trap(msg)`"
 
-#: src/EMBEDDING.md:375
+#: src/EMBEDDING.md:377
 msgid "Script halted by a `Trap` instruction"
 msgstr "`Trap`命令でスクリプトが停止"
 
-#: src/EMBEDDING.md:376
+#: src/EMBEDDING.md:378
 msgid "`VerifyError(msg)`"
 msgstr "`VerifyError(msg)`"
 
-#: src/EMBEDDING.md:376
+#: src/EMBEDDING.md:378
 msgid "Structural or resource-bounds verification failed at construction"
 msgstr "構築時に構造または資源境界検証が失敗"
 
-#: src/EMBEDDING.md:377
+#: src/EMBEDDING.md:379
 msgid "`LoadError(msg)`"
 msgstr "`LoadError(msg)`"
 
-#: src/EMBEDDING.md:377
+#: src/EMBEDDING.md:379
 msgid "Wire-format framing failed during `load_bytes`"
 msgstr "`load_bytes`中にワイヤフォーマットフレーミングが失敗"
 
-#: src/EMBEDDING.md:379
+#: src/EMBEDDING.md:381
 msgid ""
 "`VerifyError` is the only variant that fires before any script code "
 "executes. The other variants fire during execution. See [WHY_REJECTED.md](./"
@@ -10904,11 +10916,11 @@ msgstr ""
 "す。他のヴァリアントは実行中に発火します。`VerifyError`の解釈は"
 "[WHY_REJECTED.md](./WHY_REJECTED.md)を参照してください。"
 
-#: src/EMBEDDING.md:381
+#: src/EMBEDDING.md:383
 msgid "Hot Code Swapping"
 msgstr "ホットコードスワッピング"
 
-#: src/EMBEDDING.md:383
+#: src/EMBEDDING.md:385
 msgid ""
 "The VM supports replacing the loaded module at the reset boundary of a "
 "`loop` script. The host calls `Vm::replace_module` after observing "
@@ -10922,7 +10934,7 @@ msgstr ""
 "新しいモジュールと、長さが新しいモジュールの宣言されたスキーマと一致しなけれ"
 "ばならない初期データセグメントベクタを取ります。"
 
-#: src/EMBEDDING.md:389
+#: src/EMBEDDING.md:391
 msgid ""
 "// Re-initialise the data segment. Length must match the\n"
 "        // new module's declared `data` block size; preserve or\n"
@@ -10932,7 +10944,7 @@ msgstr ""
 "        // 宣言された`data`ブロックサイズと一致しなければならない。\n"
 "        // 適切に値を保持または移行する。\n"
 
-#: src/EMBEDDING.md:394
+#: src/EMBEDDING.md:396
 msgid ""
 "// The swap clears coroutine state. Drive the new module\n"
 "        // from the entry point, not via `resume`.\n"
@@ -10940,7 +10952,7 @@ msgstr ""
 "// スワップはコルーチン状態をクリアする。新しいモジュールを\n"
 "        // `resume`ではなくエントリポイントから動かす。\n"
 
-#: src/EMBEDDING.md:402
+#: src/EMBEDDING.md:404
 msgid ""
 "The dialogue type, the yielded type and the resume type, must remain stable "
 "across swaps. The data segment may carry forward (pass current values), may "
@@ -10960,11 +10972,11 @@ msgstr ""
 "なエンドツーエンドの実演については [`examples/piano_roll.rs`](../../examples/"
 "piano_roll.rs) を参照してください。"
 
-#: src/EMBEDDING.md:404
+#: src/EMBEDDING.md:406
 msgid "Signed Modules"
 msgstr "署名付きモジュール"
 
-#: src/EMBEDDING.md:406
+#: src/EMBEDDING.md:408
 msgid ""
 "The optional `signatures` cargo feature enables Ed25519 signing of compiled "
 "bytecode. Source scripts declare the requirement with the `signed` modifier "
@@ -10980,11 +10992,11 @@ msgstr ""
 "名が読み込み前にホストが追加する信頼マトリクスに対して検証されない限り、その"
 "ようなモジュールの読み込みを拒否します。"
 
-#: src/EMBEDDING.md:408
+#: src/EMBEDDING.md:410
 msgid "Signing at build time"
 msgstr "ビルド時の署名"
 
-#: src/EMBEDDING.md:410
+#: src/EMBEDDING.md:412
 msgid ""
 "The host (or a build pipeline) takes a 32-byte Ed25519 seed and uses "
 "`wire_format::module_to_signed_wire_bytes` to produce signed bytes. The CLI "
@@ -11000,11 +11012,11 @@ msgstr ""
 "RNGから新しい鍵ペアを生成します。シードファイルはUnixで`0o600`権限で書かれ、"
 "既存のファイルは上書きされません。"
 
-#: src/EMBEDDING.md:418
+#: src/EMBEDDING.md:420
 msgid "Verifying and loading"
 msgstr "検証と読み込み"
 
-#: src/EMBEDDING.md:420
+#: src/EMBEDDING.md:422
 msgid ""
 "The host loads a signed module through `Vm::load_signed_bytes(bytes, arena, "
 "&keys)`. The keys slice carries one or more public keys; the first matching "
@@ -11020,7 +11032,7 @@ msgstr ""
 "されるので、その後の`Vm::replace_module_from_bytes`呼び出しは同じ鍵を継承しま"
 "す。"
 
-#: src/EMBEDDING.md:428
+#: src/EMBEDDING.md:430
 msgid ""
 "Hosts that bootstrap from an unsigned baseline and only accept signed "
 "bytecode at hot-swap construct the VM normally, register keys post-"
@@ -11030,11 +11042,11 @@ msgstr ""
 "トコードを受け入れるホストは、通常通りVMを構築し、構築後に鍵を登録し、署名付"
 "きの更新をホットスワップします。"
 
-#: src/EMBEDDING.md:432
+#: src/EMBEDDING.md:434
 msgid "// ... later, after receiving a signed update over the comm link ...\n"
 msgstr "// ... 後で、通信リンク上で署名付き更新を受け取ったあと ...\n"
 
-#: src/EMBEDDING.md:437
+#: src/EMBEDDING.md:439
 msgid ""
 "`Vm::load_bytes` refuses signed modules with a diagnostic redirecting the "
 "caller to `Vm::load_signed_bytes`. Without the `signatures` feature, the "
@@ -11046,7 +11058,7 @@ msgstr ""
 "れるヴァリアントは`LoadError::SignaturesUnsupported`なので、運用者はビルドが"
 "検証できないこと(経路が間違っているだけでなく)を見ます。"
 
-#: src/EMBEDDING.md:439
+#: src/EMBEDDING.md:441
 msgid ""
 "The signing message convention is the full framed buffer with the signature "
 "payload bytes and the CRC trailer bytes zeroed. The verifier reconstructs "
@@ -11061,7 +11073,7 @@ msgstr ""
 "署名を含むファイル全体をカバーするので、フレーミングレベルの改ざんはCRCだけで"
 "検出され、署名の変異はCRC修復後の暗号チェックで検出されます。"
 
-#: src/EMBEDDING.md:441
+#: src/EMBEDDING.md:443
 msgid ""
 "See `R42` in [`docs/decisions/RESOLVED.md`](../../docs/decisions/"
 "RESOLVED.md) for the design rationale and [`docs/spec/WIRE_FORMAT.md`](../../"
@@ -11071,11 +11083,11 @@ msgstr ""
 "RESOLVED.md) の `R42` を、ヘッダのレイアウトについては [`docs/spec/"
 "WIRE_FORMAT.md`](../../docs/spec/WIRE_FORMAT.md) を参照してください。"
 
-#: src/EMBEDDING.md:443
+#: src/EMBEDDING.md:445
 msgid "Trust-Skip Construction"
 msgstr "トラストスキップ構築"
 
-#: src/EMBEDDING.md:445
+#: src/EMBEDDING.md:447
 msgid ""
 "Programs whose verification cost is paid at build time, not at every load, "
 "may use `Vm::new_unchecked` to skip the resource-bounds check. Structural "
@@ -11085,7 +11097,7 @@ msgstr ""
 "`Vm::new_unchecked`を使って資源境界チェックを飛ばせます。構造検証は依然として"
 "走ります。"
 
-#: src/EMBEDDING.md:451
+#: src/EMBEDDING.md:453
 msgid ""
 "This is intentional misuse if used to admit programs that would fail the "
 "safe verifier. The intended use is precompiled bytecode that the host "
@@ -11101,11 +11113,11 @@ msgstr ""
 "い。`Vm::new_unchecked` は署名付きモジュールフラグのチェックも省略します。呼"
 "び出し側は、いかなる署名検証もビルド時に実施済みであることを表明します。"
 
-#: src/EMBEDDING.md:453 src/WHY_REJECTED.md:241
+#: src/EMBEDDING.md:455 src/WHY_REJECTED.md:241
 msgid "Cross-References"
 msgstr "相互参照"
 
-#: src/EMBEDDING.md:455
+#: src/EMBEDDING.md:457
 msgid ""
 "[`examples/wcmu_basic.rs`](../../examples/wcmu_basic.rs) shows the auto-"
 "sizing pattern end to end."
@@ -11113,7 +11125,7 @@ msgstr ""
 "[`examples/wcmu_basic.rs`](../../examples/wcmu_basic.rs)が自動サイズパターン"
 "を最初から最後まで示します。"
 
-#: src/EMBEDDING.md:456
+#: src/EMBEDDING.md:458
 msgid ""
 "[`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs) shows "
 "native bound declaration."
@@ -11121,7 +11133,7 @@ msgstr ""
 "[`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs)がネイ"
 "ティブ境界宣言を示します。"
 
-#: src/EMBEDDING.md:457
+#: src/EMBEDDING.md:459
 msgid ""
 "[`examples/wcmu_rejection.rs`](../../examples/wcmu_rejection.rs) shows the "
 "verifier rejecting an undersized arena."
@@ -11129,7 +11141,7 @@ msgstr ""
 "[`examples/wcmu_rejection.rs`](../../examples/wcmu_rejection.rs)が検証器がサ"
 "イズ不足のアリーナを却下する様子を示します。"
 
-#: src/EMBEDDING.md:458
+#: src/EMBEDDING.md:460
 msgid ""
 "[`examples/string_ops.rs`](../../examples/string_ops.rs) shows host-"
 "registered text concatenation and slicing natives."
@@ -11137,7 +11149,7 @@ msgstr ""
 "[`examples/string_ops.rs`](../../examples/string_ops.rs)がホスト登録のテキス"
 "ト連結とスライスネイティブを示します。"
 
-#: src/EMBEDDING.md:459
+#: src/EMBEDDING.md:461
 msgid ""
 "[`examples/yield_error.rs`](../../examples/yield_error.rs) shows error "
 "propagation through yield with a script-defined `Result`\\-shaped enum."
@@ -11145,7 +11157,7 @@ msgstr ""
 "[`examples/yield_error.rs`](../../examples/yield_error.rs)がスクリプト定義の"
 "`Result`形状の列挙型でyieldを通じたエラー伝搬を示します。"
 
-#: src/EMBEDDING.md:460
+#: src/EMBEDDING.md:462
 msgid ""
 "[`examples/method_call.rs`](../../examples/method_call.rs) shows method "
 "dispatch through receiver-style syntax."
@@ -11153,7 +11165,7 @@ msgstr ""
 "[`examples/method_call.rs`](../../examples/method_call.rs)がレシーバスタイル"
 "構文でのメソッドディスパッチを示します。"
 
-#: src/EMBEDDING.md:461
+#: src/EMBEDDING.md:463
 msgid ""
 "[`examples/piano_roll.rs`](../../examples/piano_roll.rs) is a feature-gated "
 "end-to-end SDL3 audio host. It exercises bounded-step execution under a real-"
@@ -11182,7 +11194,7 @@ msgstr ""
 "こと、例を他の制御ループ領域でKeleusmaを組み込むアーキテクチャ参照として使う"
 "ことを扱います。"
 
-#: src/EMBEDDING.md:462
+#: src/EMBEDDING.md:464
 msgid ""
 "[LANGUAGE_DESIGN.md](../../docs/architecture/LANGUAGE_DESIGN.md) describes "
 "the language model."
@@ -11190,7 +11202,7 @@ msgstr ""
 "[LANGUAGE_DESIGN.md](../../docs/architecture/LANGUAGE_DESIGN.md) は言語モデル"
 "を説明します。"
 
-#: src/EMBEDDING.md:463
+#: src/EMBEDDING.md:465
 msgid ""
 "[EXECUTION_MODEL.md](../../docs/architecture/EXECUTION_MODEL.md) describes "
 "the runtime model."
@@ -11198,7 +11210,7 @@ msgstr ""
 "[EXECUTION_MODEL.md](../../docs/architecture/EXECUTION_MODEL.md) はランタイム"
 "モデルを説明します。"
 
-#: src/EMBEDDING.md:464
+#: src/EMBEDDING.md:466
 msgid ""
 "[WHY_REJECTED.md](./WHY_REJECTED.md) describes verifier rejection categories."
 msgstr ""
@@ -11485,12 +11497,16 @@ msgid "GetData"
 msgstr "GetData"
 
 #: src/INSTRUCTION_SET.md:48 src/INSTRUCTION_SET.md:49
-msgid "u24 slot"
-msgstr "u24 slot"
+msgid "u24 field"
+msgstr "u24 field"
 
 #: src/INSTRUCTION_SET.md:48
-msgid "Push data segment slot value onto stack."
-msgstr "データセグメントのスロット値をスタックにプッシュします。"
+msgid ""
+"Push the value of element zero of the data field the operand names by its "
+"layout index."
+msgstr ""
+"オペランドがレイアウトインデックスで指定するデータフィールドの要素 0 の値を"
+"プッシュします。"
 
 #: src/INSTRUCTION_SET.md:49
 msgid "SetData"
@@ -11498,36 +11514,38 @@ msgstr "SetData"
 
 #: src/INSTRUCTION_SET.md:49
 msgid ""
-"Pop value and store into a data segment slot. A scalar stores inline; a flat "
-"composite copies its body into the persistent composite pool at the offset "
-"the module's private-composite layout table records for the slot (no "
-"dedicated composite-write opcode)."
+"Pop value and store into element zero of the data field the operand names. A "
+"scalar stores inline; a flat composite copies its body into the persistent "
+"composite pool at the offset the field's record gives (no dedicated "
+"composite-write opcode)."
 msgstr ""
-"値をポップしてデータセグメントのスロットに格納します。スカラーはインラインで"
-"格納されます。フラットな複合体は、モジュールのプライベート複合体レイアウト"
-"テーブルがそのスロットに対して記録するオフセットで、その本体を永続複合体プー"
-"ルにコピーします（専用の複合体書き込みオペコードはありません）。"
+"値をポップし、オペランドが指定するデータフィールドの要素 0 に格納します。スカ"
+"ラーはインラインで格納されます。フラットな複合体は、フィールドのレコードが示"
+"すオフセットで、その本体を永続複合体プールにコピーします（専用の複合体書き込"
+"みオペコードはありません）。"
 
 #: src/INSTRUCTION_SET.md:50
 msgid "GetDataIndexed"
 msgstr "GetDataIndexed"
 
 #: src/INSTRUCTION_SET.md:50 src/INSTRUCTION_SET.md:51
-msgid "u24 base, u24 len"
-msgstr "u24 base, u24 len"
+msgid "u24 field, u24 len"
+msgstr "u24 field, u24 len"
 
 #: src/INSTRUCTION_SET.md:50
 msgid ""
-"Pop a Word, Byte or Unit fallback and then a Word index. Read in range, "
-"otherwise use the supplied fallback. Push value, index, four Word byte limbs "
-"of the bound and an outcome flag. Invalid spans and operand types remain "
-"contract errors."
+"Pop a Word, Byte or Unit fallback and then a Word index. The span names one "
+"data field and its length is at most that field's element count. Read "
+"element `index` of the field in range, otherwise use the supplied fallback. "
+"Push value, index, four Word byte limbs of the bound and an outcome flag. "
+"Invalid spans and operand types remain contract errors."
 msgstr ""
 "Word、Byte、または Unit のフォールバック値をポップし、次に Word のインデック"
-"スをポップします。範囲内であれば読み取り、そうでなければ与えられたフォール"
-"バック値を使用します。値、インデックス、境界を表す四つの Word のバイトリム、"
-"および結果フラグをプッシュします。無効なスパンとオペランドの型は引き続き契約"
-"エラーです。"
+"スをポップします。スパンは一つのデータフィールドを指定し、その長さはその"
+"フィールドの要素数以下です。範囲内であればフィールドの要素 `index` を読み取"
+"り、そうでなければ与えられたフォールバック値を使用します。値、インデックス、"
+"境界を表す四つの Word のバイトリム、および結果フラグをプッシュします。無効な"
+"スパンとオペランドの型は引き続き契約エラーです。"
 
 #: src/INSTRUCTION_SET.md:51 src/INSTRUCTION_SET.md:257
 msgid "SetDataIndexed"
@@ -11535,15 +11553,16 @@ msgstr "SetDataIndexed"
 
 #: src/INSTRUCTION_SET.md:51
 msgid ""
-"Pop value and Word index. A valid index writes one slot. An invalid index "
-"performs no write. Push the index, four Word byte limbs of the bound and "
-"flag zero for success or one for invalid. Invalid spans and storage-contract "
-"violations remain errors."
+"Pop value and Word index. The span is as for `GetDataIndexed`. A valid index "
+"writes one element of the field. An invalid index performs no write. Push "
+"the index, four Word byte limbs of the bound and flag zero for success or "
+"one for invalid. Invalid spans and storage-contract violations remain errors."
 msgstr ""
-"値と Word のインデックスをポップします。有効なインデックスは一つのスロットに"
-"書き込みます。無効なインデックスは書き込みを行いません。インデックス、境界を"
-"表す四つの Word のバイトリム、および成功時は 0、無効時は 1 のフラグをプッシュ"
-"します。無効なスパンとストレージ契約の違反は引き続きエラーです。"
+"値と Word のインデックスをポップします。スパンは `GetDataIndexed` と同様で"
+"す。有効なインデックスはフィールドの一つの要素に書き込みます。無効なインデッ"
+"クスは書き込みを行いません。インデックス、境界を表す四つの Word のバイトリ"
+"ム、および成功時は 0、無効時は 1 のフラグをプッシュします。無効なスパンとスト"
+"レージ契約の違反は引き続きエラーです。"
 
 #: src/INSTRUCTION_SET.md:52 src/INSTRUCTION_SET.md:240
 msgid "BoundsCheck"
@@ -13380,31 +13399,35 @@ msgid ""
 "Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute "
 "the capacity from the compiled module before constructing the VM. The figure "
 "is the sum of the operand stack, the call frames, the opaque registry, the "
-"per-iteration heap, and the composite host inputs of the entry chunk. An "
+"per-iteration heap, the composite host inputs of the entry chunk, and the "
+"private composite initializers that construction copies into the arena. An "
 "arena of exactly that size constructs the VM under the supplied native "
 "attestations and admits the call and every resume up to each `Reset`, "
 "provided that no composite input contains `Text`."
 msgstr ""
 "`keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)`を使って、VM構築"
 "前にコンパイル済みモジュールから容量を計算します。この値は、オペランドスタッ"
-"ク、呼び出しフレーム、不透明レジストリ、反復ごとのヒープ、そしてエントリチャ"
-"ンクの複合ホスト入力の合計です。ちょうどその大きさのアリーナは、提供されたネ"
-"イティブ計上のもとでVMを構築し、どの複合入力も`Text`を含まない限り、呼び出し"
-"と各`Reset`までのすべての再開を許容します。"
+"ク、呼び出しフレーム、不透明レジストリ、反復ごとのヒープ、エントリチャンクの"
+"複合ホスト入力、そして構築時にアリーナへコピーされるプライベート複合値の初期"
+"値の合計です。ちょうどその大きさのアリーナは、提供されたネイティブ計上のもと"
+"でVMを構築し、どの複合入力も`Text`を含まない限り、呼び出しと各`Reset`までのす"
+"べての再開を許容します。"
 
 #: src/COOKBOOK.md:78
 msgid ""
-"The figure also adds the region a native compilation of the module reserves, "
-"reported by `keleusma::native_region::native_region_supplement_bytes`, so "
-"that one capacity serves both the virtual machine and native code. A host "
-"that runs only the virtual machine is over-provisioned by exactly that "
-"region."
+"The figure is the virtual machine's alone. A host that runs the module as "
+"native code calls `keleusma::native_region::native_route_buffers_for`, which "
+"reports the native composite region, the private buffer and the shared "
+"buffer. A host that keeps one arena for either route calls "
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`, which adds the native "
+"region once."
 msgstr ""
-"この値には、モジュールをネイティブコードへコンパイルしたときに確保される領域も"
-"加算されます。その大きさは "
-"`keleusma::native_region::native_region_supplement_bytes` が返し、一つの容量で"
-"仮想マシンとネイティブコードの両方に対応できます。仮想マシンだけを実行するホス"
-"トには、ちょうどその領域の分だけ余分に割り当てられます。"
+"この値は仮想マシンだけのものです。モジュールをネイティブコードとして実行する"
+"ホストは`keleusma::native_region::native_route_buffers_for`を呼びます。この関"
+"数は、ネイティブの複合値領域、プライベートバッファ、共有バッファを返します。"
+"どちらの経路にも使える一つのアリーナを持つホストは"
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`を呼びます。この関数はネ"
+"イティブ領域を一度だけ加えます。"
 
 #: src/COOKBOOK.md:89
 msgid ""
@@ -24161,6 +24184,52 @@ msgstr ""
 "より広い`llms.txt`の慣習は、AI読み取り可能なプロジェクト入口を宣言する構造化"
 "マークダウンの慣習として、2024年にJeremy Howardらが提案しました。Keleusmaのプ"
 "ロジェクトルートの[`llms.txt`](../../llms.txt)がその慣習に従っています。"
+
+#~ msgid ""
+#~ "The figure also includes the region a native compilation of the module "
+#~ "reserves, so that one capacity works whether the module runs on the "
+#~ "virtual machine or as native code. A host that runs only the virtual "
+#~ "machine is therefore over-provisioned by that region, which "
+#~ "`keleusma::native_region::native_region_supplement_bytes` reports, and a "
+#~ "host that used to add the native figure itself should stop, or it counts "
+#~ "the region twice."
+#~ msgstr ""
+#~ "この値には、モジュールをネイティブコードへコンパイルしたときに確保される領"
+#~ "域も含まれます。そのため、モジュールを仮想マシンで実行する場合とネイティブ"
+#~ "コードとして実行する場合のどちらでも、一つの容量で動作します。仮想マシンだ"
+#~ "けを実行するホストには、その領域の分だけ余分に割り当てられます。その大きさ"
+#~ "は `keleusma::native_region::native_region_supplement_bytes` が返します。"
+#~ "以前にネイティブ用の値を自分で加えていたホストは、それをやめてください。そ"
+#~ "うしないと、その領域を二重に数えることになります。"
+
+#~ msgid ""
+#~ "Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to "
+#~ "compute the capacity from the compiled module before constructing the VM. "
+#~ "The figure is the sum of the operand stack, the call frames, the opaque "
+#~ "registry, the per-iteration heap, and the composite host inputs of the "
+#~ "entry chunk. An arena of exactly that size constructs the VM under the "
+#~ "supplied native attestations and admits the call and every resume up to "
+#~ "each `Reset`, provided that no composite input contains `Text`."
+#~ msgstr ""
+#~ "`keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)`を使って、VM"
+#~ "構築前にコンパイル済みモジュールから容量を計算します。この値は、オペランド"
+#~ "スタック、呼び出しフレーム、不透明レジストリ、反復ごとのヒープ、そしてエン"
+#~ "トリチャンクの複合ホスト入力の合計です。ちょうどその大きさのアリーナは、提"
+#~ "供されたネイティブ計上のもとでVMを構築し、どの複合入力も`Text`を含まない限"
+#~ "り、呼び出しと各`Reset`までのすべての再開を許容します。"
+
+#~ msgid ""
+#~ "The figure also adds the region a native compilation of the module "
+#~ "reserves, reported by "
+#~ "`keleusma::native_region::native_region_supplement_bytes`, so that one "
+#~ "capacity serves both the virtual machine and native code. A host that "
+#~ "runs only the virtual machine is over-provisioned by exactly that region."
+#~ msgstr ""
+#~ "この値には、モジュールをネイティブコードへコンパイルしたときに確保される領"
+#~ "域も加算されます。その大きさは "
+#~ "`keleusma::native_region::native_region_supplement_bytes` が返し、一つの容"
+#~ "量で仮想マシンとネイティブコードの両方に対応できます。仮想マシンだけを実行"
+#~ "するホストには、ちょうどその領域の分だけ余分に割り当てられます。"
 
 #~ msgid ""
 #~ "The second argument is a slice of per-native heap attestations; pass an "

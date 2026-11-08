@@ -2490,28 +2490,39 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<ResolvedResumes, Typ
         validate_no_nested_negative_labels(&impl_block.for_type, false)?;
     }
     for impl_block in &program.impls {
-        let head = match strip_labels(ctx.resolve_type(&impl_block.for_type)) {
-            Type::Byte => "Byte".to_string(),
-            Type::Word => "Word".to_string(),
-            Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
-            Type::Float => "Float".to_string(),
-            Type::Bool => "bool".to_string(),
-            Type::Unit => "()".to_string(),
-            Type::Str => "Text".to_string(),
-            Type::Tuple(_) => "tuple".to_string(),
-            Type::Array(_, _) => "array".to_string(),
-            Type::TextN(n) => alloc::format!("Text<{}>", n),
-            Type::Multiword(n, f) => alloc::format!("Multiword<{}, {}>", n, f),
-            Type::Option(_) => "Option".to_string(),
-            Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
-            Type::Newtype(name) => name,
-            Type::Labelled(_, _) => unreachable!("strip_labels removed Labelled"),
-            Type::Var(_) => continue,
+        // The impl is keyed by the same head that method lookup and trait
+        // bound checking use, `type_head_name`. For `Text<N>`, `Fixed<n>`
+        // and `Multiword<n>` that head is the family name without its
+        // dimension. Until 2026-11-01 this site keyed those three by the
+        // dimensioned name, so their impls were admitted and could never be
+        // called. See `tests/generic_methods.rs`, `dimensioned_families`.
+        let resolved = strip_labels(ctx.resolve_type(&impl_block.for_type));
+        let Some(head) = type_head_name(&resolved) else {
+            continue;
         };
-        ctx.impls
+        let newly_registered = ctx
+            .impls
             .entry(impl_block.trait_name.clone())
             .or_default()
             .insert(head.clone());
+        // Two impls of one trait within a dimensioned family would mangle to
+        // the same `Trait::Family::method` name, and the later one would
+        // silently replace the earlier one. Refuse that instead.
+        let dimensioned = matches!(
+            resolved,
+            Type::Str | Type::TextN(_) | Type::Fixed(_) | Type::Multiword(_, _)
+        );
+        if dimensioned && !newly_registered {
+            return Err(TypeError::new(
+                format!(
+                    "trait `{}` is implemented more than once for the `{}` family. An impl \
+                     applies to the whole family, every capacity or width alike, so a \
+                     family takes at most one impl of each trait",
+                    impl_block.trait_name, head
+                ),
+                impl_block.span,
+            ));
+        }
 
         // Register each impl method under a mangled name so it is
         // callable from user code through the existing `Expr::Call`
@@ -2711,23 +2722,10 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<ResolvedResumes, Typ
     // their mangled names so the parameter and return type lookups
     // resolve through the same FnSig that was registered in pass 1d.
     for impl_block in &program.impls {
-        let head = match strip_labels(ctx.resolve_type(&impl_block.for_type)) {
-            Type::Byte => "Byte".to_string(),
-            Type::Word => "Word".to_string(),
-            Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
-            Type::Float => "Float".to_string(),
-            Type::Bool => "bool".to_string(),
-            Type::Unit => "()".to_string(),
-            Type::Str => "Text".to_string(),
-            Type::Tuple(_) => "tuple".to_string(),
-            Type::Array(_, _) => "array".to_string(),
-            Type::TextN(n) => alloc::format!("Text<{}>", n),
-            Type::Multiword(n, f) => alloc::format!("Multiword<{}, {}>", n, f),
-            Type::Option(_) => "Option".to_string(),
-            Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
-            Type::Newtype(name) => name,
-            Type::Labelled(_, _) => unreachable!("strip_labels removed Labelled"),
-            Type::Var(_) => continue,
+        // The same head as the registration pass above.
+        let Some(head) = type_head_name(&strip_labels(ctx.resolve_type(&impl_block.for_type)))
+        else {
+            continue;
         };
         for method in &impl_block.methods {
             let mut renamed = method.clone();

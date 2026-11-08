@@ -1,0 +1,43 @@
+COMPLETION CONDITION — the host contract, stated completely
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE GENERATED HEADER STATES EVERY BUFFER THE ENTRY REQUIRES.
+   For a module lowered through the shipped emit path, the header carries the
+   size of the persistent/private region and of the composite region, alongside
+   the shared-segment size it already carried. The values are derived from the
+   module, not transcribed.
+
+2. THE HEADER'S FIGURES EQUAL THE PUBLISHED ONES.
+   A test compares each figure in the generated header against the backend
+   function that defines it, and fails on a mismatch. It is non-vacuous: the
+   figures compared are non-zero for the subject used.
+
+3. THE PRIVATE INITIAL IMAGE IS AVAILABLE TO A C HOST.
+   When a module's initial private image has any non-zero content, the header
+   carries those bytes, and the shipped host installs them before the first call.
+   A module with no such content does not emit an empty array.
+
+4. THE SHIPPED HOST DERIVES ITS BUFFER SIZES FROM THE HEADER.
+   No buffer the entry receives is sized by a literal in the host source that the
+   header does not define.
+
+5. THE EXAMPLE STILL AGREES WITH THE REFERENCE.
+   The existing end-to-end check -- build, link, run, compare against the virtual
+   machine -- still passes, and still degrades to a skip rather than a failure
+   when no C compiler is present.
+
+6. WHAT THE EXAMPLE DOES NOT EXERCISE IS WRITTEN DOWN.
+   The subject declares no private data and builds no composite, so the private
+   and composite figures it carries are structurally correct but not driven by
+   its own execution. That limitation is stated next to the test rather than left
+   for a reader to discover.
+
+7. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

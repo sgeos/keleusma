@@ -10,7 +10,9 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
     let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(schema).unwrap()).unwrap();
     let module = keleusma::compiler::compile(&ast).unwrap();
     assert_eq!(module.shared_data_bytes, 24 * 8 + 1024);
-    assert_eq!(module.private_data_bytes, 6880);
+    // 6,880 before Encoding F retired the run-grouping blocks `dg` and `sr` and
+    // shrank the data decoder's `dl` from twenty slots to seven.
+    assert_eq!(module.private_data_bytes, 5568);
     eprintln!(
         "schema resources: {} chunks, {} artifact bytes, {} shared bytes, {} private bytes",
         module.chunks.len(),
@@ -30,7 +32,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (wire, "nm", "native_at", 37, 1184),
         (wire, "templates", "count", 7, 224),
         (wire, "ck", "debug", 7, 224),
-        (wire, "initialization", "active", 7, 224),
+        (wire, "initialization", "active", 6, 192),
         (wire, "fl", "module", 18, 576),
         (debug, "sort", "mode", 15, 480),
         (debug, "emit", "phase", 9, 288),
@@ -38,7 +40,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (schema, "nr", "mode", 7, 224),
         (schema, "cs", "mode", 23, 736),
         (schema, "lt", "mode", 17, 544),
-        (schema, "dl", "mode", 20, 640),
+        (schema, "dl", "mode", 7, 224),
         (schema, "pt", "mode", 3, 96),
         (schema, "dr", "mode", 9, 288),
         (schema, "mo", "mode", 9, 288),
@@ -47,8 +49,6 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (schema, "bf", "mode", 16, 512),
         (schema, "ec", "consts", 10, 320),
         (schema, "np", "mode", 17, 544),
-        (schema, "dg", "mode", 14, 448),
-        (schema, "sr", "mode", 14, 448),
     ] {
         let start = stage.find(&format!("private data {name} {{")).unwrap();
         let end = start + stage[start..].find('}').unwrap() + 1;
@@ -59,7 +59,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         let tokens = keleusma::lexer::tokenize(&source).unwrap();
         let ast = keleusma::parser::parse(&tokens).unwrap();
         let module = keleusma::compiler::compile(&ast).unwrap();
-        assert_eq!(module.data_layout.as_ref().unwrap().slots.len(), count);
+        assert_eq!(module.data_layout.as_ref().unwrap().slot_count(), count);
         assert_eq!(module.private_data_bytes, bytes);
         assert_eq!(
             keleusma::vm::required_persistent_capacity_for(&module),
@@ -87,7 +87,7 @@ fn module_forest_scratch_is_priced_at_the_declared_word_width() {
     let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(&source).unwrap()).unwrap();
     let module = keleusma::compiler::compile(&ast).unwrap();
     assert_eq!(
-        module.data_layout.as_ref().unwrap().shared_layout.len(),
+        module.data_layout.as_ref().unwrap().shared_slot_count(),
         9216 + 1536 * 2
     );
     assert_eq!(module.shared_data_bytes, 98_304);

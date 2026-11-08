@@ -1,0 +1,47 @@
+COMPLETION CONDITION — the float yield arm
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Either the backend lowers a float-carrying general stream and a differential
+   in the tree compares its results against the reference implementation value
+   by value, or the backend still refuses such a stream and the tree records why
+   the attempt was stopped. A lowered float stream with nothing comparing it
+   satisfies neither.
+
+2. If the backend lowers such a stream, the degenerate yield form is unchanged:
+   nothing in the tree carries a float through the host callback, and the host
+   facing calling convention for that callback is the same as before.
+
+3. If the backend lowers such a stream, the kind recorded for a resumed value
+   comes from the stream's declared parameter type rather than from the emitted
+   value's machine type, and the tree states why that distinction matters.
+
+4. The defensive behaviour that marks a reused operand slot as integer by
+   default is still present, so a stale float tag cannot leak into a later
+   integer operand.
+
+5. The refusal that rejects a composite body stacked beneath a yielded value is
+   unchanged.
+
+6. Every float operand and reply driven by any differential comparing the two
+   implementations is exactly representable in a four byte float, and something
+   in the tree fails if that stops being true. Agreement is decided by exact
+   comparison, not by a tolerance.
+
+7. No instrument in the tree asserts an asymmetry between the two
+   implementations that no longer holds.
+
+8. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+9. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries or on one run assumed to cover both.
+
+10. The handoff state table agrees with the tree, its figures name the commit
+    they were measured at where they cannot be re-derived, and the guards that
+    check it pass.
+
+11. The working tree is clean and the branch is pushed.

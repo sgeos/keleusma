@@ -1,0 +1,48 @@
+COMPLETION CONDITION — Order-1 subject widening
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. Each seeded self-hosted stage is driven against more than one
+   subject input, or the tree records why a given stage cannot be and
+   names the obstacle.
+
+2. The report states, from a run, how many subjects each seeded stage
+   received, and counts separately any subject that failed to produce a
+   seed. A declined subject is visible rather than silently skipped.
+
+3. No widened run is vacuous. Where a stage's verdict cannot be moved
+   for a subject, that is reported rather than counted as agreement.
+
+4. The argument-vector count for a stream entry remains one. Subject
+   variation and argument-vector variation are kept distinct in both
+   the code and the report.
+
+5. Any stage that disagrees on a newly added subject is reported as a
+   finding and investigated. It is not exempted, masked, or removed.
+
+6. A guard fails if a seeded stage is driven at only one subject, or if
+   the subject set is empty. No guard pins the subject count to a
+   constant.
+
+7. The tree states the remaining limitation at its new position rather
+   than implying the gate's inputs are now general.
+
+8. The tree does not claim the Order-1 gate is met.
+
+9. Any claim that a figure changed is supported by a recorded
+   measurement of both the before and after values.
+
+10. If the number of subjects is bounded for runtime, the bound and its
+    reason are stated rather than applied silently.
+
+11. The files recorded as owned by the other line are unmodified.
+
+12. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+13. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.

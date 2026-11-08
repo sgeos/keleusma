@@ -1,0 +1,45 @@
+COMPLETION CONDITION — the absorption workspace clause (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE CURRENT TREE IS EXERCISED BEYOND THE BACKEND PACKAGE.
+   The workspace test suite is run on the tree as it now stands, and its result
+   is reported with the configuration it ran under.
+
+2. THE GAP IS DESCRIBED AS A ROUTINE DEFECT, NOT A ONE-OFF.
+   The record says that absorption predictions naming only the backend package
+   cannot express workspace staleness, and that this is why the check was
+   missed rather than that it was forgotten once.
+
+3. THE ROUTINE IS CHANGED, NOT ONLY THE TREE.
+   Something durable records that an absorption touching shared source leaves
+   workspace coverage stale on this branch. A green run with no recorded change
+   does not satisfy this, because the gap would recur at the next absorption.
+
+4. THE RELATIONSHIP TO THE EARLIER LESSON IS STATED.
+   The record says whether this is a new failure species or another instance of
+   one already recorded, and does not present a repeat as a discovery.
+
+5. NO PARTIAL RUN IS CALLED A GATE PASS.
+   Running one suite in one configuration is distinguished from running the
+   project's gate.
+
+6. FIGURES CARRY THEIR POPULATION.
+   Each count states which package or workspace and which configuration it
+   ranges over.
+
+7. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test is named with its cause and with a statement of whether the
+   cause belongs to this line.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass/fail claim corresponds to output appearing in the
+   transcript. Carried figures are marked as carried.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the eight properties above,
+or whether any other goal in the same session advanced.

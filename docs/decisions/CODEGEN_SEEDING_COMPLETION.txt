@@ -1,0 +1,77 @@
+COMPLETION CONDITION — absorption 14, and the codegen.kel requirement
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The branch contains the v0.2.3 work carrying the Call-record chunk-radix
+   change, with nothing from that line left unabsorbed.
+
+2. Every census and gate figure quoted as current was re-derived against the
+   present tree after the last change capable of moving it. Where a figure
+   moved, what moved it is stated; where it held, that it was re-derived is
+   evident.
+
+3. If more than one change capable of moving a gate figure landed, each figure
+   that moved is attributed to one of them on the basis of a measurement taken
+   between them, not on reasoning after the fact.
+
+4. A document states what codegen.kel requires to be seeded: the shape of its
+   input, whether the harness tick budget is load-bearing for it, and whether
+   anything it needs is available only from a file this line does not own. Each
+   verdict rests on something read or measured against the tree rather than
+   inferred from the other stages, and where its shape differs from the stages
+   already seeded, the difference is stated rather than glossed.
+
+5. Any description of a stage's shared block held anywhere in the tree accounts
+   for every slot in that block. A count stated for one is correct.
+
+6. Either codegen.kel is driven by a seed, or the obstacle is named specifically
+   enough that a next attempt starts from it. If it is driven, then the stage
+   reaches a result rather than exiting early with the harness REQUIRING that,
+   an observable MOVES from what the unseeded buffer already holds, and the
+   gate's count of unseeded stages reflects reality.
+
+7. Any subject tried and rejected is reported with its cause rather than
+   silently replaced.
+
+8. No file under src/selfhost/, and none of src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, or .github/workflows/, differs from the
+   v0.2.3 commit the branch has absorbed.
+
+9. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   The two are not run concurrently with each other, because the workspace
+   carries a wall-clock guard that concurrent load makes fail.
+
+10. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+11. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Seeding codegen.kel. Establishing its requirement is the goal; a working seed
+  is a bonus and a partially-working one that reports as seeded is a defect.
+- Declaring the Order-1 gate met.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Repairing anything needing a file this line does not own.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A stage reported as seeded whose observable did not move, or whose run stopped
+  early.
+- An observable asserted without its unseeded baseline having been measured.
+- A green reached by narrowing a population, dropping a subject, or relaxing an
+  assertion, unless what was excluded is still reported with its cause.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A figure carried across a change capable of moving it.
+- A suite result read from a pipeline's exit status rather than the command's.

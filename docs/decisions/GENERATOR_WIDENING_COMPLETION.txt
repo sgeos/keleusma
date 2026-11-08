@@ -1,0 +1,41 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE GENERATOR IS WIDER AND STILL BOUNDED
+- Generated programs are compared across more than one seed, and across at least
+  one operand type beyond the one originally covered.
+- The number of distinct programs compared is asserted against a floor that
+  reflects the widening.
+- Depth or magnitude limits are derived per operand type rather than shared, so
+  that checked arithmetic cannot overflow for any type generated.
+- The added runtime is stated and remains small relative to the gate's longest
+  phase.
+
+2. REACH IS SHOWN FOR THE NEW COVERAGE
+- The tree records a perturbation of the lowering that the newly added coverage
+  catches, distinct from the perturbation used for the original coverage.
+- If a perturbation for the new type could not be made to fire, that is recorded
+  as a finding rather than omitted.
+
+3. THE SCOPE IS STATED
+- The tree says which operand types the generator does not emit and why, in terms
+  a reader can disagree with.
+- A green run is not described as a correctness claim about the lowering.
+
+4. FINDINGS
+- Any divergence is recorded, reduced toward a minimal case, and described as the
+  two implementations disagreeing rather than as a verdict about which is wrong.
+- Nothing is weakened, skipped or deleted to make a run green.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

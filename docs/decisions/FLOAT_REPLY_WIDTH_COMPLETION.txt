@@ -1,0 +1,44 @@
+COMPLETION CONDITION — the resumed float reply's width
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Either a composite built directly from a resumed float reply is lowered and a
+   differential in the tree compares its field values against the reference tick
+   by tick, or the tree records why the attempt was stopped and the refusal
+   remains pinned with its control.
+
+2. If such a composite is lowered, the width used for the resumed value is taken
+   from the module's declared float width rather than from a constant, so it
+   differs between the two float configurations, and the tree states why that
+   figure is the correct one.
+
+3. The function that maps a type tag alone to a width still declines to supply a
+   width for a float, and the tree states that it declines because the tag does
+   not carry the information.
+
+4. Any test asserting the new capability compares values read back from the
+   composite, not merely the absence of a refusal.
+
+5. Every float value any differential relies on, operands and replies and yielded
+   values alike, is exactly representable in a four byte float, and something in
+   the tree fails if that stops being true.
+
+6. No claim in the tree says this closes the question of the spilled operand's
+   width unless something in the tree detects the loss of that width.
+
+7. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+8. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+9. The handoff state table agrees with the tree, figures that cannot be
+   re-derived name the commit they were measured at, and the guards that check it
+   pass.
+
+10. The working tree is clean, and the branch on the remote matches the local
+    branch, established by querying the remote.

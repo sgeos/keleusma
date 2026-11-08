@@ -200,13 +200,25 @@ fn node(ctx: &mut Ctx, kind: i64, arg: i64, lhs: i64, rhs: i64) -> i64 {
     (ctx.nodes.len() - 1) as i64
 }
 
-/// Resolve a `data.field` reference to its slot index in the module data layout.
+/// The field index of the element slot at `pos`, the number of fields that begin
+/// before it. `slots` names every element slot by its field, in slot order, so a
+/// field begins wherever the name changes. A data operand names a field since
+/// option B of the array wire-slot design, where it named an element slot before.
+fn field_index_at(slots: &[String], pos: usize) -> i64 {
+    (0..pos)
+        .filter(|&i| i == 0 || slots[i - 1] != slots[i])
+        .count() as i64
+}
+
+/// Resolve a `data.field` reference to its field index in the module data layout.
 fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
     let slot_name = format!("{data_name}.{field}");
-    ctx.data_slots
+    let pos = ctx
+        .data_slots
         .iter()
         .position(|n| n == &slot_name)
-        .unwrap_or_else(|| panic!("no data slot named `{slot_name}`")) as i64
+        .unwrap_or_else(|| panic!("no data slot named `{slot_name}`"));
+    field_index_at(&ctx.data_slots, pos)
 }
 
 /// Resolve a `data.field[..]` array reference to its element-0 slot (base) and its
@@ -224,13 +236,13 @@ fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
 /// tests in three places rather than one.
 fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
     let want = format!("{data_name}.{field}");
-    let base = ctx
+    let pos = ctx
         .data_slots
         .iter()
         .position(|n| n == &want)
-        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+        .unwrap_or_else(|| panic!("no data slot named `{want}`"));
     let len = ctx.data_slots.iter().filter(|n| *n == &want).count() as i64;
-    (base, len)
+    (field_index_at(&ctx.data_slots, pos), len)
 }
 
 /// A flattened function body: the flattening context and the body's block root.
@@ -1793,7 +1805,7 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         let data_slots: Vec<String> = reference
             .data_layout
             .as_ref()
-            .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+            .map(slot_names)
             .unwrap_or_default();
         // Scalar `const data` fields, resolved to their literal values.
         let const_data: Vec<(String, i64)> = program
@@ -1935,7 +1947,7 @@ fn self_compile_codegen_atomic_functions() {
     let data_slots: Vec<String> = reference
         .data_layout
         .as_ref()
-        .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+        .map(slot_names)
         .unwrap_or_default();
     let const_data: Vec<(String, i64)> = program
         .data_decls
@@ -2112,8 +2124,12 @@ fn self_compile_codegen_atomic_functions() {
     // slice 5b `push_floatlit` (103 -> 104).
     // 105 since `push_refinement`, the refinement check, 2026-10-27.
     // The private struct read copy pass of 2026-10-31 adds the twelve `dc_` helpers, all
-    // self-compiling (105 -> 117).
-    const EXPECTED_SELF_COMPILE: usize = 117;
+    // self-compiling (105 -> 117). The `Text<N>` literal cast adds `text_cast_base` and
+    // `push_text_cast`, both self-compiling (117 -> 119), 2026-11-02. The five `Text<N>`
+    // operations add `push_text_op`, `text_step` and the `tx_` helpers, all
+    // self-compiling (119 -> 139), the same day, and the `Byte` literal suffix adds
+    // `push_bytelit` (139 -> 140).
+    const EXPECTED_SELF_COMPILE: usize = 140;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2339,7 +2355,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=105) => {}
+                        || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                        {}
                     _ => records.push((code, val)),
                 }
             } else if in_guard {
@@ -2432,7 +2449,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 && *k != keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                 && *k != keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                 && *k != keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                && !matches!(*k, 94..=96 | 99..=105)
+                && !matches!(*k, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG)
         })
         .collect();
     let records: &[(i64, i64)] = &records;
@@ -4175,7 +4192,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                     || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                     || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                    || matches!(c, 94..=96 | 99..=105) => {}
+                    || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                    {}
                 _ => cur.as_mut().unwrap().body.push((code, val)),
             }
         } else if in_guard {
@@ -4187,7 +4205,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                     || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                     || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                    || matches!(c, 94..=96 | 99..=105) => {}
+                    || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                    {}
                 _ => cur.as_mut().unwrap().guard.push((code, val)),
             }
         } else if in_data {
@@ -4512,6 +4531,9 @@ fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].ops = ops;
         // A tag-1 pool entry is a StaticStr: its value is the lexer intern id, resolved to the
         // string bytes through the name table. A tag-0 entry is an Int.
+        // A tag-4 entry is a `Text<N>` literal cast's flat body and a tag-5 entry a Byte
+        // literal. The shipping driver's conversion is used for those tags, so the two
+        // cannot drift on them.
         module.chunks[idx].constants = pool
             .iter()
             .map(|&(v, t)| {
@@ -4522,6 +4544,8 @@ fn self_host_compile(src: &str) -> Module {
                 } else if t == 3 {
                     // A Float literal's interned text, as the shipping driver converts it.
                     ConstValue::Float(names[v as usize].parse().expect("float literal text"))
+                } else if t == 4 || t == 5 {
+                    keleusma::selfhost::pool_to_constants(&[(v, t)], &names).remove(0)
                 } else {
                     ConstValue::Int(v)
                 }
@@ -5645,17 +5669,30 @@ fn reconstruct_kel_matches_rust_for_multihead() {
 // first, then private, const blocks producing no runtime slots, array fields expanding
 // to one `block.field[k]` slot per element.
 
-/// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
-/// interned block, field, and (unused here) type ids through the name table.
-fn assemble_data_slots(
+/// Each logical data slot's name, the field's name once per element, which is the per-slot
+/// view the codegen inputs take.
+fn slot_names(dl: &keleusma::bytecode::DataLayout) -> Vec<String> {
+    dl.fields
+        .iter()
+        .flat_map(|f| (0..f.count).map(move |_| f.name.clone()))
+        .collect()
+}
+
+/// Assemble the data fields from parse.kel's data-block record stream, an independent model
+/// of the driver's assembly: one field per declared field, shared blocks first, const blocks
+/// producing no field. A shared field takes the next host-buffer offset and the element size
+/// as its stride; a private field starts at the zero of its kind. The stage data fields are
+/// all `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
+/// (tag 2, one byte), each a scalar, and the stages declare no private composite.
+fn assemble_data_fields(
     data_records: &[(i64, i64)],
     names: &[String],
-) -> Vec<keleusma::bytecode::DataSlot> {
-    use keleusma::bytecode::{DataSlot, SlotVisibility};
+) -> Vec<keleusma::bytecode::DataField> {
+    use keleusma::bytecode::{DataField, DataInit};
     struct Blk {
         name_id: i64,
         vis: i64,
-        fields: Vec<(i64, i64)>, // (field name id, element count)
+        fields: Vec<(i64, i64, i64)>, // (field name id, type name id, element count)
     }
     let mut blocks: Vec<Blk> = Vec::new();
     for &(code, val) in data_records {
@@ -5665,104 +5702,9 @@ fn assemble_data_slots(
                 vis: val % 4,
                 fields: Vec::new(),
             }),
-            4 => blocks.last_mut().unwrap().fields.push((val, 1)),
-            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
-            // 6 (PTYPE) is not needed for the slot names; 5 (END) is a boundary.
-            _ => {}
-        }
-    }
-    let mut slots = Vec::new();
-    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
-    for pass_vis in [0i64, 1i64] {
-        let visibility = if pass_vis == 0 {
-            SlotVisibility::Shared
-        } else {
-            SlotVisibility::Private
-        };
-        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
-            let bname = &names[b.name_id as usize];
-            for &(fid, count) in &b.fields {
-                let fname = &names[fid as usize];
-                if count == 1 {
-                    slots.push(DataSlot {
-                        name: format!("{bname}.{fname}"),
-                        visibility,
-                    });
-                } else {
-                    // ONE NAME FOR THE WHOLE ARRAY, mirroring the reference
-                    // compiler. A distinct `field[k]` per element defeated the
-                    // name interner's dedup and made the string pool and name
-                    // table scale with the ELEMENT COUNT. This model exists to
-                    // agree with `compiler.rs` byte for byte, so it tracks that
-                    // change rather than encoding the older convention.
-                    let array_name = format!("{bname}.{fname}");
-                    for _ in 0..count {
-                        slots.push(DataSlot {
-                            name: array_name.clone(),
-                            visibility,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    slots
-}
-
-// The data-slot table the driver assembles from parse.kel's data-block records is
-// byte-identical (name and visibility, in order) to the one the Rust-hosted compiler
-// bakes, for every stage source: shared-then-private ordering, array expansion, and
-// const blocks producing no slots.
-#[test]
-fn assembled_data_slots_match_the_reference() {
-    if common::selfhost_cache::hit("assembled_data_slots_match_the_reference", KEL_PIPELINE) {
-        return;
-    }
-    let cases = [
-        "compiler/kel/lexer.kel",
-        "compiler/kel/reconstruct.kel",
-        "compiler/kel/codegen.kel",
-        "compiler/kel/parse.kel",
-    ];
-    for path in cases {
-        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
-        let (_fns, names, data_records, _) = parse_functions(&src);
-        let slots = assemble_data_slots(&data_records, &names);
-        let reference = compile_src(&src);
-        let ref_slots = &reference.data_layout.as_ref().expect("data layout").slots;
-        assert_eq!(slots.len(), ref_slots.len(), "slot count for {path}");
-        for (i, (a, b)) in slots.iter().zip(ref_slots.iter()).enumerate() {
-            assert_eq!(a.name, b.name, "slot {i} name for {path}");
-            assert_eq!(a.visibility, b.visibility, "slot {i} visibility for {path}");
-        }
-    }
-    common::selfhost_cache::record_pass("assembled_data_slots_match_the_reference", KEL_PIPELINE);
-}
-
-/// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
-/// data-block records. The shared segment is the single shared block's fields expanded
-/// to one entry per element at consecutive byte offsets; the stage data fields are all
-/// `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
-/// (tag 2, one byte), and each is a scalar (len 0).
-fn assemble_shared_layout(
-    data_records: &[(i64, i64)],
-    names: &[String],
-) -> Vec<keleusma::bytecode::SharedSlotLayout> {
-    use keleusma::bytecode::SharedSlotLayout;
-    struct Blk {
-        vis: i64,
-        fields: Vec<(i64, i64)>, // (type name id, element count)
-    }
-    let mut blocks: Vec<Blk> = Vec::new();
-    for &(code, val) in data_records {
-        match code {
-            9 => blocks.push(Blk {
-                vis: val % 4,
-                fields: Vec::new(),
-            }),
-            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
-            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
-            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            4 => blocks.last_mut().unwrap().fields.push((val, 0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().2 = val,
             _ => {}
         }
     }
@@ -5770,30 +5712,72 @@ fn assemble_shared_layout(
         match names[type_id as usize].as_str() {
             "Word" => (3, 8),
             "Byte" => (2, 1),
-            other => panic!("unhandled shared field type `{other}`"),
+            other => panic!("unhandled data field type `{other}`"),
         }
     };
-    let mut layout = Vec::new();
+    let mut fields = Vec::new();
+    let mut slot: u32 = 0;
     let mut offset: u32 = 0;
-    for b in blocks.iter().filter(|b| b.vis == 0) {
-        for &(tid, count) in &b.fields {
-            let (tag, size) = scalar(tid);
-            for _ in 0..count {
-                layout.push(SharedSlotLayout {
-                    offset,
-                    kind: tag,
-                    len: 0,
-                });
-                offset += size;
+    for pass_vis in [0i64, 1i64] {
+        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
+            let bname = &names[b.name_id as usize];
+            for &(fid, tid, count) in &b.fields {
+                let name = format!("{bname}.{}", names[fid as usize]);
+                let count = count as u32;
+                let (kind, size) = scalar(tid);
+                if pass_vis == 0 {
+                    let stride = if count > 1 { size } else { 0 };
+                    fields.push(DataField::shared(
+                        name, slot, count, kind, 0, offset, stride,
+                    ));
+                    offset += size * count;
+                } else {
+                    fields.push(DataField::private(name, slot, count, kind, DataInit::Zero));
+                }
+                slot += count;
             }
         }
     }
-    layout
+    fields
 }
 
-// The per-shared-slot byte layout the driver assembles from parse.kel's records equals
-// the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's source buffer whose later fields sit past 64 KB).
+const ASSEMBLY_CASES: [&str; 4] = [
+    "compiler/kel/lexer.kel",
+    "compiler/kel/reconstruct.kel",
+    "compiler/kel/codegen.kel",
+    "compiler/kel/parse.kel",
+];
+
+// The field table the driver's model assembles from parse.kel's data-block records names
+// the reference's fields, in order and with their visibility, slot ranges and counts, for
+// every stage source: shared-then-private ordering, one field per array, and const blocks
+// producing no field.
+#[test]
+fn assembled_data_slots_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_data_slots_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
+    for path in ASSEMBLY_CASES {
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
+        let (_fns, names, data_records, _) = parse_functions(&src);
+        let fields = assemble_data_fields(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_fields = &reference.data_layout.as_ref().expect("data layout").fields;
+        assert_eq!(fields.len(), ref_fields.len(), "field count for {path}");
+        for (i, (a, b)) in fields.iter().zip(ref_fields.iter()).enumerate() {
+            assert_eq!(
+                (&a.name, a.visibility, a.first_slot, a.count),
+                (&b.name, b.visibility, b.first_slot, b.count),
+                "field {i} for {path}"
+            );
+        }
+    }
+    common::selfhost_cache::record_pass("assembled_data_slots_match_the_reference", KEL_PIPELINE);
+}
+
+// The shared byte layout the model assembles equals the reference compiler's, offset, kind,
+// element length and stride for every shared field, for all four stage sources, including
+// lexer.kel's source buffer whose later fields sit past 64 KB.
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     if common::selfhost_cache::hit(
@@ -5802,32 +5786,23 @@ fn assembled_shared_layout_matches_the_reference() {
     ) {
         return;
     }
-    let cases = [
-        "compiler/kel/lexer.kel",
-        "compiler/kel/reconstruct.kel",
-        "compiler/kel/codegen.kel",
-        "compiler/kel/parse.kel",
-    ];
-    for path in cases {
+    for path in ASSEMBLY_CASES {
         let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, data_records, _) = parse_functions(&src);
-        let layout = assemble_shared_layout(&data_records, &names);
+        let fields = assemble_data_fields(&data_records, &names);
         let reference = compile_src(&src);
-        let ref_layout = &reference
-            .data_layout
-            .as_ref()
-            .expect("data layout")
-            .shared_layout;
-        assert_eq!(
-            layout.len(),
-            ref_layout.len(),
-            "shared_layout len for {path}"
-        );
-        for (i, (a, b)) in layout.iter().zip(ref_layout.iter()).enumerate() {
+        let shared = |f: &&keleusma::bytecode::DataField| {
+            f.visibility == keleusma::bytecode::SlotVisibility::Shared
+        };
+        let ref_fields = &reference.data_layout.as_ref().expect("data layout").fields;
+        let ours: Vec<_> = fields.iter().filter(shared).collect();
+        let theirs: Vec<_> = ref_fields.iter().filter(shared).collect();
+        assert_eq!(ours.len(), theirs.len(), "shared field count for {path}");
+        for (i, (a, b)) in ours.iter().zip(theirs.iter()).enumerate() {
             assert_eq!(
-                (a.offset, a.kind, a.len),
-                (b.offset, b.kind, b.len),
-                "shared_layout entry {i} for {path}"
+                (a.offset, a.kind, a.elem_len, a.stride),
+                (b.offset, b.kind, b.elem_len, b.stride),
+                "shared field {i} for {path}"
             );
         }
     }
@@ -5837,116 +5812,25 @@ fn assembled_shared_layout_matches_the_reference() {
     );
 }
 
-/// Assemble the per-private-slot load-time initial values from parse.kel's records:
-/// one entry per private slot (arrays expanded), the type's zero -- `Int(0)` for a
-/// `Word` slot, `Byte(0)` for a `Byte` slot. The stage private fields carry no
-/// `= literal` initializer, so every entry is a zero.
-fn assemble_private_init(
-    data_records: &[(i64, i64)],
-    names: &[String],
-) -> Vec<keleusma::bytecode::ConstValue> {
-    use keleusma::bytecode::ConstValue;
-    struct Blk {
-        vis: i64,
-        fields: Vec<(i64, i64)>, // (type name id, element count)
-    }
-    let mut blocks: Vec<Blk> = Vec::new();
-    for &(code, val) in data_records {
-        match code {
-            9 => blocks.push(Blk {
-                vis: val % 4,
-                fields: Vec::new(),
-            }),
-            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
-            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
-            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
-            _ => {}
-        }
-    }
-    let mut init = Vec::new();
-    for b in blocks.iter().filter(|b| b.vis == 1) {
-        for &(tid, count) in &b.fields {
-            let zero = match names[tid as usize].as_str() {
-                "Word" => ConstValue::Int(0),
-                "Byte" => ConstValue::Byte(0),
-                other => panic!("unhandled private field type `{other}`"),
-            };
-            for _ in 0..count {
-                init.push(zero.clone());
-            }
-        }
-    }
-    init
-}
-
-/// Assemble a whole `DataLayout` from parse.kel's data-block records. The stages have
-/// no private composite fields, so `private_composite_layout` is empty.
-fn assemble_data_layout(
-    data_records: &[(i64, i64)],
-    names: &[String],
-) -> keleusma::bytecode::DataLayout {
-    keleusma::bytecode::DataLayout {
-        slots: assemble_data_slots(data_records, names),
-        shared_layout: assemble_shared_layout(data_records, names),
-        private_composite_layout: Vec::new(),
-        private_init: assemble_private_init(data_records, names),
-    }
-}
-
-// The whole DataLayout the driver assembles from parse.kel's records -- slot table,
-// per-shared-slot byte layout, and per-private-slot initial values -- is byte-identical
-// to the reference compiler's for every stage source, so the driver no longer needs the
+// The whole field table the model assembles from parse.kel's records is the reference
+// compiler's for every stage source, initialisers included, so the driver needs no
 // reference for the module's data layout.
 #[test]
 fn assembled_data_layout_matches_the_reference() {
     if common::selfhost_cache::hit("assembled_data_layout_matches_the_reference", KEL_PIPELINE) {
         return;
     }
-    let cases = [
-        "compiler/kel/lexer.kel",
-        "compiler/kel/reconstruct.kel",
-        "compiler/kel/codegen.kel",
-        "compiler/kel/parse.kel",
-    ];
-    for path in cases {
+    for path in ASSEMBLY_CASES {
         let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, data_records, _) = parse_functions(&src);
-        let dl = assemble_data_layout(&data_records, &names);
+        let dl = keleusma::bytecode::DataLayout {
+            fields: assemble_data_fields(&data_records, &names),
+        };
         let reference = compile_src(&src);
-        let ref_dl = reference.data_layout.as_ref().expect("data layout");
-        assert_eq!(dl.slots.len(), ref_dl.slots.len(), "slot count for {path}");
-        for (i, (a, b)) in dl.slots.iter().zip(ref_dl.slots.iter()).enumerate() {
-            assert_eq!(
-                (&a.name, a.visibility),
-                (&b.name, b.visibility),
-                "slot {i} for {path}"
-            );
-        }
         assert_eq!(
-            dl.shared_layout.len(),
-            ref_dl.shared_layout.len(),
-            "shared_layout len for {path}"
-        );
-        for (i, (a, b)) in dl
-            .shared_layout
-            .iter()
-            .zip(ref_dl.shared_layout.iter())
-            .enumerate()
-        {
-            assert_eq!(
-                (a.offset, a.kind, a.len),
-                (b.offset, b.kind, b.len),
-                "shared_layout {i} for {path}"
-            );
-        }
-        assert_eq!(
-            dl.private_composite_layout.len(),
-            ref_dl.private_composite_layout.len(),
-            "private_composite_layout for {path}"
-        );
-        assert_eq!(
-            dl.private_init, ref_dl.private_init,
-            "private_init for {path}"
+            Some(&dl),
+            reference.data_layout.as_ref(),
+            "data layout for {path}"
         );
     }
     common::selfhost_cache::record_pass(
@@ -6219,7 +6103,9 @@ fn self_assembled_scaffold_serializes_byte_identically() {
         // The self-hosted chunk ops, with the reference scaffold; then splice in the
         // driver-assembled components.
         let mut module = self_host_compile(&src);
-        let dl = assemble_data_layout(&data_records, &names);
+        let dl = keleusma::bytecode::DataLayout {
+            fields: assemble_data_fields(&data_records, &names),
+        };
         // The driver's own hash, slot types included.
         module.schema_hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
         module.data_layout = Some(dl);
@@ -6573,10 +6459,12 @@ fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
         }
     }
     // Resolve each chunk's transitive WCMU in topological order, then admit.
-    let shared_layout = module
+    let expanded = module
         .data_layout
         .as_ref()
-        .map_or(&[][..], |dl| &dl.shared_layout);
+        .map(|dl| dl.shared_slots())
+        .unwrap_or_default();
+    let shared_layout = &expanded[..];
     let mut chunk_wcmu = vec![(0i64, 0i64); n];
     let mut valid = true;
     for &idx in &order {
@@ -8413,8 +8301,9 @@ fn the_boundary_tables_thin_families_are_the_ones_on_record() {
     // The acknowledged thin families. `literal` is the one that cost something: its single case is
     // `let s = "hi"`, and the string defects of 2026-08-30 lived exactly where that case does not
     // reach.
-    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it.
-    let acknowledged = ["literal", "tuple"];
+    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it, and
+    // `tuple` on 2026-11-01, when the tuple holding a range induction variable joined it.
+    let acknowledged = ["literal"];
     assert_eq!(
         thin.as_slice(),
         acknowledged.as_slice(),
@@ -9177,12 +9066,164 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "enum W { A(Word, Word) }\nfn f(w: W) -> Word { let W::A(x, y) = w; x * 10 + y }",
         ),
-        // A typed destructuring pattern, which the reference compiles and the filter
-        // refuses rather than rewriting.
+        // A typed destructuring pattern, which the filter rewrites by annotating the hidden
+        // binding that stores the value, 2026-11-01. It was `let/typed_pattern__GAP`,
+        // refused, before that.
         (
-            "let/typed_pattern__GAP",
-            Refuses,
+            "let/typed_pattern",
+            SOk,
             "fn f() -> Word { let (a, b): (Word, Word) = (1, 2); a + b }",
+        ),
+        (
+            "let/typed_nested_pattern",
+            SOk,
+            "fn f() -> Word { let (a, (b, c)): (Word, (Word, Word)) = (1, (2, 3)); a + b + c }",
+        ),
+        (
+            "let/typed_struct_pattern",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { x, y: b }: P = p; x + b }",
+        ),
+        // An enum-typed payload field of an enum declared earlier, read whole as the
+        // reference's `GetEnumField(FlatNested{Enum})` since 2026-11-01. It read as a unit
+        // field, a divergence, before that.
+        (
+            "match/enum_payload_enum_field",
+            SOk,
+            "enum V { B(Word), C }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { match w { W::A(v, y) => y } }",
+        ),
+        (
+            "match/enum_payload_enum_field_matched",
+            SOk,
+            "enum V { B(Word), C }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { match w { W::A(v, y) => match v { V::B(x) => x + y, V::C => y } } }",
+        ),
+        (
+            "let/enum_variant_enum_payload_destructure",
+            SOk,
+            "enum V { B(Word) }\nenum W { A(V, Word) }\nfn f(w: W) -> Word { let W::A(V::B(x), y) = w; x + y }",
+        ),
+        // The payload enum declared after the enum holding it has no layout yet when the
+        // payload is laid out, so a read of the payload is refused.
+        (
+            "match/enum_payload_forward_enum__GAP",
+            Refuses,
+            "enum W { A(V, Word) }\nenum V { B(Word), C }\nfn f(w: W) -> Word { match w { W::A(v, y) => y } }",
+        ),
+        // An enum equality whose payload is an enum, which the reference compares field by
+        // field and the parser has no loop for, so it is refused rather than compared whole.
+        (
+            "eq/enum_enum_payload__GAP",
+            Refuses,
+            "enum V { B(Word), C }\nenum W { A(V, Word), D }\nfn f(a: W, b: W) -> bool { a == b }",
+        ),
+        // A range induction variable is a `Word` value, so a tuple holding it has a layout,
+        // 2026-11-01. It was a type-stage gap before that.
+        (
+            "tuple/of_induction_variable",
+            SOk,
+            "fn f() -> Word { for i in 0..3 { let t = (i, 2); } 0 }",
+        ),
+        // A generic call on a resume value takes the reference's resolved resume type, the
+        // kind a later annotated `let` fixes or `loop main`'s first parameter, 2026-11-01.
+        (
+            "scope/generic_resume_fixed_later",
+            SOk,
+            "fn id<T>(x: T) -> T { x }\nloop main() -> Word { let r = yield 1; let s = id(r); let u: Byte = r; yield 0 }",
+        ),
+        (
+            "scope/generic_resume_main_param",
+            SOk,
+            "fn id<T>(x: T) -> T { x }\nloop main(t: Byte) -> Word { let r = yield 1; let s = id(r); yield 0 }",
+        ),
+        // A resume type the parser does not model, a tuple parameter of `loop main`.
+        (
+            "scope/generic_resume_composite__GAP",
+            Refuses,
+            "fn id<T>(x: T) -> T { x }\nloop main(t: (Word, Word)) -> Word { let r = yield 1; let s = id(r); yield 0 }",
+        ),
+        // --- the `Byte` and `Word` literal suffixes, 2026-11-02 ------------------------
+        //
+        // The lexer read `2Byte` as the integer 2 followed by the name `Byte`, so the parser
+        // reported an undefined identifier and the type stage rejected a tuple mixing a word
+        // and a byte that the reference accepts. A suffixed literal is now the reference's
+        // byte constant, and a `Word` suffix changes nothing.
+        (
+            "suffix/byte_literal",
+            SOk,
+            "fn f(x: Byte) -> Byte { x + 3Byte }",
+        ),
+        (
+            "suffix/word_and_byte_tuple",
+            SOk,
+            "fn f() -> Byte { let t = (1, 2Byte); t.1 }",
+        ),
+        (
+            "suffix/byte_array_and_word_suffix",
+            SOk,
+            "fn f() -> (Word, [Byte; 2]) { (7Word, [0Byte, 255Byte]) }",
+        ),
+        (
+            "suffix/byte_out_of_range__REJECT",
+            RefRejects,
+            "fn f() -> Byte { 256Byte }",
+        ),
+        // --- the capacity-bounded text type, 2026-11-02 ------------------------------
+        //
+        // `Text<N>` is laid out as the tuple of a length word and `N` bytes, and a literal
+        // cast loads one pooled constant. The uses the stages do not lower, a data field and
+        // an `Option` payload among them, are refused by the shipping entry before any stage
+        // runs, which this table does not exercise, so they are pinned in
+        // `capacity_bounded_text_has_its_pinned_outcomes` in `selfhost_full_language.rs`. The
+        // five operations need the `text` feature, so they are pinned in `text_ops.rs`.
+        (
+            "text_n/literal_cast",
+            SOk,
+            "fn f() -> Text<8> { \"abc\" as Text<8> }",
+        ),
+        (
+            "text_n/escapes_and_utf8",
+            SOk,
+            "fn f() -> Word { let a = \"a\\0\\n\" as Text<4>; let b = \"\u{e9}\" as Text<2>; let c = \"a\\0\\n\" as Text<4>; 1 }",
+        ),
+        (
+            "text_n/annotated_let",
+            SOk,
+            "fn f() -> Word { let t: Text<8> = \"abc\" as Text<8>; 1 }",
+        ),
+        (
+            "text_n/parameter_and_call",
+            SOk,
+            "fn id(t: Text<8>) -> Text<8> { t }\nfn f() -> Text<8> { id(\"abc\" as Text<8>) }",
+        ),
+        (
+            "text_n/tuple_element",
+            SOk,
+            "fn f() -> Text<4> { let p = (1, \"cd\" as Text<4>); p.1 }",
+        ),
+        (
+            "text_n/array_element",
+            SOk,
+            "fn g(xs: [Text<4>; 2]) -> Text<4> { xs[1] }\nfn f() -> Text<4> { g([\"ab\" as Text<4>, \"cd\" as Text<4>]) }",
+        ),
+        (
+            "text_n/struct_field",
+            SOk,
+            "struct S { a: Text<2>, b: Word }\nfn f() -> Word { let s = S { b: 9, a: \"a\" as Text<2> }; s.b }",
+        ),
+        (
+            "text_n/enum_payload",
+            SOk,
+            "enum E { A, V(Text<8>) }\nfn g(e: E) -> Text<8> { match e { E::A => \"none\" as Text<8>, E::V(t) => t } }\nfn f() -> Text<8> { g(E::V(\"a\" as Text<8>)) }",
+        ),
+        (
+            "text_n/branches",
+            SOk,
+            "fn f() -> Text<4> { if true { \"a\" as Text<4> } else { \"b\" as Text<4> } }",
+        ),
+        (
+            "text_n/too_long__REJECT",
+            RefRejects,
+            "fn f() -> Text<2> { \"abc\" as Text<2> }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (
@@ -9364,10 +9405,14 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // the destructuring filter, `dq_struct`, took it to 2403 on 2026-10-31 with the
             // peak unchanged. Nested and variant patterns, which replaced `dq_struct` with
             // the item and frame tables and their helpers, took it to 2744 on 2026-10-31,
-            // with the peak unchanged.
+            // with the peak unchanged. The typed pattern annotation, `dq_type`, `dq_top` and
+            // `dq_push_typed`, took it to 2823 on 2026-11-01 with the peak unchanged. The
+            // `Text<N>` fold, `tx_is_text`, `tx_take`, `tx_release` and `tx_filter`, took it
+            // to 3013 on 2026-11-02 with the peak unchanged, and the numeric suffixes,
+            // `integer_suffix`, to 3116 the same day.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2744,
+            3116,
             421,
         ),
         (
@@ -9390,10 +9435,16 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Re-measured 2026-10-30 after the flat Text layout proof, with its
             // transfers moved into helpers so `apply_typed` stays the largest
             // group: 1551 and 505 became 2142 and 557.
+            // Re-measured 2026-11-01 after the C5 review's join repair, which added the
+            // region write sets, the two snapshot pools and the native flag's scalar push:
+            // 2142 and 557 became 3066 and 570.
+            // Re-measured 2026-11-04 after the C5 residual repairs, which added the loop
+            // fixpoint with its break accumulators and replaced the four-offset text layouts
+            // with the layout heap: 3066 and 570 became 3844 and 604.
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            2142,
-            557,
+            3844,
+            604,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {

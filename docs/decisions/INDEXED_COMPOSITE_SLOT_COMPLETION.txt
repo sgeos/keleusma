@@ -1,0 +1,42 @@
+COMPLETION CONDITION — the indexed composite data slot
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. AN INDEXED COMPOSITE DATA SLOT LOWERS AND AGREES.
+   A program that writes and reads elements of an array-of-composite private data
+   field, at more than one index, produces the same result natively as on the
+   virtual machine.
+
+2. ELEMENTS ARE INDEPENDENT.
+   Writing one element does not make a different, unwritten element readable: a
+   read of an element the program never wrote still faults natively, matching the
+   reference, even when a sibling element has been written.
+
+3. THE STRIDE IS VALIDATED, NOT ASSUMED.
+   The element size and spacing are checked across the whole declared element
+   range before any address is computed, and a range the module's table does not
+   cover uniformly causes a refusal naming which property failed.
+
+4. THE BOUND IS THE ONE ALREADY ENFORCED.
+   The element count used comes from the instruction's own operand, and the
+   existing unsigned bounds check on the index remains the thing that guards an
+   out-of-range access.
+
+5. THE SIZE HAS ONE SOURCE.
+   The element body size used by the indexed path is derived the same way as the
+   direct path's, not by a second computation.
+
+6. NEW ADDRESS-FORMING OR VALUE-MOVING SITES ARE CLASSIFIED.
+   If the work adds sites of the kinds the censuses track, each is classified in
+   the relevant census rather than absorbed into a count.
+
+7. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.
+
+9. WHAT REMAINS UNSUPPORTED IS WRITTEN DOWN next to the implementation.

@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-10-31T03:58:58-07:00\n"
+"POT-Creation-Date: 2026-11-06T06:11:25-08:00\n"
 "PO-Revision-Date: \n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -6390,7 +6390,7 @@ msgid ""
 "frames, and the arena, while preserving the data segment."
 msgstr ""
 
-#: src/34_coroutine_protocol.md:84 src/EMBEDDING.md:352
+#: src/34_coroutine_protocol.md:84 src/EMBEDDING.md:354
 msgid "\"script error: {}\""
 msgstr ""
 
@@ -6497,13 +6497,13 @@ msgstr ""
 
 #: src/35_arena_sizing.md:51
 msgid ""
-"The figure also includes the region a native compilation of the module "
-"reserves, so that one capacity works whether the module runs on the virtual "
-"machine or as native code. A host that runs only the virtual machine is "
-"therefore over-provisioned by that region, which "
-"`keleusma::native_region::native_region_supplement_bytes` reports, and a "
-"host that used to add the native figure itself should stop, or it counts the "
-"region twice."
+"The figure is the virtual machine's alone. A host that runs the module as "
+"native code sizes its buffers from "
+"`keleusma::native_region::native_route_buffers_for` instead, which reports "
+"the native composite region, the private buffer and the shared buffer. A "
+"host that keeps one arena able to serve either route uses "
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`, which adds the native "
+"region once, and must not add it again."
 msgstr ""
 
 #: src/35_arena_sizing.md:59
@@ -6583,7 +6583,7 @@ msgid ""
 "by a build pipeline, skips the lex, parse, and compile phases:"
 msgstr ""
 
-#: src/36_loading_bytecode.md:15 src/EMBEDDING.md:37 src/EMBEDDING.md:415
+#: src/36_loading_bytecode.md:15 src/EMBEDDING.md:37 src/EMBEDDING.md:417
 msgid "\"script.kel.bin\""
 msgstr ""
 
@@ -6609,7 +6609,7 @@ msgid ""
 "`Vm::load_signed_bytes`, which takes a slice of trusted public keys:"
 msgstr ""
 
-#: src/36_loading_bytecode.md:34 src/EMBEDDING.md:423
+#: src/36_loading_bytecode.md:34 src/EMBEDDING.md:425
 msgid "\"pub.bin\""
 msgstr ""
 
@@ -6707,7 +6707,7 @@ msgid ""
 "`Vm::replace_module`:"
 msgstr ""
 
-#: src/37_hot_swap_host.md:30 src/EMBEDDING.md:398
+#: src/37_hot_swap_host.md:30 src/EMBEDDING.md:400
 msgid "/* ... */"
 msgstr ""
 
@@ -7902,162 +7902,171 @@ msgstr ""
 
 #: src/EMBEDDING.md:329
 msgid ""
+"The bound is the virtual machine's alone. A host that runs the module as "
+"native code sizes its buffers from "
+"`keleusma::native_region::native_route_buffers_for`, and a host that keeps "
+"one arena for either route uses "
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`."
+msgstr ""
+
+#: src/EMBEDDING.md:331
+msgid ""
 "**Option C. Provide a static buffer.** The arena can run from a host-owned "
 "buffer in `.bss` for embedded targets without a heap."
 msgstr ""
 
-#: src/EMBEDDING.md:338
+#: src/EMBEDDING.md:340
 msgid ""
 "If the chosen capacity is below the analyzed WCMU, `Vm::new` returns "
 "`VmError::VerifyError`. The error is surfaceable before any code runs."
 msgstr ""
 
-#: src/EMBEDDING.md:340
+#: src/EMBEDDING.md:342
 msgid "Error Recovery"
 msgstr ""
 
-#: src/EMBEDDING.md:342
+#: src/EMBEDDING.md:344
 msgid ""
 "Errors during `call` or `resume` return `Err(VmError)`. The VM is not "
 "automatically reset; volatile state may remain on the operand stack and in "
 "the arena. Two paths exist."
 msgstr ""
 
-#: src/EMBEDDING.md:344
+#: src/EMBEDDING.md:346
 msgid ""
 "**Path 1. Discard the VM.** Drop and reconstruct. The arena resets when the "
 "new VM is constructed against it."
 msgstr ""
 
-#: src/EMBEDDING.md:346
+#: src/EMBEDDING.md:348
 msgid ""
 "**Path 2. Recover and continue.** Call `Vm::reset_after_error` to clear "
 "volatile state while preserving the data segment."
 msgstr ""
 
-#: src/EMBEDDING.md:359
+#: src/EMBEDDING.md:361
 msgid ""
 "The data segment, if declared, persists across error events. Long-running "
 "streams that accumulate state should rely on the data segment rather than "
 "local bindings for state that must survive errors."
 msgstr ""
 
-#: src/EMBEDDING.md:361
+#: src/EMBEDDING.md:363
 msgid "Error Variants"
 msgstr ""
 
-#: src/EMBEDDING.md:363
+#: src/EMBEDDING.md:365
 msgid "`VmError` enumerates the runtime error conditions."
 msgstr ""
 
-#: src/EMBEDDING.md:365
+#: src/EMBEDDING.md:367
 msgid "Variant"
 msgstr ""
 
-#: src/EMBEDDING.md:365
+#: src/EMBEDDING.md:367
 msgid "Condition"
 msgstr ""
 
-#: src/EMBEDDING.md:367
+#: src/EMBEDDING.md:369
 msgid "`StackUnderflow`"
 msgstr ""
 
-#: src/EMBEDDING.md:367
+#: src/EMBEDDING.md:369
 msgid "Empty operand stack on pop"
 msgstr ""
 
-#: src/EMBEDDING.md:368
+#: src/EMBEDDING.md:370
 msgid "`TypeError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:368
+#: src/EMBEDDING.md:370
 msgid "Operand type does not match the operation"
 msgstr ""
 
-#: src/EMBEDDING.md:369
+#: src/EMBEDDING.md:371
 msgid "`DivisionByZero`"
 msgstr ""
 
-#: src/EMBEDDING.md:369
+#: src/EMBEDDING.md:371
 msgid "Integer or modulo by zero"
 msgstr ""
 
-#: src/EMBEDDING.md:370
+#: src/EMBEDDING.md:372
 msgid "`IndexOutOfBounds(idx, len)`"
 msgstr ""
 
-#: src/EMBEDDING.md:370
+#: src/EMBEDDING.md:372
 msgid "Array or tuple index out of range"
 msgstr ""
 
-#: src/EMBEDDING.md:371
+#: src/EMBEDDING.md:373
 msgid "`FieldNotFound(struct, field)`"
 msgstr ""
 
-#: src/EMBEDDING.md:371
+#: src/EMBEDDING.md:373
 msgid "Field access on a struct that does not declare the field"
 msgstr ""
 
-#: src/EMBEDDING.md:372
+#: src/EMBEDDING.md:374
 msgid "`NoMatch(value)`"
 msgstr ""
 
-#: src/EMBEDDING.md:372
+#: src/EMBEDDING.md:374
 msgid "No match arm or multiheaded function head matched"
 msgstr ""
 
-#: src/EMBEDDING.md:373
+#: src/EMBEDDING.md:375
 msgid "`NativeError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:373
+#: src/EMBEDDING.md:375
 msgid "Native function returned `Err`"
 msgstr ""
 
-#: src/EMBEDDING.md:374
+#: src/EMBEDDING.md:376
 msgid "`InvalidBytecode(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:374
+#: src/EMBEDDING.md:376
 msgid "Bytecode shape unexpected at runtime"
 msgstr ""
 
-#: src/EMBEDDING.md:375
+#: src/EMBEDDING.md:377
 msgid "`Trap(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:375
+#: src/EMBEDDING.md:377
 msgid "Script halted by a `Trap` instruction"
 msgstr ""
 
-#: src/EMBEDDING.md:376
+#: src/EMBEDDING.md:378
 msgid "`VerifyError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:376
+#: src/EMBEDDING.md:378
 msgid "Structural or resource-bounds verification failed at construction"
 msgstr ""
 
-#: src/EMBEDDING.md:377
+#: src/EMBEDDING.md:379
 msgid "`LoadError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:377
+#: src/EMBEDDING.md:379
 msgid "Wire-format framing failed during `load_bytes`"
 msgstr ""
 
-#: src/EMBEDDING.md:379
+#: src/EMBEDDING.md:381
 msgid ""
 "`VerifyError` is the only variant that fires before any script code "
 "executes. The other variants fire during execution. See "
 "[WHY_REJECTED.md](./WHY_REJECTED.md) for `VerifyError` interpretation."
 msgstr ""
 
-#: src/EMBEDDING.md:381
+#: src/EMBEDDING.md:383
 msgid "Hot Code Swapping"
 msgstr ""
 
-#: src/EMBEDDING.md:383
+#: src/EMBEDDING.md:385
 msgid ""
 "The VM supports replacing the loaded module at the reset boundary of a "
 "`loop` script. The host calls `Vm::replace_module` after observing "
@@ -8066,20 +8075,20 @@ msgid ""
 "length must match the new module's declared schema."
 msgstr ""
 
-#: src/EMBEDDING.md:389
+#: src/EMBEDDING.md:391
 msgid ""
 "// Re-initialise the data segment. Length must match the\n"
 "        // new module's declared `data` block size; preserve or\n"
 "        // migrate values as appropriate.\n"
 msgstr ""
 
-#: src/EMBEDDING.md:394
+#: src/EMBEDDING.md:396
 msgid ""
 "// The swap clears coroutine state. Drive the new module\n"
 "        // from the entry point, not via `resume`.\n"
 msgstr ""
 
-#: src/EMBEDDING.md:402
+#: src/EMBEDDING.md:404
 msgid ""
 "The dialogue type, the yielded type and the resume type, must remain stable "
 "across swaps. The data segment may carry forward (pass current values), may "
@@ -8092,11 +8101,11 @@ msgid ""
 "end-to-end demonstration."
 msgstr ""
 
-#: src/EMBEDDING.md:404
+#: src/EMBEDDING.md:406
 msgid "Signed Modules"
 msgstr ""
 
-#: src/EMBEDDING.md:406
+#: src/EMBEDDING.md:408
 msgid ""
 "The optional `signatures` cargo feature enables Ed25519 signing of compiled "
 "bytecode. Source scripts declare the requirement with the `signed` modifier "
@@ -8106,11 +8115,11 @@ msgid ""
 "against a trust matrix the host populates before the load."
 msgstr ""
 
-#: src/EMBEDDING.md:408
+#: src/EMBEDDING.md:410
 msgid "Signing at build time"
 msgstr ""
 
-#: src/EMBEDDING.md:410
+#: src/EMBEDDING.md:412
 msgid ""
 "The host (or a build pipeline) takes a 32-byte Ed25519 seed and uses "
 "`wire_format::module_to_signed_wire_bytes` to produce signed bytes. The CLI "
@@ -8120,11 +8129,11 @@ msgid ""
 "permissions on Unix and existing files are not overwritten."
 msgstr ""
 
-#: src/EMBEDDING.md:418
+#: src/EMBEDDING.md:420
 msgid "Verifying and loading"
 msgstr ""
 
-#: src/EMBEDDING.md:420
+#: src/EMBEDDING.md:422
 msgid ""
 "The host loads a signed module through `Vm::load_signed_bytes(bytes, arena, "
 "&keys)`. The keys slice carries one or more public keys; the first matching "
@@ -8134,18 +8143,18 @@ msgid ""
 "the same keys."
 msgstr ""
 
-#: src/EMBEDDING.md:428
+#: src/EMBEDDING.md:430
 msgid ""
 "Hosts that bootstrap from an unsigned baseline and only accept signed "
 "bytecode at hot-swap construct the VM normally, register keys "
 "post-construction, and hot-swap signed updates:"
 msgstr ""
 
-#: src/EMBEDDING.md:432
+#: src/EMBEDDING.md:434
 msgid "// ... later, after receiving a signed update over the comm link ...\n"
 msgstr ""
 
-#: src/EMBEDDING.md:437
+#: src/EMBEDDING.md:439
 msgid ""
 "`Vm::load_bytes` refuses signed modules with a diagnostic redirecting the "
 "caller to `Vm::load_signed_bytes`. Without the `signatures` feature, the "
@@ -8153,7 +8162,7 @@ msgid ""
 "that the build cannot verify, not just that the path is wrong."
 msgstr ""
 
-#: src/EMBEDDING.md:439
+#: src/EMBEDDING.md:441
 msgid ""
 "The signing message convention is the full framed buffer with the signature "
 "payload bytes and the CRC trailer bytes zeroed. The verifier reconstructs "
@@ -8163,7 +8172,7 @@ msgid ""
 "signature mutation is caught by the cryptographic check after CRC repair."
 msgstr ""
 
-#: src/EMBEDDING.md:441
+#: src/EMBEDDING.md:443
 msgid ""
 "See `R42` in "
 "[`docs/decisions/RESOLVED.md`](../../docs/decisions/RESOLVED.md) for the "
@@ -8172,18 +8181,18 @@ msgid ""
 "layout."
 msgstr ""
 
-#: src/EMBEDDING.md:443
+#: src/EMBEDDING.md:445
 msgid "Trust-Skip Construction"
 msgstr ""
 
-#: src/EMBEDDING.md:445
+#: src/EMBEDDING.md:447
 msgid ""
 "Programs whose verification cost is paid at build time, not at every load, "
 "may use `Vm::new_unchecked` to skip the resource-bounds check. Structural "
 "verification still runs."
 msgstr ""
 
-#: src/EMBEDDING.md:451
+#: src/EMBEDDING.md:453
 msgid ""
 "This is intentional misuse if used to admit programs that would fail the "
 "safe verifier. The intended use is precompiled bytecode that the host "
@@ -8194,47 +8203,47 @@ msgid ""
 "build time."
 msgstr ""
 
-#: src/EMBEDDING.md:453 src/WHY_REJECTED.md:241
+#: src/EMBEDDING.md:455 src/WHY_REJECTED.md:241
 msgid "Cross-References"
 msgstr ""
 
-#: src/EMBEDDING.md:455
+#: src/EMBEDDING.md:457
 msgid ""
 "[`examples/wcmu_basic.rs`](../../examples/wcmu_basic.rs) shows the "
 "auto-sizing pattern end to end."
 msgstr ""
 
-#: src/EMBEDDING.md:456
+#: src/EMBEDDING.md:458
 msgid ""
 "[`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs) shows "
 "native bound declaration."
 msgstr ""
 
-#: src/EMBEDDING.md:457
+#: src/EMBEDDING.md:459
 msgid ""
 "[`examples/wcmu_rejection.rs`](../../examples/wcmu_rejection.rs) shows the "
 "verifier rejecting an undersized arena."
 msgstr ""
 
-#: src/EMBEDDING.md:458
+#: src/EMBEDDING.md:460
 msgid ""
 "[`examples/string_ops.rs`](../../examples/string_ops.rs) shows "
 "host-registered text concatenation and slicing natives."
 msgstr ""
 
-#: src/EMBEDDING.md:459
+#: src/EMBEDDING.md:461
 msgid ""
 "[`examples/yield_error.rs`](../../examples/yield_error.rs) shows error "
 "propagation through yield with a script-defined `Result`\\-shaped enum."
 msgstr ""
 
-#: src/EMBEDDING.md:460
+#: src/EMBEDDING.md:462
 msgid ""
 "[`examples/method_call.rs`](../../examples/method_call.rs) shows method "
 "dispatch through receiver-style syntax."
 msgstr ""
 
-#: src/EMBEDDING.md:461
+#: src/EMBEDDING.md:463
 msgid ""
 "[`examples/piano_roll.rs`](../../examples/piano_roll.rs) is a feature-gated "
 "end-to-end SDL3 audio host. It exercises bounded-step execution under a "
@@ -8251,19 +8260,19 @@ msgid ""
 "other control-loop domains."
 msgstr ""
 
-#: src/EMBEDDING.md:462
+#: src/EMBEDDING.md:464
 msgid ""
 "[LANGUAGE_DESIGN.md](../../docs/architecture/LANGUAGE_DESIGN.md) describes "
 "the language model."
 msgstr ""
 
-#: src/EMBEDDING.md:463
+#: src/EMBEDDING.md:465
 msgid ""
 "[EXECUTION_MODEL.md](../../docs/architecture/EXECUTION_MODEL.md) describes "
 "the runtime model."
 msgstr ""
 
-#: src/EMBEDDING.md:464
+#: src/EMBEDDING.md:466
 msgid ""
 "[WHY_REJECTED.md](./WHY_REJECTED.md) describes verifier rejection categories."
 msgstr ""
@@ -8517,11 +8526,13 @@ msgid "GetData"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:48 src/INSTRUCTION_SET.md:49
-msgid "u24 slot"
+msgid "u24 field"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:48
-msgid "Push data segment slot value onto stack."
+msgid ""
+"Push the value of element zero of the data field the operand names by its "
+"layout index."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:49
@@ -8530,10 +8541,10 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:49
 msgid ""
-"Pop value and store into a data segment slot. A scalar stores inline; a flat "
-"composite copies its body into the persistent composite pool at the offset "
-"the module's private-composite layout table records for the slot (no "
-"dedicated composite-write opcode)."
+"Pop value and store into element zero of the data field the operand names. A "
+"scalar stores inline; a flat composite copies its body into the persistent "
+"composite pool at the offset the field's record gives (no dedicated "
+"composite-write opcode)."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50
@@ -8541,15 +8552,16 @@ msgid "GetDataIndexed"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50 src/INSTRUCTION_SET.md:51
-msgid "u24 base, u24 len"
+msgid "u24 field, u24 len"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50
 msgid ""
-"Pop a Word, Byte or Unit fallback and then a Word index. Read in range, "
-"otherwise use the supplied fallback. Push value, index, four Word byte limbs "
-"of the bound and an outcome flag. Invalid spans and operand types remain "
-"contract errors."
+"Pop a Word, Byte or Unit fallback and then a Word index. The span names one "
+"data field and its length is at most that field's element count. Read "
+"element `index` of the field in range, otherwise use the supplied fallback. "
+"Push value, index, four Word byte limbs of the bound and an outcome flag. "
+"Invalid spans and operand types remain contract errors."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:51 src/INSTRUCTION_SET.md:257
@@ -8558,10 +8570,10 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:51
 msgid ""
-"Pop value and Word index. A valid index writes one slot. An invalid index "
-"performs no write. Push the index, four Word byte limbs of the bound and "
-"flag zero for success or one for invalid. Invalid spans and storage-contract "
-"violations remain errors."
+"Pop value and Word index. The span is as for `GetDataIndexed`. A valid index "
+"writes one element of the field. An invalid index performs no write. Push "
+"the index, four Word byte limbs of the bound and flag zero for success or "
+"one for invalid. Invalid spans and storage-contract violations remain errors."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:52 src/INSTRUCTION_SET.md:240
@@ -10004,7 +10016,8 @@ msgid ""
 "Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute "
 "the capacity from the compiled module before constructing the VM. The figure "
 "is the sum of the operand stack, the call frames, the opaque registry, the "
-"per-iteration heap, and the composite host inputs of the entry chunk. An "
+"per-iteration heap, the composite host inputs of the entry chunk, and the "
+"private composite initializers that construction copies into the arena. An "
 "arena of exactly that size constructs the VM under the supplied native "
 "attestations and admits the call and every resume up to each `Reset`, "
 "provided that no composite input contains `Text`."
@@ -10012,11 +10025,12 @@ msgstr ""
 
 #: src/COOKBOOK.md:78
 msgid ""
-"The figure also adds the region a native compilation of the module reserves, "
-"reported by `keleusma::native_region::native_region_supplement_bytes`, so "
-"that one capacity serves both the virtual machine and native code. A host "
-"that runs only the virtual machine is over-provisioned by exactly that "
-"region."
+"The figure is the virtual machine's alone. A host that runs the module as "
+"native code calls `keleusma::native_region::native_route_buffers_for`, which "
+"reports the native composite region, the private buffer and the shared "
+"buffer. A host that keeps one arena for either route calls "
+"`keleusma::vm::auto_arena_capacity_for_vm_and_native`, which adds the native "
+"region once."
 msgstr ""
 
 #: src/COOKBOOK.md:89

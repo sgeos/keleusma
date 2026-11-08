@@ -570,7 +570,11 @@ impl FuncCompiler {
     /// write changes. The ordinal is the read's position in emission order,
     /// which is the same on both compiles because the copy only appends
     /// straight-line ops.
-    fn note_data_read(&mut self, data_name: &str, lo: u32, len: u32, element: &TypeExpr) {
+    /// Record a read of data field `field` for the private composite alias
+    /// analysis. A data operand names one field, so the read covers that
+    /// field alone, whatever its element count, and a write hazards the read
+    /// exactly when it names the same field.
+    fn note_data_read(&mut self, data_name: &str, field: u32, element: &TypeExpr) {
         if !self.type_info.private_data_blocks.contains(data_name)
             || !matches!(
                 classify_flat_field(element, &self.type_info),
@@ -582,8 +586,8 @@ impl FuncCompiler {
         let ordinal = self.alias_reads.len();
         self.alias_reads.push(alias_copy::Read {
             at: self.chunk.ops.len(),
-            lo,
-            hi: lo.saturating_add(len),
+            lo: field,
+            hi: field.saturating_add(1),
         });
         if self.alias_copies.contains(&ordinal) {
             emit_detach_data_element(self, element);
@@ -3670,10 +3674,13 @@ fn compile_with_recorded_type_hook(
     // partition matches the source declaration order so error
     // messages and slot names remain predictable.
     let mut data_fields: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
-    let mut shared_slots: Vec<DataSlot> = Vec::new();
-    let mut private_slots: Vec<DataSlot> = Vec::new();
-    // Load-time initial value of each private slot, in private-slot order,
-    // parallel to `private_slots`. Filled only during the private pass.
+    // One skeleton per declared field, in slot order, shared fields first. The
+    // byte layout and the initialiser are filled in below, once `type_info`
+    // can resolve each field's type.
+    let mut field_skels: Vec<DataFieldSkel> = Vec::new();
+    // Load-time initial value of each private FIELD, in private-field order.
+    // Every element of a field starts with the same value, so one entry per
+    // field suffices. Filled only during the private pass.
     let mut private_init: Vec<crate::bytecode::ConstValue> = Vec::new();
     let mut data_slot_idx: u32 = 0;
     // Two-pass loop. Pass 0 processes shared declarations; pass 1
@@ -3696,7 +3703,21 @@ fn compile_with_recorded_type_hook(
                     pass_visibility,
                     &mut visiting,
                 )?;
-                fields.push((field.name.clone(), data_slot_idx));
+                // A field is addressed by its index in the layout, one logical
+                // slot per field, option B of the array wire-slot design. The
+                // index is the position the field takes in `field_skels`
+                // below, shared fields first.
+                let field_index = u32::try_from(field_skels.len())
+                    .ok()
+                    .filter(|v| *v < MAX_DATA_ADDR)
+                    .ok_or_else(|| CompileError {
+                        message: format!(
+                            "data segment field `{}.{}` overflows the 24-bit field index space",
+                            decl.name, field.name
+                        ),
+                        span: field.span,
+                    })?;
+                fields.push((field.name.clone(), field_index));
                 // Array-typed fields expand into consecutive slots, one
                 // per scalar element. Scalar and other composite types
                 // continue to occupy a single slot whose `Value`
@@ -3713,50 +3734,34 @@ fn compile_with_recorded_type_hook(
                         "const data does not produce runtime slots; const fields handled separately"
                     ),
                 };
-                let target = match pass_visibility {
-                    DataVisibility::Shared => &mut shared_slots,
-                    DataVisibility::Private => &mut private_slots,
-                    DataVisibility::Const => unreachable!(),
+                // ONE TOKEN PER FIELD, the form H2 the operator chose on 2026-10-31.
+                // An array field's token carries its element count, so resizing an
+                // array changes the hash, which the per-slot form expressed only by
+                // repeating the element's line.
+                let leaf = schema_type_token(peel_arrays(&field.type_expr), &program.types);
+                let token = if matches!(field.type_expr, TypeExpr::Array(..)) {
+                    format!("[{leaf};{n_slots}]")
+                } else {
+                    leaf
                 };
-                let token = schema_type_token(peel_arrays(&field.type_expr), &program.types);
                 let tokens = match pass_visibility {
                     DataVisibility::Shared => &mut shared_tokens,
                     _ => &mut private_tokens,
                 };
-                for _ in 0..n_slots {
-                    tokens.push(token.clone());
-                }
-                if n_slots == 1 {
-                    target.push(DataSlot {
-                        name: format!("{}.{}", decl.name, field.name),
-                        visibility,
-                    });
-                } else {
-                    // ONE NAME FOR THE WHOLE ARRAY, NOT ONE PER ELEMENT.
-                    //
-                    // `SchemaBuilder::add_data_layout` interns each slot's name
-                    // with dedup, so identical names collapse to a single
-                    // `NAMES` record and a single run of pool bytes. A distinct
-                    // `field[k]` per element defeated that dedup and made the
-                    // string pool and name table scale with the ELEMENT COUNT:
-                    // for `lexer` they were 6,609,960 and 3,166,432 bytes, 60.7%
-                    // of a 16,114,608-byte artifact built from a 21 KB source.
-                    //
-                    // Nothing addresses a slot by name at runtime. The host reads
-                    // and writes through `Vm::get_shared`/`set_shared` by slot
-                    // INDEX, and `Op::GetDataIndexed` resolves `base + k * stride`
-                    // as an index too; `DataSlot::name` is documented as being for
-                    // host initialization and debugging. An element's name is
-                    // recoverable as `name[k]` from the array's base slot, so the
-                    // per-element string was storing what the index already says.
-                    let array_name = format!("{}.{}", decl.name, field.name);
-                    for _ in 0..n_slots {
-                        target.push(DataSlot {
-                            name: array_name.clone(),
-                            visibility,
-                        });
-                    }
-                }
+                tokens.push(token);
+                // ONE FIELD, HOWEVER MANY ELEMENTS IT HAS.
+                //
+                // A data operand names the field, and the layout carries the
+                // array once, under one name. The field's element slots, the
+                // host's index space, start at `first_slot`, and an element's
+                // name is recoverable as `name[k]` from it, so a per-element
+                // entry would store what the index already says.
+                field_skels.push(DataFieldSkel {
+                    name: format!("{}.{}", decl.name, field.name),
+                    visibility,
+                    first_slot: data_slot_idx,
+                    count: n_slots,
+                });
                 data_slot_idx = data_slot_idx
                     .checked_add(n_slots)
                     .filter(|v| *v <= MAX_DATA_ADDR)
@@ -3767,37 +3772,31 @@ fn compile_with_recorded_type_hook(
                         ),
                         span: field.span,
                     })?;
-                // Bake the load-time initial value(s) for private slots, in the
-                // same slot order the slots were pushed, so `private_init[i]`
-                // initializes the `i`-th private slot.
+                // Bake the load-time initial value of each private field, in
+                // the same order the fields were pushed, so `private_init[i]`
+                // initializes every element of the `i`-th private field.
                 if pass_visibility == DataVisibility::Private {
-                    private_init.extend(private_init_for_field(decl.name.as_str(), field)?);
+                    private_init.push(private_init_for_field(decl.name.as_str(), field)?);
                 }
             }
             data_fields.insert(decl.name.clone(), fields);
         }
     }
     // Compose the final slot table: shared slots first, then
-    // private slots. Slot indices in `data_fields` already
-    // reference the unified space.
-    let shared_count = shared_slots.len() as u32;
-    let private_count = private_slots.len() as u32;
-    let mut data_layout_slots: Vec<DataSlot> = shared_slots;
-    data_layout_slots.append(&mut private_slots);
+    // private slots. The indices in `data_fields` are field indices in
+    // the same shared-first order, which is what a data operand names.
+    let shared_count: u32 = field_skels
+        .iter()
+        .filter(|f| f.visibility == SlotVisibility::Shared)
+        .map(|f| f.count)
+        .sum();
+    let private_count: u32 = field_skels
+        .iter()
+        .filter(|f| f.visibility == SlotVisibility::Private)
+        .map(|f| f.count)
+        .sum();
     let mut slot_type_tokens = shared_tokens;
     slot_type_tokens.append(&mut private_tokens);
-    // `shared_layout` is filled in below, once `type_info` is available to
-    // compute per-shared-slot byte offsets and kinds (B28 item 2).
-    let mut data_layout = if data_layout_slots.is_empty() {
-        None
-    } else {
-        Some(DataLayout {
-            slots: data_layout_slots,
-            shared_layout: Vec::new(),
-            private_composite_layout: Vec::new(),
-            private_init,
-        })
-    };
 
     // Group function definitions by name. Impl method definitions
     // are folded in under their mangled name `Trait::Type::method`
@@ -3961,113 +3960,81 @@ fn compile_with_recorded_type_hook(
     let function_summaries = compute_function_return_ranges(program, &type_info);
     type_info.function_return_ranges = function_summaries;
 
-    // Lay out the persistent composite body pool and record each private
-    // composite slot's fixed body offset (B28 P3 item 5, item 3a). Private
-    // slots take unified indices starting at `shared_count`, in the same
-    // declaration order the slot table used, so the unified index and the
-    // cumulative body offset are produced by one walk. The total sizes the
-    // pool, declared in the module header. An array-of-scalar leaf reserves no
-    // pool (zero body bytes) and stores scalars inline. Computed before the
-    // codegen loop so the table is available for the WCMU pass.
-    // `private_composite_layout` is the single placement record for every
-    // private composite slot, a single composite field and each
-    // array-of-composite element slot alike, keyed by slot index with a `u32`
-    // pool offset (B28 item 2 step 6A). The runtime reads it at a flat-composite
-    // write through the plain `SetData`/`SetDataIndexed` path and copies the
-    // body into the pool through `persist_composite_body`, so no private
-    // composite write needs a global-heap owned body and no baked operand is
-    // required (the rad-hard minimal-ISA choice, prefer a module table over a
-    // dedicated opcode). One running `total` gives each slot a distinct offset
+    // ONE PLACEMENT PER PRIVATE FIELD, NOT ONE PER ELEMENT.
+    //
+    // A private field whose element has a flat composite body takes the next
+    // pool offset, and an array of such elements takes `count` consecutive
+    // bodies at a constant stride, so `(offset, stride)` places every element.
+    // The record this replaced carried one placement per element with a `u16`
+    // slot, which made the table scale with the element count and capped the
+    // slot at 65,535. One running `total` gives each field a distinct range
     // and sizes the pool declared in the module header. This is the
     // linker-style fixed-address placement of program state: every private
-    // composite slot, array elements included, has a statically baked pool
-    // address.
-    let (persistent_composite_bytes, private_composite_layout) = {
+    // composite element has a statically baked pool address.
+    let (persistent_composite_bytes, private_placements) = {
         let mut total: u32 = 0;
-        let mut table: Vec<crate::bytecode::PrivateCompositeSlot> = Vec::new();
-        let mut slot_idx: u32 = shared_count;
+        // Per private field, in private-field order: kind, element body
+        // length, and the pool offset when the element has a pool home.
+        let mut placements: Vec<(u8, u16, Option<u32>)> = Vec::new();
         for decl in &program.data_decls {
             if !matches!(decl.visibility, crate::ast::DataVisibility::Private) {
                 continue;
             }
             for field in &decl.fields {
                 let n = slots_for_data_type(&field.type_expr);
-                // The flat composite body size of the leaf element. A single
-                // composite field is its own leaf (`n == 1`); an
-                // array-of-composite field has `n` element slots each of the
-                // innermost element's body size. A scalar or array-of-scalar
-                // leaf is `0` and reserves no pool, its slots storing scalars.
+                // The flat composite body size of the leaf element. A scalar
+                // or array-of-scalar leaf is `0` and reserves no pool, its
+                // slots storing scalars.
                 let leaf = innermost_non_array_type(&field.type_expr);
+                let kind = data_element_kind(leaf, &type_info);
                 let body = data_field_pool_bytes(leaf, &type_info);
-                if body > 0 {
-                    if n == 1 {
-                        // A single composite field: record its pool offset in
-                        // the table, resolved by slot at the `SetData` write.
-                        table.push(crate::bytecode::PrivateCompositeSlot {
-                            slot: private_composite_slot_index(slot_idx, decl, field)?,
-                            offset: total,
-                        });
-                        // Saturate the widening so a body larger than u32::MAX
-                        // fails closed at the downstream arena check rather than
-                        // truncating and under-sizing the pool (audit B13).
-                        total = total.saturating_add(u32::try_from(body).unwrap_or(u32::MAX));
-                    } else {
-                        // An array-of-composite field: every element slot is a
-                        // composite of `body` bytes at a distinct pool offset,
-                        // carried in the table and resolved by slot at the
-                        // `SetDataIndexed` write.
-                        for k in 0..n {
-                            table.push(crate::bytecode::PrivateCompositeSlot {
-                                slot: private_composite_slot_index(
-                                    slot_idx.saturating_add(k),
-                                    decl,
-                                    field,
-                                )?,
-                                offset: total,
-                            });
-                            // Saturate the widening so a body larger than u32::MAX
-                            // fails closed at the downstream arena check rather than
-                            // truncating and under-sizing the pool (audit B13).
-                            total = total.saturating_add(u32::try_from(body).unwrap_or(u32::MAX));
-                        }
-                    }
+                if body == 0 {
+                    placements.push((kind, 0, None));
+                    continue;
                 }
-                slot_idx = slot_idx.saturating_add(n);
+                // The record carries one element's body length in sixteen
+                // bits, as a shared composite's does, so a larger element is
+                // refused here rather than truncated into a wrong length.
+                let elem_len = u16::try_from(body).map_err(|_| CompileError {
+                    message: format!(
+                        "private data field `{}.{}` has an element of {body} bytes, beyond the \
+                         {} bytes one data field element may occupy",
+                        decl.name,
+                        field.name,
+                        u16::MAX
+                    ),
+                    span: field.span,
+                })?;
+                placements.push((kind, elem_len, Some(total)));
+                // Saturate so a pool larger than `u32::MAX` fails closed at the
+                // downstream arena check rather than truncating and
+                // under-sizing the pool (audit B13).
+                total = total.saturating_add(u32::from(elem_len).saturating_mul(n));
             }
         }
-        (total, table)
+        (total, placements)
     };
 
-    // The shared data segment's flat byte total and its per-shared-slot layout
-    // table (B28 item 2 shared-data re-architecture). `shared_data_bytes` is the
-    // size of the borrowed host-owned buffer the embedder lends at
-    // `call`/`resume`, laid out as a flat struct at the module's scalar widths.
-    // The layout table gives each shared slot its byte offset and kind so the
-    // existing `GetData`/`SetData` reach the buffer with no new opcode (the
-    // rad-hard minimal-ISA choice); it is filled into `data_layout` below. No
-    // runtime path reads either yet (the slot model is still active in this
-    // step). The shared-field walk order matches the slot-assignment walk
-    // above, so the table is indexed by shared slot index.
-    let (shared_data_flat_bytes, shared_slot_layout): (
-        u32,
-        Vec<crate::bytecode::SharedSlotLayout>,
-    ) = {
-        let mut entries: Vec<crate::bytecode::SharedSlotLayout> = Vec::new();
+    // The shared data segment's flat byte total and each shared field's byte
+    // layout in the host buffer (B28 item 2 shared-data re-architecture).
+    // `shared_data_bytes` is the size of the borrowed host-owned buffer the
+    // embedder lends at `call`/`resume`, laid out as a flat struct at the
+    // module's scalar widths. The field layout gives each shared field its
+    // byte offset, kind and stride so the existing `GetData`/`SetData` reach
+    // the buffer with no new opcode (the rad-hard minimal-ISA choice). The
+    // shared-field walk order matches the slot-assignment walk above.
+    let (shared_data_flat_bytes, shared_placements) = {
+        let mut entries: Vec<SharedFieldPlacement> = Vec::new();
         let mut offset: u32 = 0;
         for decl in &program.data_decls {
             if !matches!(decl.visibility, crate::ast::DataVisibility::Shared) {
                 continue;
             }
             for field in &decl.fields {
-                let consumed = push_shared_slot_layout(
-                    &field.type_expr,
-                    &type_info,
-                    offset,
-                    field.span,
-                    &mut entries,
-                )?;
+                let placement =
+                    shared_field_placement(&field.type_expr, &type_info, offset, field.span)?;
                 offset = offset
-                    .checked_add(consumed)
+                    .checked_add(placement.total)
                     .filter(|v| *v <= MAX_DATA_ADDR)
                     .ok_or_else(|| CompileError {
                         message: String::from(
@@ -4075,15 +4042,18 @@ fn compile_with_recorded_type_hook(
                         ),
                         span: field.span,
                     })?;
+                entries.push(placement);
             }
         }
         (offset, entries)
     };
-    if let Some(dl) = data_layout.as_mut() {
-        dl.shared_layout = shared_slot_layout;
-        dl.private_composite_layout = private_composite_layout;
-        fill_private_zero_initializers(program, &type_info, &mut dl.private_init)?;
-    }
+    fill_private_zero_initializers(program, &type_info, &mut private_init)?;
+    let data_layout = assemble_data_layout(
+        field_skels,
+        &shared_placements,
+        &private_placements,
+        private_init,
+    )?;
 
     // Compile each function group. After emission, enforce the
     // V0.2.0 Phase 6 chunk-size limit: any chunk whose op count
@@ -4147,6 +4117,10 @@ fn compile_with_recorded_type_hook(
     // rewrite. Const data blocks are exempt because their values
     // are compile-time and never written.
     if shared_count + private_count > 0 {
+        // Data operands name fields, so the analysis runs over field indices.
+        // A field counts as written when any of its elements is, which is
+        // what the element-space form of this check computed, since an
+        // indexed write's span never leaves the field it names.
         let mut private_slot_indices: Vec<u32> = Vec::new();
         for decl in &program.data_decls {
             if decl.visibility != DataVisibility::Private {
@@ -4154,13 +4128,10 @@ fn compile_with_recorded_type_hook(
             }
             for field in &decl.fields {
                 if let Some(field_list) = data_fields.get(&decl.name)
-                    && let Some((_, slot_idx)) =
+                    && let Some((_, field_idx)) =
                         field_list.iter().find(|(name, _)| name == &field.name)
                 {
-                    let n = slots_for_data_type(&field.type_expr);
-                    for k in 0..n {
-                        private_slot_indices.push(slot_idx.saturating_add(k));
-                    }
+                    private_slot_indices.push(*field_idx);
                 }
             }
         }
@@ -4170,13 +4141,11 @@ fn compile_with_recorded_type_hook(
             for chunk in &chunks {
                 for op in &chunk.ops {
                     match op {
-                        crate::bytecode::Op::SetData(slot) => {
-                            written.insert(*slot);
+                        crate::bytecode::Op::SetData(field) => {
+                            written.insert(*field);
                         }
-                        crate::bytecode::Op::SetDataIndexed(base, len) => {
-                            for k in 0..*len {
-                                written.insert(base.saturating_add(k));
-                            }
+                        crate::bytecode::Op::SetDataIndexed(field, len) if *len > 0 => {
+                            written.insert(*field);
                         }
                         _ => {}
                     }
@@ -4226,6 +4195,7 @@ fn compile_with_recorded_type_hook(
         })
         .collect();
 
+    let private_data_bytes = private_data_bytes_at(&data_layout, target, private_count);
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_typed_schema_hash(
@@ -4256,12 +4226,14 @@ fn compile_with_recorded_type_hook(
         // feature) at end of compile_with_target. `shared_data_bytes` is the
         // true flat byte size of the borrowed host-owned shared buffer (B28
         // item 2): the sum of each shared field's flat size at the module's
-        // scalar widths. `private_data_bytes` still mirrors the slot partition
-        // in `VALUE_SLOT_SIZE_BYTES` units, because private slots remain a
-        // `Value` array in the arena persistent region.
+        // scalar widths. `private_data_bytes` follows packed private storage,
+        // S1 of the array wire-slot design: `VALUE_SLOT_SIZE_BYTES` per private
+        // `Value` slot plus the packed bytes of every private array stored at
+        // element width, by the one rule `DataLayout::private_data_bytes`
+        // applies, which the runtime and the self-hosted driver share.
         flags: 0,
         shared_data_bytes: shared_data_flat_bytes,
-        private_data_bytes: private_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        private_data_bytes,
     };
 
     // Compile-time defense-in-depth for the WCET and WCMU contract.
@@ -4643,7 +4615,7 @@ fn compile_with_recorded_type_hook(
                 any_used_text_param || declared_return_carries_text
             })
             .unwrap_or(false);
-        let provably_ephemeral = module.private_data_bytes == 0 && !signature_uses_text;
+        let provably_ephemeral = !module.declares_private_data() && !signature_uses_text;
         if provably_ephemeral {
             module.flags |= crate::bytecode::FLAG_EPHEMERAL;
         }
@@ -4653,7 +4625,7 @@ fn compile_with_recorded_type_hook(
             && !provably_ephemeral
         {
             let mut reason = alloc::string::String::new();
-            if module.private_data_bytes != 0 {
+            if module.declares_private_data() {
                 reason.push_str("module declares `private data` which persists across resets");
             } else if signature_uses_text {
                 if !reason.is_empty() {
@@ -5259,6 +5231,24 @@ fn schema_type_token(t: &TypeExpr, types: &[TypeDef]) -> String {
     out
 }
 
+/// The declared private data size of a module, under packed private storage.
+///
+/// A module with no layout but a nonzero private count cannot arise, and is
+/// charged a `Value` slot per private element, the figure before packing, so
+/// that the declared size is never smaller than the storage.
+fn private_data_bytes_at(
+    layout: &Option<crate::bytecode::DataLayout>,
+    target: &crate::target::Target,
+    private_count: u32,
+) -> u32 {
+    let word_bytes = (1usize << target.word_bits_log2) / 8;
+    let float_bytes = (1usize << target.float_bits_log2) / 8;
+    layout.as_ref().map_or_else(
+        || private_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        |dl| dl.private_data_bytes(word_bytes, float_bytes),
+    )
+}
+
 fn slots_for_data_type(type_expr: &TypeExpr) -> u32 {
     match type_expr {
         TypeExpr::Array(elem, len, _) => {
@@ -5301,85 +5291,53 @@ fn scalar_array_elem_zero(mut elem: &TypeExpr) -> Option<crate::bytecode::ConstV
     }
 }
 
-/// The `u16` slot index a private composite placement record carries.
-///
-/// The data slot index space is 24 bits, and a `PrivateCompositeSlot` records
-/// its slot in 16. A composite slot above `u16::MAX` was dropped from the table
-/// with no diagnostic, so its writes found no pool offset. Widening the record
-/// changes the wire format, which needs the operator's authorization, so such a
-/// module is refused here instead. Measured on 2026-10-30, a private
-/// `[P; 70000]` produced 65,536 records for 70,000 elements.
-fn private_composite_slot_index(
-    slot: u32,
-    decl: &crate::ast::DataDecl,
-    field: &DataFieldDecl,
-) -> Result<u16, CompileError> {
-    u16::try_from(slot).map_err(|_| CompileError {
-        message: format!(
-            "private data field `{}.{}` places a composite at slot {slot}, beyond the {} \
-             composite slots a module can record",
-            decl.name,
-            field.name,
-            u32::from(u16::MAX) + 1
-        ),
-        span: field.span,
-    })
-}
-
-/// Per-slot load-time initial values for a private data field, one entry per
-/// slot the field occupies (`slots_for_data_type`). A scalar field carries its
-/// `= literal` initializer or the primitive zero; a scalar array carries the
-/// element zero in every slot; every other shape carries `Unit` here, which
+/// Load-time initial value for every element of a private data field. A scalar
+/// field carries its `= literal` initializer or the primitive zero; a scalar
+/// array carries the element zero; every other shape carries `Unit` here, which
 /// `fill_private_zero_initializers` replaces with the type's zero once the type
 /// tables are complete.
 fn private_init_for_field(
     data_name: &str,
     field: &DataFieldDecl,
-) -> Result<Vec<crate::bytecode::ConstValue>, CompileError> {
+) -> Result<crate::bytecode::ConstValue, CompileError> {
     use crate::bytecode::ConstValue;
-    let n = slots_for_data_type(&field.type_expr) as usize;
     match &field.type_expr {
         TypeExpr::Prim(p, _) => {
             // A scalar occupies exactly one slot. A non-zero-initializable
             // scalar (`Text`) keeps `Unit`; the initializer rejection above has
             // already ensured such a field carries no `= literal`.
             match prim_zero(p) {
-                Some(zero) => {
-                    let cv = match &field.initializer {
-                        Some(init) => const_value_from_literal_for_field(
-                            init,
-                            &field.type_expr,
-                            data_name,
-                            &field.name,
-                            field.span,
-                        )?,
-                        None => zero,
-                    };
-                    Ok(alloc::vec![cv])
-                }
-                None => Ok(alloc::vec![ConstValue::Unit; n]),
+                Some(zero) => match &field.initializer {
+                    Some(init) => const_value_from_literal_for_field(
+                        init,
+                        &field.type_expr,
+                        data_name,
+                        &field.name,
+                        field.span,
+                    ),
+                    None => Ok(zero),
+                },
+                None => Ok(ConstValue::Unit),
             }
         }
-        TypeExpr::Array(elem, _, _) => match scalar_array_elem_zero(elem) {
-            Some(zero) => Ok(alloc::vec![zero; n]),
-            None => Ok(alloc::vec![ConstValue::Unit; n]),
-        },
-        _ => Ok(alloc::vec![ConstValue::Unit; n]),
+        TypeExpr::Array(elem, _, _) => Ok(scalar_array_elem_zero(elem).unwrap_or(ConstValue::Unit)),
+        _ => Ok(ConstValue::Unit),
     }
 }
 
-/// Give every private slot that `private_init_for_field` left as `Unit` the
+/// Give every private field that `private_init_for_field` left as `Unit` the
 /// canonical zero value of its type, so that no private slot starts as the
 /// virtual machine's empty-slot marker.
 ///
 /// This is option (b) of the operator's ruling of 2026-10-30 on definite
-/// initialization. A composite slot receives its type's
-/// `crate::zero_value::zero_value`, an array of composites its element's zero
-/// in every element slot, and a `Text` slot the empty static string. The type
-/// tables are complete here, which `private_init_for_field` runs too early to
-/// use, so the zeros are filled in afterwards, in the same private-slot order.
+/// initialization. A composite field receives its type's
+/// `crate::zero_value::zero_value`, an array of composites its element's zero,
+/// and a `Text` field the empty static string. The type tables are complete
+/// here, which `private_init_for_field` runs too early to use, so the zeros are
+/// filled in afterwards, in the same private-field order. `private_init` holds
+/// one value per private field, which initialises every element of it.
 ///
-/// A slot keeps `Unit` in three cases. Its type is `()`, whose only value is
+/// A field keeps `Unit` in three cases. Its type is `()`, whose only value is
 /// `Unit`. Its zero would violate a refinement, because some refined newtype in
 /// it has no determinable lowest valid value, and a load-time initializer is
 /// observable. Or its type has no zero, as an opaque host type does not. The
@@ -5398,19 +5356,16 @@ fn fill_private_zero_initializers(
             continue;
         }
         for field in &decl.fields {
-            let n = slots_for_data_type(&field.type_expr) as usize;
             let leaf = innermost_non_array_type(&field.type_expr);
-            let slots = private_init
-                .get_mut(at..at.saturating_add(n))
-                .ok_or_else(|| CompileError {
-                    message: format!(
-                        "internal error: private data field `{}.{}` has no initializer entry",
-                        decl.name, field.name
-                    ),
-                    span: field.span,
-                })?;
-            at = at.saturating_add(n);
-            if !slots.contains(&ConstValue::Unit)
+            let value = private_init.get_mut(at).ok_or_else(|| CompileError {
+                message: format!(
+                    "internal error: private data field `{}.{}` has no initializer entry",
+                    decl.name, field.name
+                ),
+                span: field.span,
+            })?;
+            at = at.saturating_add(1);
+            if *value != ConstValue::Unit
                 || !crate::zero_value::zero_respects_refinements(leaf, &registry)
             {
                 continue;
@@ -5419,9 +5374,7 @@ fn fill_private_zero_initializers(
                 continue;
             };
             resolve_const_enum_discriminants(&mut zero, &type_info.enum_variant_order);
-            for slot in slots.iter_mut().filter(|v| **v == ConstValue::Unit) {
-                *slot = zero.clone();
-            }
+            *value = zero;
         }
     }
     if at != private_init.len() {
@@ -5433,6 +5386,163 @@ fn fill_private_zero_initializers(
         });
     }
     Ok(())
+}
+
+/// One declared data field before its byte layout and initialiser are known.
+struct DataFieldSkel {
+    name: String,
+    visibility: SlotVisibility,
+    first_slot: u32,
+    count: u32,
+}
+
+/// One shared field's byte layout in the host buffer.
+struct SharedFieldPlacement {
+    /// Offset of element zero.
+    offset: u32,
+    /// Element kind tag, in the `SharedSlotLayout::kind` space.
+    kind: u8,
+    /// Element flat body length, zero for a scalar.
+    elem_len: u16,
+    /// Byte distance between consecutive elements, zero for one element.
+    stride: u32,
+    /// Bytes the whole field occupies.
+    total: u32,
+}
+
+/// The kind tag of a data field's leaf element, in the space
+/// `SharedSlotLayout::kind` uses.
+///
+/// A type with no statically known layout, an opaque host type for example,
+/// reports `ScalarKind::Opaque`, which carries no zero and so always takes an
+/// explicit or `Unit` initialiser.
+fn data_element_kind(leaf: &TypeExpr, ti: &TypeInfo) -> u8 {
+    use crate::value_layout::{CompositeKind, LayoutDescriptor as LD, ScalarKind};
+    match ti.layout_context().layout_for(leaf) {
+        Ok(LD::Scalar(k)) => k.to_tag(),
+        Ok(LD::Tuple(_)) => SHARED_SLOT_COMPOSITE_FLAG | CompositeKind::Tuple.to_tag(),
+        Ok(LD::Array { .. }) => SHARED_SLOT_COMPOSITE_FLAG | CompositeKind::Array.to_tag(),
+        Ok(LD::Struct { .. }) => SHARED_SLOT_COMPOSITE_FLAG | CompositeKind::Struct.to_tag(),
+        Ok(LD::Enum { .. }) => SHARED_SLOT_COMPOSITE_FLAG | CompositeKind::Enum.to_tag(),
+        Err(_) => ScalarKind::Opaque.to_tag(),
+    }
+}
+
+/// The host-buffer layout of one shared field of type `ty` beginning at
+/// `base_offset`.
+///
+/// The element layout is resolved once, from the field's innermost non-array
+/// type, rather than once per element, so the cost is a function of the array
+/// nesting depth and not of the element count.
+fn shared_field_placement(
+    ty: &TypeExpr,
+    ti: &TypeInfo,
+    base_offset: u32,
+    span: crate::token::Span,
+) -> Result<SharedFieldPlacement, CompileError> {
+    let count = slots_for_data_type(ty);
+    let mut element = Vec::with_capacity(1);
+    let size = push_shared_slot_layout(
+        innermost_non_array_type(ty),
+        ti,
+        base_offset,
+        span,
+        &mut element,
+    )?;
+    let entry = match element.as_slice() {
+        [one] => *one,
+        _ => {
+            return Err(CompileError {
+                message: String::from(
+                    "internal error: a shared data element did not resolve to one layout entry",
+                ),
+                span,
+            });
+        }
+    };
+    let total = size
+        .checked_mul(count)
+        .filter(|t| {
+            base_offset
+                .checked_add(*t)
+                .is_some_and(|e| e <= MAX_DATA_ADDR)
+        })
+        .ok_or_else(|| CompileError {
+            message: String::from("shared data segment exceeds the 16 MB flat host-buffer limit"),
+            span,
+        })?;
+    Ok(SharedFieldPlacement {
+        offset: entry.offset,
+        kind: entry.kind,
+        elem_len: entry.len,
+        stride: if count > 1 { size } else { 0 },
+        total,
+    })
+}
+
+/// Assemble the module's data layout from the field skeletons and the shared
+/// and private placements computed for them, or `None` when the module
+/// declares no runtime data field.
+fn assemble_data_layout(
+    skels: Vec<DataFieldSkel>,
+    shared: &[SharedFieldPlacement],
+    private: &[(u8, u16, Option<u32>)],
+    private_init: Vec<crate::bytecode::ConstValue>,
+) -> Result<Option<DataLayout>, CompileError> {
+    if skels.is_empty() {
+        return Ok(None);
+    }
+    let disagree = || CompileError {
+        message: String::from(
+            "internal error: the data field placements and the declared fields disagree",
+        ),
+        span: Span::default(),
+    };
+    let mut shared_iter = shared.iter();
+    let mut private_iter = private.iter().zip(private_init);
+    let mut fields = Vec::with_capacity(skels.len());
+    for skel in skels {
+        let field = match skel.visibility {
+            SlotVisibility::Shared => {
+                let p = shared_iter.next().ok_or_else(disagree)?;
+                DataField {
+                    name: skel.name,
+                    visibility: skel.visibility,
+                    first_slot: skel.first_slot,
+                    count: skel.count,
+                    kind: p.kind,
+                    elem_len: p.elem_len,
+                    offset: Some(p.offset),
+                    stride: p.stride,
+                    init: DataInit::Zero,
+                }
+            }
+            SlotVisibility::Private => {
+                let (&(kind, elem_len, offset), value) =
+                    private_iter.next().ok_or_else(disagree)?;
+                DataField {
+                    name: skel.name,
+                    visibility: skel.visibility,
+                    first_slot: skel.first_slot,
+                    count: skel.count,
+                    kind,
+                    elem_len,
+                    offset,
+                    stride: if offset.is_some() && skel.count > 1 {
+                        u32::from(elem_len)
+                    } else {
+                        0
+                    },
+                    init: DataInit::canonical(kind, value),
+                }
+            }
+        };
+        fields.push(field);
+    }
+    if shared_iter.next().is_some() || private_iter.next().is_some() {
+        return Err(disagree());
+    }
+    Ok(Some(DataLayout { fields }))
 }
 
 /// A resolved indexed access into a data-segment array field.
@@ -5714,7 +5824,7 @@ fn emit_data_indexed_read(
     // A dynamic data-array index can trap out-of-bounds; record the
     // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
-    fc.note_data_read(chain.data_name, base, total, element);
+    fc.note_data_read(chain.data_name, base, element);
     Ok(())
 }
 
@@ -6839,8 +6949,9 @@ fn compile_data_field_assign(
             message: format!("unknown data field: {}.{}", data_name, field),
             span,
         })?;
-    // An array field occupies one data slot per element, so a single `SetData` would put the
-    // whole array value in the first slot and leave the others unwritten. A whole-array read is
+    // An array field has one element slot per element and `SetData` writes element zero, so a
+    // single `SetData` would put the whole array value in the first element and leave the others
+    // unwritten. A whole-array read is
     // refused for the same layout, and the write is refused to match, until an element-wise
     // lowering exists.
     let field_type = fc
@@ -8618,7 +8729,7 @@ fn compile_for_in_data_array(
     // Bind the iteration variable to the indexed element.
     fc.emit(Op::GetLocal(idx_slot));
     fc.emit_data_read(base, total_slots, elem_type);
-    fc.note_data_read(data_name, base, total_slots, elem_type);
+    fc.note_data_read(data_name, base, elem_type);
     let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
     fc.emit(Op::SetLocal(var_slot));
 
@@ -11122,7 +11233,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
                 fc.emit(Op::GetData(slot));
                 if let Some(t) = &field_type {
-                    fc.note_data_read(name, slot, 1, t);
+                    fc.note_data_read(name, slot, t);
                 }
                 return Ok(());
             }
@@ -14665,7 +14776,8 @@ mod tests {
                    fn main() -> Word { ctx.score }";
         let module = compile_str(src).unwrap();
         let layout = module.data_layout.expect("expected data layout");
-        assert_eq!(layout.slots.len(), 4);
+        assert_eq!(layout.slot_count(), 4);
+        assert_eq!(layout.fields.len(), 4);
     }
 
     #[test]

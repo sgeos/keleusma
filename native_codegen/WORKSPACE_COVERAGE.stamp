@@ -1,0 +1,3 @@
+commit: 1c83f9dc7df5e196f9d1d254d125f736b71dd1f9
+stamped: 2026-09-04T07:45:25Z
+figures: 2760 passed, 0 failed, 120 binaries | cargo test --workspace --no-fail-fast | DEFAULT FEATURES ONLY | measured 2026-09-04 on a FROZEN tree after absorption 49 | subject: the tree at this commit, not a standing property

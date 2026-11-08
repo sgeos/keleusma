@@ -1,0 +1,79 @@
+COMPLETION CONDITION — joining confinement to the arena-bound gap
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Something in the tree reports, for the modules whose backend arena demand
+   exceeds their verified figure, how their construction sites are distributed
+   across the confinement analysis's three answers. The three are reported
+   separately; the inconclusive answer is never folded into the confident one.
+
+2. That per-module picture is reported alongside the corpus-wide distribution,
+   with the two clearly distinguished as different populations, so a reader can
+   tell whether the exceeding modules differ from the corpus at all.
+
+3. The report states explicitly what the measurement does NOT license. In
+   particular it does not present any figure as an achievable or proposed arena
+   bound, and it says why: confinement licenses reuse across scopes rather than
+   within one, so a count of confined sites is not a demand.
+
+4. The direction of soundness is stated: which of the reported counts is an
+   upper bound and which a lower bound on what it stands for.
+
+5. A verdict is recorded on whether confinement could plausibly account for the
+   gap, and it is one the reported numbers support rather than one they merely
+   suggest. If the numbers are inconclusive, that is the recorded verdict.
+
+6. Any instrument used is demonstrated to discriminate — shown to produce
+   different answers on inputs that should differ — rather than trusted because
+   its output looked plausible.
+
+7. No distribution over a population that ordinary corpus growth moves is
+   pinned as an equality, unless the pin exists to announce that growth and says
+   so.
+
+8. Nothing in the code-generation path consumes a confinement verdict. The
+   region planner still assigns per static site, so no verdict from this
+   analysis can affect emitted code.
+
+9. No file under src/selfhost/, src/confine.rs, and none of src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+12. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+13. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Closing the arena-bound gap, or proposing a bound.
+- Wiring confinement into region planning.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Presenting a count of confined sites as an achievable demand or bound.
+- Folding the inconclusive verdict into the confident one.
+- Reporting corpus-wide and exceeding-module figures as one population.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A green reached by narrowing a population or relaxing an assertion, unless
+  what was excluded is still reported with its cause.
+- A suite result read from a pipeline's exit status rather than the command's.

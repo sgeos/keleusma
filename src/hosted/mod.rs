@@ -485,24 +485,27 @@ fn data_inits(module: &Module) -> Result<Vec<(i64, i64)>, Refusal> {
     let Some(layout) = module.data_layout.as_ref() else {
         return Ok(Vec::new());
     };
-    if !layout.shared_layout.is_empty() {
+    if layout.shared_slot_count() != 0 {
         return Err(Refusal::Unsupported(String::from("shared data")));
     }
-    if !layout.private_composite_layout.is_empty() {
+    if layout.fields.iter().any(|f| f.offset.is_some()) {
         return Err(Refusal::Unsupported(String::from("private composite data")));
     }
-    if layout.slots.len() > caps::DATA {
+    if layout.slot_count() > caps::DATA {
         return Err(Refusal::Capacity(format!(
             "{} data slots",
-            layout.slots.len()
+            layout.slot_count()
         )));
     }
     let wire = module
         .to_bytes()
         .and_then(|b| Module::from_bytes(&b))
         .map_err(|e| Refusal::Unsupported(format!("data layout round trip: {e:?}")))?;
-    let inits = wire.data_layout.map(|l| l.private_init).unwrap_or_default();
-    (0..layout.slots.len())
+    let inits = wire
+        .data_layout
+        .map(|l| l.private_init_values())
+        .unwrap_or_default();
+    (0..layout.slot_count())
         .map(|i| match inits.get(i) {
             None => Ok((0, 0)),
             Some(c) => HostedValue::from_const(c)
@@ -636,8 +639,15 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
             let e = match *op {
                 Op::Const(i) => [Tag::Const as i64, k0 + i64::from(i), 0, 0],
                 Op::IsEnum(_, _, d) => [Tag::IsEnum as i64, k0 + i64::from(d), 0, 0],
-                _ => encode_op(op)
-                    .ok_or_else(|| Refusal::Unsupported(format!("chunk {ci} op {ip} {op:?}")))?,
+                // A data operand names a field, and the interpreter's data table is indexed by
+                // element, so the operand is translated to the field's first element here.
+                _ => encode_op(
+                    &module
+                        .data_layout
+                        .as_ref()
+                        .map_or(*op, |dl| dl.element_addressed(*op)),
+                )
+                .ok_or_else(|| Refusal::Unsupported(format!("chunk {ci} op {ip} {op:?}")))?,
             };
             ops.push(e);
         }
@@ -770,9 +780,10 @@ impl Slots {
         let base = |name: &str| -> Result<usize, VmError> {
             let full = format!("io.{name}");
             layout
-                .slots
+                .fields
                 .iter()
-                .position(|s| s.name == full)
+                .find(|f| f.name == full)
+                .map(|f| f.first_slot as usize)
                 .ok_or_else(|| VmError::InvalidBytecode(format!("interp.kel lacks {full}")))
         };
         Ok(Slots {

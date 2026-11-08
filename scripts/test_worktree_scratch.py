@@ -17,6 +17,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Over the 1 MB below which `list` treats a target as holding only locks.
+BUILD_OUTPUT = b'\0' * (2 * 1024 * 1024)
 
 
 class WorktreeScratchTests(unittest.TestCase):
@@ -155,7 +157,7 @@ class WorktreeScratchTests(unittest.TestCase):
         agent = self.tmp / 'agents' / 'eleven'
         self.git('worktree', 'add', '-q', '-b', 'agent/eleven', str(agent))
         (agent / 'compiler' / 'target').mkdir(parents=True)
-        (agent / 'compiler' / 'target' / 'marker').write_text('build output')
+        (agent / 'compiler' / 'target' / 'marker').write_bytes(BUILD_OUTPUT)
         result = self.worktree('list')
         self.assertEqual(result.returncode, 0, result.stderr)
         unlinked = f'build output not on the scratch volume: {agent.resolve() / "compiler" / "target"} ('
@@ -164,12 +166,38 @@ class WorktreeScratchTests(unittest.TestCase):
                    if line.startswith('build output not on the scratch volume')]
         # The agent tree has no root `target`, and the linked tree's targets are links.
         self.assertEqual(len(reports), 1, reports)
-        self.assertEqual((agent / 'compiler' / 'target' / 'marker').read_text(), 'build output')
+        self.assertEqual((agent / 'compiler' / 'target' / 'marker').read_bytes(), BUILD_OUTPUT)
+
+    def test_list_skips_a_target_that_holds_only_locks(self):
+        # A `target` holding only lock files is not build output worth reporting.
+        agent = self.tmp / 'agents' / 'thirteen'
+        self.git('worktree', 'add', '-q', '-b', 'agent/thirteen', str(agent))
+        (agent / 'target' / 'debug').mkdir(parents=True)
+        (agent / 'target' / 'debug' / '.cargo-lock').write_text('')
+        result = self.worktree('list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('not on the scratch volume', result.stdout)
+
+    def test_list_counts_a_folder_a_tree_links_by_another_name(self):
+        # V0.2.X links its agent trees by hand to folders named after their branches,
+        # so a folder whose name matches no tree may still be in use.
+        agent = self.tmp / 'agents' / 'fourteen'
+        self.git('worktree', 'add', '-q', '-b', 'agent/fourteen', str(agent))
+        folder = self.home('agent-branch-name')
+        (folder / 'target').mkdir(parents=True)
+        os.symlink(folder / 'target', agent / 'target')
+        stale = self.home('agent-gone')
+        stale.mkdir(parents=True)
+        result = self.worktree('list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(str(folder), result.stdout)
+        self.assertIn(f'scratch folder used by no tree: {stale}', result.stdout)
 
     def test_list_without_scratch_base_reports_no_unlinked_target(self):
         agent = self.tmp / 'agents' / 'twelve'
         self.git('worktree', 'add', '-q', '-b', 'agent/twelve', str(agent))
         (agent / 'target').mkdir()
+        (agent / 'target' / 'marker').write_bytes(BUILD_OUTPUT)
         result = self.worktree('list', scratch=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('not on the scratch volume', result.stdout)

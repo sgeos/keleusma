@@ -48,13 +48,13 @@ until the next `Reset`. When such a value carries `Text`, use
 in any one value, since the module cannot know the length of a host
 string.
 
-The figure also includes the region a native compilation of the module
-reserves, so that one capacity works whether the module runs on the
-virtual machine or as native code. A host that runs only the virtual
-machine is therefore over-provisioned by that region, which
-`keleusma::native_region::native_region_supplement_bytes` reports, and a
-host that used to add the native figure itself should stop, or it counts
-the region twice.
+The figure is the virtual machine's alone. A host that runs the module
+as native code sizes its buffers from
+`keleusma::native_region::native_route_buffers_for` instead, which
+reports the native composite region, the private buffer and the shared
+buffer. A host that keeps one arena able to serve either route uses
+`keleusma::vm::auto_arena_capacity_for_vm_and_native`, which adds the
+native region once, and must not add it again.
 
 ## Option C: a static buffer
 

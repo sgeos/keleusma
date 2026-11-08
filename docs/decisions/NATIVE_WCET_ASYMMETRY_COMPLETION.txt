@@ -1,0 +1,63 @@
+COMPLETION CONDITION — the native worst-case-time asymmetry (V0.3.X, native_codegen)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE TWO HALVES ARE DISTINGUISHED WHERE A READER MEETS THEM.
+   Wherever the emitted bounds are presented to someone linking a native object,
+   the memory figures and the time figure are no longer presented as the same
+   kind of claim. The distinction appears in the program's own output, not only
+   in a design document.
+
+2. THE SUBJECT OF THE TIME FIGURE IS NAMED.
+   The record and the output state that the cost-unit figure describes the
+   bytecode under a virtual-machine cost model, and that it is not a measured
+   bound on native execution.
+
+3. THE CLAIM IS NARROWED, NOT DELETED.
+   The time figure is still reported. A solution that removes it does not
+   satisfy this, because the figure is true about the bytecode and useful.
+
+4. THE SUPPORTABLE CLAIM IS THE ONE MADE.
+   The record says that no measurement relates the bytecode cost model to native
+   execution. It does not assert that the native code violates any bound, is
+   slower than the figure, or that compiler-runtime routines are unbounded in
+   fact rather than unbounded by this project.
+
+5. THE MEASURED HALF IS STILL CREDITED.
+   The record states that the memory bounds do transfer and names the instrument
+   that measures them, so narrowing the time claim does not read as weakening
+   both.
+
+6. THE CONNECTION TO THE MEASURED RUNTIME CALLS IS STATED.
+   The record says that native code on at least one measured target calls into a
+   compiler runtime, and that such calls have no counterpart at the bytecode
+   level, which is why a per-opcode model cannot describe them.
+
+7. WHAT A NATIVE TIME BOUND WOULD REQUIRE IS NAMED, WITHOUT BEING BUILT.
+   The record states what is missing, and does not present that as work
+   completed or as an increment in progress.
+
+8. ANY QUOTED OUTPUT IN DOCUMENTATION MATCHES WHAT THE PROGRAM NOW PRINTS.
+   If a document reproduces the program's output, the reproduction corresponds
+   to the current output. A stale quotation of changed output does not satisfy
+   this.
+
+9. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every figure and pass/fail claim corresponds to a command whose output
+   appears in the transcript. Carried figures are marked as carried.
+
+10. NEW OR CHANGED TESTS SURVIVE ORDINARY PARALLELISM.
+    Any test added or modified is observed passing under the harness's default
+    threading, not only in isolation.
+
+11. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+    The native_codegen suite passes, or each failure is named with its cause and
+    with a statement of whether the cause belongs to this package.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the eleven properties above,
+or whether any other goal in the same session advanced.

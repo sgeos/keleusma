@@ -1,0 +1,113 @@
+# Refusing the composite that leaves its iteration by `yield`
+
+> **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
+
+**Status**: implemented on the V0.3.X line, 2026-08-27. Costs the corpus nothing.
+**Owner**: the native backend (`native_codegen/`), which is not built by continuous integration.
+
+## The defect
+
+`region::plan_chunk_region` gives every construction site one offset for the life of the chunk, so a
+site inside a loop body rewrites the same bytes on every iteration. After B28 a composite is
+`FlatComposite::Arena(ArenaHandle<[u8]>)`, a pointer and a length rather than a copy, and the epoch
+the handle carries is advanced only by a `RESET`. **An overwrite in place advances nothing.** A host
+holding iteration *n*'s handle therefore calls `resolve`, succeeds, and reads iteration *n+1*'s
+bytes.
+
+**The failure mode is a silently wrong value, not a `Stale` error.** That is why it cannot be left to
+a runtime guard: there is no runtime guard it trips. Established against the runtime by the `v0.2.3`
+line and recorded in [`../proofs/COMPOSITE_REGION_REUSE.md`](../proofs/COMPOSITE_REGION_REUSE.md)
+§4.1.1.
+
+## The recorded premise was false, and correcting it is the substantive finding
+
+Both the V0.3.X handoff and the obligation document stated that the defect was latent because **no
+corpus module has the escaping shape**. That is wrong.
+
+`examples/scripts/13_telemetry_stream.kel` **carries the shape deliberately** and says so in its own
+header: *"the value LEAVES the iteration through `yield`, so the host may still be holding it when
+the next iteration builds its successor... A planner that reused a slot here would hand the host the
+next reading's bytes where it asked for this one's, and the arena's epoch guard would NOT catch
+it."* Measured: chunk 0, construction at op 24, yielded at op 25.
+
+**So latency had to be explained by the backend rather than by the corpus, and it is.** Asked
+directly, the backend refuses that module with:
+
+```
+main: native lowering does not yet support opcode Stream
+```
+
+**The safety is accidental.** It rests on an unimplemented opcode, not on any escape reasoning. Every
+chunk that can carry the shape is a `loop` chunk, and a `loop` chunk opens with `Op::Stream`. On the
+day `Stream` lowers, the defect becomes live and silent unless something else refuses it first.
+
+## The disposition: refuse at the placement
+
+`region::yield_escape_hazards` reports sites whose fixed offset can be overwritten while the host
+still holds the value built there, and `lower_chunk_body` returns
+`LowerError::YieldEscapingLoopComposite` rather than emitting the placement.
+
+**Refusal rather than a better placement.** Not reusing the slot means one region per iteration,
+which is unbounded in the iteration count and gives up the bounded-memory property the backend exists
+to provide. Making `resolve` fail instead would require the epoch to advance on an in-place
+overwrite, and epoch semantics live in `src/vm.rs` and the arena, which this line may read and must
+not edit.
+
+### Why this does not reopen the recorded design tension
+
+The objection to a confinement verdict reaching the planner is that a wrong verdict would then
+miscompile. **That objection does not reach this gate.** The predicate over-approximates in one
+direction only and its result is used to **refuse**, never to place. A verdict wrong in the permissive
+direction rejects a sound program loudly and recoverably; placement still consumes nothing. The
+immunity and the guard are compatible because they act at different points.
+
+## What it costs: nothing
+
+Measured over 91 modules and 1117 chunks by
+`native_codegen/tests/yield_escape_gate.rs`:
+
+| | |
+|---|---|
+| chunks carrying the shape | **1** (`13_telemetry_stream.kel` chunk 0) |
+| of those, already refused for another reason | **1** |
+| **newly refused by this gate** | **0** |
+
+## What is NOT closed, stated rather than implied
+
+- **The interprocedural case is MEASURED and empty over the shipped corpus**, and is not refused.
+  `native_codegen/tests/interproc_yield_escape.rs` follows the call graph to a fixpoint and reports,
+  of the 14 chunks that construct inside a loop, how many could hand the composite to a `yield` in
+  another chunk. **Crude result: 0 by call, 2 by return.** Both return-path candidates
+  (`piano_roll_0.kel` and `piano_roll_1.kel`, chunk 1) are **ruled out by a scalar boundary**: the
+  yielding caller's declared return type is `Word`, and a `loop` chunk's return type is the type it
+  yields, so no composite can reach the host through it. Confirmed independently by reading
+  `piano_roll_0.kel`, whose `main` is `loop main(input: Word) -> Word` and yields the literal `0`.
+  **Refined residual: 0.**
+
+  **Not refused, and the reason is not that it is free.** A refusal here would rest on three stacked
+  over-approximations with no data flow traced at any of them, so it would reject sound programs on
+  the strength of "a callee can yield" — and there is no instance to justify that cost. **The class
+  also cannot occur today**, because every chunk that could yield a composite is behind the same
+  `Stream` refusal. The census asserts the refined residual is zero, so a corpus change that creates
+  an instance fails the test and forces the decision then, on evidence, rather than now on none.
+
+  **Both tripwires point at the same moment**: the `Stream` opcode landing. Whoever lands it must
+  revisit the shadowing test AND this residual.
+- **THE GATE IS NO LONGER SHADOWED. UPDATED 2026-09-08, THE DAY `Stream` LOWERED.**
+  It WAS shadowed: every hazardous chunk was refused earlier for `Stream`, so the refusal could not
+  fire through `lower_module` on unmutated input. The tripwire that asserted the shadowing did what
+  it was written to do — **it failed on the day general `Op::Stream` lowering landed** — and it is
+  now `the_yield_escape_refusal_now_fires_unshadowed`, which asserts the opposite property: that
+  `lower_module` refuses the §4.1 module for the escaping composite AND that it is no longer refused
+  for `Stream`. The second half matters as much as the first, because without it a future refusal
+  moving back in front would let the test pass for the retired reason.
+
+  **The consequence is that this refusal has stopped being a precaution.** It is now the only thing
+  standing between the corpus and a silently wrong value, which is what the shadowing note said would
+  happen and is the reason the guard was worth writing before it could fire.
+- **Fireability was demonstrated BEFORE it could be observed directly**, by removing the `Stream` op
+  from compiled bytecode and observing `lower_module` return the yield-escape refusal. That mutation
+  is no longer needed for the primary evidence and the simulations built on it have been removed;
+  the refusal is now observed on the real module. A guard whose only evidence is a
+  non-empty predicate result says nothing about whether the lowering consults it, and this line has
+  shipped guards that passed while unable to fail.

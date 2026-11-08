@@ -1,0 +1,77 @@
+COMPLETION CONDITION — absorption 15 and the recorded-blocker sweep
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The branch contains the v0.2.3 work in which the wire stage self-compiles
+   byte-identically, with nothing from that line left unabsorbed.
+
+2. Every census and gate figure quoted as current was re-derived against the
+   present tree after the last change capable of moving it. Where a figure
+   moved, what moved it is stated; where a prediction was recorded in advance,
+   the outcome is reported against it whether or not it was right.
+
+3. If more than one change capable of moving a gate figure landed, each figure
+   that moved is attributed on the basis of a measurement taken between them
+   rather than reasoning afterwards.
+
+4. The recorded claims in this line's own sources that assert something is
+   blocked, deferred, refused or impossible are enumerated, and each examined
+   one is classified as: still true, expired, blocked by design rather than by
+   circumstance, or not checkable from this line. The population examined is
+   stated, along with what was excluded and why.
+
+5. A claim judged expired is judged so because the thing it named as its
+   dependency was checked and found to exist, not because the wording seemed
+   old.
+
+6. Any note found expired is corrected where it is written, with what changed
+   made visible, rather than deleted or silently superseded elsewhere.
+
+7. A claim owned by a file this line cannot edit is reported as a finding rather
+   than left implying this line will act on it.
+
+8. Any selector used to enumerate the population is demonstrated to
+   discriminate, and does not match on the output of the tool that produced its
+   input.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+12. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Unblocking anything the sweep finds expired. Finding them is the goal; acting
+  on one is a separate increment with its own evidence.
+- Examining every shape-matched claim, provided what was examined and what was
+  not is stated.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Marking a claim still true on the strength of how it is worded.
+- Reporting a by-design refusal as an expired blocker.
+- Deleting an expired note instead of correcting it visibly.
+- A selector that matches everything or nothing, or that matches its own tool's
+  output.
+- A figure carried across a change capable of moving it.
+- A suite result read from a pipeline's exit status rather than the command's.

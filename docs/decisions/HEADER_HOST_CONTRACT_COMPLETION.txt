@@ -1,0 +1,59 @@
+COMPLETION CONDITION — the generated header states the host contract (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE GENERATED HEADER NAMES THE NATIVES A MODULE REQUIRES.
+   For a module that declares host natives, the emitted header contains a
+   declaration for each, under the exact symbol name the emitted object refers
+   to.
+
+2. THE SYMBOL NAME COMES FROM ONE PLACE.
+   The name in the header is produced by the same code that names the symbol in
+   the object. No second implementation of the mangling exists in the tree.
+
+3. A MODULE WITH NATIVES IS ACTUALLY EXERCISED.
+   The evidence uses a module that declares at least one native. A demonstration
+   on a module with none does not satisfy this, whatever it prints.
+
+4. THE HEADER IS ACCEPTED BY A C COMPILER.
+   The generated text is compiled, not merely inspected. A check that only reads
+   the emitted string has not tested the property the header exists for.
+
+5. NO SIGNATURE IS INVENTED.
+   Any declared prototype reflects what the module states. Where a shape is not
+   available, the record says so rather than supplying a plausible one.
+
+6. THE CLAIM IS SCOPED TO THE HALF IT COVERS.
+   Wherever the header's coverage is described, it says that the host-supplied
+   natives are covered and that toolchain or C-library symbols are not, with a
+   pointer to where those are recorded.
+
+7. AN OMITTED NATIVE FAILS EARLIER THAN BEFORE, AND THIS IS SHOWN.
+   The transcript demonstrates the difference the change makes: a host that does
+   not define a required native is rejected, and the record states at which
+   stage. A claim that it "would" fail earlier, unaccompanied by the
+   demonstration, does not satisfy this.
+
+8. THE EXISTING EXAMPLE STILL BUILDS AND RUNS.
+   The C host that links against an emitted object still compiles, links, and
+   produces its previous output.
+
+9. NEW OR CHANGED TESTS SURVIVE ORDINARY PARALLELISM.
+   Any test added or modified is observed passing under the harness's default
+   threading, not only in isolation.
+
+10. NOTHING IS CLAIMED THAT WAS NOT RUN.
+    Every count and pass/fail claim corresponds to a command whose output
+    appears in the transcript. Carried figures are marked as carried.
+
+11. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+    The native_codegen suite passes, or each failure is named with its cause and
+    with a statement of whether the cause belongs to this package.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the eleven properties above,
+or whether any other goal in the same session advanced.

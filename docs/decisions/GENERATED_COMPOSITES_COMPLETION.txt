@@ -1,0 +1,43 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. COMPOSITES ARE GENERATED AND COMPARED
+- A test generates programs that build a composite from computed values and read
+  its fields back, comparing execution against the reference.
+- Field count, field types and field values vary across generated programs rather
+  than being fixed.
+- Every field of each generated composite is read, and the reads are combined so
+  that two fields exchanging values changes the result.
+- The number of programs compared is asserted against a floor, and generation is
+  seeded and reproducible.
+
+2. THE ADDED BREADTH IS SHOWN TO BE WORTH SOMETHING
+- The tree records either a divergence found, or a perturbation that the
+  generated subjects catch and the existing hand-written packing subjects do not.
+- If no such perturbation could be found, that is recorded plainly, so the
+  generated coverage is not credited with power it has not demonstrated.
+
+3. SCOPE IS STATED
+- The tree says which composite shapes are not generated.
+- A green run is not described as a correctness claim about composite layout.
+
+4. BOUNDS
+- Generated arithmetic cannot overflow a checked operation for any type emitted.
+- The added runtime is stated and remains small relative to the gate's longest
+  phase.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any divergence is recorded as a finding, reduced toward a minimal case, and
+  described as the two implementations disagreeing rather than as a verdict about
+  which is wrong.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

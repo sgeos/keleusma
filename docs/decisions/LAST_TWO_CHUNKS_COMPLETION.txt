@@ -1,0 +1,56 @@
+COMPLETION CONDITION — the last two unlowered chunks
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. BOTH SURVIVORS ARE NAMED, NOT BUCKETED
+   An executable check in the tree reports, for every chunk in the shipped corpus
+   the backend does not lower, which module and chunk it is and the reason given
+   for refusing it. The reason is the one the backend itself produces, not a
+   workstream label such as "other". The figures come from running code rather
+   than from prose.
+
+2. THE DISPOSITION FOLLOWS THE EVIDENCE
+   For each named chunk, either it now lowers and the tree records that, or it
+   still does not and the tree records why, distinguishing a cause that is a
+   deliberate refusal from one that is unimplemented work. Either outcome is
+   acceptable; an unexplained survivor is not.
+
+3. ANY WIDENING IS BACKED BY EXECUTION
+   If the backend accepts something it previously refused, a check in the tree
+   runs it and compares against the reference implementation, and evidence shows
+   the check fails without the change. Coverage figures alone do not establish
+   correctness.
+
+4. FIGURES ARE RE-DERIVED
+   Corpus coverage and the count of modules executed and agreeing are
+   re-measured and stated whether or not they moved. If they moved, the tree
+   names which chunks changed state.
+
+5. NO GUARD IS TRUSTED WITHOUT EVIDENCE IT CAN FIRE
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively, so a passing result
+   distinguishes the property from its absence.
+
+6. A STACK WALK, IF ANY, USES TRUE POP AND PUSH COUNTS
+   If any analysis added reconstructs operand provenance, it does so from the
+   source that documents itself as giving true pop and push counts, not from the
+   peak model. This is called out because the peak model was misused once
+   already.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the project's verification gate, or of the
+   subproject step it contains, showing formatting, lint with warnings denied,
+   tests, and the documentation build all clean. Test results give both the
+   runner's exit status and the summed pass, fail and binary counts, and the two
+   agree.
+
+8. CLAIMS MATCH THE TREE
+   No document asserts a figure, blocker, or cause the tree contradicts.
+   Anything corrected is visible as corrected rather than silently replaced.
+
+9. WORK IS INTEGRATED AND CLEAN
+   No uncommitted changes remain and the local branch agrees with its remote.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

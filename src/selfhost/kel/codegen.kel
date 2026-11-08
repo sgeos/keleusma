@@ -114,7 +114,7 @@
 // ops then `GetDataIndexed(base, len)` (IndexRead, kind 13), and `d.arr[i] = v`
 // lowers to the value ops, the index ops, then `SetDataIndexed(base, len)`
 // (IndexAssignIn, kind 14, with an IndexStore child, kind 15, sequencing value
-// then index). `base` is the element-0 data slot and `len` the array length, both
+// then index). `base` is the field index and `len` the array length, both
 // resolved by name by the input adapter and packed as base + len*65536. Single
 // dimension only; multi-dimensional arrays are a later increment.
 //
@@ -426,6 +426,8 @@ private data st {
     // Per open bare loop, the break-list watermark at its `Loop`, Order 6, so its `EndLoop`
     // patches the user `break`s recorded inside it, as a `mendloop` does for its own.
     cf_lbstart: [Word; 32],
+    // The pool index of the sign shift of the `Text<N>` operation being emitted.
+    tx_sign: Word,
 }
 
 // Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
@@ -689,6 +691,24 @@ fn push_floatlit(p: Word) -> Word {
     if idx == st.pool_count {
         st.pool[st.pool_count] = id;
         st.pool_tag[st.pool_count] = 3;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
+// ByteLit (kind 87): a `Byte`-suffixed literal, a Byte pool entry, tag 5, deduplicated by
+// its value among Byte entries, as the reference's structural deduplication keeps it apart
+// from an Int of the same value.
+fn push_bytelit(p: Word) -> Word {
+    let value = ast.args[p];
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 5 { st.dup_idx = i; }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 5;
         st.pool_count = st.pool_count + 1;
     }
     push_emit(wire.konst + idx * wire.radix)
@@ -1222,7 +1242,33 @@ fn push_refinement(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// The literal cast `"..." as Text<N>` carries `N` above this base. It loads one pooled
+// constant, tag 4, whose value packs the string literal's intern id below 65536 and the
+// capacity above it. The host builds the flat body from the two, the literal's bytes zero
+// padded to `N`, which is the reference's `ConstValue::Tuple(Int, Array)`. The operand is
+// not visited, because the reference emits nothing for it. Pool deduplication is by the
+// packed value, so two casts of one spelling to one capacity share an entry as the
+// reference's structural deduplication shares them.
+fn text_cast_base() -> Word { 1099511627776 }
+fn push_text_cast(p: Word) -> Word {
+    let operand = ast.lhs[p];
+    let n = ast.args[p] - text_cast_base();
+    let value = if ast.kinds[operand] == 38 { ast.args[operand] + n * 65536 } else { 0 - 1 };
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 1024 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 4 { st.dup_idx = i; }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 4;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
 fn push_cast(p: Word) -> Word {
+    if ast.args[p] >= text_cast_base() { push_text_cast(p) } else {
     if ast.args[p] >= 2 {
         push_enum_dispatch(p, ast.args[p] - 2, 4)
     } else {
@@ -1232,7 +1278,230 @@ fn push_cast(p: Word) -> Word {
         push_emit(wire.bytetoword);
     }
     push_visit(ast.lhs[p])
+    } }
+}
+
+// THE FIVE `Text<N>` OPERATIONS, node kind 86, the lowering of `src/compiler/text_intrinsics.rs`.
+//
+// `args` packs the operation in its low three bits, `len` 0, `capacity` 1, `concat` 2, `eq` 3
+// and `slice` 4, the receiver's capacity A above them, the argument's capacity B above 2^20,
+// the receiver's hidden slot above 2^37 and the first of the remaining hidden slots above
+// 2^48, as `parse.kel` reserved them where the reference declares its hidden locals. A slice
+// has one capacity and carries its start slot in the second capacity field. `lhs` is
+// the operand start in `call_args`, the receiver first, and `rhs` the operand count.
+//
+// The operands are visited and stored by ordinary work items. The rest is one work item of
+// kind 15 per phase, phase zero the prologue and phase `i + 1` result byte `i`, each emitting
+// its instructions directly in source order. That keeps the work stack at a constant depth
+// whatever the capacity, and interns every constant in the order the reference adds it to the
+// pool, the sign shift after the effective lengths and a position above fifteen where it is
+// read. The `If` of a clamp is the bare `mif` form, whose target is its `EndIf`, as the
+// reference patches it. A total byte read is emitted raw, since `emit_op` would append the
+// trap that a checked read takes.
+fn tx_op(p: Word) -> Word { ast.args[p] % 8 }
+fn tx_capa(p: Word) -> Word { (ast.args[p] / 8) % 131072 }
+fn tx_capb(p: Word) -> Word { (ast.args[p] / 1048576) % 131072 }
+fn tx_s1(p: Word) -> Word { (ast.args[p] / 137438953472) % 2048 }
+fn tx_s2(p: Word) -> Word { ast.args[p] / 281474976710656 }
+fn tx_local(tag: Word, slot: Word) -> Word { emit_physical(tag + mapped_local(slot) * wire.radix) }
+fn tx_word(value: Word) -> Word {
+    if value <= 15 { emit_raw(wire.pushimm + (4 + value) * wire.radix) } else {
+        emit_raw(wire.konst + intern_int(value) * wire.radix)
     }
+}
+fn tx_field(offset: Word, kind: Word) -> Word { emit_raw(wire.gettuplefield + (offset + kind * 65536) * wire.radix) }
+// `if slot cmp bound { slot = bound }`, against a local or, with `bound` below zero, against
+// the constant `0 - bound - 1`. Seven instructions.
+fn tx_clamp(slot: Word, bound: Word, cmp: Word) -> Word {
+    tx_local(wire.getlocal, slot);
+    if bound < 0 { tx_word(0 - bound - 1); } else { tx_local(wire.getlocal, bound); }
+    emit_raw(cmp);
+    emit_raw(wire.mif);
+    if bound < 0 { tx_word(0 - bound - 1); } else { tx_local(wire.getlocal, bound); }
+    tx_local(wire.setlocal, slot);
+    emit_raw(wire.mendif)
+}
+// The effective length of the text on top of the stack, stored in `slot`.
+fn tx_effective(slot: Word, cap: Word) -> Word {
+    tx_field(0, 3);
+    tx_local(wire.setlocal, slot);
+    tx_clamp(slot, 0 - 1, wire.cmplt);
+    tx_clamp(slot, 0 - cap - 1, wire.cmpgt)
+}
+// The byte array of the text in `slot`, a zero-copy view, stored in `into`.
+fn tx_stash(slot: Word, cap: Word, into: Word) -> Word {
+    tx_local(wire.getlocal, slot);
+    emit_raw(wire.gettuplefield + (8 + cap * 65536 + 4294967296) * wire.radix);
+    tx_local(wire.setlocal, into)
+}
+// All ones when `i` is below the word in local `bound`, else zero. Six instructions.
+fn tx_mask(i: Word, bound: Word, sign: Word) -> Word {
+    tx_word(i);
+    tx_local(wire.getlocal, bound);
+    emit_raw(wire.checkedsub);
+    emit_raw(wire.popn + 2 * wire.radix);
+    emit_raw(wire.konst + sign * wire.radix);
+    emit_raw(wire.shr)
+}
+fn tx_total_read() -> Word {
+    emit_raw(wire.getindex + 2 * wire.radix);
+    emit_raw(wire.popn + 6 * wire.radix)
+}
+fn tx_pack(cap: Word) -> Word {
+    emit_raw(wire.newcompositearray + (cap + cap * 65536) * wire.radix);
+    emit_raw(wire.newcompositetuple + (2 + (8 + cap) * 65536) * wire.radix)
+}
+// The number of result bytes, each its own phase.
+fn tx_bytes(p: Word) -> Word {
+    let op = tx_op(p);
+    if op == 2 { tx_capa(p) + tx_capb(p) } else {
+    if op == 3 { if tx_capa(p) < tx_capb(p) { tx_capa(p) } else { tx_capb(p) } } else {
+    if op == 4 { tx_capa(p) } else { 0 } } }
+}
+
+fn push_text_op(p: Word) -> Word {
+    let op = tx_op(p);
+    let start = ast.lhs[p];
+    push_work(15, p);
+    if op == 4 {
+        push_emit(wire.setlocal + tx_s2(p) * wire.radix);
+        push_visit(ast.call_args[start + 2]);
+        push_emit(wire.setlocal + tx_capb(p) * wire.radix);
+        push_visit(ast.call_args[start + 1]);
+    }
+    if op == 2 orelse op == 3 {
+        push_emit(wire.setlocal + tx_s2(p) * wire.radix);
+        push_visit(ast.call_args[start + 1]);
+    }
+    if op >= 2 { push_emit(wire.setlocal + tx_s1(p) * wire.radix); }
+    push_visit(ast.call_args[start])
+}
+
+// One phase of an operation. Phase zero is the prologue, and phase `i + 1` result byte `i`,
+// after which the next phase is scheduled or the epilogue emitted.
+fn text_step(payload: Word) -> Word {
+    let p = payload % 4096;
+    let phase = payload / 4096;
+    if phase == 0 { tx_prologue(p); } else { tx_byte(p, phase - 1); }
+    if phase < tx_bytes(p) { push_work(15, p + (phase + 1) * 4096); } else { tx_epilogue(p); }
+    0
+}
+
+fn tx_prologue(p: Word) -> Word {
+    let op = tx_op(p);
+    let a = tx_capa(p);
+    let s1 = tx_s1(p);
+    let s2 = tx_s2(p);
+    if op == 0 {
+        tx_effective(s2, a);
+        tx_local(wire.getlocal, s2);
+    }
+    if op == 1 {
+        emit_raw(wire.popn + 1 * wire.radix);
+        tx_word(a);
+    }
+    if op == 2 {
+        tx_local(wire.getlocal, s1); tx_effective(s2 + 1, a);
+        tx_local(wire.getlocal, s2); tx_effective(s2 + 2, tx_capb(p));
+        tx_stash(s2, tx_capb(p), s2 + 3);
+        st.tx_sign = intern_int(63);
+        tx_local(wire.getlocal, s2 + 1);
+        tx_local(wire.getlocal, s2 + 2);
+        emit_raw(wire.checkedadd);
+        emit_raw(wire.popn + 2 * wire.radix);
+        emit_raw(wire.dup);
+        tx_local(wire.setlocal, s2 + 4);
+    }
+    if op == 3 {
+        tx_local(wire.getlocal, s1); tx_effective(s2 + 1, a);
+        tx_local(wire.getlocal, s2); tx_effective(s2 + 2, tx_capb(p));
+        st.tx_sign = intern_int(63);
+        tx_local(wire.getlocal, s2 + 1);
+        tx_local(wire.getlocal, s2 + 2);
+        emit_raw(wire.bitxor);
+    }
+    if op == 4 {
+        // The start slot rides the second capacity field, and `s2` is the end, followed by
+        // the effective length, the zero, the result length and the byte array.
+        let first = tx_capb(p);
+        tx_local(wire.getlocal, s1); tx_effective(s2 + 1, a);
+        tx_word(0);
+        tx_local(wire.setlocal, s2 + 2);
+        tx_clamp(first, s2 + 2, wire.cmplt);
+        tx_clamp(first, s2 + 1, wire.cmpgt);
+        tx_clamp(s2, first, wire.cmplt);
+        tx_clamp(s2, s2 + 1, wire.cmpgt);
+        tx_local(wire.getlocal, s2);
+        tx_local(wire.getlocal, first);
+        emit_raw(wire.checkedsub);
+        emit_raw(wire.popn + 2 * wire.radix);
+        tx_local(wire.setlocal, s2 + 3);
+        tx_stash(s1, a, s2 + 4);
+        st.tx_sign = intern_int(63);
+        tx_local(wire.getlocal, s2 + 3);
+    }
+    0
+}
+
+fn tx_byte(p: Word, i: Word) -> Word {
+    let op = tx_op(p);
+    let a = tx_capa(p);
+    let s1 = tx_s1(p);
+    let s2 = tx_s2(p);
+    let sign = st.tx_sign;
+    if op == 2 {
+        // (a[i] & below(i, la)) | b[i - la], masked by below(i, la + lb).
+        tx_local(wire.getlocal, s2 + 3);
+        tx_word(i);
+        tx_local(wire.getlocal, s2 + 1);
+        emit_raw(wire.checkedsub);
+        emit_raw(wire.popn + 2 * wire.radix);
+        tx_total_read();
+        emit_raw(wire.bytetoword);
+        if i < a {
+            tx_local(wire.getlocal, s1);
+            tx_field(8 + i, 2);
+            emit_raw(wire.bytetoword);
+            tx_mask(i, s2 + 1, sign);
+            emit_raw(wire.bitand);
+            emit_raw(wire.bitor);
+        }
+        tx_mask(i, s2 + 4, sign);
+        emit_raw(wire.bitand);
+        emit_raw(wire.wordtobyte);
+    }
+    if op == 3 {
+        tx_local(wire.getlocal, s1);
+        tx_field(8 + i, 2);
+        tx_local(wire.getlocal, s2);
+        tx_field(8 + i, 2);
+        emit_raw(wire.subop);
+        emit_raw(wire.bytetoword);
+        tx_mask(i, s2 + 1, sign);
+        emit_raw(wire.bitand);
+        emit_raw(wire.bitor);
+    }
+    if op == 4 {
+        tx_local(wire.getlocal, s2 + 4);
+        tx_local(wire.getlocal, tx_capb(p));
+        tx_word(i);
+        emit_raw(wire.checkedadd);
+        emit_raw(wire.popn + 2 * wire.radix);
+        tx_total_read();
+        emit_raw(wire.bytetoword);
+        tx_mask(i, s2 + 3, sign);
+        emit_raw(wire.bitand);
+        emit_raw(wire.wordtobyte);
+    }
+    0
+}
+
+fn tx_epilogue(p: Word) -> Word {
+    let op = tx_op(p);
+    if op == 2 { tx_pack(tx_capa(p) + tx_capb(p)); }
+    if op == 3 { tx_word(0); emit_raw(wire.cmpeq); }
+    if op == 4 { tx_pack(tx_capa(p)); }
+    0
 }
 
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
@@ -1850,8 +2119,12 @@ fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
             push_emit(wire.setlocal + slot * wire.radix);
             // A composite payload uses a sentinel kind that encodes both the nested-composite
             // variant and its byte size: an ARRAY element is `40000 + size` (variant 1), a TUPLE is
-            // `30000 + size` (variant 0), a STRUCT is `100 + size` (variant 2). Each emits
+            // `30000 + size` (variant 0), a STRUCT is `100 + size` (variant 2), and an ENUM is
+            // `50000 + size` (variant 3). Each emits
             // GetEnumField(FlatNested{offset, size, variant}); a scalar (kind 0-7) the plain Flat.
+            if kind >= 50000 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 50000) * 65536 + 3 * 4294967296) * wire.radix);
+            } else {
             if kind >= 40000 {
                 push_emit(wire.getenumfieldnested + (off + (kind - 40000) * 65536 + 1 * 4294967296) * wire.radix);
             } else {
@@ -1862,7 +2135,7 @@ fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
                 push_emit(wire.getenumfieldnested + (off + (kind - 100) * 65536 + 2 * 4294967296) * wire.radix);
             } else {
                 push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
-            } } }
+            } } } }
             push_emit(wire.getlocal + temp * wire.radix);
         }
         if vname >= 0 {
@@ -3230,6 +3503,8 @@ fn walk_step() -> Word {
     // Map a parser-owned slot without emitting it, so the frame covers a reserved slot that
     // no instruction names.
     if ikind == 14 { mapped_local(payload); }
+    // A phase of a `Text<N>` operation, emitted in source order.
+    if ikind == 15 { text_step(payload); }
     if ikind == wire.lsrvalue { lsr_value(payload); }
     if ikind == wire.lsrcount { lsr_count(payload); }
     if ikind == wire.rawemit { emit_raw(payload); }
@@ -3261,6 +3536,8 @@ fn walk_step() -> Word {
         // self-hosted parser bridges (the pipe desugars to exactly this `match`).
         match ast.kinds[payload] {
             1 => push_literal(payload),
+            86 => push_text_op(payload),
+            87 => push_bytelit(payload),
             2 => push_local(payload),
             3 => push_binop(payload),
             44 => push_byte_binop(payload),
@@ -3393,7 +3670,7 @@ private data dcopy {
     open: [Word; 32], open_n: Word, c: Word, shift: Word,
 }
 
-// The flat byte size of private struct slot `slot`, or 0 when the slot is not one.
+// The flat byte size of private struct field `slot`, or 0 when the field is not one.
 fn dc_size_of(slot: Word) -> Word {
     dcopy.found = 0;
     for j in 0..ast.dc_count limit 64 {
@@ -3420,12 +3697,13 @@ fn dc_is_dead_end(w: Word, lo: Word) -> Word {
         orelse (tag == wire.setdata andalso opd != lo) { 1 } else { 0 }
 }
 
-// A hazard may write slot `lo`. It is an overlapping SetData or SetDataIndexed, a call or
-// a yield.
+// A hazard may write field `lo`. It is a SetData or a nonempty SetDataIndexed naming that
+// field, since a data operand names a field and an indexed span stays within it, a call or a
+// yield.
 fn dc_is_hazard(w: Word, lo: Word) -> Word {
     let tag = w % wire.radix; let opd = w / wire.radix;
     if (tag == wire.setdata andalso opd == lo)
-        orelse (tag == wire.setdataix andalso opd % 16777216 <= lo andalso lo < opd % 16777216 + opd / 16777216)
+        orelse (tag == wire.setdataix andalso opd % 16777216 == lo andalso opd / 16777216 > 0)
         orelse tag == wire.call orelse tag == wire.callnative orelse tag == wire.callext
         orelse tag == wire.yieldop { 1 } else { 0 }
 }
@@ -3620,11 +3898,13 @@ fn relocate_data_arg() -> Word {
         for i in 0..ast.relocate_count limit 1024 {
             let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
             if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {
-                if base >= start andalso base - start < length {
+                // A data operand names a field (option B of the array wire-slot design), so it
+                // matches a source field exactly, and the field's element count bounds the width.
+                if base == start {
                     relocate.hits = relocate.hits + 1;
-                    if width > length - (base - start) { relocate.bad = 1; } else {
+                    if width > length { relocate.bad = 1; } else {
                         let prefix = if indexed { (ast.relocate_arg / 16777216) * 16777216 } else { 0 };
-                        relocate.result = prefix + target + (base - start);
+                        relocate.result = prefix + target;
                     }
                 }
             }

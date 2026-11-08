@@ -1,0 +1,74 @@
+COMPLETION CONDITION — the proof's claims about this line
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. For each claim the absorbed proof makes about this line's backend, the tree
+   records whether it is accurate, inaccurate, or ambiguous, judged against what
+   the backend actually does rather than against how the claim is worded.
+
+2. Claims found inaccurate are distinguished from claims found merely ambiguous,
+   and neither is presented as the other.
+
+3. Where a claim is contradicted, the contradiction rests on an observable
+   property of this tree that a reader can check, not on assertion.
+
+4. The other line's proof document is not edited. Disagreements with it are
+   recorded on this line and communicated, leaving their artifact as absorbed.
+
+5. Whether the proof's counterexample applies to the sites the recorded
+   arm-overlap remedy would actually share storage between is either settled, or
+   stated as unsettled with what would settle it. A module-level escape figure is
+   not treated as answering a question about specific site pairs.
+
+6. If the remedy's soundness is affected, the record says so plainly and does not
+   leave an earlier, more favourable characterisation of it standing unqualified
+   elsewhere in the tree.
+
+7. No claim is made that the backend reuses storage, and any statement about what
+   it does is consistent with what its planner is measured to do.
+
+8. Nothing in the backend's behaviour changed.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+12. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+13. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Agreement with the other line, or its acknowledgement of anything found here.
+- Settling the counterexample question, provided what would settle it is named.
+- Changing the planner, adopting or abandoning the arm-overlap remedy.
+- Resolving the Fixed shared-slot ABI, the float entry ABI, or the git topology
+  question; all are held by the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Editing the absorbed proof document to fix a claim about this line.
+- Reporting an ambiguous phrasing as a factual error, or the reverse.
+- Concluding the remedy is or is not sound from a figure at the wrong
+  granularity.
+- Leaving a favourable characterisation of the remedy standing where a finding
+  here undercuts it.
+- A suite result read from a pipeline's exit status rather than the command's.

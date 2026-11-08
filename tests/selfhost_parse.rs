@@ -196,7 +196,12 @@ fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
         .expect("compile program")
         .data_layout
         .as_ref()
-        .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+        .map(|dl| {
+            dl.fields
+                .iter()
+                .flat_map(|f| (0..f.count).map(move |_| f.name.clone()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -211,12 +216,19 @@ fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
 /// A scalar field of the same name would be a single slot, which this would
 /// report as an array of length one. That is exactly what the caller wants: the
 /// base slot and the number of elements addressable from it.
+///
+/// The base is a field index, the number of fields that begin before this one,
+/// since a data operand names a field under option B of the array wire-slot
+/// design.
 fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) {
     let want = format!("{data}.{field}");
-    let base = data_slots
+    let pos = data_slots
         .iter()
         .position(|n| n == &want)
-        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+        .unwrap_or_else(|| panic!("no data slot named `{want}`"));
+    let base = (0..pos)
+        .filter(|&i| i == 0 || data_slots[i - 1] != data_slots[i])
+        .count() as i64;
     let len = data_slots.iter().filter(|n| *n == &want).count() as i64;
     (base, len)
 }
@@ -374,7 +386,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=105) => {}
+                        || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                        {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -392,7 +405,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=105) => {}
+                        || matches!(c, 94..=96 | 99..=105 | keleusma::selfhost_host::PARSE_TEXT_CAPACITY_TAG) =>
+                        {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
@@ -691,19 +705,14 @@ fn flatten(
             out.push((24, 0));
         }
         Expr::FieldAccess { object, field, .. } => {
-            // A scalar `data.field` read is a DataRead (kind 11) over the field's element-0
-            // slot in the flat data layout. The stage resolves it from its own accumulated
-            // table; the reference resolves it from the compiler's `data_layout.slots`.
+            // A scalar `data.field` read is a DataRead (kind 11) over the field's index in the
+            // data layout, the operand option B names. The stage resolves it from its own
+            // accumulated table; the reference resolves it from the compiler's layout.
             let data = match object.as_ref() {
                 Expr::Ident { name, .. } => name.as_str(),
                 other => panic!("a data read's object must be a block name, got {other:?}"),
             };
-            let name = format!("{data}.{field}");
-            let slot = data_slots
-                .iter()
-                .position(|n| n == &name)
-                .unwrap_or_else(|| panic!("no data slot named `{name}`"))
-                as i64;
+            let slot = array_base_len(data_slots, data, field).0;
             out.push((11, slot));
         }
         Expr::ArrayIndex { object, index, .. } => {
@@ -936,12 +945,7 @@ fn flatten_block(
                     enum_table,
                     out,
                 );
-                let name = format!("{data_name}.{field}");
-                let slot = data_slots
-                    .iter()
-                    .position(|n| n == &name)
-                    .unwrap_or_else(|| panic!("no data slot named `{name}`"))
-                    as i64;
+                let slot = array_base_len(data_slots, data_name, field).0;
                 stmt_nodes.push((12, slot));
             }
             Stmt::DataFieldIndexAssign {
@@ -1554,16 +1558,17 @@ fn a_scalar_data_read_resolves_its_slot() {
     assert_eq!(got.funcs[0].3, vec![(11, 1)]);
 }
 
-// A data read composes with the operator grammar and preceding array-field widths: the
-// base counter is a prefix-sum over field slot counts.
+// A data read composes with the operator grammar, and a preceding array field takes one
+// field index whatever its width: the operand names a field since option B of the array
+// wire-slot design, where it was a prefix-sum over field element counts before.
 #[test]
 fn data_reads_account_for_array_widths() {
     let src = "shared data d { xs: [Word; 3], n: Word } fn f(p: Word) -> Word { d.n + p }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // d.xs occupies slots 0..2, so d.n is slot 3; then p (slot 0), Add.
-    assert_eq!(got.funcs[0].3, vec![(11, 3), (2, 0), (3, 1)]);
+    // d.xs is field 0 with three elements, so d.n is field 1; then p (slot 0), Add.
+    assert_eq!(got.funcs[0].3, vec![(11, 1), (2, 0), (3, 1)]);
 }
 
 // A const data block carries no runtime slots, so it does not advance the base counter;
@@ -3110,7 +3115,9 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
-    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // 538 after Encoding F replaced the four per-slot data-layout tables with one
+    // field table, a net twenty-three fewer reader, emitter and offset functions (-23).
+    // Previously 561 after a metadata-only name preparation function and scan bound (+2),
     // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
     // removed to keep the stage inside the type stage's 640-row name channel.
     // Previously 562 after separating the module-forest and raw-node capacities.
@@ -3133,7 +3140,7 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        561,
+        538,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",

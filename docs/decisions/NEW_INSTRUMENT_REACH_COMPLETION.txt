@@ -1,0 +1,40 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. REACH IS ESTABLISHED OR ITS ABSENCE IS RECORDED
+- For each test function added to this line's arena and region instruments during
+  this session, the tree records whether a perturbation of its SUBJECT was shown
+  to make it fail, or records that no such perturbation is available and why.
+- No assertion is described as having demonstrated reach without the perturbation
+  that showed it being named.
+- Where an assertion cannot be mutation-tested, the file says so plainly and
+  gives the reason, rather than a perturbation being invented that does not
+  distinguish the two outcomes.
+
+2. THE RESULT IS REPORTED HONESTLY
+- If some assertions could not be made to fail, that is stated as a finding
+  rather than omitted.
+- Any perturbation that turned out to test nothing is recorded as such and not
+  counted as reach.
+
+3. NOTHING PERTURBED REMAINS
+- No temporary mutation, debug print, or weakened assertion is left in the tree.
+- The reference implementation at the repository root is unmodified by this work.
+
+4. THE RECORD
+- The handoff for this line describes the current state of the work, with its
+  state-table figures agreeing with the tree and its figure guard passing.
+- Claims made stale by this work are corrected where they stand.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any test that does not pass is recorded as a finding rather than deleted,
+  skipped, or weakened.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. TREE STATE
+- The working tree is clean and the branch's commits are on origin.

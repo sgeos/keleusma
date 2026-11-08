@@ -1,0 +1,34 @@
+COMPLETION CONDITION — the outstanding reports, made self-verifying
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. EVERY OUTSTANDING REPORT'S STATUS IS ESTABLISHED BY MEASUREMENT.
+   For each defect or question this line has reported to the other line and still
+   describes as open, the tree records whether it currently reproduces, measured
+   against the present tree rather than recalled.
+
+2. A REPAIR CANNOT PASS UNNOTICED.
+   Each reported defect that has a reproduction has something in the tree that
+   FAILS if it stops reproducing, and the failure message says the report should
+   be retracted rather than that a test needs fixing. An item with no
+   reproduction -- a question rather than a defect -- is stated as such instead of
+   being given a guard that proves nothing.
+
+3. THE GUARDS ARE NON-VACUOUS.
+   Each one is shown to actually exercise the reported behaviour, not merely to
+   run. A guard that would pass against an unrelated input does not satisfy this.
+
+4. THE CHANNEL DOCUMENT STATES STATUS WITH A DATE.
+   The reverse prompt no longer asserts an unqualified "none acted on"; it says
+   what was measured and when, so a reader can tell recollection from evidence.
+
+5. THE OWNERSHIP BOUNDARY IS RESPECTED.
+   No file under the repository-root src/ or tests/ is modified.
+
+6. NO NEW OPCODE AND NO BYTECODE_VERSION CHANGE.
+
+7. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

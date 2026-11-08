@@ -1,0 +1,45 @@
+COMPLETION CONDITION — reference-argument masking
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. Corpus modules that were exempt solely because a native receives a reference
+   argument are COMPARED against the virtual machine rather than skipped, on
+   every observable except the reference argument itself.
+
+2. The count of executed-and-agreeing modules is higher than before this work,
+   and the exempt count correspondingly lower. Both figures are taken from a run.
+
+3. The mask covers only the argument positions the virtual machine observed as
+   non-scalar. A scalar argument is never masked.
+
+4. No pointer supplied to the native side is dereferenced. Nothing decodes a
+   string, and the string ABI is not relied upon.
+
+5. The tree states, where the resulting figure is read, that the reference
+   argument is NOT compared and that the mask is derived from a runtime
+   observation rather than from anything the module declares.
+
+6. If a newly-compared module disagrees with the virtual machine, that
+   disagreement is reported and investigated rather than absorbed by widening
+   the mask.
+
+7. The masking is shown to be load-bearing by a recorded mutation: the
+   transcript states what was changed, that the changed version failed or
+   produced a different result, and that the revert was verified rather than
+   assumed.
+
+8. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+9. The files recorded as read-only for this line are unmodified: the virtual
+   machine, the bytecode verifier, the bytecode definitions, the self-hosted
+   compiler sources, and the continuous-integration workflows.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

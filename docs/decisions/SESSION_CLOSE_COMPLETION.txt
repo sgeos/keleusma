@@ -1,0 +1,35 @@
+COMPLETION CONDITION — consolidate the session
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. The handoff's newest narrative section describes the work of this session
+   rather than an earlier one, and no section claiming to be the place to resume
+   describes a tree older than another such section in the same file.
+
+2. That description records, as plainly as it records what was achieved, the
+   instances in which a record or instrument in this session claimed more than
+   the tree supported, and the instance in which a change was green under
+   targeted runs and red in the gate.
+
+3. The handoff's pickup list reflects what is actually open, with items completed
+   this session marked as such rather than still listed as next steps.
+
+4. Every figure the handoff states is either re-derivable and matching the tree,
+   or names the commit it was measured at, and the guards that check this pass.
+
+5. No document in the tree describes an instrument's coverage as broader than
+   what that instrument reaches.
+
+6. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+7. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+8. The working tree is clean, and the branch on the remote matches the local
+   branch, established by querying the remote rather than by a local push
+   reporting success.

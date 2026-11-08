@@ -1,0 +1,53 @@
+COMPLETION CONDITION — a tail-yielded composite's execution witness
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. WHAT THE NATIVE SIDE YIELDS FOR A COMPOSITE IS ESTABLISHED BY RUNNING CODE
+   The tree records what value the native lowering hands to the host when a
+   composite is yielded, determined by executing such a program rather than by
+   reading the lowering. If it is a reference into a buffer, the tree says which
+   buffer and how that was confirmed.
+
+2. THE DISPOSITION FOLLOWS FROM THAT
+   Either the value is compared against the reference implementation's composite
+   and the tree records the comparison, or the tree records precisely what
+   prevents a comparison from the host side. Either outcome is acceptable; an
+   unexamined gap is not.
+
+3. NO REPRESENTATION IS ASSUMED
+   Nothing is read through a value on the assumption that it is a pointer or an
+   offset. Any such reading is preceded by a check that the value lies where
+   expected, and a test demonstrates that check rejecting a value that does not.
+
+4. A PARTIAL COMPARISON IS DESCRIBED AS PARTIAL
+   If some fields or properties are compared and others are not, the tree says
+   which, and no test name or comment claims more than the body establishes.
+
+5. NO TEST IS NAMED FOR A PROPERTY ITS BODY DOES NOT ESTABLISH
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively, and no guard's conclusion is
+   made automatic by its own precondition.
+
+6. NOTHING IS WIDENED TO ENABLE A TEST
+   No guard, refusal, or opt-in flag is relaxed or enabled in order to make the
+   witness possible. If one blocks it, that is recorded as the reason.
+
+7. FIGURES ARE RE-DERIVED
+   Opcode and corpus coverage figures are re-measured and stated whether or not
+   they moved, and nothing is described as changed that has not.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with both the runner's exit status and the summed pass, fail and
+   binary counts agreeing. A run that ended early is not reported as a result.
+   Any suite still failing for a reason owned elsewhere is named as such rather
+   than reported as green.
+
+9. WORK IS COMMITTED, AND ANY PUSH BLOCKAGE IS VISIBLE
+   No uncommitted changes remain. If the branch cannot publish, the tree records
+   that it is ahead of its remote and why, and no gate was bypassed to avoid it.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

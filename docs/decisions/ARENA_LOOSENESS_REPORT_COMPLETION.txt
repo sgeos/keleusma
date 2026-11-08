@@ -1,0 +1,41 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE REPORT EXISTS AND IS ACCURATE
+- This line's outgoing channel carries a report of the arena-plan looseness,
+  giving the measured figures and naming both the static and the dynamic method
+  behind them.
+- It states in its own text that over-provisioning is safe and that the
+  reservation's rationale stands, so it reads as a quantification rather than a
+  defect claim.
+- It attributes the code in question to the line that owns it, and does not
+  credit this line's work to the other line.
+- It states what the measurement does not cover.
+- Identifiers that the repository-root citation scan cannot resolve are written
+  as paths or as prose, not as bare backticked names.
+
+2. THE REPORT IS GUARDED
+- A test fails if the reported figures stop being reproducible from the tree, and
+  its failure message asks for a retraction or a re-measurement rather than for a
+  patched constant.
+- Any register of this line's outstanding reports includes it, so it cannot be
+  silently forgotten.
+
+3. THE DECISION NOT TO EXTEND THE MEASUREMENT IS RECORDED
+- The tree states why the remaining streaming corpus modules were not measured
+  dynamically, in terms a reader can disagree with.
+
+4. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any test that does not pass is recorded as a finding rather than deleted,
+  skipped, or weakened.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+5. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

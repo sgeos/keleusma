@@ -1,0 +1,48 @@
+COMPLETION CONDITION — figures and the populations they describe
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE CONFLICTING COUNTS ARE RECONCILED BY MEASUREMENT
+   Where the tree gives two different values for what reads as the same
+   quantity, an executable check reports both, and the tree states whether they
+   measure different populations or one was wrong. The answer comes from running
+   both, not from reading the code that produced them.
+
+2. EACH SURVIVING FIGURE CARRIES ITS POPULATION
+   Any figure kept after the reconciliation is stated together with the set it
+   was measured over, closely enough that a reader cannot compare it with a
+   figure over a different set by accident.
+
+3. A WRONG FIGURE IS CORRECTED VISIBLY
+   If one value turns out to be wrong rather than differently scoped, the
+   correction is visible as a correction and the superseded value remains
+   quoted rather than deleted.
+
+4. NO FIGURE IS CHANGED TO MAKE TWO AGREE
+   No walk is altered so that its output matches another's. If two walks measure
+   different things, the tree says what each measures.
+
+5. THE CHECK CAN FAIL
+   Any check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively, and no guard's conclusion is
+   made automatic by its own precondition.
+
+6. FIGURES THAT COULD HAVE MOVED ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's
+   state is recorded, either from a run or with a stated reason why the change
+   could not affect it.
+
+8. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure the tree contradicts. No uncommitted changes
+   remain, and either the branch agrees with its remote or the tree says why not.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

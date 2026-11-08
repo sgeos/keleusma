@@ -1,0 +1,30 @@
+COMPLETION CONDITION — the false rejection entry
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE FALSE ENTRY IS CORRECTED WHERE IT WAS MADE.
+   The claim that a comparison shape is rejected by the reference no longer
+   stands unqualified; the tree records that the rejection was a type-name error
+   and that the correctly spelled shape compiles.
+
+2. COMPARISONS ARE DRIVEN PER OPERAND TYPE.
+   Comparison operations on more than one operand type are executed on both sides
+   and compared, with at least one input pair that would give a different answer
+   under a plausible wrong lowering.
+
+3. THE SURVIVING REJECTION IS CONFIRMED, NOT INHERITED.
+   Any shape still listed as rejected by the reference is checked, not carried
+   over from the earlier list.
+
+4. NOTHING IS CLAIMED BEYOND WHAT WAS DRIVEN.
+   The tree does not present the comparison family as sound in general on the
+   strength of the cases run.
+
+5. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+6. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

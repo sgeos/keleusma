@@ -1,0 +1,467 @@
+//! **THE CLAUSE WRITTEN SIX TIMES AND ENFORCED ZERO TIMES.**
+//!
+//! Every completion condition drafted for this line carried some form of *"no
+//! test present before this increment has been deleted or disabled"*. Verifying
+//! it for one session took a manual name-diff against that session's first
+//! commit: **456 test functions then, 474 now, ten names absent** — each
+//! cross-referenced by hand to a documented successor, because they were renamed
+//! rather than removed.
+//!
+//! **The result was clean. The method was not.** Nothing in the tree would have
+//! noticed a test quietly disappearing, and the clause would have gone on being
+//! asserted every increment.
+//!
+//! That is the shape this line keeps finding: **a guard present in the prose and
+//! absent from the mechanism.** The standing warning to assert a lowered
+//! function's parameter count had been written into the handoff and left
+//! unenforced in the two files the warning names — where it later turned out a
+//! four-parameter function was being called through a one-parameter signature.
+//! This is the same failure at the level of acceptance criteria rather than code.
+//!
+//! # What this guard establishes, and what it CANNOT
+//!
+//! **It detects CHANGE, not deletion.** A count cannot tell a rename from a
+//! delete-plus-add, and no cheap check can. What it can do is refuse to let the
+//! population move without someone looking — which is exactly what
+//! `pointer_offset_census.rs` did when the spill slice added two sites, and what
+//! the mutation table did when a fix left `SetLocal` unbounded.
+//!
+//! **Pinning the 474 names was considered and rejected**: a table that large is
+//! one nobody maintains, and an unmaintained table is worse than a count because
+//! it looks like coverage.
+
+/// Backend test functions at the stamp.
+///
+/// **Derive this, do not transcribe it.** A count in this tree once read
+/// "nineteen" while the block it described held twenty-nine.
+// 662 -> 663 on 2026-09-28. The reporter fixtures have an independent test
+// entry instead of depending on the unrelated schema-staleness test.
+// 663 -> 672 with nine retcon bytecode tests. Name comparison against
+// 40acc268 found no removed files or test functions.
+// 672 -> 677 with five delegated coroutine regressions. No names removed.
+// 677 -> 682 with four nested-stream checks and the float initializer pin.
+// Name comparison against a9a674e9 found no removed functions or files.
+// 682 -> 686 with four coroutine scalar-admission regressions.
+// 686 -> 689 with three coroutine inspection controls. No names removed.
+// 689 -> 692 with three flat coroutine yield controls. No names removed.
+// 692 -> 695 with three live-body coroutine controls. No names removed.
+// 695 -> 697 with stable-handle lifecycle and C-linkage tests. No names removed.
+// 697 -> 705 with eight flat host-input lifetime and refusal tests. No names removed.
+// 705 -> 730 across the Workstream B completion series. The mixed receiver
+// refusal test was replaced by its executed positive successor. No test files
+// were removed. The new tests cover completion, dialogues, native ownership,
+// mixed kinds, predicate invalidation, varying extents and bounds traps.
+// 730 -> 735 with cleared-value consumer checks and equality regressions.
+// The guarded parameter refusal was replaced by executed positive coverage.
+// One new test records the remaining composite-packing admission gap.
+// 735 -> 744 with packing, call metadata, private aliases and Unit regressions.
+// The former guarded-construction refusal now has executed positive coverage.
+// 744 -> 751 with private scalar kinds, lifecycle, ordering and arithmetic-gap
+// coverage. The old initializer-refusal test now executes both changed inputs.
+// 759 -> 760 in absorption 82: `differential.rs` folded two bounds-check tests
+// into one, `differential_coverage.rs` deleted its emptied external-witness test,
+// and `native_workflow.rs` added three.
+// 760 -> 761: `native_workflow.rs` guards the gate script against bash 3.2,
+// after the first hosted run failed on an empty feature array.
+// 761 -> 764 in absorption 83. Direct and suspended FixedDiv outcome slots,
+// plus handled nested writes across suspension. No test names were removed.
+// 764 -> 765: `workspace_coverage_guard.rs` forces the SIGPIPE exit that the
+// `| head -20` listing produced on a hosted gate. The diff is additions only.
+// 765 -> 769: `stage_differential.rs` drives `wire.kel`, `verify_datalayout.kel`,
+// `wire_debug.kel` and `wire_schema.kel` by their host protocols, closing the
+// Order 1 gate's exempt and unseeded stages. Additions only.
+// 769 -> 775: `arena_coroutine_frames.rs` adds Workstream C's static frame
+// bound and arena slot pool tests. Additions only.
+// 775 -> 782: `static_library_linkage.rs` adds the Order 3 static library tests.
+// Additions only.
+// 782 -> 789: `native_trap_outcomes.rs` and `native_host_failure.rs` add Order 4's
+// trap and host-failure tests.
+// 789 -> 799: `handled_partial_outcomes.rs` 2, `machine_stack_bound.rs` 2,
+// `native_cost_path.rs` 5 and the stack measurement in `static_library_linkage.rs`.
+// 799 -> 804: `native_hot_swap.rs` 2 and `static_kind_lowering.rs` 3 for Order 5.
+// 804 -> 813: the construct census 1, tier one targets 2, the `kel-native`
+// command 3 and Text comparison 3, for Order 6.
+// 813 -> 814: the x86-64 Rust host in `static_library_linkage.rs`, for operator
+// question 15. No name disappeared.
+// 814 -> 815: `a_pattern_entry_covers_only_what_it_names` in `reach_census.rs`,
+// for operator question 11. No name disappeared.
+// 815 -> 821: six in `native_opaque.rs`, for operator question 14. No name
+// disappeared. The two renamed in `tier_one_targets.rs` for question 12 kept
+// the count.
+// 821 -> 822: `an_operand_no_instruction_reads_needs_no_run_time_kind` in
+// `static_kind_lowering.rs`, for the question 9 census. No name disappeared.
+// 822 -> 824: two in `native_stage_executor.rs`, for operator question 19. No
+// name disappeared.
+// 824 -> 826: two host-native binding tests in `native_stage_executor.rs`, for
+// operator question 19. The build test there was renamed
+// `every_stage_builds_and_an_unbound_host_native_is_refused`, for what it refuses.
+// 826 -> 829: three tests in `native_seeded_interp.rs`, the seeded `interp.kel`
+// differential of operator question 6, 2026-10-30. No name disappeared.
+// 829 -> 831: two tests in `native_stage_factory.rs`, operator question 19
+// step 3, 2026-10-30. No name disappeared.
+// 831 -> 832: `the_framing_stage_runs_natively_with_its_natives_bridged` in
+// `native_stage_factory.rs`, operator question 19. No name disappeared.
+// 832 -> 833: `a_replacement_changing_only_a_slot_type_is_refused_by_both_shapes`
+// in `native_hot_swap.rs`, operator question 8, 2026-10-30. No name disappeared.
+// 833 -> 835: `every_corpus_source_compiles_identically_with_native_stages`,
+// ignored by default, and `a_sample_of_the_corpus_compiles_identically_with_native_stages`
+// in `native_stage_factory.rs`, operator question 19, 2026-10-30. No name
+// disappeared.
+// 835 -> 837: `the_three_compilers_build_byte_identical_libraries` and
+// `an_out_of_subset_source_suggests_the_reference_compiler` in
+// `kel_native_cli.rs`, the compiler selector of operator question 19,
+// 2026-10-30. No name disappeared.
+// 837 -> 839: `text_n_literals_agree_with_the_vm` in `retcon_bytecode.rs` and
+// `a_text_n_lowers_on_the_module_route` in `text_surface.rs`, the native
+// `Text<N>` differential of operator question 13, 2026-10-30. No name
+// disappeared.
+// 839 -> 840: `an_opaque_handle_inside_a_composite_agrees_with_the_vm` in
+// `native_opaque.rs`, operator question 14, 2026-10-30. No name disappeared.
+// 840 -> 841: `the_template_scan_stage_finds_templates_natively` in
+// `native_stage_factory.rs`, 2026-10-30. No name disappeared.
+// 841 -> 842: `bodies_yielded_in_a_cycle_stay_intact_until_the_reset` in
+// `retcon_bytecode.rs`, the copy at the yield of operator question 24,
+// 2026-10-31. No name disappeared.
+// 842 -> 844: the two tests of `region_supplement_formula.rs`, operator
+// question 22, 2026-10-31. No name disappeared.
+// 844 -> 845: `the_shipping_crates_copy_agrees_with_the_backend` in
+// `region_supplement_formula.rs`, absorption 127, 2026-10-31. No name
+// disappeared.
+// 845 -> 846: `a_pipe_into_a_generic_template_agrees_with_the_vm` in
+// `general_stream_sequence.rs`, absorption 128, 2026-10-31. No name
+// disappeared.
+// 846 -> 847: `delegated_loop_resets_rebind_the_innermost_parameter_like_the_vm`
+// in `retcon_bytecode.rs`, absorption 129, 2026-11-01. Upstream 704 rebinds a
+// delegated loop's parameter after its Reset, and ten names that pinned the
+// cleared parameter disappeared, each renamed in place with the reason in its
+// own doc comment or body. Their successors, old name first and unquoted
+// because it no longer resolves:
+// cleared_nested_body_access_traps_before_dereferencing_unit as
+// `a_delegated_array_parameter_is_refused_for_its_resume_type`,
+// cleared_ordered_comparison_traps_at_consumption as
+// `an_ordered_comparison_reads_the_rebound_parameter`,
+// equality_of_cleared_values_matches_vm_partial_eq as
+// `equality_of_rebound_parameters_matches_vm_partial_eq`,
+// guarded_composite_construction_from_a_cleared_parameter_executes as
+// `guarded_composite_construction_from_the_parameter_executes`,
+// nested_cleared_enum_inspection_remains_false_without_a_type_fault as
+// `a_delegated_enum_parameter_is_refused_for_its_resume_type`,
+// nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero as
+// `nested_stream_parameter_reads_take_the_reply_after_reset`,
+// private_scalar_consumption_traps_after_a_valid_unit_store as
+// `private_scalar_consumption_reads_the_stored_reply`,
+// private_scalar_slots_preserve_cleared_values as
+// `private_scalar_slots_preserve_stored_parameters`,
+// shortened_constructed_tuple_traps_before_an_out_of_bounds_read as
+// `a_tuple_constructed_from_the_parameter_keeps_its_extent_after_reset`, and
+// shortened_private_view_traps_while_an_older_long_view_remains_valid as
+// `older_and_newer_private_views_both_read_after_reset`. Established by
+// diffing the names of `retcon_bytecode.rs` against 96887065. No other file's
+// names changed.
+const RECORDED_TEST_FUNCTIONS: usize = 847;
+// UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
+// six CASES in its matrix, which is data rather than test functions. Worth saying,
+// because a reader reconciling that increment against this number would otherwise
+// look for a change.
+//
+// 534 -> 535 on 2026-09-12: one added to `composite_return_aliasing.rs`. Its
+// decision record said for a month that this file carries the failing case as
+// `#[ignore]`; the repair landed 2026-08-14 and no ignored test remained. A
+// document cannot notice that the code under it changed, and this is the smallest
+// thing that can.
+//
+// 533 -> 534 on 2026-09-12: one added to `fixed_shared_scale.rs`. A `Fixed`
+// shared slot LOWERED and nothing drove it — the one combination of sixteen that
+// the kind-arm census called unexercised where the path was actually live. The
+// other fifteen are unreachable or refused, measured.
+//
+// 530 -> 533 on 2026-09-12: three added in `operand_variant_sweep.rs`, which
+// EXECUTES both sides for each operation-by-operand-type combination. The support
+// census asks whether a thing lowers; four defects showed that is a different
+// question from whether it agrees.
+//
+// 526 -> 530 on 2026-09-12: four added in `checked_byte_arithmetic.rs`. Checked
+// `Byte` multiply and add returned UNTRUNCATED values — 200 * 100 gave 20000
+// where the reference gives Byte(32) — because the backend took the integer arm
+// for an operand type the runtime dispatches separately. Found by asking what
+// `backend_support_census.rs` could not see, after it reported 0 refusals while
+// three variants were broken.
+//
+// 523 -> 526 on 2026-09-12: three added to `checked_fixed_mul.rs` for the checked
+// fixed DIVIDE, refused on a ground that did not distinguish it — the bare
+// `Op::FixedDiv` already reaches `__divti3` and already lowers, so the cost was
+// paid by supported code.
+//
+// 519 -> 523 on 2026-09-12: four added in `checked_fixed_mul.rs`. The checked
+// fixed-point multiply — the form with ok and overflow arms — was refused while
+// the bare saturating form lowered; it now lowers, with the middle slot zero
+// rather than the integer form's high half and a WRAPPING low slot.
+//
+// 518 -> 519 on 2026-09-12: one added, `prediction_stamp.rs`. Absorption 59's
+// brief predicted zero conflicts against a merge-tree computed an iteration
+// earlier on a four-commit backlog; the guard requires the newest absorption
+// brief to record the tree its prediction belongs to. Proven to fire by removing
+// the stamp and watching it fail.
+//
+// 517 -> 518 on 2026-09-12: one added, `panic_site_census.rs`. It is the
+// deliberate version of the question that found the depth-disagreement panic by
+// hand — which panic-capable sites in the emitter encode an assumption about the
+// MODULE, given that `lower_module` does not require a verified one.
+//
+// 514 -> 517 on 2026-09-12: three added in `depth_disagreement.rs`. A branch
+// retargeted to a valid-but-wrong index makes one block arrive at two operand
+// depths, and the check for that was an `assert_eq!` — a PANIC on a public entry
+// point that does not require a verified module. It is now a refusal.
+//
+// 511 -> 514 on 2026-09-11: three added in `outstanding_reports.rs`. They watch
+// the defects this line has reported to the `v0.2.3` line, so a repair upstream
+// turns this suite red and forces the report to be retracted. Written after
+// finding that a decision document had asserted an unsoundness for four weeks
+// after it was fixed.
+//
+// Unchanged by the bounds-transfer pin: `spike_bounds_transfer.rs` gained
+// assertions inside an existing test rather than a new test function. Worth
+// saying, because a reader reconciling that increment against this number would
+// otherwise look for one.
+//
+// 510 -> 511 on 2026-09-11, net, and the net hides a REPLACEMENT: two added in
+// `shared_composite_slot.rs` — the indexed form agreeing, and a scalar shared
+// array as the control that the shared resolver's composite branch did not change
+// its scalar answer — and one REMOVED, the test asserting the indexed shared form
+// is refused. Its claim became false when the form was implemented, and a
+// weakened version would have been kept green by not implementing it.
+//
+// 507 -> 510 on 2026-09-11, net: three added in `shared_composite_slot.rs`, and
+// in `value_movement_census.rs` one REPLACED another — the test asserting that a
+// composite written into a shared slot is refused became false when the copy
+// landed, and was replaced by `every_composite_typed_data_slot_has_a_stated_placement`,
+// which is the stronger claim that makes the refusal unreachable from compilable
+// source. A weakened version would have been kept green by not implementing it.
+//
+// 506 -> 507 on 2026-09-11: one added, `host_buffer_census.rs`. It is the
+// deliberate instrument for the class the day ended on — a host buffer sized by
+// a literal rather than by the published contract. Three harnesses had it; a
+// hand sweep found one of them and the census found the rest.
+//
+// 503 -> 506 on 2026-09-11, net, and the net hides a DELETION that must be
+// stated: four added in `indexed_composite_slot.rs`, one REMOVED from
+// `private_slot_composite.rs`. The removed one asserted that an indexed composite
+// slot is refused, and the increment implemented it — **a weakened version would
+// have been kept green by not implementing it**, which is why it was deleted
+// rather than softened. The unwritten-sibling trap subject added in the same
+// increment is a DATA ROW in `corpus_differential.rs`, so it moves no count.
+//
+// ⚠ **THIS GUARD CAUGHT A SECOND, UNINTENDED DELETION IN THE SAME EDIT.** The
+// text slice that removed the refusal test swallowed its neighbour,
+// `the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one` — the
+// only subject that tells survival across `Op::Reset` apart from a pool that is
+// merely never rewritten, and itself added only hours earlier after auditing a
+// completion condition. The count came out one short of the accounting above,
+// which is the whole reason the accounting is written rather than the number
+// patched. Restored.
+//
+// 501 -> 503 on 2026-09-11: two added in `host_contract_completeness.rs`. The
+// generated header stated the layout of ONE of the three pointers the entry
+// takes; the shipped C host sized the other two by eye, and that file is what a
+// host programmer copies.
+//
+// 495 -> 501 on 2026-09-11: six added across two new files. Four in
+// `private_init_image.rs`, for a defect the read census found: a private scalar
+// slot's declared initializer was never applied natively, because the runtime
+// applies `private_init` at load and there is no native load step. Two in
+// `memory_read_census.rs`, the third axis — what guarantees the contents of
+// memory the emitter reads but did not write.
+//
+// 494 -> 495 on 2026-09-11: one added,
+// `the_published_supplement_covers_every_byte_the_backend_writes`. The
+// initialisation words for composite slots are new persistent state, and a figure
+// a host must add is one the runtime's sizing does not include. The trap subject
+// added in the same increment is a DATA ROW in `corpus_differential.rs`, not a
+// test function, so it moves no count -- worth saying, because a reader
+// reconciling this number against the increment would otherwise look for it.
+//
+// 492 -> 494 on 2026-09-11: two added, both in the new
+// `value_movement_census.rs`. It is the deliberate instrument for VALUE movement,
+// the counterpart to `pointer_offset_census.rs` for addresses: the data-slot
+// defect was a value move, and no census looked at those.
+//
+// 491 -> 492 on 2026-09-11: one added,
+// `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules`. It is
+// the non-vacuity check on a harness repair: the corpus differential sized its
+// private buffer by slot count rather than by the contract the backend
+// publishes, and the composite copy was the first lowering to reach the space
+// between the two.
+//
+// 490 -> 491 on 2026-09-11: one added,
+// `the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one`. It
+// exists because auditing the increment's own completion condition found clause
+// 2 satisfiable by a pool that is merely never overwritten — a weaker property
+// than surviving a reset. The subject writes on some cycles and not others, so
+// survival and rewrite fail on different elements of one sequence.
+//
+// 488 -> 490 on 2026-09-11, net, and the net hides a REPLACEMENT that must be
+// stated: `private_slot_composite.rs` went from four names to six. Two were
+// REMOVED because their claim was inverted by the same-day fix — the composite
+// data slot no longer refuses, so a test asserting the refusal would have been
+// kept green by deleting the lowering. Four were added, asserting the copy, its
+// survival across a reset, the corpus subject running, and the indexed form
+// still refusing. **A count cannot tell a replacement from an addition**, which
+// is why it is written here.
+//
+// 476 -> 488 on 2026-09-11: TWELVE added, NONE removed, and each is accounted
+// for rather than absorbed. Six in `reset_region_retention.rs`, four in
+// `private_slot_composite.rs`, two in `general_stream_sequence.rs`. The two new
+// files exist because the increment found two defects: a local live across a
+// suspension was cleared by the entry preamble on every resume, and a composite
+// written to a private data slot was stored as the body's ADDRESS.
+//
+// 475 -> 476 on 2026-09-10: one added,
+// `the_corpus_contains_no_general_stream_and_the_control_proves_the_probe_works`.
+// Two scaffolding probes written in the same increment were REMOVED, both
+// subsumed by that one, so the net is a single name — accounted for here in the
+// way the failure message demands rather than absorbed into the figure.
+//
+// 474 when the figure was first derived from git at an earlier head, plus THIS
+// FILE'S OWN test. The guard fired on its own arrival, which is the first
+// evidence that it fires at all — and the update is accountable in the way the
+// failure message demands: the one added name is named here.
+
+/// Backend test binaries at the stamp.
+///
+/// 104 -> 106 on 2026-09-11. Both additions are named above, and `git status`
+/// showed no deletion under `tests/` in the same increment — which is the check
+/// the failure message asks for, since a count cannot tell an add from a
+/// delete-plus-add. Unchanged by the persistent-composite-copy increment that
+/// followed: it rewrote a file's contents without adding or removing one.
+///
+/// 106 -> 107 on 2026-09-11: `value_movement_census.rs` added, none removed.
+///
+/// 107 -> 109 later the same day: `private_init_image.rs` and
+/// `memory_read_census.rs` added, none removed.
+///
+/// 109 -> 110: `host_contract_completeness.rs` added, none removed.
+///
+/// 110 -> 111: `indexed_composite_slot.rs` added, none removed.
+///
+/// 111 -> 112: `host_buffer_census.rs` added, none removed.
+///
+/// 112 -> 113: `shared_composite_slot.rs` added, none removed.
+///
+/// 113 -> 114: `outstanding_reports.rs` added, none removed.
+///
+/// 114 -> 115: `depth_disagreement.rs` added, none removed.
+///
+/// 115 -> 116: `panic_site_census.rs` added, none removed.
+///
+/// 116 -> 117: `prediction_stamp.rs` added, none removed.
+///
+/// 117 -> 118: `checked_fixed_mul.rs` added, none removed.
+///
+/// 118 -> 119: `checked_byte_arithmetic.rs` added, none removed.
+///
+/// 119 -> 120: `operand_variant_sweep.rs` added, none removed.
+// 156 -> 157 in absorption 82: `native_workflow.rs` added, none removed.
+// 157 -> 158: `arena_coroutine_frames.rs` added for Workstream C, none removed.
+// 158 -> 159: `static_library_linkage.rs` added for Order 3, none removed.
+// 159 -> 161: `native_trap_outcomes.rs` and `native_host_failure.rs`, none removed.
+// 161 -> 164: `handled_partial_outcomes.rs`, `machine_stack_bound.rs` and
+// `native_cost_path.rs` for Order 4, none removed.
+// 164 -> 166: `native_hot_swap.rs` and `static_kind_lowering.rs`, none removed.
+// 166 -> 170: `language_construct_census.rs`, `tier_one_targets.rs`,
+// `kel_native_cli.rs` and `text_comparison.rs` for Order 6, none removed.
+// 170 -> 171: `native_opaque.rs` for operator question 14, none removed.
+// 171 -> 172: `native_stage_executor.rs` for operator question 19, none removed.
+// 172 -> 173: `native_seeded_interp.rs` for operator question 6, none removed.
+// 173 -> 174: `native_stage_factory.rs` for operator question 19, none removed.
+// 174 -> 175: `region_supplement_formula.rs` for operator question 22, none removed.
+const RECORDED_TEST_FILES: usize = 175;
+
+fn test_files() -> Vec<std::path::PathBuf> {
+    let mut out: Vec<_> = std::fs::read_dir("tests")
+        .expect("the tests directory is readable")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Every `#[test]` function name across the backend's test files.
+fn test_function_names() -> Vec<String> {
+    let mut names = Vec::new();
+    for path in test_files() {
+        let src = std::fs::read_to_string(&path).expect("a test file is readable");
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            if l.trim() != "#[test]" {
+                continue;
+            }
+            // The `fn` may be a line or two below, past attributes such as
+            // `#[should_panic]` or a doc comment continuation.
+            for probe in lines.iter().skip(i + 1).take(4) {
+                if let Some(rest) = probe.trim().strip_prefix("fn ")
+                    && let Some(name) = rest.split('(').next()
+                {
+                    names.push(name.trim().to_string());
+                    break;
+                }
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+#[test]
+fn the_backend_test_population_has_not_moved_unnoticed() {
+    let names = test_function_names();
+    let files = test_files();
+
+    println!("\n================ BACKEND TEST POPULATION");
+    println!("  test files     : {}", files.len());
+    println!("  test functions : {}", names.len());
+    println!(
+        "\n  THIS DETECTS CHANGE, NOT DELETION. A count cannot tell a rename from\n  \
+         a delete-plus-add. It refuses to let the population move without\n  \
+         someone looking, which is all it claims.\n================\n"
+    );
+
+    // **NON-VACUITY.** A matcher that found nothing would pass for ever, and
+    // this file's whole subject is a population.
+    assert!(
+        names.len() > 100,
+        "only {} test functions were found across {} files, so the matcher has \
+         gone stale and this guard is measuring nothing",
+        names.len(),
+        files.len()
+    );
+    // It must find ITSELF, or it is not reading the directory it claims to.
+    assert!(
+        names
+            .iter()
+            .any(|n| n == "the_backend_test_population_has_not_moved_unnoticed"),
+        "the guard cannot see its own test function, so it is not reading the \
+         files it reports on"
+    );
+
+    assert_eq!(
+        files.len(),
+        RECORDED_TEST_FILES,
+        "the number of backend test FILES changed. Update the figure only after \
+         establishing that no file was removed."
+    );
+    assert_eq!(
+        names.len(),
+        RECORDED_TEST_FUNCTIONS,
+        "THE BACKEND TEST POPULATION CHANGED. Do not simply update the number.\n\
+         \n\
+         Establish that nothing was LOST: diff the test-function names against an \
+         earlier commit, and for every name that disappeared, name the successor \
+         that covers its subject. Ten disappeared in one session and all ten were \
+         deliberate renames with the reason in their own doc comments — but that \
+         was established by looking, not by the count agreeing.\n\
+         \n\
+         A test removed because it became inconvenient is exactly what this guard \
+         exists to make visible, and it is indistinguishable from a rename here."
+    );
+}

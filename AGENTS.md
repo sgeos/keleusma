@@ -12,6 +12,59 @@ Keleusma is a Total Functional Stream Processor that compiles to bytecode and ru
 
 **Status**. V0.2.2 published to crates.io. Seven workspace crates: `keleusma`, `keleusma-arena`, `keleusma-macros`, `keleusma-bench`, `keleusma-cli`, `keleusma-wire`, `keleusma-wire-derive`.
 
+## ⚠ TWO DEVELOPMENT LINES — check which one you are on BEFORE the reading order below
+
+The reading order and the verification commands in this file describe the **`v0.2.3` line**. A
+second line runs concurrently and **neither its channel nor its gate appears anywhere else in this
+file**, so following the sections below on that line will point you at the wrong documents and run
+a verification that cannot see the code you are changing.
+
+### If you are on `v0.3.0` or a feature branch cut from it
+
+| | |
+|---|---|
+| Where | worktree `keleusma-worktrees/arena-composites`, branch `v0.3.0` |
+| The package | `native_codegen/` — **a DETACHED workspace root**, not one of the seven workspace crates |
+| Start here | [`docs/process/handoffs/v0.3.0-BRIEF.md`](./docs/process/handoffs/v0.3.0-BRIEF.md) — bounded. The full channel is `docs/process/handoffs/v0.3.0.md`, which is over ten thousand lines and is an ARCHIVE |
+| **Not** its channel | `docs/process/TASKLOG.md` and `docs/process/REVERSE_PROMPT.md` belong to the `v0.2.3` line |
+
+**The verification commands in "Build, test, lint" below DO NOT REACH THIS PACKAGE.** A detached
+workspace root is invisible to a root `cargo test`, and continuous integration never builds it —
+measured, zero occurrences of `native_codegen` across every job in `ci.yml`. Its only gate is:
+
+```sh
+cd native_codegen
+tools/backend-gate.sh            # default features
+tools/backend-gate.sh --narrow   # narrow-float-32
+```
+
+**One invocation covers ONE float configuration, and a single run is not both.** Each takes roughly
+ten to twenty minutes and must run with the tree STILL — the gate freeze-checks itself, and editing
+anything, documentation included, while it runs voids that phase. The result is written to
+`native_codegen/GATE_RECORD.md`, which records the commit, whether the worktree was clean, whether
+the phases stayed frozen, and the verdict. **That file, not a claim in prose, is this line's
+evidence that it is green.**
+
+**A detached package shares nothing with the parent workspace unless it declares it** — it has its
+own `Cargo.lock`, its own `[profile.dev]`, its own `rust-version`. Ask that question whenever
+workspace-level configuration changes; it has already cost three separate rediscoveries.
+
+### Constraints on the `v0.3.0` line specifically
+
+- **Root `src/` and root `tests/` are READ-ONLY to this line.** Read them freely; report problems
+  rather than repairing them. Verify with the commits **not reachable from `origin/v0.2.3`**, or the
+  check counts the other line's absorbed work as this line's violation.
+- **No new opcodes**, and **no `BYTECODE_VERSION` change without operator authorisation.**
+- **Publication is held.** Nothing is published from this line.
+- **The byte-identical differential against the reference VM is the correctness signal.** A lowering
+  that "looks right" is not evidence; agreement with the virtual machine is.
+- **Absorb first.** `git rev-list --count HEAD..origin/v0.2.3` — derive it, never quote a figure for
+  it — and run the conflict check in its OWN command before writing any prediction about the merge.
+- **Commit once per prompt. Only feature branches may commit on red.** Full gates must pass before publication or merging into `main`. Version branches remain green through remote continuous integration. Local checks may stay targeted when they provide high confidence in a green remote result. Root continuous integration does not cover this detached package, so select relevant native checks as well. Both complete native configurations are mandatory before publication or merging into `main`, rather than at every version-branch integration. A stale full-gate record identifies missing complete verification, not an observed test failure. Publication requires explicit in-session confirmation.
+
+- **Shared channels** retain both lines. Update this line's bounded brief and archive, and
+  append attributed reports to the shared reverse prompt. Preserve its upstream current block.
+
 ## Reading order for new sessions
 
 1. [`CLAUDE.md`](./CLAUDE.md) for project conventions and protocol.
@@ -31,7 +84,7 @@ Items that an AI assistant trained on general Rust code is likely to get wrong o
 - **Conservative-verification stance.** The safe verifier rejects recursion, closures, `dyn Trait` dispatch, and other constructs that defeat the WCET and WCMU analyses. The compile pipeline admits a broader surface than the verifier accepts; both rejection paths are intentional. Do not silence verifier diagnostics by relaxing the checks.
 - **Trait-bounded generics over trait objects.** Prefer `fn foo<T: Trait>(x: T)` to `fn foo(x: &dyn Trait)`. The latter is rejected by the verifier in most positions.
 - **No flat jumps.** Control flow uses block-structured instructions (`If`, `Else`, `EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`). Flat `Jmp` and `Branch` opcodes are not present in the ISA.
-- **Per-session protocol.** Read `docs/process/TASKLOG.md` for current task state and `docs/process/REVERSE_PROMPT.md` for the last AI-to-human handoff before proceeding. After completing a task, update `TASKLOG.md` and overwrite `REVERSE_PROMPT.md`.
+- **Per-session protocol.** Read `docs/process/TASKLOG.md` for current task state and `docs/process/REVERSE_PROMPT.md` for the last AI-to-human handoff before proceeding. After completing a task, update `TASKLOG.md` and overwrite your own line's block of `REVERSE_PROMPT.md`, leaving the other line's block in place, as `CLAUDE.md` describes.
 - **HARD CONSTRAINT: before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** It holds operator-stated context held outside the repository deliberately. **Do not copy any of it into tracked files, commit messages, or public documentation; reference it only as "Appendix B".** Until 2026-09-28 this constraint appeared only in `docs/process/HANDOFF.md`, which was absent from the reading order above — so an assistant could follow this file faithfully and never learn it. The failure mode is disclosure, which is irreversible.
 
 - **Three limits are the operator's, not yours.** `BYTECODE_VERSION` moves only on explicit operator authorisation; it is 2. The rad-hard minimal-ISA constraint means the opcode count is itself a design limit, so prefer reusing an opcode over adding one; the count is 66. And a crates.io publication needs in-session confirmation. If a change appears to require any of these, stop and record the question in `REVERSE_PROMPT.md` rather than proceeding.

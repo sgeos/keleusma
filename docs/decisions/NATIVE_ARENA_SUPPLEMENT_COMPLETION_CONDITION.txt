@@ -1,0 +1,54 @@
+COMPLETION CONDITION — host-facing arena supplement (Workstream E remedy)
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The native code generator exposes a public, documented way for a host to
+   obtain, from a module alone, the arena byte figure the backend requires for
+   composite bodies — the term the runtime's own arena-sizing function does not
+   include.
+
+2. That figure is derived from the same region planning the lowering itself
+   uses. No second or parallel region model is introduced.
+
+3. A test establishes the soundness property that matters: the entry-rooted
+   figure is greater than or equal to what is planned for every chunk reachable
+   from the entry. A shortfall anywhere fails the test rather than being
+   reported.
+
+4. The soundness comparison is shown to be non-vacuous: the number of modules
+   with a non-zero requirement, and the number of chunk comparisons actually
+   performed, are both asserted to be non-trivial and are printed.
+
+5. The documentation states plainly that this is a figure a host must ADD to
+   what the runtime's sizing function returns, and that a figure the host must
+   remember to add is a weaker guarantee than one the runtime returns itself.
+
+6. Every comparison states what it is rooted at. No comparison brings together
+   quantities at different scopes without saying so, and none conflates a slot
+   count with a byte count.
+
+7. At least one new assertion is shown load-bearing by a recorded mutation: the
+   transcript states what was changed, that the changed version failed or
+   produced a different result, and that the revert was verified rather than
+   assumed.
+
+8. If the soundness property does not hold, it is reported as a defect in this
+   line's own code and is NOT resolved by weakening the assertion.
+
+9. The resume document for this line records the outcome, including that the
+   earlier framing — that closing this gap required an operator ruling — was
+   narrower than the facts warranted, and what part remains genuinely the
+   operator's.
+
+10. The files recorded as read-only for this line are unmodified: the virtual
+    machine, the bytecode verifier, the bytecode definitions, the self-hosted
+    compiler sources, and the continuous-integration workflows.
+
+11. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+12. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

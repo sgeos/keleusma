@@ -618,185 +618,114 @@ fn layouts_dispatch(cmd: Word) -> Word {
     if cmd == 29 { layout_variant() } else { layout_error() }}}}}}}}
 }
 
+// The owned data-layout decoder over Encoding F, one `DATA_FIELDS` record per
+// declared field. The stage validates every field record against the decoder's
+// invariants, the reference `validate_field_record`, so the host builds a field
+// only from a record the stage accepted. The host supplies two facts it reads
+// off the kind tag from the Rust tables, whether the kind is known to this
+// build and whether it has a zero; every verdict over them is the stage's.
 private data dl {
     mode: Word,
     names: Word,
-    slot_rows: Word,
-    shared_rows: Word,
-    placement_rows: Word,
+    rows: Word,
+    consts: Word,
     scanned: Word,
-    total: Word,
-    slot_at: Word,
-    shared_at: Word,
-    placement_at: Word,
-    name: Word,
-    visibility: Word,
-    run: Word,
-    offset: Word,
-    kind: Word,
-    span: Word,
-    stride: Word,
-    pos: Word,
-    out: Word,
-    init_count: Word,
+    next: Word,
+    private_seen: Word,
 }
 fn data_error() -> Word { 0 - 306 }
 fn data_reject() -> Word { dl.mode = 0; 0 - 307 }
 fn short_unsigned(n: Word) -> bool { n >= 0 andalso n <= 65535 }
 fn byte_unsigned(n: Word) -> bool { n >= 0 andalso n <= 255 }
+// Arguments: the `DATA_FIELDS` byte count or -1 when absent, the `NAMES` and
+// `STRING_POOL` byte counts, 1 when the artifact carries a retired data-layout
+// region, and the constant table's record count. A retired region is refused
+// even beside an absent field table, since that absence would otherwise read a
+// module with a data block as one without.
 fn data_begin() -> Word {
     dl.mode = 0;
+    if io.arg[3] != 0 { data_reject() } else {
     if io.arg[0] == 0 - 1 { 0 } else {
-    if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[2] < 0 orelse io.arg[3] < 0
-        orelse io.arg[4] < 0 orelse io.arg[5] < 8 orelse io.arg[0] % 8 != 0
-        orelse io.arg[1] % 8 != 0 orelse io.arg[3] % 16 != 0
-        orelse io.arg[4] % 8 != 0 orelse io.arg[5] % 8 != 0 { data_reject() } else {
+    if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[2] < 0 orelse io.arg[4] < 0
+        orelse io.arg[0] % 32 != 0 orelse io.arg[1] % 8 != 0 { data_reject() } else {
         dl.names = io.arg[1] / 8;
-        dl.slot_rows = io.arg[0] / 8;
-        dl.shared_rows = io.arg[3] / 16;
-        dl.placement_rows = io.arg[4] / 8;
+        dl.rows = io.arg[0] / 32;
+        dl.consts = io.arg[4];
         dl.scanned = 0;
-        dl.total = 0;
-        dl.slot_at = 0;
-        dl.shared_at = 0;
-        dl.placement_at = 0;
+        dl.next = 0;
+        dl.private_seen = 0;
         dl.mode = 1;
-        io.fin[0] = dl.slot_rows;
-        io.fin[1] = dl.shared_rows;
-        io.fin[2] = dl.placement_rows;
+        io.fin[0] = dl.rows;
         1
-    }}
+    }}}
 }
-fn slot_valid() -> bool {
+// The shared-field rules: an offset, the host-initialised form, and no
+// initialiser constant.
+fn field_shared_ok() -> bool {
+    dl.private_seen == 0 andalso io.fin[3] != 0xFFFFFFFF
+        andalso io.fin[8] == 0 andalso io.fin[11] == 0xFFFFFFFF
+}
+// The private-field initialiser rules: a zero needs a kind with one, `Unit` and
+// a zero carry no constant, and a constant lies within the table.
+fn field_private_ok() -> bool {
+    if io.fin[8] == 0 { io.fin[13] == 1 andalso io.fin[11] == 0xFFFFFFFF } else {
+    if io.fin[8] == 1 { io.fin[11] == 0xFFFFFFFF } else {
+    if io.fin[8] == 2 { io.fin[11] < dl.consts } else { false } } }
+}
+// The placement rules: a field without an offset carries no stride, a single
+// element carries none either, and the last element's offset is representable.
+fn field_placement_ok() -> bool {
+    if io.fin[3] == 0xFFFFFFFF { io.fin[4] == 0 } else {
+        (io.fin[2] != 1 orelse io.fin[4] == 0)
+            andalso unsigned32(io.fin[3] + (io.fin[2] - 1) * io.fin[4])
+    }
+}
+// One record: name, first slot, count, offset, stride, element length, kind,
+// visibility, initialiser form, the two reserved fields and the initialiser
+// constant, then the host's two kind facts, known and zeroable.
+fn field_valid() -> bool {
     unsigned32(io.fin[0]) andalso io.fin[0] < dl.names
-        andalso (io.fin[1] == 1 orelse io.fin[1] == 2)
-        andalso short_unsigned(io.fin[2]) andalso io.fin[2] != 0
+        andalso (io.fin[7] == 1 orelse io.fin[7] == 2)
+        andalso io.fin[9] == 0 andalso io.fin[10] == 0
+        andalso unsigned32(io.fin[2]) andalso io.fin[2] != 0
+        andalso io.fin[1] == dl.next andalso dl.next + io.fin[2] <= 16777216
+        andalso byte_unsigned(io.fin[6]) andalso io.fin[12] == 1
+        andalso short_unsigned(io.fin[5]) andalso (io.fin[6] >= 128 orelse io.fin[5] == 0)
+        andalso unsigned32(io.fin[3]) andalso unsigned32(io.fin[4]) andalso unsigned32(io.fin[11])
+        andalso field_placement_ok() andalso field_visibility_ok()
 }
-fn slot_check() -> Word {
-    if dl.mode != 1 orelse dl.scanned >= dl.slot_rows { data_error() } else {
-        if not slot_valid() { data_reject() } else {
-            dl.total = dl.total + io.fin[2];
-            dl.scanned = dl.scanned + 1;
-            0
-        }
-    }
+fn field_visibility_ok() -> bool {
+    if io.fin[7] == 1 { field_shared_ok() } else { field_private_ok() }
 }
-fn slots_validated() -> Word {
-    if dl.mode != 1 orelse dl.scanned != dl.slot_rows { data_error() } else {
-        dl.mode = 2;
-        io.fin[0] = dl.total;
-        0
-    }
-}
-fn slot_begin() -> Word {
-    if dl.mode != 2 orelse dl.slot_at >= dl.slot_rows { data_error() } else {
-        if not slot_valid() { data_reject() } else {
-            dl.name = io.fin[0];
-            dl.visibility = io.fin[1] - 1;
-            dl.run = io.fin[2];
-            io.fin[0] = dl.name;
+fn field_check() -> Word {
+    if dl.mode != 1 orelse dl.scanned >= dl.rows { data_error() } else {
+        if not field_valid() { data_reject() } else {
+            dl.next = dl.next + io.fin[2];
+            if io.fin[7] == 2 { dl.private_seen = 1; }
             dl.mode = 3;
-            1
+            0
         }
     }
 }
-fn slot_name_ready() -> Word {
+fn field_done() -> Word {
     if dl.mode != 3 { data_error() } else {
-        io.fin[0] = dl.run;
-        io.fin[1] = dl.visibility;
-        dl.mode = 4;
+        dl.scanned = dl.scanned + 1;
+        dl.mode = 1;
         0
     }
 }
-fn slot_copied() -> Word {
-    if dl.mode != 4 orelse io.arg[0] != dl.run { data_error() } else {
-        dl.slot_at = dl.slot_at + 1;
-        dl.mode = 2;
+fn data_finish() -> Word {
+    if dl.mode != 1 orelse dl.scanned != dl.rows { data_error() } else {
+        dl.mode = 0;
+        io.fin[0] = dl.next;
         0
     }
-}
-fn shared_begin() -> Word {
-    if dl.mode != 2 orelse dl.slot_at != dl.slot_rows orelse dl.shared_at >= dl.shared_rows { data_error() } else {
-    if not unsigned32(io.fin[0]) orelse not byte_unsigned(io.fin[1])
-        orelse not short_unsigned(io.fin[2]) orelse not unsigned32(io.fin[3])
-        orelse not short_unsigned(io.fin[4]) orelse io.fin[4] == 0
-        orelse not short_unsigned(io.fin[5]) { data_reject() } else {
-        dl.offset = io.fin[0];
-        dl.kind = io.fin[1];
-        dl.span = io.fin[2];
-        dl.run = io.fin[4];
-        dl.stride = io.fin[5];
-        if not unsigned32(dl.offset + (dl.run - 1) * dl.stride) { data_reject() } else {
-            dl.pos = 0;
-            dl.mode = 5;
-            io.fin[0] = dl.run;
-            0
-        }
-    }}
-}
-// The owned decoder does not use first_slot. The borrowed accessor and later
-// verifier have their own contracts. Offsets are derived here, five per batch.
-fn shared_next() -> Word {
-    if dl.mode != 5 { data_error() } else {
-        if dl.pos == dl.run { dl.shared_at = dl.shared_at + 1; dl.mode = 2; 0 } else {
-            dl.out = 0;
-            for i in 0..5 {
-                if dl.pos < dl.run {
-                    io.fin[i * 3] = dl.offset + dl.pos * dl.stride;
-                    io.fin[i * 3 + 1] = dl.kind;
-                    io.fin[i * 3 + 2] = dl.span;
-                    dl.pos = dl.pos + 1;
-                    dl.out = dl.out + 1;
-                }
-            }
-            dl.out
-        }
-    }
-}
-fn placement_read() -> Word {
-    if dl.mode != 2 orelse dl.slot_at != dl.slot_rows orelse dl.shared_at != dl.shared_rows
-        orelse dl.placement_at >= dl.placement_rows { data_error() } else {
-        if not short_unsigned(io.fin[0]) orelse not unsigned32(io.fin[1]) { data_reject() } else {
-            dl.placement_at = dl.placement_at + 1;
-            0
-        }
-    }
-}
-fn initializer_plan() -> Word {
-    if dl.mode == 2 {
-        if dl.slot_at != dl.slot_rows orelse dl.shared_at != dl.shared_rows
-            orelse dl.placement_at != dl.placement_rows { data_error() } else {
-            io.fin[0] = 0;
-            dl.mode = 7;
-            3
-        }
-    } else { if dl.mode == 7 {
-        if not unsigned32(io.fin[0]) orelse not unsigned32(io.fin[1]) { data_reject() } else {
-            dl.init_count = io.fin[1];
-            dl.mode = 6;
-            if io.fin[0] == 0xFFFFFFFF {
-                io.fin[0] = dl.init_count;
-                io.fin[1] = 0;
-                1
-            } else { 2 }
-        }
-    } else { data_error() }}
-}
-fn initializer_ready() -> Word {
-    if dl.mode != 6 orelse io.arg[0] != dl.init_count { data_error() } else { dl.mode = 0; 0 }
 }
 fn data_dispatch(cmd: Word) -> Word {
     if cmd == 30 { data_begin() } else {
-    if cmd == 31 { slot_check() } else {
-    if cmd == 32 { slots_validated() } else {
-    if cmd == 33 { slot_begin() } else {
-    if cmd == 34 { slot_name_ready() } else {
-    if cmd == 35 { slot_copied() } else {
-    if cmd == 36 { shared_begin() } else {
-    if cmd == 37 { shared_next() } else {
-    if cmd == 38 { placement_read() } else {
-    if cmd == 39 { initializer_plan() } else {
-    if cmd == 40 { initializer_ready() } else { data_error() }}}}}}}}}}}
+    if cmd == 31 { field_check() } else {
+    if cmd == 32 { field_done() } else {
+    if cmd == 33 { data_finish() } else { data_error() }}}}
 }
 
 private data pt { mode: Word, remaining: Word, bad: Word, }
@@ -1610,179 +1539,6 @@ fn encoder_metadata_dispatch(cmd: Word) -> Word {
     if cmd == 88 { encoder_names_finish() } else { emit_error() }}}}}}}}}}
 }
 
-// Group logical slots through bounded metadata and byte-comparison windows.
-// The first name remains in host storage and is requested again by source index.
-private data dg {
-    mode: Word, total: Word, first: Word, scan: Word, length: Word, visibility: Word,
-    take: Word, prefix: Word, compared: Word, want: Word, equal_prefix: Word,
-    remaining: Word, groups: Word, valid: Word,
-}
-private data sr {
-    mode: Word, total: Word, first: Word, scan: Word, start: Word, last: Word,
-    kind: Word, length: Word, stride: Word, run: Word, done: Word, take: Word,
-    stopped: Word, valid: Word,
-}
-fn run_error() -> Word { 0 - 320 }
-fn run_bad() -> Word { 0 - 321 }
-fn data_group_head_request() -> Word {
-    if dg.first == dg.total { dg.mode = 0; io.fin[0] = dg.groups; 0 } else {
-        io.fin[0] = dg.first; dg.mode = 1; 1
-    }
-}
-fn data_group_begin() -> Word {
-    if dg.mode != 0 orelse not unsigned32(io.arg[0]) { run_error() } else {
-        dg.total = io.arg[0]; dg.first = 0; dg.groups = 0;
-        data_group_head_request()
-    }
-}
-fn data_group_ready() -> Word {
-    dg.remaining = dg.scan - dg.first;
-    io.fin[0] = dg.first; io.fin[1] = dg.remaining;
-    io.fin[2] = dg.visibility; io.fin[3] = dg.groups;
-    dg.mode = 4; 4
-}
-fn data_group_batch_request() -> Word {
-    if dg.scan == dg.total { data_group_ready() } else {
-        dg.take = if dg.total - dg.scan < 8 { dg.total - dg.scan } else { 8 };
-        io.fin[0] = dg.scan; io.fin[1] = dg.take;
-        dg.mode = 2; 2
-    }
-}
-fn data_group_head_reply() -> Word {
-    if dg.mode != 1 { run_error() } else {
-    if not unsigned32(io.arg[0]) orelse io.arg[1] < 0 orelse io.arg[1] > 1 { run_bad() } else {
-        dg.length = io.arg[0]; dg.visibility = io.arg[1] + 1;
-        dg.scan = dg.first + 1;
-        data_group_batch_request()
-    }}
-}
-fn data_group_compare_request() -> Word {
-    dg.want = if dg.length - dg.compared < 64 { dg.length - dg.compared } else { 64 };
-    io.fin[0] = dg.first; io.fin[1] = dg.scan; io.fin[2] = dg.equal_prefix;
-    io.fin[3] = dg.compared; io.fin[4] = dg.want;
-    dg.mode = 3; 3
-}
-fn data_group_compared() -> Word {
-    dg.scan = dg.scan + dg.equal_prefix;
-    if dg.equal_prefix < dg.take { data_group_ready() } else { data_group_batch_request() }
-}
-fn data_group_batch_reply() -> Word {
-    if dg.mode != 2 orelse io.arg[0] != dg.take { run_error() } else {
-        dg.prefix = dg.take; dg.valid = 1;
-        for i in 0..dg.take limit 8 {
-            if not unsigned32(io.fin[i * 2]) orelse io.fin[i * 2 + 1] < 0 orelse io.fin[i * 2 + 1] > 1 { dg.valid = 0; }
-            if dg.prefix == dg.take andalso (io.fin[i * 2] != dg.length orelse io.fin[i * 2 + 1] + 1 != dg.visibility) { dg.prefix = i; }
-        }
-        if dg.valid == 0 { run_bad() } else {
-            dg.equal_prefix = dg.prefix;
-            if dg.prefix == 0 { data_group_ready() } else {
-            if dg.length == 0 { data_group_compared() } else {
-                dg.compared = 0; data_group_compare_request()
-            }}
-        }
-    }
-}
-fn data_group_compare_reply() -> Word {
-    if dg.mode != 3 orelse io.arg[0] != dg.want { run_error() } else {
-        // Keep the original comparison width stable while the first mismatch shrinks the prefix.
-        for j in 0..dg.prefix limit 8 {
-            for i in 0..dg.want limit 64 {
-                if j < dg.equal_prefix andalso io.bytes[i] != io.bytes[(j + 1) * 64 + i] { dg.equal_prefix = j; }
-            }
-        }
-        dg.compared = dg.compared + dg.want;
-        if dg.equal_prefix == 0 orelse dg.compared == dg.length { data_group_compared() } else {
-            dg.prefix = dg.equal_prefix;
-            data_group_compare_request()
-        }
-    }
-}
-fn data_group_piece() -> Word {
-    if dg.mode != 4 { run_error() } else {
-        if dg.remaining == 0 {
-            dg.groups = dg.groups + 1; dg.first = dg.scan;
-            data_group_head_request()
-        } else {
-            let count = if dg.remaining < 65535 { dg.remaining } else { 65535 };
-            io.fin[0] = count; dg.remaining = dg.remaining - count;
-            5
-        }
-    }
-}
-fn shared_run_head_request() -> Word {
-    if sr.first == sr.total { sr.mode = 0; 0 } else {
-        io.fin[0] = sr.first; sr.mode = 1; 1
-    }
-}
-fn shared_run_begin() -> Word {
-    if sr.mode != 0 orelse not unsigned32(io.arg[0]) { run_error() } else {
-        sr.total = io.arg[0]; sr.first = 0; shared_run_head_request()
-    }
-}
-fn shared_run_emit() -> Word {
-    let count = if sr.run - sr.done < 65535 { sr.run - sr.done } else { 65535 };
-    io.fin[0] = (sr.start + sr.done * sr.stride) band 0xFFFFFFFF;
-    io.fin[1] = sr.kind; io.fin[2] = 0; io.fin[3] = sr.length;
-    io.fin[4] = sr.first + sr.done; io.fin[5] = count; io.fin[6] = sr.stride;
-    sr.done = sr.done + count; sr.mode = 3; 3
-}
-fn shared_run_batch_request() -> Word {
-    if sr.scan == sr.total { shared_run_emit() } else {
-        sr.take = if sr.total - sr.scan < 5 { sr.total - sr.scan } else { 5 };
-        io.fin[0] = sr.scan; io.fin[1] = sr.take; sr.mode = 2; 2
-    }
-}
-fn shared_run_head_reply() -> Word {
-    if sr.mode != 1 { run_error() } else {
-    if not unsigned32(io.arg[0]) orelse io.arg[1] < 0 orelse io.arg[1] > 255
-        orelse io.arg[2] < 0 orelse io.arg[2] > 65535 { run_bad() } else {
-        sr.start = io.arg[0]; sr.last = io.arg[0]; sr.kind = io.arg[1]; sr.length = io.arg[2];
-        sr.stride = 0; sr.run = 1; sr.done = 0; sr.scan = sr.first + 1;
-        shared_run_batch_request()
-    }}
-}
-fn shared_run_batch_reply() -> Word {
-    if sr.mode != 2 orelse io.arg[0] != sr.take { run_error() } else {
-        sr.valid = 1;
-        for i in 0..sr.take limit 5 {
-            if not unsigned32(io.fin[i * 3]) orelse io.fin[i * 3 + 1] < 0 orelse io.fin[i * 3 + 1] > 255
-                orelse io.fin[i * 3 + 2] < 0 orelse io.fin[i * 3 + 2] > 65535 { sr.valid = 0; }
-        }
-        if sr.valid == 0 { run_bad() } else {
-            sr.stopped = 0;
-            for i in 0..sr.take limit 5 {
-                if sr.stopped == 0 {
-                    let delta = (io.fin[i * 3] - sr.last) band 0xFFFFFFFF;
-                    if io.fin[i * 3 + 1] != sr.kind orelse io.fin[i * 3 + 2] != sr.length
-                        orelse (sr.run == 1 andalso delta > 65535) orelse (sr.run > 1 andalso delta != sr.stride) { sr.stopped = 1; } else {
-                        if sr.run == 1 { sr.stride = delta; }
-                        sr.last = io.fin[i * 3]; sr.run = sr.run + 1; sr.scan = sr.scan + 1;
-                    }
-                }
-            }
-            if sr.stopped == 1 { shared_run_emit() } else { shared_run_batch_request() }
-        }
-    }
-}
-fn shared_run_next() -> Word {
-    if sr.mode != 3 { run_error() } else {
-        if sr.done < sr.run { shared_run_emit() } else {
-            sr.first = sr.scan; shared_run_head_request()
-        }
-    }
-}
-fn run_dispatch(cmd: Word) -> Word {
-    if cmd == 89 { data_group_begin() } else {
-    if cmd == 90 { data_group_head_reply() } else {
-    if cmd == 91 { data_group_batch_reply() } else {
-    if cmd == 92 { data_group_compare_reply() } else {
-    if cmd == 93 { data_group_piece() } else {
-    if cmd == 94 { shared_run_begin() } else {
-    if cmd == 95 { shared_run_head_reply() } else {
-    if cmd == 96 { shared_run_batch_reply() } else {
-    if cmd == 97 { shared_run_next() } else { run_error() }}}}}}}}}
-}
-
 fn signatures_dispatch(cmd: Word) -> Word {
     if cmd == 0 { tables_begin() } else {
     if cmd == 1 { signature_check() } else {
@@ -1794,7 +1550,6 @@ fn signatures_dispatch(cmd: Word) -> Word {
     if cmd == 7 { schema_finish() } else { schema_error() }}}}}}}}
 }
 fn route(cmd: Word) -> Word {
-    if cmd >= 89 { run_dispatch(cmd) } else {
     if cmd >= 64 { encoder_dispatch(cmd) } else {
     if cmd >= 57 { frame_dispatch(cmd) } else {
     if cmd >= 48 { module_dispatch(cmd) } else {
@@ -1803,11 +1558,9 @@ fn route(cmd: Word) -> Word {
     if cmd >= 30 { data_dispatch(cmd) } else {
     if cmd >= 22 { layouts_dispatch(cmd) } else {
     if cmd >= 12 { constants_dispatch(cmd) } else {
-    if cmd >= 8 { names_dispatch(cmd) } else { signatures_dispatch(cmd) }}}}}}}}}}
+    if cmd >= 8 { names_dispatch(cmd) } else { signatures_dispatch(cmd) }}}}}}}}}
 }
 fn dispatch(cmd: Word) -> Word {
-    if dg.mode != 0 andalso (cmd < 89 orelse cmd > 93) { run_error() } else {
-    if sr.mode != 0 andalso (cmd < 94 orelse cmd > 97) { run_error() } else {
     if np.mode != 0 andalso cmd != 86 andalso cmd != 87 andalso cmd != 80 andalso not (np.mode == 2 andalso cmd >= 65 andalso cmd <= 70) { emit_error() } else {
     if en.mode != 0 andalso (cmd < 65 orelse cmd > 70) { emit_error() } else {
     if bf.mode != 0 andalso (cmd < 71 orelse cmd > 77) andalso not (bf.mode == 4 andalso cmd >= 65 andalso cmd <= 70) { emit_error() } else {
@@ -1820,7 +1573,7 @@ fn dispatch(cmd: Word) -> Word {
     if lt.mode != 0 andalso (cmd < 22 orelse cmd > 29) andalso not (cmd >= 8 andalso cmd <= 11 andalso lt.mode == 5) { layout_error() } else {
     if cs.mode != 0 andalso (cmd < 12 orelse cmd > 21) andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
     if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) andalso not (cmd == 28 andalso lt.mode == 5 andalso io.arg[0] == 0) { 0 - 296 } else {
-    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else { route(cmd) }}}}}}}}}}}}}}}
+    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else { route(cmd) }}}}}}}}}}}}}
 }
 
 loop main(cmd: Word) -> Word { yield dispatch(cmd) }

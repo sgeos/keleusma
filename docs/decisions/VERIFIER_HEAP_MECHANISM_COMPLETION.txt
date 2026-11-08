@@ -1,0 +1,78 @@
+COMPLETION CONDITION — the verifier's heap mechanism, established from source
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The tree records what the verifier actually does when accumulating a chunk's
+   heap figure across conditional arms, across loops, and across calls, with
+   each statement traceable to the place in the verifier that implements it
+   rather than inferred from output.
+
+2. It records how the module-level figure is derived from the per-chunk ones.
+
+3. The relationship between that account and the backend's per-static-site
+   assignment is stated, so a reader can see which of the two models branch
+   exclusivity and which does not.
+
+4. Where a previously reported agreement between a syntactic walk and the
+   verifier is explained by this account, the explanation is checked against the
+   modules involved rather than asserted. Where the walk disagrees with the
+   verifier, the reason is identified and confirmed on the disagreeing modules
+   specifically, or those modules are named as unexplained.
+
+5. No claim that the walk is an upper bound on the verifier's figure is
+   reinstated. That claim is known false, and the tree does not assert it.
+
+6. No quantity is introduced that divides one of these figures by another and
+   labels the result a count, unless it is accompanied by a check capable of
+   showing the result impossible.
+
+7. Any instrument used is demonstrated to discriminate rather than trusted
+   because its output looked plausible.
+
+8. Nothing in the code-generation path changed, and no remedy is presented as
+   decided.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+12. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+13. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Establishing that a planner could reproduce the verifier. That was answered
+  no, and nothing here reopens it.
+- Explaining every disagreeing module, provided the unexplained ones are named.
+- Adopting or advancing any remedy.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Asserting a mechanism from output alone when the implementing code was
+  available to read.
+- Replacing a refuted explanation with a guessed one rather than a checked one.
+- Reinstating the refuted upper-bound claim, in any wording.
+- Reintroducing a derived count without a check that can falsify it.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A suite result read from a pipeline's exit status rather than the command's.

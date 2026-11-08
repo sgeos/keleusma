@@ -1,0 +1,41 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. THE RUN HAPPENED AND ITS RESULT IS IN THE TREE
+- The corpus execution differential has been run with the optimiser enabled, and
+  the outcome is recorded: how many modules were compared, whether they agreed,
+  and what it cost.
+- The record states the machine-and-commit scope of the claim, and does not
+  assert that the emitted IR is free of undefined behaviour.
+- The whole output was captured, not a tail; any LEAK, SLOW or failure line the
+  run produced is accounted for rather than unmentioned.
+
+2. IF ANYTHING DIVERGED
+- The divergence is recorded as a finding, reduced to the smallest module that
+  reproduces it, and described as the two implementations disagreeing rather than
+  as a verdict about which is wrong.
+- Nothing is weakened, skipped or deleted to make the run green.
+
+3. THE GAP IS NO LONGER MISDESCRIBED
+- No file claims or implies that the corpus is covered under the optimiser if it
+  is not, nor that it is uncovered if the run now covers it.
+- The distinction between IR that still verifies after the middle end and IR that
+  still computes the same values is stated where a reader would otherwise conflate
+  them.
+
+4. THE ENVIRONMENT IS NOT LEFT CHANGED
+- No later measurement silently runs under different settings because of this
+  work.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations at the default optimisation setting.
+- Any guard whose pinned figure changed has the change explained in the tree.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.

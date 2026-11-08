@@ -1,0 +1,58 @@
+COMPLETION CONDITION — operand-width recovery for the last two composite sites
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE CAUSE IS NAMED, NOT JUST THE CONDITION
+   An executable check in the tree reports, for each composite construction site
+   the backend refuses for an unknown operand width, which operand is unknown
+   and which instruction produced it. The answer is produced by running code
+   over the shipped corpus rather than asserted in prose, and it names the
+   module and instruction position.
+
+2. THE DISPOSITION FOLLOWS THE EVIDENCE
+   Either the backend now recovers that width from information the module
+   already carries and the tree records the resulting coverage figures, or it
+   still refuses and the tree records why recovery would be unsound or
+   unavailable, citing what was inspected. Either outcome is acceptable. A
+   change that widens what is accepted without evidence that the width is
+   correct is not.
+
+3. NO WIDTH IS EVER GUESSED
+   If any width is recovered, the tree shows that an unknown or absent
+   description yields no width rather than a default one, and that only a
+   description that actually determines a scalar's size is used. A test
+   demonstrates that the unknown case is refused rather than assumed.
+
+4. ACCEPTANCE CHANGES ARE MEASURED, NOT INFERRED
+   If the set of accepted chunks changed, the tree records the corpus coverage
+   figures re-derived after the change, and distinguishes a chunk that now
+   lowers from one whose refusal merely moved to a different cause. If nothing
+   changed, the figures are still re-derived and stated as such.
+
+5. BEHAVIOUR IS CHECKED AGAINST THE REFERENCE, NOT ONLY AGAINST ITSELF
+   Any newly accepted chunk that can be executed is compared against the
+   reference implementation's result, so that acceptance is backed by agreement
+   rather than by the absence of a refusal.
+
+6. NO GUARD IS TRUSTED WITHOUT EVIDENCE IT CAN FIRE
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively.
+
+7. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the project's full verification gate, or of the
+   subproject step it contains, showing formatting, lint with warnings denied,
+   tests, and the documentation build all clean. Test results give both the
+   runner's exit status and the summed pass, fail and binary counts, and the two
+   agree.
+
+8. CLAIMS MATCH THE TREE
+   No document asserts a figure, a blocker, or a cause that the tree
+   contradicts. Anything corrected is visible as corrected rather than silently
+   replaced.
+
+9. WORK IS INTEGRATED AND CLEAN
+   No uncommitted changes remain and the local branch agrees with its remote.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

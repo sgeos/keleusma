@@ -333,15 +333,14 @@ fn unit_private_slots(module: &Module) -> Vec<u32> {
     let Some(layout) = module.data_layout.as_ref() else {
         return Vec::new();
     };
-    let private = layout
-        .slots
+    layout
+        .fields
         .iter()
-        .enumerate()
-        .filter(|(_, s)| s.visibility == SlotVisibility::Private);
-    private
-        .enumerate()
-        .filter(|(k, _)| matches!(layout.private_init.get(*k), None | Some(ConstValue::Unit)))
-        .filter_map(|(_, (slot, _))| u32::try_from(slot).ok())
+        .filter(|f| {
+            f.visibility == SlotVisibility::Private
+                && matches!(f.init.value(f.kind), None | Some(ConstValue::Unit))
+        })
+        .flat_map(|f| f.first_slot..f.first_slot.saturating_add(f.count))
         .collect()
 }
 
@@ -420,12 +419,34 @@ fn private_data_chunk(
         |vm| {
             let mut shared = seed_verify_depth_shared(vm, chunk);
             set(vm, &mut shared, DV_D_WIDTH, size(unit.len(), STAGE)?, STAGE)?;
+            // A data operand names a field, and the unit slots are elements, so each operand
+            // is translated to the element slots it reaches, as the reference does. An
+            // operand that names no field reaches none.
+            let layout = module.data_layout.as_ref();
+            let element = |f: u32| {
+                layout
+                    .and_then(|dl| dl.operand_slot(f))
+                    .and_then(|s| u32::try_from(s).ok())
+            };
+            let span_at = |f: u32, len: u32| {
+                layout
+                    .and_then(|dl| dl.operand_span(f, len))
+                    .and_then(|s| u32::try_from(s).ok())
+            };
             for (i, op) in chunk.ops.iter().enumerate() {
                 let (put, span, call) = match op {
-                    Op::SetData(s) => (unit.binary_search(s).map_or(0, |k| k + 1) as i64, None, 0),
+                    Op::SetData(f) => (
+                        element(*f)
+                            .and_then(|s| unit.binary_search(&s).ok())
+                            .map_or(0, |k| k + 1) as i64,
+                        None,
+                        0,
+                    ),
                     Op::Return => (-1, None, 0),
-                    Op::GetData(s) => (0, Some(unit_span(unit, *s, 1)), 0),
-                    Op::GetDataIndexed(base, len) => (0, Some(unit_span(unit, *base, *len)), 0),
+                    Op::GetData(f) => (0, element(*f).map(|s| unit_span(unit, s, 1)), 0),
+                    Op::GetDataIndexed(f, len) => {
+                        (0, span_at(*f, *len).map(|s| unit_span(unit, s, *len)), 0)
+                    }
                     Op::Call(callee, _) => (
                         0,
                         None,
@@ -658,7 +679,6 @@ fn typed_with_stage(
     )
 }
 fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
-    use crate::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
     let Some(layout) = module.data_layout.as_ref() else {
         return Ok(false);
     };
@@ -668,10 +688,8 @@ fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
     let mut shared = vec![0; vm.shared_data_bytes()];
     let mut started = false;
     for (slot, value) in [
-        (DL_N_SLOTS, layout.slots.len()),
         (DL_BUFFER, module.shared_data_bytes as usize),
         (DL_POOL, module.persistent_composite_bytes as usize),
-        (DL_A2 + DL_BATCH, layout.shared_layout.len()),
     ] {
         set(
             &vm,
@@ -681,60 +699,13 @@ fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
             "data layout",
         )?;
     }
+    set(&vm, &mut shared, DL_PHASE, 0, "data layout")?;
     command(&mut vm, &mut shared, &mut started, "data layout")?;
-    for phase in 1..=3 {
-        let len = match phase {
-            1 => layout.slots.len(),
-            2 => layout.shared_layout.len(),
-            _ => layout.private_composite_layout.len(),
-        };
-        for start in (0..len).step_by(DL_BATCH) {
-            let count = (len - start).min(DL_BATCH);
-            set(&vm, &mut shared, DL_PHASE, phase, "data layout")?;
-            set(
-                &vm,
-                &mut shared,
-                DL_COUNT,
-                size(count, "data layout")?,
-                "data layout",
-            )?;
-            for j in 0..count {
-                let (a, b, c) = match phase {
-                    1 => (
-                        i64::from(matches!(
-                            layout.slots[start + j].visibility,
-                            SlotVisibility::Shared
-                        )),
-                        0,
-                        0,
-                    ),
-                    2 => {
-                        let row = &layout.shared_layout[start + j];
-                        let extent = if row.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
-                            Some(usize::from(row.len))
-                        } else {
-                            ScalarKind::from_tag(row.kind)
-                                .map(|k| k.size_in_bytes(widths.0, widths.1, widths.2))
-                        };
-                        (
-                            i64::from(row.offset),
-                            size(extent.unwrap_or(0), "data layout")?,
-                            i64::from(extent.is_none()),
-                        )
-                    }
-                    _ => {
-                        let row = &layout.private_composite_layout[start + j];
-                        (i64::from(row.slot), i64::from(row.offset), 0)
-                    }
-                };
-                for (slot, value) in [(DL_A0 + j, a), (DL_A1 + j, b), (DL_A2 + j, c)] {
-                    set(&vm, &mut shared, slot, value, "data layout")?;
-                }
-            }
-            command(&mut vm, &mut shared, &mut started, "data layout")?;
-        }
+    for batch in dl_field_rows(layout, widths).chunks(DL_BATCH) {
+        dl_set_batch(&vm, &mut shared, batch).map_err(|e| execution("data layout", e))?;
+        command(&mut vm, &mut shared, &mut started, "data layout")?;
     }
-    set(&vm, &mut shared, DL_PHASE, 4, "data layout")?;
+    set(&vm, &mut shared, DL_PHASE, 2, "data layout")?;
     flag(
         command(&mut vm, &mut shared, &mut started, "data layout")?,
         "data layout",
@@ -937,7 +908,7 @@ mod tests {
             "private data d { u: (), n: Word }\nfn init() -> Word { d.u = (); 0 }\n\
              fn main() -> Word { let z = init(); let v = d.u; d.n + z }",
         );
-        callee.data_layout.as_mut().unwrap().private_init[1] = crate::bytecode::ConstValue::Int(0);
+        callee.data_layout.as_mut().unwrap().fields[1].init = crate::bytecode::DataInit::Zero;
         assert_eq!(private_data(&callee, stage).unwrap(), None);
         let found = "            di.ret = 1;";
         assert_eq!(source.matches(found).count(), 1);

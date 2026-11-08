@@ -1,0 +1,212 @@
+//! **EVERY HARNESS THAT BUILDS HOST BUFFERS, AND WHERE ITS SIZES COME FROM.**
+//!
+//! # Why this exists, and it is not a hypothetical
+//!
+//! A native entry takes three pointers. A harness that allocates them must size
+//! them from the contract this backend publishes —
+//! `required_persistent_capacity_for` plus `persistent_supplement_bytes` for the
+//! private region, and `host_arena_supplement_bytes` for the composite region.
+//!
+//! **Three harnesses in this package sized a region by a literal or by the slot
+//! count.** In one day:
+//!
+//! | harness | how it failed | how it was found |
+//! |---|---|---|
+//! | the corpus differential | one word per private slot | its canary fired when the composite pool landed |
+//! | the two-argument differential | `vec![0u64; 8]` | **SIGSEGV in the gate** — green alone, green under narrow |
+//! | the stage differential | one word per private slot | this sweep, before it could fail |
+//!
+//! **A literal-sized buffer fails by corrupting its neighbour**, which is not a
+//! stable observable: it depends on the allocator and on how many tests run
+//! beside it. That is why one of the three appeared only in the gate.
+//!
+//! # What this census refuses
+//!
+//! A NEW harness that calls a three-pointer entry without deriving its private
+//! size from the contract. It cannot verify that an existing harness's arithmetic
+//! is right — that is what the canaries do at run time — only that every harness
+//! asks the published functions instead of guessing.
+//!
+//! # What it cannot see
+//!
+//! - A harness that derives the figure and then uses it wrongly.
+//! - A harness that allocates buffers in a helper file this matcher does not
+//!   associate with the caller. `tests/common/mod.rs` is such a helper, and it is
+//!   listed explicitly for that reason.
+//! - Anything about the SHARED segment, whose size is the host's by contract and
+//!   which several harnesses legitimately size to a fixed scratch value.
+
+/// Test files that construct the private region for a native call.
+///
+/// Recorded so a new one announces itself rather than joining silently.
+/// ⚠ **THIS LIST WAS FIRST WRITTEN BY HAND AND WAS WRONG.** It named seven
+/// files; the matcher found fourteen, three of which asked no contract figure at
+/// all. **A hand sweep over a population is the thing this census replaces**, and
+/// its first draft demonstrated why in the same increment. The SECOND draft was
+/// also wrong — it omitted `rogue_dungen_differential.rs` and included
+/// `private_init_image.rs`, which drives through the shared helper and allocates
+/// nothing itself. Both corrections came from the matcher, not from another look.
+const BUFFER_HARNESSES: &[&str] = &[
+    // Added 2026-10-24 with the arena slot pool. Every instance buffer comes from
+    // one arena, sized by the same contract functions as the retcon harness.
+    "arena_coroutine_frames.rs",
+    "common/mod.rs",
+    "composite_stream_sequence.rs",
+    "composite_yield_witness.rs",
+    "corpus_differential.rs",
+    "declared_float_width.rs",
+    "delegated_suspension.rs",
+    "fixed_shared_scale.rs",
+    // Added 2026-09-23 with the Fixed stream differential. **This census caught it
+    // before the commit**, which is the tenth catalogue row working: a targeted run
+    // selected by binary name cannot see a census in another binary. Its driver is
+    // modelled on the float stream one and asks the same two contract functions.
+    "fixed_stream_differential.rs",
+    // Added 2026-09-17 with the float-stream asymmetry file, when its driver was
+    // PARKED -- `Op::Yield` refused a float operand, so the differential could
+    // not run. It was listed anyway, because it built the same three host buffers
+    // and sized the private region from the contract.
+    //
+    // **That judgement paid off on 2026-09-18**: the refusal lifted, the driver
+    // went live, and nothing had to be added here. Listing a harness on what it
+    // ALLOCATES rather than on whether it currently runs is why.
+    "float_stream_differential.rs",
+    "general_stream_sequence.rs",
+    // Added 2026-09-18 with the generated float streams. **This census caught it
+    // in the gate**, and the targeted runs that preceded the commit did not --
+    // they selected the new binary by name and never ran this one. Its driver is
+    // copied from `float_stream_differential.rs` and asks the same two contract
+    // functions.
+    "generated_float_streams.rs",
+    "module_differential.rs",
+    "module_source_differential.rs",
+    // Added 2026-09-23 with the narrow stream differential. **Caught by this census
+    // before the commit for the second time in a day** — and then caught AGAIN,
+    // because the list is compared as an ORDERED sequence and the first insertion
+    // was alphabetically misplaced. The sets were identical; only the order was not.
+    "narrow_stream_differential.rs",
+    "native_calls.rs",
+    // Order 4. Each sizes the private region as the persistent capacity plus
+    // `region::persistent_supplement_bytes`, the published contract.
+    "native_cost_path.rs",
+    "native_host_failure.rs",
+    "native_trap_outcomes.rs",
+    "partial_operation_census.rs",
+    "reset_region_retention.rs",
+    // Retcon uses the published private and composite bounds with adjacent
+    // sentinels. Its separate frame reservation is checked after LLVM splitting.
+    "retcon_bytecode.rs",
+    "rogue_ai_differential.rs",
+    "rogue_dungen_differential.rs",
+    "shared_composite_slot.rs",
+    "stage_differential.rs",
+    // Order 5. Sizes the private region as the persistent capacity plus
+    // `region::persistent_supplement_bytes`, the published contract.
+    "static_kind_lowering.rs",
+];
+// `shared_composite_slot.rs` joined on 2026-09-11, **the increment after this
+// census was written**, and the census refused until it was registered.
+// `fixed_shared_scale.rs` joined on 2026-09-12 the same way — **the second time
+// this census caught its own author adding a harness**, which is the whole point
+// of pinning the population rather than trusting a sweep. It
+// derives every buffer from the contract and carries three canaries, which is
+// what the registration is for: the list records that someone looked, not merely
+// that a file exists.
+
+/// How a harness may establish its private region size.
+///
+/// `module_source_differential.rs` is the one member that legitimately uses
+/// neither: its programs declare no data at all, it says so, and it still passes
+/// a valid guarded pointer.
+const CONTRACT_SOURCES: &[&str] = &[
+    "required_persistent_capacity_for",
+    "install_private_init",
+    "persistent_supplement_bytes",
+];
+
+fn harness_files() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir("tests").expect("tests directory") {
+        let path = entry.expect("entry").path();
+        let text = if path.is_dir() {
+            let inner = path.join("mod.rs");
+            match std::fs::read_to_string(&inner) {
+                Ok(t) => t,
+                Err(_) => continue,
+            }
+        } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+            std::fs::read_to_string(&path).unwrap_or_default()
+        } else {
+            continue;
+        };
+        // The three-pointer entry signature is what makes a file a host harness.
+        // **The census excludes ITSELF.** It carries the signature string in its
+        // own matcher, so it would otherwise report as a harness that builds
+        // buffers, which it does not.
+        let is_self = path
+            .file_name()
+            .map(|f| f == "host_buffer_census.rs")
+            .unwrap_or(false);
+        if !is_self && text.contains("*mut u8, *mut u8, *mut u8") {
+            let name = if path.is_dir() {
+                "common/mod.rs".to_string()
+            } else {
+                path.file_name().unwrap().to_string_lossy().into_owned()
+            };
+            out.push((name, text));
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn every_host_harness_sizes_the_private_region_from_the_contract() {
+    let files = harness_files();
+    println!("\n================ HARNESSES THAT BUILD HOST BUFFERS");
+    for (name, text) in &files {
+        let source = CONTRACT_SOURCES
+            .iter()
+            .find(|s| text.contains(**s))
+            .copied()
+            .unwrap_or("NONE");
+        println!("  {name:38} <- {source}");
+    }
+    println!("================\n");
+
+    // **NON-VACUITY.** A matcher finding nothing would pass for ever, and this
+    // file's whole subject is a population.
+    assert!(
+        files.len() >= 5,
+        "only {} host harnesses found; the matcher has gone stale",
+        files.len()
+    );
+
+    let found: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        found, BUFFER_HARNESSES,
+        "the set of harnesses that build host buffers changed. A new one must \
+         derive its private region size from the published contract — three in \
+         this package sized it by a literal or by the slot count, and one of those \
+         reached the gate as a SIGSEGV."
+    );
+
+    for (name, text) in &files {
+        // The one legitimate exception, and it states its own reason: its
+        // programs declare no data, so there is no contract figure to ask for.
+        if name == "module_source_differential.rs" {
+            assert!(
+                text.contains("no private slots"),
+                "{name} neither derives the contract figure nor says why it does \
+                 not need to"
+            );
+            continue;
+        }
+        assert!(
+            CONTRACT_SOURCES.iter().any(|s| text.contains(*s)),
+            "{name} builds host buffers without asking the published contract for \
+             the private region's size. A literal fails by corrupting its \
+             neighbour, which is not a stable observable."
+        );
+    }
+}

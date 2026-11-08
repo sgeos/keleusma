@@ -1,0 +1,74 @@
+COMPLETION CONDITION — lowering FixedDiv
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Either the backend lowers the fixed-point divide, or a document states what
+   blocked it in terms that are true of the tree as it now stands rather than
+   inherited from an earlier note.
+
+2. If it is lowered, the lowering reproduces what the virtual machine does for
+   that opcode in all three of its behaviours: the compile-time refusal when the
+   fraction count is at or beyond the word width, the unconditional fault on a
+   zero divisor, and a result that saturates at the word bounds rather than
+   wrapping.
+
+3. The lowering is exercised by something that actually reaches the opcode. If
+   no corpus module emits it, that is stated and a constructed subject is used
+   instead, with the narrower claim named rather than implied.
+
+4. Agreement with the virtual machine is demonstrated on values that include at
+   least one saturating case and at least one ordinary case, so a lowering that
+   silently returns a constant or omits the clamp would fail.
+
+5. The fault behaviour is covered: a zero divisor is shown to fault on both
+   sides, or the reason it cannot be compared is stated.
+
+6. Every census figure the change moves is re-derived against the present tree
+   rather than asserted, including the count of opcodes the backend lowers and
+   the list of named refusals. The partition those figures form still sums
+   correctly.
+
+7. Any recorded reason for refusing an opcode that is no longer true is
+   corrected where it is written, not merely superseded elsewhere.
+
+8. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+9. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   The two are not run concurrently with each other, because the workspace
+   carries a wall-clock guard that concurrent load makes fail.
+
+10. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+11. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Lowering any other refused opcode. One opcode, one set of evidence.
+- Closing the arena-bound gap or advancing its remedy.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator. Lowering the opcode does not decide either.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A lowering that drops the compile-time refusal, the fault, or the saturation,
+  in order to make something pass.
+- Claiming agreement with the virtual machine on the strength of a test that
+  never reaches the opcode.
+- Copying a neighbouring opcode's shift direction or overflow guard without
+  establishing it is correct for this one.
+- Asserting a moved census figure rather than re-deriving it.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A suite result read from a pipeline's exit status rather than the command's.

@@ -1,0 +1,44 @@
+COMPLETION CONDITION — a witness for the float spill's width
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Either the tree contains a subject that detects the loss of a float operand's
+   WIDTH across a suspension, or the tree records that no expressible subject
+   makes that width observable, with the reasoning and what was tried.
+
+2. If such a subject exists, the tree carries evidence that it actually detects
+   the loss, meaning a recorded perturbation of the spilled width that the
+   subject fails under. An argument that it ought to detect it is not evidence.
+   Whether the detection is a refusal or a differing value is stated rather than
+   blurred.
+
+3. No claim in the tree says that a subject exercises the operand spill unless
+   the yield in it is a subexpression with a computed operand beneath it. Any
+   subject carrying its values only in locals is described as such.
+
+4. The refusal of a composite body stacked beneath a yielded value is unchanged,
+   and the emitter is not modified in pursuit of this witness.
+
+5. Every float value any differential relies on, operands and replies and yielded
+   values alike, is exactly representable in a four byte float, and something in
+   the tree fails if that stops being true.
+
+6. Any harness newly allocating host buffers for a native call derives its
+   private region size from the published contract and is declared wherever the
+   tree enumerates such harnesses.
+
+7. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+8. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+9. The handoff state table agrees with the tree, figures that cannot be
+   re-derived name the commit they were measured at, and the guards that check it
+   pass.
+
+10. The working tree is clean and the branch is pushed.

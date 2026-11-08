@@ -1,0 +1,45 @@
+COMPLETION CONDITION — a driven witness per opcode
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test assigns every opcode declared by the runtime's instruction set to
+   exactly one of two columns: it has a witness driven end to end here, or it does
+   not and the tree records why. An opcode in neither column, or in both, fails
+   the test.
+
+2. The set of opcodes is derived from the runtime's own source at test time, not
+   transcribed, and a derivation yielding fewer than a recorded floor fails as a
+   broken probe.
+
+3. Every witness in the driven column is shown to compile, to actually emit the
+   opcode it is listed against, and to produce the same result under both
+   implementations. A witness that agrees without emitting its opcode fails.
+
+4. Each entry in the not-driven column carries a reason specific enough to be
+   checked or acted on later, rather than a generic placeholder.
+
+5. Where a witness is driven, it is driven through the package's existing
+   canonical driver rather than a signature named by hand in the test.
+
+6. Any constraint of that driver which shapes the table is stated in the tree.
+
+7. Where investigation showed an assumption about which construct emits an opcode
+   to be false, the tree records what the producer actually is.
+
+8. Any divergence observed while building this that turned out to originate in the
+   measuring harness rather than the backend is recorded as such, and no such case
+   is presented as a backend defect.
+
+9. Every assertion added is accompanied by evidence that it fails when the
+   condition it describes is violated.
+
+10. The recorded test population figures and the handoff's state-table figures
+    agree with the tree, and the backend gate passes in both float
+    configurations.
+
+11. Files under src/ and tests/ at the repository root carry no changes
+    originating from this line.

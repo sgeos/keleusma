@@ -65,7 +65,6 @@ mod wire_aux_decode;
 pub use wire_aux_decode::wire_decode_aux_body_via_kel;
 #[cfg(test)]
 mod wire_auxiliary;
-mod wire_run_encode;
 mod wire_stream_auxiliary;
 pub use wire_stream_auxiliary::wire_auxiliary_from_module_via_kel;
 mod wire_data_decode;
@@ -646,7 +645,7 @@ fn copy_pass_slots(m: &Module) -> CopyPassSlots {
     let find = |name: &str| {
         m.data_layout
             .as_ref()
-            .and_then(|l| l.slots.iter().position(|s| s.name == name))
+            .and_then(|l| l.slot_of(name))
             .unwrap_or_else(|| panic!("codegen.kel declares no `{name}`"))
     };
     CopyPassSlots {
@@ -981,7 +980,20 @@ struct FirstPass {
     instances: Vec<(Instantiation, i64, i64)>,
     /// The newtypes the syntactic scan recognised, Order 6.
     newtypes: Vec<Newtype>,
+    /// The scalar kind of `loop main`'s first parameter, 1 `bool`, 2 `Byte` or 3 `Word`, -1
+    /// for a parameter of another type and 0 for none, from the syntactic scan. The
+    /// reference types every `yield` in a `yield` or `loop` function by that parameter.
+    resume_main: i64,
+    /// The resume kinds the probe rounds found, `(yield token position, kind)`.
+    resumes: Vec<ResumeFact>,
+    /// Whether this pass seeds a probe round, in which `parse.kel` reports fixed resume
+    /// kinds.
+    probe: bool,
 }
+
+/// A resume value's kind fixed by an annotated `let`: the `yield`'s token position and the
+/// kind, 1 `bool`, 2 `Byte` or 3 `Word`.
+type ResumeFact = (i64, i64);
 
 /// A newtype declaration, recognised syntactically, Order 6.
 ///
@@ -1103,6 +1115,14 @@ fn seed_generics(vm: &mut dyn StageExecutor, shared: &mut [u8], first: &FirstPas
         set(h::BR_P_SPEC_KEY + r, key);
         set(h::BR_P_SPEC_CHUNK + r, *chunk);
         set(h::BR_P_SPEC_NAME + r, *name);
+    }
+    set(h::BR_P_RES_MAIN, first.resume_main);
+    set(h::BR_P_RES_PROBE, i64::from(first.probe));
+    let resumes = &first.resumes[..first.resumes.len().min(h::RESUME_FACT_CAP)];
+    set(h::BR_P_RES_COUNT, resumes.len() as i64);
+    for (r, &(at, kind)) in resumes.iter().enumerate() {
+        set(h::BR_P_RES_AT + r, at);
+        set(h::BR_P_RES_KIND + r, kind);
     }
 }
 
@@ -1243,7 +1263,10 @@ fn first_pass(src: &str) -> FirstPass {
     if plain.templates.is_empty() {
         plain
     } else {
-        first_pass_with(src, &generic_instantiations(src))
+        let (instances, resumes) = generic_instantiations(src);
+        let mut first = first_pass_with(src, &instances);
+        first.resumes = resumes;
+        first
     }
 }
 
@@ -1272,6 +1295,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let mut scan = TemplateScan::new(&scan_arena);
     let mut runs: Vec<(i64, Vec<(i64, i64)>)> = Vec::new();
     let mut run_open = false;
+    let mut entry = EntryScan::default();
     while let Some(w) = lex_next(&mut vm, &mut shared) {
         let cur = (w.rem_euclid(256), w.div_euclid(256));
         // The brace depth before this token. `depth` lags by one token below.
@@ -1282,6 +1306,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
                 _ => 0,
             };
         scan.step(token_count as i64, depth_before, cur);
+        entry.step(depth_before, cur);
         // Top-level runs for the newtype scan, bounded at eight tokens each.
         if run_open {
             let run = &mut runs.last_mut().expect("open run").1;
@@ -1329,6 +1354,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let mut names = lex_names(&vm, &shared, src);
     let values = lex_values(&vm, &shared, names.len());
     let newtypes = newtypes_from_runs(&runs, &names);
+    let resume_main = entry.resume_kind(&names);
     // A template is not a chunk. Only a name every head of which is a template is dropped, so
     // a template sharing its name with a plain head stays a chunk and the parser refuses it.
     let templates: Vec<Template> = scan
@@ -1387,6 +1413,21 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
             methods.push((h, m, idx as i64));
         }
     }
+    // The five `Text<N>` operations resolve by the receiver type `Text`, not by a trait
+    // impl, as the reference resolves them. Each takes a row under the `Text` head whose
+    // chunk is the operation's code below zero, `-1` for `len` through `-5` for `slice`,
+    // which `parse.kel` lowers in place rather than calling. A row is added only for a
+    // name the source spells, and a trait method of the same name on `Text` cannot
+    // shadow it, because the reference reaches the operation first.
+    if let Some(text) = names.iter().position(|n| n == "Text") {
+        for (code, op) in TEXT_OPERATIONS.iter().enumerate() {
+            if let Some(m) = names.iter().position(|n| n == op) {
+                let (h, m) = (text as i64, m as i64);
+                methods.retain(|&(mh, mm, _)| !(mh == h && mm == m));
+                methods.push((h, m, -(code as i64) - 1));
+            }
+        }
+    }
     let instances = instances
         .iter()
         .zip(&instance_ids)
@@ -1409,6 +1450,79 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
         methods,
         token_count,
         has_imports,
+        resume_main,
+        resumes: Vec::new(),
+        probe: false,
+    }
+}
+
+/// The syntactic scan of each top-level `loop NAME(` header for its first parameter's type,
+/// so the parser can type a resume value as the reference does, by `loop main`'s first
+/// parameter. Only `loop main()` and `loop main(p: T, ..)` or `loop main(p: T)` with `T` one
+/// identifier are read. Any other first parameter is recorded as unmodelled.
+#[derive(Default)]
+struct EntryScan {
+    /// 0 idle, 1 after `loop`, 2 after its name, 3 after `(`, 4 after the parameter name, 5
+    /// after `:`, 6 after the type name.
+    state: u8,
+    name: i64,
+    ty: i64,
+    /// Per header in source order, its name id and its first parameter, 0 none, -1
+    /// unmodelled, or the type name id plus one.
+    headers: Vec<(i64, i64)>,
+}
+
+impl EntryScan {
+    /// The most headers recorded, a bound on the scan's residency.
+    const HEADER_CAP: usize = 4096;
+
+    /// One token at brace depth `depth`.
+    fn step(&mut self, depth: i64, cur: (i64, i64)) {
+        let (next, closed) = match (self.state, cur.0) {
+            (0, 6) if depth == 0 => (1, None),
+            (1, 1) => {
+                self.name = cur.1;
+                (2, None)
+            }
+            (2, 7) => (3, None),
+            (3, 8) => (0, Some(0)),
+            (3, 1) => (4, None),
+            (4, 9) => (5, None),
+            (5, 1) => {
+                self.ty = cur.1;
+                (6, None)
+            }
+            (6, 8) | (6, 10) => (0, Some(self.ty + 1)),
+            (3..=6, _) => (0, Some(-1)),
+            _ => (0, None),
+        };
+        self.state = next;
+        if let Some(value) = closed
+            && self.headers.len() < Self::HEADER_CAP
+        {
+            self.headers.push((self.name, value));
+        }
+    }
+
+    /// The first `loop main` header's resume kind.
+    fn resume_kind(&self, names: &[String]) -> i64 {
+        let named = |id: i64| usize::try_from(id).ok().and_then(|i| names.get(i));
+        let Some(&(_, value)) = self
+            .headers
+            .iter()
+            .find(|(name, _)| named(*name).is_some_and(|n| n == "main"))
+        else {
+            return 0;
+        };
+        if value <= 0 {
+            return value;
+        }
+        match named(value - 1).map(String::as_str) {
+            Some("bool") => 1,
+            Some("Byte") => 2,
+            Some("Word") => 3,
+            _ => -1,
+        }
     }
 }
 
@@ -2242,9 +2356,10 @@ fn try_parse_functions_impl(
 /// final parse reports the unresolved call. A probe round that fails to parse stops the
 /// rounds too, and the final parse reports the failure. The result is cached per source,
 /// because several entry points derive the chunk table independently.
-fn generic_instantiations(src: &str) -> Vec<Instantiation> {
+fn generic_instantiations(src: &str) -> (Vec<Instantiation>, Vec<ResumeFact>) {
     use std::sync::Mutex;
-    static CACHE: Mutex<Vec<(String, Vec<Instantiation>)>> = Mutex::new(Vec::new());
+    type Found = (Vec<Instantiation>, Vec<ResumeFact>);
+    static CACHE: Mutex<Vec<(String, Found)>> = Mutex::new(Vec::new());
     if let Some((_, found)) = CACHE
         .lock()
         .expect("instantiation cache")
@@ -2255,16 +2370,25 @@ fn generic_instantiations(src: &str) -> Vec<Instantiation> {
     }
     const ROUNDS: usize = 8;
     let mut instances: Vec<Instantiation> = Vec::new();
+    // The resume kinds found so far. A round's kinds change the keys of the calls on those
+    // resume values, so a new one requires another round, as a new request does.
+    let mut resumes: Vec<ResumeFact> = Vec::new();
     for _ in 0..ROUNDS {
-        let first = first_pass_with(src, &instances);
+        let mut first = first_pass_with(src, &instances);
+        first.resumes = resumes.clone();
+        first.probe = true;
         let ntp: Vec<usize> = first
             .templates
             .iter()
             .map(|t| t.type_params.len())
             .collect();
         let mut requested: Vec<Instantiation> = Vec::new();
+        let mut fixed: Vec<ResumeFact> = Vec::new();
         let probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             try_parse_functions_impl_with(src, true, first, &mut |_, _| {}, &mut |code, val, _| {
+                if code == crate::selfhost_host::PARSE_RESUME_FACT_TAG {
+                    fixed.push((val / 16, val % 16));
+                }
                 if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
                     let template = (val % 16) as usize;
                     let mut key = val / 16;
@@ -2283,6 +2407,26 @@ fn generic_instantiations(src: &str) -> Vec<Instantiation> {
             .into_iter()
             .filter(|r| !instances.contains(r))
             .collect();
+        // The parser reports only positions it was not seeded with, the first annotation of
+        // each in source order, so the first report of a position is kept.
+        let mut fresh_resume = false;
+        for (at, kind) in fixed {
+            if !resumes.iter().any(|&(a, _)| a == at)
+                && resumes.len() < crate::selfhost_host::RESUME_FACT_CAP
+            {
+                resumes.push((at, kind));
+                fresh_resume = true;
+            }
+        }
+        // The requests of a round were keyed by the resume kinds it was seeded with, so a new
+        // kind discards them and the instantiations found so far, which the next round
+        // requests again under the new kinds. A stale one would otherwise remain a chunk the
+        // reference does not have. Every kind comes from a non-generic body, which the first
+        // round already parses whole, so this costs one round.
+        if fresh_resume {
+            instances.clear();
+            continue;
+        }
         if !matches!(probe, Ok(Ok(_))) && fresh.is_empty() {
             break;
         }
@@ -2299,8 +2443,8 @@ fn generic_instantiations(src: &str) -> Vec<Instantiation> {
     if cache.len() >= 16 {
         cache.remove(0);
     }
-    cache.push((src.to_string(), instances.clone()));
-    instances
+    cache.push((src.to_string(), (instances.clone(), resumes.clone())));
+    (instances, resumes)
 }
 
 fn try_parse_functions_impl_with(
@@ -2718,8 +2862,11 @@ fn try_parse_functions_impl_with(
                 );
                 return ControlFlow::Continue(());
             }
-            // A request for an instantiation, consumed by the probe rounds alone.
-            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
+            // A request for an instantiation or a fixed resume kind, consumed by the probe
+            // rounds alone.
+            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG
+                || code == crate::selfhost_host::PARSE_RESUME_FACT_TAG
+            {
                 return ControlFlow::Continue(());
             }
             if code == crate::selfhost_host::PARSE_DATA_FIELD_BASE_TAG {
@@ -2736,7 +2883,12 @@ fn try_parse_functions_impl_with(
                 }
                 return ControlFlow::Continue(());
             }
-            if (in_body || in_guard) && matches!(code, 94..=96 | 99..=101 | 103) {
+            if (in_body || in_guard)
+                && matches!(
+                    code,
+                    94..=96 | 99..=101 | 103 | crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG
+                )
+            {
                 use crate::selfhost_host::{
                     PARSE_ANNOTATION_ARRAY_TAG, PARSE_ANNOTATION_END_TAG,
                     PARSE_ANNOTATION_START_TAG,
@@ -3054,7 +3206,8 @@ fn try_parse_functions_impl_with(
                     }
                     // A builtin generic's argument follows its head and is routed the same way.
                     crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
-                    | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+                    | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG
+                    | crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG => {
                         let f = open_decl(&mut cur, code, val);
                         if !f.return_type_records.is_empty() {
                             f.return_type_records.push((code, val));
@@ -3177,9 +3330,13 @@ fn try_parse_functions_impl_with(
 /// | 0 | `Int` | the integer itself |
 /// | 1 | `StaticStr` | the **lexer intern id**, resolved here through `names` |
 /// | 2 | `Bool` | 0 or 1 |
+/// | 3 | `Float` | the lexer intern id of the literal's text |
+/// | 4 | `Tuple(Int, Array)` | a `Text<N>` literal cast, the intern id below 65536 and `N` above it |
+/// | 5 | `Byte` | a `Byte`-suffixed literal's value |
 ///
-/// A `StaticStr` is the only entry needing `names`, and it is why this cannot be a plain
-/// `From` impl on the pair.
+/// The string, float and text entries need `names`, which is why this cannot be a plain
+/// `From` impl on the pair. It is public so that the test drivers which copy the pipeline
+/// convert the pool with this one definition rather than a fifth copy.
 ///
 /// # Failure modes
 ///
@@ -3187,7 +3344,7 @@ fn try_parse_functions_impl_with(
 /// producing a silently wrong constant. Both are stage/host protocol violations: neither is
 /// reachable from a user program, and a wrong constant would be a silent miscompile, which is
 /// the class this function exists to close.
-fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
+pub fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
     pool.iter()
         .map(|&(v, tag)| match tag {
             0 => ConstValue::Int(v),
@@ -3212,12 +3369,66 @@ fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
                         .unwrap_or_else(|_| panic!("float literal `{text}` is not an f64")),
                 )
             }
+            4 => text_cast_constant(v, names),
+            5 => ConstValue::Byte(
+                u8::try_from(v).expect("codegen.kel interned a Byte literal outside 0..=255"),
+            ),
             other => panic!(
                 "codegen.kel emitted constant-pool tag {other}, which this host does not \
                  know. A new tag needs a `ConstValue` mapping here, not a default"
             ),
         })
         .collect()
+}
+
+/// The Cast node argument at and above which `parse.kel` marks a literal cast to
+/// `Text<N>`, the capacity being the argument less this base. It matches
+/// `text_cast_base` in `parse.kel` and `codegen.kel`.
+const TEXT_CAST_BASE: i64 = 1 << 40;
+
+/// The bundled `Text<N>` operations in the order of their codes, `len` code zero.
+/// `parse.kel` and `codegen.kel` number them the same way.
+const TEXT_OPERATIONS: [&str; 5] = ["len", "capacity", "concat", "eq", "slice"];
+
+/// The largest `Text<N>` capacity the stages lower, `text_cap_max` in `parse.kel`.
+const TEXT_CAPACITY_MAX: i64 = 65527;
+
+/// The flat body of a literal cast `"..." as Text<N>`, pool tag 4.
+///
+/// `codegen.kel` packs the string literal's lexer intern id below 65536 and the capacity
+/// `N` above it. The body is the reference's `ConstValue::Tuple(Int(length),
+/// Array([Byte; N]))`, the literal's escaped bytes followed by zero bytes up to `N`,
+/// as `compile_text_literal_cast` in the reference builds it.
+///
+/// # Failure modes
+///
+/// A negative packed value means the cast operand was not a string literal, and a literal
+/// longer than its capacity cannot be represented. The reference refuses both programs
+/// before this runs, so both panic by name here rather than build a body the reference
+/// never would, and the shipping entry turns the panic into a refusal.
+fn text_cast_constant(packed: i64, names: &[String]) -> ConstValue {
+    assert!(
+        packed >= 0,
+        "a `Text<N>` cast whose operand is not a string literal is outside the self-hosted subset"
+    );
+    let id = usize::try_from(packed % 65536).expect("text cast intern id");
+    let capacity = usize::try_from(packed / 65536).expect("text cast capacity");
+    let raw = names.get(id).unwrap_or_else(|| {
+        panic!("codegen.kel interned text cast id {id}, outside the lexer name table")
+    });
+    let text = unescape_string(raw);
+    let bytes = text.as_bytes();
+    assert!(
+        bytes.len() <= capacity,
+        "a string literal of {} bytes does not fit in Text<{capacity}>",
+        bytes.len()
+    );
+    let mut content: Vec<ConstValue> = bytes.iter().map(|b| ConstValue::Byte(*b)).collect();
+    content.resize(capacity, ConstValue::Byte(0));
+    ConstValue::Tuple(vec![
+        ConstValue::Int(i64::try_from(bytes.len()).expect("text cast length")),
+        ConstValue::Array(content),
+    ])
 }
 
 /// Resolve the escape sequences the reference compiler bakes into a `StaticStr`.
@@ -3554,6 +3765,9 @@ fn declared_type_operand(
             // an argument mismatch. This is recorded as a residual in the Order 6 plan.
             crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
             | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {}
+            // A `Text<N>` keeps its `Text` head in the same way, and the reference
+            // cross-check refuses a capacity mismatch.
+            crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG => {}
             _ => panic!("unknown source type record {kind}"),
         }
     }
@@ -3594,7 +3808,11 @@ fn source_data_type_ranges(
         .zip(bases)
         .map(|((type_id, count), &base)| {
             assert!(count >= 0 && base >= 0, "negative data field range");
-            let end = base.checked_add(count).expect("data slot range overflow");
+            // A data operand names a field, so the range a read's operand is looked up in is
+            // the field's own index alone. The count is still read, to keep the declaration
+            // walk aligned with the records.
+            let _ = count;
+            let end = base.checked_add(1).expect("data field index overflow");
             let tag = scalar_tag_of_type_name(
                 type_id
                     .and_then(|id| names.get(id as usize))
@@ -4656,7 +4874,11 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
         } else if scalar_results && matches!(node.kind, 10 | 65 | 66) {
             row_of_node.insert(at as i64, rows.len());
             rows.push((12, operand(node.lhs), nothing.clone()));
-        } else if scalar_results && node.kind == 26 {
+        } else if scalar_results && node.kind == 26 && node.arg < TEXT_CAST_BASE {
+            // A `Text<N>` literal cast, whose argument is at or above the base, is not a
+            // scalar conversion. It contributes no row, so its type stays unknown to the
+            // stage, as the `Text` head of its annotation does, and the reference
+            // cross-check is what refuses a wrong operand or capacity.
             row_of_node.insert(at as i64, rows.len());
             let target = if node.arg == 1 { 3 } else { 1 };
             rows.push((15, operand(node.lhs), (target, 0, String::new())));
@@ -5595,30 +5817,16 @@ fn analyze_stack_effect(op: &crate::bytecode::Op) -> (i64, i64) {
 
 /// The per-op arena-heap bytes analyze.kel accounts for `op`: the op's own construction
 /// allocation (`Op::heap_alloc`) plus the copy-out a `GetData`/`GetDataIndexed` performs when
-/// it reads a flat-composite shared slot (`shared_composite_copyout_bytes`). `shared_layout`
-/// is empty for the shallow empty-resolver form (copy-out zero, matching
+/// it reads a flat-composite shared slot (`shared_composite_copyout_bytes`). `layout`
+/// is `None` for the shallow empty-resolver form (copy-out zero, matching
 /// `wcmu_stream_iteration`) and the module's real layout for the transitive validator.
 fn analyze_op_heap(
     op: &crate::bytecode::Op,
     chunk: &crate::bytecode::Chunk,
-    shared_layout: &[crate::bytecode::SharedSlotLayout],
+    layout: Option<&crate::bytecode::DataLayout>,
 ) -> i64 {
-    use crate::bytecode::{Op, SHARED_SLOT_COMPOSITE_FLAG};
-    let slot_copyout = |slot: usize| -> i64 {
-        shared_layout
-            .get(slot)
-            .filter(|e| e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0)
-            .map_or(0, |e| e.len as i64)
-    };
-    let copyout = match op {
-        Op::GetData(s) => slot_copyout(*s as usize),
-        Op::GetDataIndexed(base, len) => (0..*len as usize)
-            .map(|i| slot_copyout(*base as usize + i))
-            .max()
-            .unwrap_or(0),
-        _ => 0,
-    };
-    op.heap_alloc(chunk) as i64 + copyout
+    op.heap_alloc(chunk) as i64
+        + i64::from(crate::verify::shared_composite_copyout_bytes(op, layout))
 }
 
 /// Run analyze.kel over one chunk against `arena_capacity`, returning `(wcet, stack_bytes,
@@ -5626,13 +5834,13 @@ fn analyze_op_heap(
 /// the whole op range for a Func/Reentrant chunk, matching `compute_chunk_wcmu`. `chunk_wcmu`
 /// resolves each `Op::Call` to the callee chunk's already-computed `(stack_bytes, heap_bytes)`
 /// (indexed by chunk index); pass `&[]` for the shallow empty-resolver form, where every
-/// callee folds in as zero. `shared_layout` sizes composite-shared-read copy-out (empty for
+/// callee folds in as zero. `layout` sizes composite-shared-read copy-out (`None` for
 /// the shallow form).
 fn run_analyze_kel(
     chunk: &crate::bytecode::Chunk,
     arena_capacity: i64,
     chunk_wcmu: &[(i64, i64)],
-    shared_layout: &[crate::bytecode::SharedSlotLayout],
+    layout: Option<&crate::bytecode::DataLayout>,
 ) -> (i64, i64, i64, bool, bool) {
     use crate::bytecode::{BlockType, Op};
     let vsb = crate::bytecode::VALUE_SLOT_SIZE_BYTES as i64;
@@ -5688,7 +5896,7 @@ fn run_analyze_kel(
             &vm,
             &mut shared,
             WA_HEAP + i,
-            analyze_op_heap(op, chunk, shared_layout),
+            analyze_op_heap(op, chunk, layout),
         );
         set(&vm, &mut shared, WA_OPK + i, opk);
         set(&vm, &mut shared, WA_SLOT + i, slot);
@@ -5728,7 +5936,7 @@ fn run_analyze_kel(
 /// per-iteration `(wcet, stack_bytes, heap_bytes, reject, valid)`. A thin reporting wrapper
 /// over `run_analyze_kel` with the empty resolver and empty layout.
 pub fn analyze_stream_chunk(chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, bool, bool) {
-    run_analyze_kel(chunk, i64::MAX, &[], &[])
+    run_analyze_kel(chunk, i64::MAX, &[], None)
 }
 
 // --- Self-hosted structural verifier (verify_structural.kel) ---------------------------------
@@ -5778,13 +5986,14 @@ pub fn verify_structural_kel_module() -> Module {
         .clone()
 }
 
-/// The number of declared shared/private data slots (`data_layout.slots.len()`), or 0 when the
-/// module declares no data layout, matching the reference `GetData`/`SetData` bound.
+/// The number of declared data fields, or 0 when the module declares no data layout, matching
+/// the reference `GetData`/`SetData` bound. A data operand names a field, option B of the array
+/// wire-slot design.
 fn data_layout_slot_count(module: &Module) -> i64 {
     module
         .data_layout
         .as_ref()
-        .map_or(0, |dl| dl.slots.len() as i64)
+        .map_or(0, |dl| dl.field_count() as i64)
 }
 
 /// Classify an op's operand-bounds obligation as `(opb, o1, o2, o3)`, mirroring the reference's
@@ -5797,7 +6006,16 @@ fn structural_opbounds(op: &crate::bytecode::Op, module: &Module) -> (i64, i64, 
     use crate::value_layout::CompositeKind;
     match op {
         Op::GetData(s) | Op::SetData(s) => (1, *s as i64, 0, 0),
-        Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => (2, *b as i64, *l as i64, 0),
+        // A span lies within the one field its base names, so `o3` carries that field's element
+        // count, zero when the base names no field, and the stage bounds the length by it.
+        Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => {
+            let count = module
+                .data_layout
+                .as_ref()
+                .and_then(|dl| dl.fields.get(*b as usize))
+                .map_or(0, |f| i64::from(f.count));
+            (2, *b as i64, *l as i64, count)
+        }
         Op::Const(i) | Op::IsStruct(i) => (3, *i as i64, 0, 0),
         Op::GetField(StructField::Boxed { name_const }) => (3, *name_const as i64, 0, 0),
         Op::IsEnum(e, v, d) => (4, *e as i64, *v as i64, *d as i64),
@@ -6349,6 +6567,9 @@ const TV_OUT_REJECT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 
 const TV_CP_FIRST: usize = TV_OUT_REJECT + 1;
 const TV_CP_COUNT: usize = TV_CP_FIRST + crate::selfhost_host::VERIFY_OP_CAP;
 const TV_CP_CAPACITY: usize = 12288;
+/// The chunk's local count, after `out_cause`, which sets the stage's copy of the reference's
+/// loop fixpoint cap, `local_count + 2` passes.
+const TV_LOCAL_COUNT: usize = TV_CP_COUNT + crate::selfhost_host::VERIFY_OP_CAP + 1;
 
 /// The compiled `verify_typed.kel` stage module, cached after the first build.
 ///
@@ -6416,9 +6637,10 @@ fn typed_desc(
         Op::GetLocal(i) => (3, *i as i64, 0, 0),
         Op::SetLocal(i) => (4, *i as i64, 0, 0),
         Op::Yield => (11, 0, 0, 0),
-        Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => {
-            (12, 0, 0, 0)
-        }
+        // A native carries the word width in `ta`, the size of the error flag a reified call
+        // pushes above its value.
+        Op::Call(_, _) => (12, 0, 0, 0),
+        Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => (12, wb as i64, 0, 0),
         // `tc` 1 marks a static string, which the reference types as a `Text` scalar, so the
         // stage can record where a body holds text.
         Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb, ab) {
@@ -6605,6 +6827,12 @@ fn seed_typed_shared(
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
+    set(
+        vm,
+        &mut shared,
+        TV_LOCAL_COUNT,
+        i64::from(chunk.local_count),
+    );
     // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
     if let Some(sig) = sig {
         for (i, param) in sig.params.iter().enumerate().take(256) {
@@ -6733,34 +6961,28 @@ pub fn typed_reject_module_via_kel(module: &Module) -> bool {
 
 // --- Self-hosted A.2.1 data-layout validation, slice 2c (verify_datalayout.kel) --------------
 //
-// verify_datalayout.kel reproduces the reference `validate_data_layout` (B6/C4): the shared-slot
-// reconcile (contiguity/count), the shared-slot buffer bounds, and the private-composite
-// monotonicity. It is BATCHED so it scales to the self-hosted stages, whose layouts expand to
-// tens of thousands of slots (one per array element). The driver feeds each table 1024 entries at
-// a time by resuming the coroutine, threading the running state through the shared block `dl`:
-// scalars `phase` (0), `count` (1), `n_slots` (2), `buffer` (3), `pool` (4); the running state
-// `io_prefix` (5) `io_total` `io_still` `io_prev_slot` `io_prev_off` `io_first` `io_bad` (11); and
-// the batch arrays `a0` (12..), `a1`, `a2` (each 1024 wide), reused per phase. After the last
-// batch the driver reads `io_bad`/`io_prefix`/`io_total` and finalises the contiguity/count
-// comparison (`prefix == total`, `n_shared == total`).
+// verify_datalayout.kel reproduces the reference `validate_data_layout` (B6/C4) over the field
+// records of Encoding F: the tiling of the slot space, the shared prefix, the shared buffer
+// bounds, the initialiser forms and the private composite placements. It is BATCHED: the driver
+// feeds the fields 256 at a time by resuming the coroutine, threading the running state through
+// the shared block `dl`: scalars `phase` (0), `count` (1), `buffer` (2), `pool` (3); the running
+// state `io_next` (4) `io_private` `io_pool_end` `io_bad` (7); and one 256-wide array per field
+// column from slot 8. Phase 0 resets the running state, phase 1 checks one batch, and phase 2
+// returns the verdict.
+//
+// One entry per FIELD rather than one per element, so a stage's layout is a handful of batches
+// at most however large its arrays are. Before Encoding F the driver fed one entry per element,
+// which on `lexer` alone was hundreds of thousands of entries.
 
 const DL_PHASE: usize = 0;
 const DL_COUNT: usize = 1;
-const DL_N_SLOTS: usize = 2;
-const DL_BUFFER: usize = 3;
-const DL_POOL: usize = 4;
-const DL_IO_PREFIX: usize = 5;
-const DL_IO_TOTAL: usize = 6;
-const DL_IO_STILL: usize = 7;
-const DL_IO_PREV_SLOT: usize = 8;
-const DL_IO_PREV_OFF: usize = 9;
-const DL_IO_FIRST: usize = 10;
-const DL_IO_BAD: usize = 11;
-const DL_A0: usize = 12;
-const DL_A1: usize = 12 + 1024;
-const DL_A2: usize = 12 + 1024 * 2;
-
-const DL_BATCH: usize = 1024;
+const DL_BUFFER: usize = 2;
+const DL_POOL: usize = 3;
+const DL_BATCH: usize = 256;
+/// First slot of the column arrays, which follow the eight scalars.
+const DL_COLUMNS_BASE: usize = 8;
+/// Columns per field row, in the order of the `dl` arrays.
+const DL_COLUMNS: usize = 10;
 
 fn verify_datalayout_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -6769,44 +6991,92 @@ fn verify_datalayout_kel_module() -> Module {
         .clone()
 }
 
-/// Run verify_datalayout.kel over a module's data layout, returning whether it rejects a B6
-/// shared-slot reconcile/bounds or a C4 private-composite monotonicity violation (the reference
-/// `validate_data_layout`). A module with no data layout is accepted. The three tables are fed one
-/// 1024-entry batch at a time (resuming the coroutine, the running state persisting in the shared
-/// buffer), so it scales to the self-hosted stages' tens-of-thousands-of-slot layouts.
-pub fn dl_reject_module_via_kel(module: &Module) -> bool {
-    use crate::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
+/// One row per data field for verify_datalayout.kel, in the column order of its `dl` arrays:
+/// shared flag, first slot, count, offset (-1 when absent), stride, element extent, element body
+/// length, composite flag, initialiser form, and whether the kind has a zero.
+///
+/// The extent is the composite body length or the scalar size at the module widths, -1 for an
+/// undecodable kind, and the zero flag comes from `crate::bytecode::data_kind_zero`, the one
+/// kind-to-zero table. Both are transport, the facts the reference reads off the kind, and every
+/// verdict over them is the stage's.
+fn dl_field_rows(
+    layout: &crate::bytecode::DataLayout,
+    widths: (usize, usize, usize),
+) -> Vec<[i64; DL_COLUMNS]> {
+    use crate::bytecode::{DataInit, SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility, data_kind_zero};
     use crate::value_layout::ScalarKind;
+    layout
+        .fields
+        .iter()
+        .map(|f| {
+            let composite = f.kind & SHARED_SLOT_COMPOSITE_FLAG != 0;
+            let extent = if composite {
+                i64::from(f.elem_len)
+            } else {
+                ScalarKind::from_tag(f.kind)
+                    .map_or(-1, |k| k.size_in_bytes(widths.0, widths.1, widths.2) as i64)
+            };
+            [
+                i64::from(f.visibility == SlotVisibility::Shared),
+                i64::from(f.first_slot),
+                i64::from(f.count),
+                f.offset.map_or(-1, i64::from),
+                i64::from(f.stride),
+                extent,
+                i64::from(f.elem_len),
+                i64::from(composite),
+                match f.init {
+                    DataInit::Zero => 0,
+                    DataInit::Unit => 1,
+                    DataInit::Const(_) => 2,
+                },
+                i64::from(data_kind_zero(f.kind).is_some()),
+            ]
+        })
+        .collect()
+}
+
+/// Write one batch of field rows into verify_datalayout.kel's column arrays, with its count.
+fn dl_set_batch(
+    vm: &dyn StageExecutor,
+    shared: &mut [u8],
+    rows: &[[i64; DL_COLUMNS]],
+) -> Result<(), crate::vm::VmError> {
+    vm.set_shared(shared, DL_PHASE, Value::Int(1))?;
+    vm.set_shared(shared, DL_COUNT, Value::Int(rows.len() as i64))?;
+    for (j, row) in rows.iter().enumerate() {
+        for (column, &value) in row.iter().enumerate() {
+            vm.set_shared(
+                shared,
+                DL_COLUMNS_BASE + column * DL_BATCH + j,
+                Value::Int(value),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Run verify_datalayout.kel over a module's data layout, returning whether it rejects a tiling,
+/// B6 prefix or bounds, initialiser, or C4 placement violation (the reference
+/// `validate_data_layout`). A module with no data layout is accepted. The fields are fed one
+/// 256-entry batch at a time, resuming the coroutine, the running state persisting in the shared
+/// buffer.
+pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     let Some(layout) = module.data_layout.as_ref() else {
         return false;
     };
-    let n_slots = layout.slots.len();
-    let n_shared = layout.shared_layout.len();
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
     let ab = (1usize << module.addr_bits_log2) / 8;
     let m = verify_datalayout_kel_module();
     let need = required_persistent_capacity_for(&m);
-    // The working region must hold verify_datalayout.kel's per-batch frames while it walks a stage's
-    // data layout; the self-hosted stages expand a large shared byte array to per-element slots (the
-    // lexer `src.bytes` buffer alone is hundreds of thousands of entries), so give a generous margin
-    // over the 64 KB default. This is a host-side test-harness arena, not a WCMU claim.
-    let mut arena = Arena::with_capacity(4 * 1024 * 1024 + need);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = stage_vm(m, &arena).expect("verify verify_datalayout.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
-    // Running state and the per-run scalars, initialised once (they persist across resumes).
-    set(&vm, &mut shared, DL_IO_PREFIX, 0);
-    set(&vm, &mut shared, DL_IO_TOTAL, 0);
-    set(&vm, &mut shared, DL_IO_STILL, 1);
-    set(&vm, &mut shared, DL_IO_PREV_SLOT, 0);
-    set(&vm, &mut shared, DL_IO_PREV_OFF, 0);
-    set(&vm, &mut shared, DL_IO_FIRST, 1);
-    set(&vm, &mut shared, DL_IO_BAD, 0);
-    set(&vm, &mut shared, DL_N_SLOTS, n_slots as i64);
     set(&vm, &mut shared, DL_BUFFER, module.shared_data_bytes as i64);
     set(
         &vm,
@@ -6815,70 +7085,26 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
         module.persistent_composite_bytes as i64,
     );
 
-    // Process one prepared batch (`phase`/`count`/arrays already set). Each batch is a fresh
-    // `call_with_shared` -- it re-enters `loop main` from the entry, runs `run()` once, and yields
-    // -- so the batch's `run()` always executes (a resume can land on the Stream/Reset cycle
-    // boundary, which does not run the body). The running state `io_*` persists in the shared
-    // buffer across calls because the buffer is retained, not re-zeroed.
+    // Each batch is a fresh `call_with_shared` -- it re-enters `loop main` from the entry, runs
+    // `run()` once, and yields -- so the batch's `run()` always executes (a resume can land on the
+    // Stream/Reset cycle boundary, which does not run the body). The running state `io_*` persists
+    // in the shared buffer across calls because the buffer is retained, not re-zeroed.
     let run_batch = |vm: &mut dyn StageExecutor, shared: &mut [u8]| match vm
         .call_with_shared(shared, &[Value::Int(0)])
         .expect("call verify_datalayout.kel")
     {
-        VmState::Yielded(Value::Int(_)) => {}
+        VmState::Yielded(Value::Int(v)) => v,
         other => panic!("unexpected verify_datalayout.kel state: {other:?}"),
     };
 
-    // Phase 1: the slot visibilities (shared prefix/total counts).
-    for batch in layout.slots.chunks(DL_BATCH) {
-        set(&vm, &mut shared, DL_PHASE, 1);
-        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
-        for (j, s) in batch.iter().enumerate() {
-            let is_shared = i64::from(matches!(s.visibility, SlotVisibility::Shared));
-            set(&vm, &mut shared, DL_A0 + j, is_shared);
-        }
+    set(&vm, &mut shared, DL_PHASE, 0);
+    run_batch(&mut vm, &mut shared);
+    for batch in dl_field_rows(layout, (wb, fb, ab)).chunks(DL_BATCH) {
+        dl_set_batch(&vm, &mut shared, batch).expect("verify_datalayout.kel batch");
         run_batch(&mut vm, &mut shared);
     }
-    // Phase 2: the shared-slot layout (offset, precomputed size, undecodable flag).
-    for batch in layout.shared_layout.chunks(DL_BATCH) {
-        set(&vm, &mut shared, DL_PHASE, 2);
-        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
-        for (j, sl) in batch.iter().enumerate() {
-            set(&vm, &mut shared, DL_A0 + j, sl.offset as i64);
-            let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
-                (sl.len as i64, 0)
-            } else {
-                match ScalarKind::from_tag(sl.kind) {
-                    Some(k) => (k.size_in_bytes(wb, fb, ab) as i64, 0),
-                    None => (0, 1),
-                }
-            };
-            set(&vm, &mut shared, DL_A1 + j, size);
-            set(&vm, &mut shared, DL_A2 + j, bad);
-        }
-        run_batch(&mut vm, &mut shared);
-    }
-    // Phase 3: the private-composite layout (slot, pool offset).
-    for batch in layout.private_composite_layout.chunks(DL_BATCH) {
-        set(&vm, &mut shared, DL_PHASE, 3);
-        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
-        for (j, e) in batch.iter().enumerate() {
-            set(&vm, &mut shared, DL_A0 + j, e.slot as i64);
-            set(&vm, &mut shared, DL_A1 + j, e.offset as i64);
-        }
-        run_batch(&mut vm, &mut shared);
-    }
-
-    let rd = |slot: usize| -> i64 {
-        match vm.get_shared(&shared, slot).unwrap() {
-            Value::Int(n) => n,
-            o => panic!("expected Int at {slot}, got {o:?}"),
-        }
-    };
-    // Reject on any per-entry violation, or the B6 contiguity/count mismatch. When there were no
-    // batches at all (an empty layout), the running state is its init value and this is `false`.
-    rd(DL_IO_BAD) != 0
-        || rd(DL_IO_PREFIX) != rd(DL_IO_TOTAL)
-        || (n_shared as i64) != rd(DL_IO_TOTAL)
+    set(&vm, &mut shared, DL_PHASE, 2);
+    run_batch(&mut vm, &mut shared) != 0
 }
 
 /// Keleusma-computed text-allocation and boundary summary for one chunk.
@@ -7080,14 +7306,14 @@ fn self_hosted_zero(
 pub fn schema_hash_from_pipeline(src: &str) -> u32 {
     let (_, names, data_records, _, _, struct_records) = parse_functions_fused_with_natives(src);
     let dl = assemble_data_layout(&data_records, &struct_records, &names);
-    let layout = (!dl.slots.is_empty()).then_some(dl);
+    let layout = (!dl.fields.is_empty()).then_some(dl);
     crate::bytecode::compute_typed_schema_hash(
         layout.as_ref(),
         &schema_slot_tokens(&data_records, &struct_records, &names),
     )
 }
 
-/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
+/// Each data field's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
 /// [`assemble_data_slots`], from parse.kel's data records and its struct records.
 ///
 /// A data record names each field's type, 6, and an array's element count, 8. A struct record
@@ -7145,13 +7371,15 @@ fn schema_slot_tokens(
             out.push('}');
         }
     }
-    // Data fields as (visibility, type id, slot count), in declaration order.
-    let mut fields: Vec<(i64, i64, i64)> = Vec::new();
+    // Data fields as (visibility, type id, element count when an array), in declaration
+    // order. The count is `None` for a field with no array record, so `[Word; 1]` and `Word`
+    // keep distinct tokens, as the reference's do.
+    let mut fields: Vec<(i64, i64, Option<i64>)> = Vec::new();
     let mut vis = 0;
     for &(code, val) in data_records {
         match code {
             9 => vis = val % 4,
-            4 => fields.push((vis, -1, 1)),
+            4 => fields.push((vis, -1, None)),
             6 => {
                 if let Some(f) = fields.last_mut() {
                     f.1 = val;
@@ -7159,163 +7387,57 @@ fn schema_slot_tokens(
             }
             8 => {
                 if let Some(f) = fields.last_mut() {
-                    f.2 = val;
+                    f.2 = Some(val);
                 }
             }
             _ => {}
         }
     }
+    // One token per FIELD, the form H2: an array field renders as `[leaf;count]` with the
+    // product of its dimensions, which is the count parse.kel's array record carries.
     let mut tokens = Vec::new();
     for pass in [0i64, 1i64] {
         for &(_, ty, count) in fields.iter().filter(|f| f.0 == pass) {
             let mut token = String::new();
             render(ty, 0, &name_of, &struct_id, &structs, &mut token);
-            for _ in 0..count.max(1) {
-                tokens.push(token.clone());
-            }
+            tokens.push(match count {
+                Some(n) => format!("[{token};{n}]"),
+                None => token,
+            });
         }
     }
     tokens
 }
 
-/// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
-/// interned block, field, and (unused here) type ids through the name table.
-fn assemble_data_slots(
-    data_records: &[(i64, i64)],
-    names: &[String],
-) -> Vec<crate::bytecode::DataSlot> {
-    use crate::bytecode::{DataSlot, SlotVisibility};
-    struct Blk {
-        name_id: i64,
-        vis: i64,
-        fields: Vec<(i64, i64)>, // (field name id, element count)
+/// The shared element kind tag and byte size of a shared field's declared type. The stage data
+/// fields are all `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or
+/// `Byte` (tag 2, one byte), and each is a scalar.
+fn shared_scalar_of(type_name: &str) -> (u8, u32) {
+    match type_name {
+        "Word" => (3, 8),
+        "Byte" => (2, 1),
+        other => panic!("unhandled shared field type `{other}`"),
     }
-    let mut blocks: Vec<Blk> = Vec::new();
-    for &(code, val) in data_records {
-        match code {
-            9 => blocks.push(Blk {
-                name_id: val / 4,
-                vis: val % 4,
-                fields: Vec::new(),
-            }),
-            4 => blocks.last_mut().unwrap().fields.push((val, 1)),
-            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
-            // 6 (PTYPE) is not needed for the slot names; 5 (END) is a boundary.
-            _ => {}
-        }
-    }
-    let mut slots = Vec::new();
-    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
-    for pass_vis in [0i64, 1i64] {
-        let visibility = if pass_vis == 0 {
-            SlotVisibility::Shared
-        } else {
-            SlotVisibility::Private
-        };
-        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
-            let bname = &names[b.name_id as usize];
-            for &(fid, count) in &b.fields {
-                let fname = &names[fid as usize];
-                if count == 1 {
-                    slots.push(DataSlot {
-                        name: format!("{bname}.{fname}"),
-                        visibility,
-                    });
-                } else {
-                    // ONE NAME FOR THE WHOLE ARRAY, mirroring `compiler.rs`.
-                    //
-                    // This driver builds the data layout from the self-hosted
-                    // parser's data-block records, and its output is compared
-                    // against the reference compiler's byte for byte -- including
-                    // `schema_hash`, which covers the layout. A distinct
-                    // `field[k]` per element defeated the name interner's dedup
-                    // and made the string pool scale with the element count; the
-                    // reference stopped doing it, so this must too or the two
-                    // compilers disagree.
-                    let array_name = format!("{bname}.{fname}");
-                    for _ in 0..count {
-                        slots.push(DataSlot {
-                            name: array_name.clone(),
-                            visibility,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    slots
 }
 
-/// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
-/// data-block records. The shared segment is the single shared block's fields expanded
-/// to one entry per element at consecutive byte offsets; the stage data fields are all
-/// `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
-/// (tag 2, one byte), and each is a scalar (len 0).
-fn assemble_shared_layout(
-    data_records: &[(i64, i64)],
-    names: &[String],
-) -> Vec<crate::bytecode::SharedSlotLayout> {
-    use crate::bytecode::SharedSlotLayout;
-    struct Blk {
-        vis: i64,
-        fields: Vec<(i64, i64)>, // (type name id, element count)
-    }
-    let mut blocks: Vec<Blk> = Vec::new();
-    for &(code, val) in data_records {
-        match code {
-            9 => blocks.push(Blk {
-                vis: val % 4,
-                fields: Vec::new(),
-            }),
-            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
-            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
-            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
-            _ => {}
-        }
-    }
-    let scalar = |type_id: i64| -> (u8, u32) {
-        match names[type_id as usize].as_str() {
-            "Word" => (3, 8),
-            "Byte" => (2, 1),
-            other => panic!("unhandled shared field type `{other}`"),
-        }
-    };
-    let mut layout = Vec::new();
-    let mut offset: u32 = 0;
-    for b in blocks.iter().filter(|b| b.vis == 0) {
-        for &(tid, count) in &b.fields {
-            let (tag, size) = scalar(tid);
-            for _ in 0..count {
-                layout.push(SharedSlotLayout {
-                    offset,
-                    kind: tag,
-                    len: 0,
-                });
-                offset += size;
-            }
-        }
-    }
-    layout
-}
-
-/// Assemble parser-produced private initializer descriptors in private-slot order.
-/// The parser decides the scalar kind, default, literal value and admission verdict.
+/// Assemble parser-produced private initializer descriptors, one per private FIELD in
+/// declaration order, as the parser's kind code and the value every element starts as. The
+/// parser decides the scalar kind, default, literal value and admission verdict.
 ///
 /// Kind 6 is a `Text` field, whose initializer is the empty static string, and kind 7 a struct
 /// field, whose initializer is its type's zero, which parse.kel chooses for every field it
 /// does not give a scalar initializer, under option (b) of the operator's ruling of 2026-10-30
 /// on definite initialization. The zero itself is assembled here from the struct records, as
-/// the slot type tokens are.
+/// the slot type tokens are. Kinds 0 to 6 coincide with the `ScalarKind` tags.
 fn assemble_private_init(
     data_records: &[(i64, i64)],
     names: &[String],
     structs: &StructFieldTable,
-) -> Vec<ConstValue> {
+) -> Vec<(i64, ConstValue)> {
     use crate::selfhost_host::{
         PARSE_PRIVATE_INIT_KIND_TAG, PARSE_PRIVATE_INIT_NEGATIVE_TAG, PARSE_PRIVATE_INIT_VALUE_TAG,
     };
     struct Field {
-        count: i64,
         type_id: i64,
         kind: Option<i64>,
         value: Option<ConstValue>,
@@ -7326,7 +7448,6 @@ fn assemble_private_init(
         match code {
             9 => visibility = value % 4,
             4 if visibility == 1 => fields.push(Field {
-                count: 1,
                 type_id: -1,
                 kind: None,
                 value: None,
@@ -7334,7 +7455,6 @@ fn assemble_private_init(
             6 if visibility == 1 => {
                 fields.last_mut().expect("type without field").type_id = value;
             }
-            8 if visibility == 1 => fields.last_mut().expect("array without field").count = value,
             PARSE_PRIVATE_INIT_KIND_TAG if visibility == 1 => {
                 let field = fields.last_mut().expect("initializer kind without field");
                 assert!(
@@ -7388,111 +7508,159 @@ fn assemble_private_init(
             _ => {}
         }
     }
-    let mut values = Vec::new();
-    for field in fields {
-        let count = usize::try_from(field.count).expect("negative initializer count");
-        assert!(
-            count <= crate::bytecode::MAX_DATA_ADDR as usize,
-            "initializer count exceeds data addressing"
-        );
-        let value = field
-            .value
-            .expect("private field has no initializer descriptor");
-        values
-            .try_reserve(count)
-            .expect("private initializer allocation");
-        for _ in 0..count {
-            values.push(value.clone());
-        }
-    }
-    values
+    fields
+        .into_iter()
+        .map(|f| {
+            (
+                f.kind.expect("private field has no initializer kind"),
+                f.value
+                    .expect("private field has no initializer descriptor"),
+            )
+        })
+        .collect()
 }
 
-/// Assemble a whole `DataLayout` from parse.kel's data-block records.
+/// Assemble a whole `DataLayout` from parse.kel's data-block records, one field per declared
+/// field, shared fields first, exactly as the reference places them.
+///
+/// The record stream is already one record per field, with code 8 carrying an array's element
+/// count, so nothing here expands a field to its elements. A shared field takes the next host
+/// buffer offset and, for an array, the element size as its stride. A private struct field,
+/// which parse.kel marks with a size record after its type record, takes the next persistent
+/// pool offset. An array of structs carries no size record, so the cross-check still refuses
+/// it.
 fn assemble_data_layout(
     data_records: &[(i64, i64)],
     struct_records: &[(i64, i64)],
     names: &[String],
 ) -> crate::bytecode::DataLayout {
-    crate::bytecode::DataLayout {
-        slots: assemble_data_slots(data_records, names),
-        shared_layout: assemble_shared_layout(data_records, names),
-        private_composite_layout: private_composite_pool(data_records).0,
-        private_init: assemble_private_init(
-            data_records,
-            names,
-            &struct_field_table(struct_records),
-        ),
-    }
-}
-
-/// The private composite pool, as the reference places it. Every private field whose type
-/// is a struct, which parse.kel marks with a size record after its type record, takes the
-/// next pool offset, keyed by its slot, and the pool total is the sum of those sizes.
-/// Private slots follow every shared slot, in declaration order, an array field taking one
-/// slot per element. An array of structs carries no size record, so the cross-check still
-/// refuses it.
-fn private_composite_pool(
-    data_records: &[(i64, i64)],
-) -> (Vec<crate::bytecode::PrivateCompositeSlot>, u32) {
-    let mut table = Vec::new();
-    let mut total: u32 = 0;
-    for (slot, bytes) in private_composite_sizes(data_records) {
-        table.push(crate::bytecode::PrivateCompositeSlot {
-            slot,
-            offset: total,
-        });
-        total = total
-            .checked_add(bytes)
-            .expect("private composite pool size");
-    }
-    (table, total)
-}
-
-/// Each private composite slot, in pool order, with its flat body size in bytes.
-///
-/// This is the layout `private_composite_pool` places, and it is what `codegen.kel`'s
-/// copy pass needs to recognise a private struct read and size its copy. Every such slot
-/// holds a struct, the only private composite field parse.kel marks with a size record.
-#[must_use]
-pub fn private_composite_sizes(data_records: &[(i64, i64)]) -> Vec<(u16, u32)> {
+    use crate::bytecode::{DataField, DataInit, SHARED_SLOT_COMPOSITE_FLAG};
     use crate::selfhost_host::PARSE_PRIVATE_COMPOSITE_TAG;
-    let mut shared_slots: i64 = 0;
-    let mut visibility = 0;
-    let mut last_count: i64 = 0;
-    for &(code, value) in data_records {
+    struct Decl {
+        vis: i64,
+        name: String,
+        type_id: i64,
+        count: u32,
+        pool_bytes: Option<u32>,
+    }
+    let mut decls: Vec<Decl> = Vec::new();
+    let mut block = String::new();
+    let mut vis = 2;
+    for &(code, val) in data_records {
         match code {
-            9 => visibility = value % 4,
-            4 if visibility == 0 => {
-                shared_slots += 1;
-                last_count = 1;
+            9 => {
+                block = names[(val / 4) as usize].clone();
+                vis = val % 4;
             }
-            8 if visibility == 0 => {
-                shared_slots += value - last_count;
-                last_count = value;
+            4 => decls.push(Decl {
+                vis,
+                name: format!("{block}.{}", names[val as usize]),
+                type_id: -1,
+                count: 1,
+                pool_bytes: None,
+            }),
+            6 => decls.last_mut().expect("type without field").type_id = val,
+            8 => {
+                decls.last_mut().expect("array without field").count =
+                    u32::try_from(val).expect("array count");
+            }
+            PARSE_PRIVATE_COMPOSITE_TAG if vis == 1 => {
+                decls.last_mut().expect("size without field").pool_bytes =
+                    Some(u32::try_from(val).expect("private composite size"));
             }
             _ => {}
         }
     }
+    let mut inits =
+        assemble_private_init(data_records, names, &struct_field_table(struct_records)).into_iter();
+    let mut fields = Vec::new();
+    let mut slot: u32 = 0;
+    let mut offset: u32 = 0;
+    let mut pool: u32 = 0;
+    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
+    for pass in [0i64, 1i64] {
+        for d in decls.iter().filter(|d| d.vis == pass) {
+            let field = if pass == 0 {
+                let (kind, size) = shared_scalar_of(&names[d.type_id as usize]);
+                let stride = if d.count > 1 { size } else { 0 };
+                let f = DataField::shared(d.name.clone(), slot, d.count, kind, 0, offset, stride);
+                offset += size * d.count;
+                f
+            } else {
+                let (code, value) = inits.next().expect("private field without initializer");
+                let kind = if code == 7 {
+                    SHARED_SLOT_COMPOSITE_FLAG | crate::value_layout::CompositeKind::Struct.to_tag()
+                } else {
+                    u8::try_from(code).expect("private initializer kind")
+                };
+                let mut f = DataField::private(
+                    d.name.clone(),
+                    slot,
+                    d.count,
+                    kind,
+                    DataInit::canonical(kind, value),
+                );
+                if let Some(bytes) = d.pool_bytes {
+                    f.elem_len = u16::try_from(bytes).expect("private composite element size");
+                    f.offset = Some(pool);
+                    f.stride = if d.count > 1 { bytes } else { 0 };
+                    pool = pool
+                        .checked_add(bytes.checked_mul(d.count).expect("private composite pool"))
+                        .expect("private composite pool size");
+                }
+                f
+            };
+            slot += d.count;
+            fields.push(field);
+        }
+    }
+    crate::bytecode::DataLayout { fields }
+}
+
+/// The private composite pool size, as the reference places it: the sum of the flat body
+/// sizes of every private field parse.kel marks with a size record.
+fn private_composite_pool_bytes(data_records: &[(i64, i64)]) -> u32 {
+    private_composite_sizes(data_records)
+        .into_iter()
+        .try_fold(0u32, |total, (_, bytes)| total.checked_add(bytes))
+        .expect("private composite pool size")
+}
+
+/// Each private composite field, in pool order, by the field index a data operand names,
+/// with its flat body size in bytes.
+///
+/// This is the layout `private_composite_pool` places, and it is what `codegen.kel`'s
+/// copy pass needs to recognise a private struct read and size its copy. Every such field
+/// holds a struct, the only private composite field parse.kel marks with a size record.
+#[must_use]
+pub fn private_composite_sizes(data_records: &[(i64, i64)]) -> Vec<(u16, u32)> {
+    use crate::selfhost_host::PARSE_PRIVATE_COMPOSITE_TAG;
+    // A data operand names a field, option B of the array wire-slot design, so each private
+    // struct is reported by its field index, which counts every shared field first and then
+    // the private fields before it, however many elements each has.
+    let mut shared_fields: i64 = 0;
+    let mut visibility = 0;
+    for &(code, value) in data_records {
+        match code {
+            9 => visibility = value % 4,
+            4 if visibility == 0 => shared_fields += 1,
+            _ => {}
+        }
+    }
     let mut sizes = Vec::new();
-    let mut slot = shared_slots;
-    let mut field_slot = -1;
+    let mut next = shared_fields;
+    let mut field_index = -1;
     for &(code, value) in data_records {
         match code {
             9 => visibility = value % 4,
             4 if visibility == 1 => {
-                field_slot = slot;
-                slot += 1;
-                last_count = 1;
-            }
-            8 if visibility == 1 => {
-                slot += value - last_count;
-                last_count = value;
+                field_index = next;
+                next += 1;
             }
             PARSE_PRIVATE_COMPOSITE_TAG if visibility == 1 => {
-                let slot_u16 = u16::try_from(field_slot).expect("private composite slot");
+                let index_u16 = u16::try_from(field_index).expect("private composite field");
                 let bytes = u32::try_from(value).expect("private composite size");
-                sizes.push((slot_u16, bytes));
+                sizes.push((index_u16, bytes));
             }
             _ => {}
         }
@@ -7598,6 +7766,11 @@ fn builtin_generic_shape(
                 .and_then(|n| n.checked_mul(8))
                 .map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size })
         }
+        // `Text<N>` is the flat tuple of a length word and `N` bytes.
+        (Some("Text"), crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG) => u32::try_from(value)
+            .ok()
+            .and_then(|n| n.checked_add(8))
+            .map_or(WireShape::Top, |size| WireShape::Flat { kind: 0, size }),
         _ => WireShape::Top,
     }
 }
@@ -7647,7 +7820,8 @@ fn declared_wire_shape(
                 ));
             }
             crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
-            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG
+            | crate::selfhost_host::PARSE_TEXT_CAPACITY_TAG => {
                 stack
                     .pop()
                     .flatten()
@@ -7782,7 +7956,7 @@ fn assemble_resource_bounds(module: &mut Module) {
         }
         // The self-hosted analyze.kel driver already ported into this file: the shallow
         // empty-resolver form matches `wcet_stream_iteration`/`wcmu_stream_iteration`.
-        let (wcet, stack, heap, reject, _valid) = run_analyze_kel(c, i64::MAX, &[], &[]);
+        let (wcet, stack, heap, reject, _valid) = run_analyze_kel(c, i64::MAX, &[], None);
         assert!(!reject, "analyze.kel rejected a stage Stream chunk");
         max_wcet = max_wcet.max(wcet);
         max_wcmu = max_wcmu.max(stack + heap);
@@ -7886,8 +8060,8 @@ pub fn self_host_compile_full(src: &str) -> Module {
     let (fns, names, data_records, enum_records, _, struct_records) =
         parse_functions_fused_with_natives(src);
     let dl = assemble_data_layout(&data_records, &struct_records, &names);
-    module.data_layout = (!dl.slots.is_empty()).then_some(dl);
-    module.persistent_composite_bytes = private_composite_pool(&data_records).1;
+    module.data_layout = (!dl.fields.is_empty()).then_some(dl);
+    module.persistent_composite_bytes = private_composite_pool_bytes(&data_records);
     module.schema_hash = crate::bytecode::compute_typed_schema_hash(
         module.data_layout.as_ref(),
         &schema_slot_tokens(&data_records, &struct_records, &names),
@@ -7925,7 +8099,7 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
         .iter()
         .find(|f| chunk_name(f, names) == "main")
         .map_or(0, |f| f.text_boundary);
-    module.flags = if module.private_data_bytes != 0 {
+    module.flags = if module.declares_private_data() {
         0
     } else if text_flags == 0 {
         crate::bytecode::FLAG_EPHEMERAL
@@ -7947,21 +8121,23 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
 
 /// The shared segment's flat byte total, derived from the assembled shared-slot layout the
 /// same way the reference accumulates it (`compile_with_target`'s `shared_data_flat_bytes`):
-/// one entry per shared slot at consecutive byte offsets, so the total is the byte past the
-/// last entry. The per-slot size is fixed by the scalar kind tag the layout records: a `Word`
-/// (tag 3) is eight bytes and a `Byte` (tag 2) is one byte at the 64-bit reference width, the
-/// same `(tag, size)` mapping `assemble_shared_layout` uses. Zero for a module with no shared
-/// slots.
-fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> u32 {
-    shared_layout
+/// one shared field after another at consecutive byte offsets, so the total is the byte past
+/// the last element of the last field. The element size is fixed by the scalar kind tag the
+/// field records: a `Word` (tag 3) is eight bytes and a `Byte` (tag 2) is one byte at the
+/// 64-bit reference width, the same `(tag, size)` mapping `shared_scalar_of` uses. Zero for a
+/// module with no shared fields.
+fn shared_data_bytes_of(layout: &crate::bytecode::DataLayout) -> u32 {
+    layout
+        .fields
         .iter()
-        .map(|e| {
-            let size = match e.kind {
+        .filter(|f| f.visibility == crate::bytecode::SlotVisibility::Shared)
+        .filter_map(|f| {
+            let size = match f.kind {
                 3 => 8u32,
                 2 => 1u32,
                 other => panic!("unhandled shared slot kind tag {other}"),
             };
-            e.offset + size
+            Some(f.offset? + (f.count - 1) * f.stride + size)
         })
         .max()
         .unwrap_or(0)
@@ -7982,7 +8158,7 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// times `VALUE_SLOT_SIZE_BYTES`). The stages declare no natives, so `native_names` and
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
-    use crate::bytecode::{Chunk, SlotVisibility};
+    use crate::bytecode::Chunk;
     let (mut fns, names, data_records, enum_records, native_paths, struct_records) =
         parse_functions_fused_with_natives(src);
     let composites = private_composite_sizes(&data_records);
@@ -8062,17 +8238,20 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
     let dl = assemble_data_layout(&data_records, &struct_records, &names);
-    let shared_data_bytes = shared_data_bytes_of(&dl.shared_layout);
-    let private_slot_count = dl
-        .slots
-        .iter()
-        .filter(|s| s.visibility == SlotVisibility::Private)
-        .count() as u32;
-    let private_data_bytes =
-        private_slot_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES);
+    let shared_data_bytes = shared_data_bytes_of(&dl);
+    // Packed private storage: a `Value` slot per private scalar and the packed bytes of every
+    // private array at element width, by the rule the reference applies, at the host widths
+    // the reference compiles with.
+    let private_data_bytes = {
+        let host = crate::target::Target::host();
+        dl.private_data_bytes(
+            (1usize << host.word_bits_log2) / 8,
+            (1usize << host.float_bits_log2) / 8,
+        )
+    };
     // An absent data segment has no layout regions in the artifact. An empty
     // layout would encode extra regions and differ from the reference.
-    let data_layout = (!dl.slots.is_empty()).then_some(dl);
+    let data_layout = (!dl.fields.is_empty()).then_some(dl);
     let schema_hash = crate::bytecode::compute_typed_schema_hash(
         data_layout.as_ref(),
         &schema_slot_tokens(&data_records, &struct_records, &names),
@@ -8144,7 +8323,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         wcmu_bytes: 0,
         // Assembled from the program-analysis bookkeeping below.
         aux_arena_bytes: 0,
-        persistent_composite_bytes: private_composite_pool(&data_records).1,
+        persistent_composite_bytes: private_composite_pool_bytes(&data_records),
         flags: 0,
         shared_data_bytes,
         private_data_bytes,
@@ -8552,30 +8731,19 @@ fn module_input_with_tail(module: &Module, tail: Vec<u8>, const_names: usize) ->
         }
     }
 
-    // The DATA-SLOT section, one name per RUN. Consecutive slots sharing a name
-    // and visibility collapse into one record in the reference, and the name is
-    // interned once per run; interning per SLOT would emit one name per array
+    // The DATA-FIELD section, one name per FIELD, in the order the reference
+    // interns them when it writes the `DATA_FIELDS` records. A field stands for
+    // every element of an array, so interning per element would emit one name per
     // element, which is how the pre-run-length-encoding artifact reached tens of
     // thousands of names and produced the 395,804 figure that outlived it.
-    let mut runs: Vec<&str> = Vec::new();
-    if let Some(dl) = &module.data_layout {
-        let mut i = 0usize;
-        while i < dl.slots.len() {
-            let s = &dl.slots[i];
-            let mut n = 1usize;
-            while i + n < dl.slots.len()
-                && dl.slots[i + n].name == s.name
-                && dl.slots[i + n].visibility == s.visibility
-            {
-                n += 1;
-            }
-            runs.push(s.name.as_str());
-            i += n;
-        }
-    }
-    let sn = u16::try_from(runs.len()).expect("slot run count fits u16");
+    let fields: Vec<&str> = module
+        .data_layout
+        .iter()
+        .flat_map(|dl| dl.fields.iter().map(|f| f.name.as_str()))
+        .collect();
+    let sn = u16::try_from(fields.len()).expect("data field count fits u16");
     out.extend_from_slice(&sn.to_le_bytes());
-    for r in &runs {
+    for r in &fields {
         push_name(&mut out, r, &mut names);
     }
 
@@ -9466,58 +9634,43 @@ fn window_emit_chunks(
     Ok(out)
 }
 
-/// Data-slot records as `(run index, visibility, reserved, run length)`.
+/// Data-field records as the twelve `DATA_FIELDS` fields, with the FIELD INDEX where the record
+/// takes its name.
 ///
-/// **The first field is a RUN INDEX, not a name index**, which is the whole
-/// difference between commands 182/183 and the formatter at 178. The stage
-/// takes its name from the interner that produced `NAMES`; the host supplies
-/// only what the host decides.
+/// **The first field is a FIELD INDEX, not a name index**, which is the whole difference between
+/// commands 182/183 and the formatter at 178. The stage takes its name from the interner that
+/// produced `NAMES`; the host supplies only what the host decides.
 ///
-/// Grouping mirrors the encoder exactly: consecutive slots sharing a name AND
-/// visibility collapse into one run, and a run longer than `u16::MAX` is
-/// CHUNKED into several records rather than rejected. The chunked case emits
-/// more records than runs while every one of them carries the same run index,
-/// because the encoder interns once per run and not once per record.
-fn slot_run_fields(module: &Module) -> Vec<i64> {
+/// Each explicit initialiser's `init_const` is the index of its root in the shared constant
+/// table. Roots occupy the table's prefix in contribution order, every chunk pool first and
+/// then each field's initialiser in field order, so the index is predictable whatever the
+/// roots expand into. This windowed path computes it on the host; the module-driven paths take
+/// it from the stage's own numbering.
+fn data_field_fields(module: &Module) -> Vec<i64> {
     let mut out = Vec::new();
     let Some(dl) = &module.data_layout else {
         return out;
     };
-    let mut i = 0usize;
-    let mut run_index = 0i64;
-    while i < dl.slots.len() {
-        let s = &dl.slots[i];
-        let vis = match s.visibility {
-            crate::bytecode::SlotVisibility::Shared => {
-                i64::from(crate::wire_schema::visibility_tag::SHARED)
-            }
-            crate::bytecode::SlotVisibility::Private => {
-                i64::from(crate::wire_schema::visibility_tag::PRIVATE)
-            }
+    let mut next = module
+        .chunks
+        .iter()
+        .map(|c| c.constants.len() as i64)
+        .sum::<i64>();
+    for (i, f) in dl.fields.iter().enumerate() {
+        let init_const = if matches!(f.init, crate::bytecode::DataInit::Const(_)) {
+            next += 1;
+            next - 1
+        } else {
+            i64::from(crate::wire_schema::ABSENT)
         };
-        let mut n = 1usize;
-        while i + n < dl.slots.len()
-            && dl.slots[i + n].name == s.name
-            && dl.slots[i + n].visibility == s.visibility
-        {
-            n += 1;
-        }
-        let mut left = n;
-        while left > 0 {
-            let take = left.min(u16::MAX as usize);
-            out.push(run_index);
-            out.push(vis);
-            out.push(0);
-            out.push(take as i64);
-            left -= take;
-        }
-        run_index += 1;
-        i += n;
+        out.extend_from_slice(&wire_stream_auxiliary::data_field_row(
+            i as i64, f, init_const,
+        ));
     }
     out
 }
 
-/// Emit the whole `DATA_SLOTS` region by STREAMING, one record per call.
+/// Emit the whole `DATA_FIELDS` region by STREAMING, one record per call.
 ///
 /// The same coroutine discipline as [`window_emit_chunks`]: one virtual machine
 /// and ONE shared buffer for the begin and every step, because `wire.nmap` lives
@@ -9535,7 +9688,7 @@ fn window_emit_slots(
 ) -> Result<Vec<u8>, SelfHostError> {
     const CMD_BEGIN: i64 = 182;
     const CMD_STEP: i64 = 183;
-    const FIELDS: usize = 4;
+    const FIELDS: usize = 12;
 
     let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
@@ -10037,6 +10190,21 @@ fn signature_fields(module: &Module) -> Vec<i64> {
     fields
 }
 
+/// Whether a constant root occupies exactly one record.
+///
+/// Listed positively rather than as "not a composite", so a variant added later is
+/// excluded by default and the region falls back to its honest gap instead of being
+/// silently assumed flat.
+fn constant_is_scalar(c: &crate::bytecode::ConstValue) -> bool {
+    use crate::bytecode::ConstValue as C;
+    match c {
+        C::Unit | C::Bool(_) | C::Int(_) | C::Byte(_) | C::Fixed(_) | C::None => true,
+        #[cfg(feature = "floats")]
+        C::Float(_) => true,
+        _ => false,
+    }
+}
+
 /// Drive a stateless record formatter over a field stream, concatenating the
 /// records it returns.
 ///
@@ -10056,229 +10224,6 @@ fn signature_fields(module: &Module) -> Vec<i64> {
 ///
 /// [`SelfHostError::Unsupported`] when the field stream is not a whole number of
 /// records, when the stage refuses one, or when the stage faults.
-/// The `SHARED_LAYOUT` record fields, seven per record, grouped into runs exactly as the
-/// reference encoder groups them.
-///
-/// # The grouping is the caller's job, and it must match byte for byte
-///
-/// `wire.kel`'s emitter writes whatever fields it is handed; forming runs is the host's. A run is
-/// consecutive entries sharing `kind` and `len` whose `offset` advances by a CONSTANT delta, and a
-/// run forms only when that delta fits `u16` -- a wider one falls back to single-slot records
-/// rather than truncating, which would place every later slot in the run at a wrong offset. Each
-/// run is then chunked at `u16::MAX` slots per record. This mirrors `SchemaBuilder::add_data_layout`
-/// and any divergence from it is a wrong artifact rather than a missing one.
-///
-/// # The batch bound does not bind, and that was measured rather than assumed
-///
-/// The scouting for this increment named the field-buffer capacity as the live constraint, on the
-/// reasoning that a stage with a large shared layout would overflow it. **That was wrong.** The
-/// grouping is enormously effective because a shared layout is overwhelmingly uniform arrays:
-/// measured 2026-08-31 across the twelve stage sources, `lexer.kel`'s 395,778 slots collapse to
-/// NINE records and `wire.kel`'s 144,391 to eight; every other stage produces one. Nine records is
-/// 63 field words against a `fin` of 1024. The guard below is still written correctly, but nothing
-/// in the corpus approaches it.
-fn shared_slot_fields(module: &Module) -> Vec<i64> {
-    let mut out = Vec::new();
-    let Some(layout) = module.data_layout.as_ref() else {
-        return out;
-    };
-    let sl = &layout.shared_layout;
-    let mut i = 0usize;
-    while i < sl.len() {
-        let a = &sl[i];
-        let mut n = 1usize;
-        let mut stride: u32 = 0;
-        if i + 1 < sl.len() {
-            let b = &sl[i + 1];
-            if b.kind == a.kind && b.len == a.len {
-                let d = b.offset.wrapping_sub(a.offset);
-                if d <= u32::from(u16::MAX) {
-                    stride = d;
-                    n = 2;
-                    while i + n < sl.len() {
-                        let c = &sl[i + n];
-                        let p = &sl[i + n - 1];
-                        if c.kind != a.kind
-                            || c.len != a.len
-                            || c.offset.wrapping_sub(p.offset) != d
-                        {
-                            break;
-                        }
-                        n += 1;
-                    }
-                }
-            }
-        }
-        let mut done = 0usize;
-        while done < n {
-            let take = (n - done).min(u16::MAX as usize);
-            out.push(i64::from(a.offset + (done as u32) * stride));
-            out.push(i64::from(a.kind));
-            out.push(0);
-            out.push(i64::from(a.len));
-            out.push((i + done) as i64);
-            out.push(take as i64);
-            out.push(i64::from(stride));
-            done += take;
-        }
-        i += n;
-    }
-    out
-}
-
-/// The `DATA_INIT` record fields, two per record, or `None` when this module's pool is one the
-/// driver cannot yet place.
-///
-/// # Both forms are driven now, and the second was recorded as blocked when it was not
-///
-/// The reference elides a wholly-default private-initialiser pool, writing the [`ABSENT`] sentinel
-/// as `first` and the slot count as `count`. That case needs nothing from the constant table and is
-/// what eleven of the twelve stage sources produce.
-///
-/// The remaining form stores the pool in the shared constant table and records the index it landed
-/// at. That was recorded as blocked on modelling the encoder's constant ordering -- the `CONSTS`
-/// problem -- and **that reason holds for a pool with CONTENTS and not for an empty one.** An empty
-/// pool has no values to place, so its `first` is simply where the pool would have started, and its
-/// count is zero.
-///
-/// The one corpus stage taking this path is `verify_datalayout.kel`, whose pool is EMPTY. An empty
-/// pool is deliberately not reported as elided, so that the sentinel stands for one situation only;
-/// that is the predicate behaving as documented, not an edge case to work around. Measured against
-/// the reference on 2026-09-04 rather than derived: it encodes as `first = 4, count = 0`, with four
-/// `Int` constant roots.
-///
-/// A pool with contents still returns `None` and still leaves an honest zeroed gap, and so does any
-/// module whose constant roots are not all scalars, because `constant_roots` documents that a
-/// composite root expands into further records and the root count is then not the record count.
-///
-/// **The elision test calls the shared predicate rather than restating its condition.** The
-/// predicate exists precisely so the encoder and any other producer cannot drift, and its own
-/// documentation records that a disagreement here is not a state anything would notice.
-fn data_init_fields(module: &Module) -> Option<Vec<i64>> {
-    let layout = module.data_layout.as_ref()?;
-    if crate::wire_schema::private_init_is_elided(layout) {
-        return Some(alloc::vec![
-            i64::from(crate::wire_schema::ABSENT),
-            layout.private_init.len() as i64,
-        ]);
-    }
-    // **THE EMPTY NON-ELIDED POOL IS PREDICTABLE, AND IT WAS RECORDED AS BLOCKED.**
-    // The comment above said this form needs the encoder's constant ordering, "the
-    // `CONSTS` problem and a separate increment". That is true of a pool with
-    // CONTENTS, whose index depends on where its values land. An EMPTY pool has no
-    // values, so its `first` is simply where the pool would have started: the
-    // record count the chunk constants occupy, with a count of zero.
-    //
-    // Measured against the reference rather than derived and hoped for:
-    // `verify_datalayout.kel`, the one corpus stage on this path, encodes as
-    // `first = 4, count = 0`, and its four constant roots are four `Int`s.
-    //
-    // **The scalar guard is what makes the count usable, and it is the whole risk.**
-    // `constant_roots` documents that roots are not records -- a composite root
-    // expands during `finish` -- so the root count equals the record count only for
-    // a forest of scalars. Where any root is composite this returns `None` and the
-    // region stays an honest zeroed gap. That distinction matters: a wrong `first`
-    // would turn a `Skipped` region into a `Differs` one, and
-    // `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is
-    // never mistaken for a defect. A gap is a smaller error than a lie.
-    if layout.private_init.is_empty() {
-        let roots = crate::wire_schema::constant_roots_of_module(module);
-        if roots.iter().all(constant_is_scalar) {
-            return Some(alloc::vec![roots.len() as i64, 0]);
-        }
-    }
-    None
-}
-
-/// Whether a constant root occupies exactly one record.
-///
-/// Listed positively rather than as "not a composite", so a variant added later is
-/// excluded by default and the region falls back to its honest gap instead of being
-/// silently assumed flat.
-fn constant_is_scalar(c: &crate::bytecode::ConstValue) -> bool {
-    use crate::bytecode::ConstValue as C;
-    match c {
-        C::Unit | C::Bool(_) | C::Int(_) | C::Byte(_) | C::Fixed(_) | C::None => true,
-        #[cfg(feature = "floats")]
-        C::Float(_) => true,
-        _ => false,
-    }
-}
-
-/// Emit `n` records of one region kind into the window through the generic `emit_in_window`
-/// command, which takes the kind, the record count and the window offset as arguments.
-///
-/// # The length is checked, never truncated
-///
-/// The sibling paths that write `&win[..len]` silently discard a disagreement between what the
-/// stage produced and what the reference reserved. Here a mismatch is reported, on the same ground
-/// as the `CONSTS` and `SHAPES` paths: a short write would turn an honest `Skipped` region into a
-/// `Differs` one, and `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is
-/// never mistaken for a defect.
-fn window_emit_kind(
-    stage: &Module,
-    kind: u16,
-    fields: &[i64],
-    per_record: usize,
-    want: usize,
-    label: &str,
-) -> Result<Vec<u8>, SelfHostError> {
-    use wire_slots::{FIN as FIN_SLOT, WARG as WARG_SLOT};
-
-    if !fields.len().is_multiple_of(per_record) {
-        return Err(SelfHostError::Unsupported {
-            detail: alloc::format!(
-                "the {label} field stream is {} words, not a multiple of {per_record}",
-                fields.len()
-            ),
-        });
-    }
-    let records = fields.len() / per_record;
-
-    let m = stage.clone();
-    let need = required_persistent_capacity_for(&m);
-    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-    arena.resize_persistent(need).expect("resize");
-    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-
-    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
-        .expect("kind");
-    vm.set_shared(&mut shared, WARG_SLOT + 1, Value::Int(records as i64))
-        .expect("count");
-    vm.set_shared(&mut shared, WARG_SLOT + 2, Value::Int(0))
-        .expect("offset");
-    for (i, &v) in fields.iter().enumerate() {
-        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
-            .expect("record field");
-    }
-
-    let wrote = enter_wire(&mut vm, &mut shared, 164)?;
-    if wrote < 0 {
-        return Err(SelfHostError::Unsupported {
-            detail: alloc::format!("wire.kel refused {label} ({records} record(s)) with {wrote}"),
-        });
-    }
-    if wrote as usize != want {
-        return Err(SelfHostError::Unsupported {
-            detail: alloc::format!(
-                "the self-hosted {label} region is {wrote} bytes and the reference reserved \
-                 {want}; the host's record model and the encoder disagree"
-            ),
-        });
-    }
-    let mut out = Vec::with_capacity(wrote as usize);
-    for k in 0..wrote as usize {
-        out.push(
-            match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
-                Value::Byte(b) => b,
-                other => panic!("shared byte slot held {other:?}"),
-            },
-        );
-    }
-    Ok(out)
-}
-
 fn window_emit_records(
     stage: &Module,
     fields: &[i64],
@@ -10420,43 +10365,27 @@ pub fn wire_windowed_via_kel(
             out[base..base + len].copy_from_slice(&win);
             continue;
         }
-        // SHARED_LAYOUT AND DATA_INIT TAKE THE GENERIC WINDOW EMITTER. Both formatters have
-        // existed in the stage all along, dispatched by `emit_at`; what was missing was the
-        // DRIVER supplying their fields, which is why both sat in the catch-all below and were
-        // left as zeros. Neither carries a name index, which is what makes them reachable
-        // without the interning route the remaining four kinds still wait on.
-        if kind == crate::wire_schema::kind::SHARED_LAYOUT {
-            let fields = shared_slot_fields(module);
-            // A module with no shared slots reserves no region; emitting zero records would ask
-            // the stage for an empty write rather than skipping, so fall through to the gap.
-            if !fields.is_empty() {
-                let win = window_emit_kind(&stage, kind, &fields, 7, len, "SHARED_LAYOUT")?;
-                out[base..base + len].copy_from_slice(&win);
-                continue;
-            }
-        }
-        // DATA_SLOTS TAKES THE NAME-AWARE STREAM, commands 182 and 183.
+        // DATA_FIELDS TAKES THE NAME-AWARE STREAM, commands 182 and 183.
         //
-        // **THE FIRST ROUTED KIND WHOSE RECORD CARRIES A NAME.** Every kind
-        // routed before it -- `SHAPES`, `SIGNATURES`, `SHARED_LAYOUT`,
-        // `DATA_INIT` -- carries none, which is what let the host supply every
-        // field. A host-supplied name index can disagree with the interner that
-        // produced `NAMES`, and the host has no way to check it, so the stage
-        // takes this one from its own interner and the host supplies the RUN
-        // INDEX instead.
+        // **A RECORD THAT CARRIES A NAME.** A host-supplied name index can
+        // disagree with the interner that produced `NAMES`, and the host has no
+        // way to check it, so the stage takes the name from its own interner and
+        // the host supplies the FIELD INDEX instead. One record per declared
+        // field, so the stream's length is the field count whatever the arrays
+        // hold.
         //
         // A module with no data layout reserves no region; emitting zero
         // records would ask the stage for an empty write rather than skipping,
-        // so fall through to the gap as `SHARED_LAYOUT` does.
-        if kind == crate::wire_schema::kind::DATA_SLOTS {
-            let fields = slot_run_fields(module);
+        // so fall through to the gap.
+        if kind == crate::wire_schema::kind::DATA_FIELDS {
+            let fields = data_field_fields(module);
             if !fields.is_empty() {
                 let win = window_emit_slots(&stage, &blob, &fields, len)?;
                 if win.len() != len {
                     return Err(SelfHostError::Unsupported {
                         detail: alloc::format!(
-                            "the self-hosted DATA_SLOTS region is {} bytes and the reference \
-                             reserved {len}; the host's run grouping and the encoder disagree",
+                            "the self-hosted DATA_FIELDS region is {} bytes and the reference \
+                             reserved {len}; the host's field rows and the encoder disagree",
                             win.len()
                         ),
                     });
@@ -10519,15 +10448,6 @@ pub fn wire_windowed_via_kel(
                 continue;
             }
         }
-        if kind == crate::wire_schema::kind::DATA_INIT {
-            // `None` is the pool form whose constant-table index the driver cannot yet predict;
-            // leaving it zeroed keeps it an honest `Skipped` rather than a wrong `Differs`.
-            if let Some(fields) = data_init_fields(module) {
-                let win = window_emit_kind(&stage, kind, &fields, 2, len, "DATA_INIT")?;
-                out[base..base + len].copy_from_slice(&win);
-                continue;
-            }
-        }
         let cmd = match kind {
             k if k == crate::wire_schema::kind::NAMES => 170,
             k if k == crate::wire_schema::kind::STRING_POOL => 171,
@@ -10540,11 +10460,10 @@ pub fn wire_windowed_via_kel(
             // and which are skipped, so the coverage claim is a figure rather
             // than a sentence.
             //
-            // FOUR KINDS REACH HERE NOW: `ENUM_VARIANTS`, `ENUM_LAYOUTS`,
-            // `DATA_SLOTS` and `PARAM_TYPES`, all four waiting on the
-            // name-interning route. Down from five on 2026-09-04 when `DATA_INIT`
-            // was routed for its last stage, and from six on 2026-08-31 when
-            // `SHARED_LAYOUT` was routed above.
+            // NO ROUTED KIND REACHES HERE. The last four to wait on the
+            // name-interning route, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, the data
+            // layout and `PARAM_TYPES`, are routed above. Encoding F replaced the
+            // four data-layout kinds with `DATA_FIELDS` on 2026-10-31.
             _ => continue,
         };
         if len > WINDOW {
@@ -10686,44 +10605,79 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
         .map(|(line, _, what)| (what, line))
 }
 
-/// The line of the first `Text<N>` the source names in any type position, or `None`.
+/// The first use of `Text<N>` the stages under `kel/` do not lower, named with its line, or
+/// `None`.
 ///
-/// The stages under `kel/` do not lower `Text<N>`. Left to them, a program naming it
-/// reached four different outcomes depending on where the type appeared. A parameter
-/// diverged on the module signature, a cast was rejected by the parser stage, a `let`
-/// annotation left the type evidence unavailable, and a struct field that no code used
-/// compiled. Only the first and last of these were even arguably correct. Refusing at
-/// the shipping entry, before any stage runs, makes the outcome one clean refusal that
-/// names the construct, and it stays correct when the reference later accepts more of
-/// the type, because the refusal does not depend on what the reference decides.
+/// The stages lower the type, its flat layout and the literal cast in a signature, a `let`
+/// annotation, a tuple, an array, a struct field and an enum payload. What remains is
+/// refused here, before any stage runs, because left to the stages some of these reached a
+/// divergence or unavailable type evidence rather than one clean refusal. The refusal does
+/// not depend on what the reference decides, so it stays correct when the reference admits
+/// more of the type.
+///
+/// | refused | why |
+/// |---|---|
+/// | a capacity that is not a literal | the generic template machinery does not substitute a const parameter into a capacity |
+/// | an `Option` of a `Text<N>` | an `Option` of any composite payload is outside the stages |
+/// | a data field | a private data field of a tuple layout is outside the stages |
+/// | a trait, an impl or a newtype | the stages key method heads and newtypes by a type name |
+///
+/// The five operations are lowered by the stages on a receiver the parser stage lays out
+/// as a text body. An operation the stages cannot lower is refused by the parser stage as
+/// an unsupported method call rather than here.
 ///
 /// A source the reference parser rejects answers `None`, so the existing rejection
 /// paths classify it exactly as before.
-fn first_text_capacity_line(src: &str) -> Option<u32> {
+fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
     use crate::ast::{Expr, Stmt, TypeDef, TypeExpr};
     use crate::visitor::Visitor;
 
-    fn type_line(te: &TypeExpr) -> Option<u32> {
+    /// Note every `Text<N>` inside `te`, and refuse the ones no stage lowers wherever
+    /// they appear.
+    fn type_scan(te: &TypeExpr, inside_option: bool, out: &mut Scan) {
         match te {
-            TypeExpr::TextN(_, span) => Some(span.line),
-            TypeExpr::Array(inner, _, _)
-            | TypeExpr::Option(inner, _)
-            | TypeExpr::Labelled(inner, _, _)
-            | TypeExpr::NegativeLabelled(inner, _, _) => type_line(inner),
-            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
-                items.iter().filter_map(type_line).min()
+            TypeExpr::TextN(cap, span) => {
+                out.named = true;
+                if inside_option {
+                    out.refuse("an `Option` of a `Text<N>`", span.line);
+                } else if cap.as_lit().is_none() {
+                    out.refuse("a `Text<N>` whose capacity is not a literal", span.line);
+                } else if cap.as_lit().is_some_and(|n| n > TEXT_CAPACITY_MAX) {
+                    // `text_cap_max` in `parse.kel`, the largest flat body a `NewComposite`
+                    // sixteen-bit size can carry beside the length word.
+                    out.refuse("a `Text<N>` whose capacity exceeds 65527", span.line);
+                }
             }
-            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => None,
+            TypeExpr::Option(inner, _) => type_scan(inner, true, out),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => type_scan(inner, inside_option, out),
+            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
+                items.iter().for_each(|t| type_scan(t, inside_option, out))
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => {}
         }
     }
 
+    #[derive(Default)]
     struct Scan {
-        lines: Vec<u32>,
+        named: bool,
+        refused: Vec<(u32, &'static str)>,
     }
     impl Scan {
+        fn refuse(&mut self, what: &'static str, line: u32) {
+            self.refused.push((line, what));
+        }
         fn note(&mut self, te: &TypeExpr) {
-            if let Some(line) = type_line(te) {
-                self.lines.push(line);
+            type_scan(te, false, self);
+        }
+        /// Refuse `te` as `what` when it names a `Text<N>` anywhere.
+        fn note_whole(&mut self, te: &TypeExpr, what: &'static str) {
+            let mut inner = Scan::default();
+            type_scan(te, false, &mut inner);
+            if inner.named {
+                self.named = true;
+                self.refuse(what, te.span().line);
             }
         }
     }
@@ -10745,8 +10699,8 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
     }
 
     let program = parse(&tokenize(src).ok()?).ok()?;
-    let mut scan = Scan { lines: Vec::new() };
-    let note_fn = |scan: &mut Scan, f: &crate::ast::FunctionDef| {
+    let mut scan = Scan::default();
+    for f in &program.functions {
         scan.note(&f.return_type);
         for p in &f.params {
             if let Some(te) = &p.type_expr {
@@ -10754,21 +10708,31 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
             }
         }
         scan.visit_block(&f.body);
-    };
-    for f in &program.functions {
-        note_fn(&mut scan, f);
     }
+    const IN_TRAIT: &str = "a `Text<N>` in a trait or an impl";
     for b in &program.impls {
+        scan.note_whole(&b.for_type, IN_TRAIT);
         for m in &b.methods {
-            note_fn(&mut scan, m);
+            scan.note_whole(&m.return_type, IN_TRAIT);
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    scan.note_whole(te, IN_TRAIT);
+                }
+            }
+            let mut body = Scan::default();
+            body.visit_block(&m.body);
+            if body.named {
+                scan.named = true;
+                scan.refuse(IN_TRAIT, m.span.line);
+            }
         }
     }
     for t in &program.traits {
         for m in &t.methods {
-            scan.note(&m.return_type);
+            scan.note_whole(&m.return_type, IN_TRAIT);
             for p in &m.params {
                 if let Some(te) = &p.type_expr {
-                    scan.note(te);
+                    scan.note_whole(te, IN_TRAIT);
                 }
             }
         }
@@ -10780,11 +10744,13 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
                 .variants
                 .iter()
                 .for_each(|v| v.fields.iter().for_each(|t| scan.note(t))),
-            TypeDef::Newtype(n) => scan.note(&n.underlying),
+            TypeDef::Newtype(n) => scan.note_whole(&n.underlying, "a `Text<N>` newtype"),
         }
     }
     for d in &program.data_decls {
-        d.fields.iter().for_each(|f| scan.note(&f.type_expr));
+        d.fields
+            .iter()
+            .for_each(|f| scan.note_whole(&f.type_expr, "a `Text<N>` data field"));
     }
     for u in &program.uses {
         if let Some(sig) = &u.signature {
@@ -10792,7 +10758,10 @@ fn first_text_capacity_line(src: &str) -> Option<u32> {
             sig.params.iter().for_each(|t| scan.note(t));
         }
     }
-    scan.lines.into_iter().min()
+    scan.refused
+        .into_iter()
+        .min()
+        .map(|(line, what)| (what, line))
 }
 
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
@@ -10819,16 +10788,14 @@ pub fn self_hosted_compile(
     {
         return Err(SelfHostError::NonHostTarget);
     }
-    // A `Text<N>` program is refused before any stage runs. The reference is consulted
-    // first so that a program it rejects, such as a literal longer than its capacity,
-    // reports that rejection rather than a subset limit that would send the user to a
-    // backend which rejects it too.
-    if let Some(line) = first_text_capacity_line(src) {
+    // A use of `Text<N>` the stages do not lower is refused before any stage runs. The
+    // reference is consulted first so that a program it rejects, such as a literal longer
+    // than its capacity, reports that rejection rather than a subset limit that would send
+    // the user to a backend which rejects it too.
+    if let Some((what, line)) = unsupported_text_capacity(src) {
         compile_reference(src)?;
         return Err(SelfHostError::Unsupported {
-            detail: format!(
-                "a capacity-bounded `Text<N>` at line {line} is outside the self-hosted subset"
-            ),
+            detail: format!("{what} at line {line} is outside the self-hosted subset"),
         });
     }
     // Obtain an independent verdict before the reference sees the source. Unknown facts

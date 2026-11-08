@@ -1,0 +1,50 @@
+COMPLETION CONDITION — two expired status claims (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE ROADMAP CARRIES THE MEASURED ANSWER.
+   Where the roadmap says the sufficiency question is unmeasured, it now states
+   the measured result, names the instrument that produced it, and dates it.
+
+2. THE SUPERSEDED TEXT REMAINS VISIBLE.
+   The original caveat is not deleted. It was correct when written, and its
+   expiry rather than its wrongness is the finding.
+
+3. THE INSTRUMENT NO LONGER MISDESCRIBES ITS OWN STATUS.
+   The file that produced the answer does not claim to be uncompiled, or to
+   require installation, if it is compiled and installed. If it asserts and runs
+   in the suite, it is not described as not being a test.
+
+4. SUFFICIENCY IS NOT CONFLATED WITH THE WORKSTREAM'S RISK.
+   The record states that the measured result answers whether one increment
+   unblocks the stage modules, and does NOT state or imply that it answers
+   whether those modules need coroutine support. If the second question is
+   mentioned, it is marked as unanswered here.
+
+5. "FREED" IS DEFINED WHERE IT IS REPORTED.
+   Any use of the measured result says that it means no other unsupported opcode
+   blocks the module, and not that the module lowers.
+
+6. THE FIGURE CARRIES ITS POPULATION.
+   The count of stages says which corpus roots it was taken over, and is not
+   presented as ranging over a population used by other figures in the tree.
+
+7. THE COST OF THE INSTRUMENT IS STATED IF IT IS RETAINED.
+   If the file remains in the suite, the record says roughly what it costs to
+   run, so that keeping it is a decision rather than an oversight.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every figure and status claim corresponds to output appearing in the
+   transcript. Carried figures are marked as carried and dated.
+
+9. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+   The native_codegen suite passes, or each failure is named with its cause and
+   with a statement of whether the cause belongs to this package.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the nine properties above,
+or whether any other goal in the same session advanced.

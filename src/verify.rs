@@ -1016,13 +1016,12 @@ struct CallResolver<'a> {
     /// Per-native WCMU bytes from host attestation. Indexed by native
     /// function entry index.
     native_wcmu: &'a [u32],
-    /// The module's shared-slot layout, indexed by shared slot. Used to size
-    /// the arena copy-out a `GetData` on a flat composite shared slot performs
-    /// (B28 item 2 / task #57). Empty on the local-only analysis path
-    /// ([`CallResolver::empty`]), which therefore under-counts a composite
-    /// shared read; only the module-level [`module_wcmu`] path, the
-    /// soundness-critical bound, carries the layout.
-    shared_layout: &'a [crate::bytecode::SharedSlotLayout],
+    /// The module's data layout. Used to size the arena copy-out a `GetData`
+    /// on a flat composite shared slot performs (B28 item 2 / task #57).
+    /// `None` on the local-only analysis path ([`CallResolver::empty`]), which
+    /// therefore under-counts a composite shared read; only the module-level
+    /// [`module_wcmu`] path, the soundness-critical bound, carries the layout.
+    data_layout: Option<&'a crate::bytecode::DataLayout>,
 }
 
 impl<'a> CallResolver<'a> {
@@ -1032,7 +1031,7 @@ impl<'a> CallResolver<'a> {
         Self {
             chunk_wcmu: &[],
             native_wcmu: &[],
-            shared_layout: &[],
+            data_layout: None,
         }
     }
 
@@ -1056,7 +1055,7 @@ impl<'a> CallResolver<'a> {
 /// [`wcmu_region`] scales them by iteration count.
 fn op_iteration_heap(op: &Op, chunk: &Chunk, resolver: &CallResolver) -> u32 {
     op.heap_alloc(chunk)
-        .saturating_add(shared_composite_copyout_bytes(op, resolver.shared_layout))
+        .saturating_add(shared_composite_copyout_bytes(op, resolver.data_layout))
 }
 
 /// Bytes the shared-composite copy-out allocates for `op` (task #57).
@@ -1070,24 +1069,25 @@ fn op_iteration_heap(op: &Op, chunk: &Chunk, resolver: &CallResolver) -> u32 {
 /// at compile time, so a `GetDataIndexed` over a shared slot reads scalars only;
 /// the element range is scanned defensively and contributes its largest
 /// composite copy-out, which is zero for a well-formed module.
-fn shared_composite_copyout_bytes(
+///
+/// The scan is over FIELDS, not elements. Every element of a field shares its
+/// kind and body length, so `DataLayout::shared_composite_max_len` visits each
+/// field the range overlaps once, and an indexed read of a long array costs a
+/// binary search and a short walk rather than one lookup per element.
+///
+/// The self-hosted resource stage sizes the same copy-out through this
+/// function, so the reference and the self-hosted twin cannot disagree about
+/// which fields an indexed read reaches.
+pub(crate) fn shared_composite_copyout_bytes(
     op: &Op,
-    shared_layout: &[crate::bytecode::SharedSlotLayout],
+    layout: Option<&crate::bytecode::DataLayout>,
 ) -> u32 {
-    let slot_copyout = |slot: usize| -> u32 {
-        shared_layout
-            .get(slot)
-            .filter(|e| e.kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
-            .map_or(0, |e| e.len as u32)
+    let (field, len) = match op {
+        Op::GetData(field) => (*field, None),
+        Op::GetDataIndexed(field, len) => (*field, Some(*len)),
+        _ => return 0,
     };
-    match op {
-        Op::GetData(slot) => slot_copyout(*slot as usize),
-        Op::GetDataIndexed(base, len) => (0..*len as usize)
-            .map(|i| slot_copyout(*base as usize + i))
-            .max()
-            .unwrap_or(0),
-        _ => 0,
-    }
+    layout.map_or(0, |dl| dl.operand_shared_composite_max_len(field, len))
 }
 
 /// Compute the worst-case memory usage over a region of instructions
@@ -2051,10 +2051,10 @@ pub fn module_wcmu_with_value_slot_bytes(
         let resolver = CallResolver {
             chunk_wcmu: &chunk_wcmu,
             native_wcmu,
-            shared_layout: module
-                .data_layout
-                .as_ref()
-                .map_or(&[], |dl| &dl.shared_layout),
+            // The field layout itself rather than a table expanded to one entry
+            // per shared slot, so the copy-out walk visits each field a
+            // `GetDataIndexed` range overlaps once rather than each element.
+            data_layout: module.data_layout.as_ref(),
         };
         let (wcmu_result, returns_text) =
             compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text, value_slot_bytes)?;
@@ -2429,10 +2429,10 @@ pub fn module_wcmu_with_bounds(
         let resolver = CallResolver {
             chunk_wcmu: &chunk_wcmu,
             native_wcmu: &per_site_native_wcmu,
-            shared_layout: module
-                .data_layout
-                .as_ref()
-                .map_or(&[], |dl| &dl.shared_layout),
+            // The field layout itself rather than a table expanded to one entry
+            // per shared slot, so the copy-out walk visits each field a
+            // `GetDataIndexed` range overlaps once rather than each element.
+            data_layout: module.data_layout.as_ref(),
         };
         let (mut wcmu_result, returns_text) =
             compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text, value_slot_bytes)?;
@@ -3603,8 +3603,10 @@ fn verify_chunk(
                     record(ip, P1, "break-if-targets-loop-exit");
                 }
                 Op::GetData(slot) | Op::SetData(slot) => {
+                    // The operand names a field, option B of the array
+                    // wire-slot design, so it is bounded by the field count.
                     let idx = *slot as usize;
-                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
+                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.field_count());
                     if data_len == 0 {
                         let op_name = if matches!(op, Op::GetData(_)) {
                             "GetData"
@@ -3630,7 +3632,7 @@ fn verify_chunk(
                         return Err(VerifyError {
                             chunk_name: name.clone(),
                             message: alloc::format!(
-                                "{} at {} references slot {} but data layout has {} slot(s)",
+                                "{} at {} references field {} but data layout has {} field(s)",
                                 op_name,
                                 ip,
                                 idx,
@@ -3641,7 +3643,6 @@ fn verify_chunk(
                     record(ip, P1, "data-slot-index-in-range");
                 }
                 Op::GetDataIndexed(base, len) | Op::SetDataIndexed(base, len) => {
-                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
                     let op_name = if matches!(op, Op::GetDataIndexed(_, _)) {
                         "GetDataIndexed"
                     } else {
@@ -3649,19 +3650,31 @@ fn verify_chunk(
                     };
                     // Empty spans need no storage and still have total outcomes.
                     record(ip, P1, "data-range-layout-declared");
-                    let base_usize = *base as usize;
-                    let len_usize = *len as usize;
-                    let end = base_usize.saturating_add(len_usize);
-                    if end > data_len {
+                    // The first operand names a field and a nonempty span lies
+                    // within it, so the length is bounded by that field's
+                    // element count. An empty span is valid up to and including
+                    // the field count, as `DataLayout::operand_span` states.
+                    let in_bounds = match module.data_layout.as_ref() {
+                        Some(dl) => dl.operand_span(*base, *len).is_some(),
+                        None => *base == 0 && *len == 0,
+                    };
+                    if !in_bounds {
+                        let (fields, count) = module.data_layout.as_ref().map_or((0, 0), |dl| {
+                            (
+                                dl.field_count(),
+                                dl.fields.get(*base as usize).map_or(0, |f| f.count),
+                            )
+                        });
                         return Err(VerifyError {
                             chunk_name: name.clone(),
                             message: alloc::format!(
-                                "{} at {} references slot range [{}, {}) but data layout has {} slot(s)",
+                                "{} at {} references {} element(s) of field {} but data layout has {} field(s) and that field has {} element(s)",
                                 op_name,
                                 ip,
-                                base_usize,
-                                end,
-                                data_len
+                                len,
+                                base,
+                                fields,
+                                count
                             ),
                         });
                     }
@@ -5423,7 +5436,7 @@ pub(crate) mod tests {
     #[test]
     fn data_slot_out_of_bounds_fails() {
         // GetData with index beyond data layout should fail verification.
-        use crate::bytecode::{DataLayout, DataSlot};
+        use crate::bytecode::{DataField, DataLayout};
         let chunk = make_chunk("main", vec![Op::GetData(5), Op::Return], BlockType::Func);
         let module = Module {
             schema_hash: 0,
@@ -5444,17 +5457,22 @@ pub(crate) mod tests {
             shared_data_bytes: 0,
             private_data_bytes: 0,
             data_layout: Some(DataLayout {
-                slots: vec![DataSlot {
-                    name: String::from("ctx.x"),
-                    visibility: crate::bytecode::SlotVisibility::Shared,
-                }],
-                shared_layout: Vec::new(),
-                private_composite_layout: Vec::new(),
-                private_init: Vec::new(),
+                fields: vec![DataField::shared(
+                    "ctx.x",
+                    0,
+                    1,
+                    crate::value_layout::ScalarKind::Int.to_tag(),
+                    0,
+                    0,
+                    0,
+                )],
             }),
         };
         let err = verify(&module).unwrap_err();
-        assert!(err.message.contains("slot"));
+        // A data operand names a field since option B, so the refusal names
+        // the field and the field count.
+        assert!(err.message.contains("field 5"), "{}", err.message);
+        assert!(err.message.contains("1 field(s)"), "{}", err.message);
     }
 
     #[test]
@@ -5469,7 +5487,7 @@ pub(crate) mod tests {
     #[test]
     fn data_valid_slot_passes() {
         // GetData/SetData with valid indices should pass.
-        use crate::bytecode::{DataLayout, DataSlot};
+        use crate::bytecode::{DataField, DataLayout};
         let chunk = make_chunk(
             "main",
             vec![
@@ -5498,34 +5516,29 @@ pub(crate) mod tests {
             flags: 0,
             shared_data_bytes: 16,
             private_data_bytes: 0,
+            // Two 8-byte Int scalars at offsets 0 and 8 within the 16-byte
+            // shared buffer, one field each, as a compiled module emits.
             data_layout: Some(DataLayout {
-                slots: vec![
-                    DataSlot {
-                        name: String::from("ctx.a"),
-                        visibility: crate::bytecode::SlotVisibility::Shared,
-                    },
-                    DataSlot {
-                        name: String::from("ctx.b"),
-                        visibility: crate::bytecode::SlotVisibility::Shared,
-                    },
+                fields: vec![
+                    DataField::shared(
+                        "ctx.a",
+                        0,
+                        1,
+                        crate::value_layout::ScalarKind::Int.to_tag(),
+                        0,
+                        0,
+                        0,
+                    ),
+                    DataField::shared(
+                        "ctx.b",
+                        1,
+                        1,
+                        crate::value_layout::ScalarKind::Int.to_tag(),
+                        0,
+                        8,
+                        0,
+                    ),
                 ],
-                // One layout entry per shared slot, as a compiled module emits
-                // (audit B6 residual reconciliation): two 8-byte Int scalars at
-                // offsets 0 and 8 within the 16-byte shared buffer.
-                shared_layout: vec![
-                    crate::bytecode::SharedSlotLayout {
-                        offset: 0,
-                        kind: crate::value_layout::ScalarKind::Int.to_tag(),
-                        len: 0,
-                    },
-                    crate::bytecode::SharedSlotLayout {
-                        offset: 8,
-                        kind: crate::value_layout::ScalarKind::Int.to_tag(),
-                        len: 0,
-                    },
-                ],
-                private_composite_layout: Vec::new(),
-                private_init: Vec::new(),
             }),
         };
         assert!(verify(&module).is_ok());

@@ -80,13 +80,13 @@ fn command_checks_resource_capacity_without_running_the_stream() {
 
 #[test]
 fn reference_disagreement_prevents_successful_admission() {
-    use keleusma::bytecode::StructField;
+    use keleusma::bytecode::{ConstValue, StructField};
     use keleusma::selfhost::{VerificationVerdict, admit_module_via_kel};
     use keleusma::value_layout::ScalarKind;
 
-    // The selected typed-stage profile widens at a join. The reference retains
-    // this scalar shape, so the shipping consistency gate must catch the gap.
-    let mut module = keleusma::selfhost::compile_src("fn main(n: Word) -> Word { n }");
+    // The join at an `EndIf` that this test pinned until 2026-11-01 now keeps the scalar shape
+    // the reference keeps, a repair of the C5 review, so both refuse that module.
+    let mut module = keleusma::selfhost::compile_src("fn main(n: Word) -> Word { let a = n; a }");
     module.chunks[0].ops = vec![
         Op::GetLocal(0),
         Op::PushImmediate(1),
@@ -99,17 +99,64 @@ fn reference_disagreement_prevents_successful_admission() {
         Op::Return,
     ];
     assert!(keleusma::verify::verify(&module).is_err());
-    assert_eq!(
+    assert!(matches!(
         admit_module_via_kel(&module, 65536).unwrap(),
-        VerificationVerdict::Accepted
-    );
+        VerificationVerdict::Rejected { .. }
+    ));
+
+    // The loop exit this test pinned until 2026-11-04, residual 1 of
+    // docs/decisions/C5_SELFHOSTED_VALIDATOR_REVIEW.md, now keeps the join of the break states
+    // the reference keeps, so both refuse it and it no longer reaches the disagreement path.
+    module.chunks[0].ops = vec![
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::Loop(7),
+        Op::GetLocal(0),
+        Op::SetLocal(1),
+        Op::Break(7),
+        Op::EndLoop(3),
+        Op::GetLocal(1),
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    assert!(keleusma::verify::verify(&module).is_err());
+    assert!(matches!(
+        admit_module_via_kel(&module, 65536).unwrap(),
+        VerificationVerdict::Rejected { .. }
+    ));
+
+    // The typed stage records a scalar's size and whether it is text, not its kind, so the join
+    // of a `Bool` and a `Byte` at an `EndIf` keeps a one-byte scalar where the reference forgets
+    // it. The stage then refuses a field read the reference defers. That is residual 6 of the
+    // review, an over-rejection and not a soundness gap, and it is the disagreement the
+    // shipping consistency gate must report.
+    module.chunks[0].constants = vec![ConstValue::Bool(true), ConstValue::Byte(1)];
+    module.chunks[0].ops = vec![
+        Op::GetLocal(0),
+        Op::If(4),
+        Op::Const(0),
+        Op::Else(5),
+        Op::Const(1),
+        Op::EndIf,
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    assert!(keleusma::verify::verify(&module).is_ok());
+    assert!(matches!(
+        admit_module_via_kel(&module, 65536).unwrap(),
+        VerificationVerdict::Rejected { .. }
+    ));
     let out = check(&module, "self-hosted", 65536, "disagreement");
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("validator disagreement"));
-    assert_eq!(
-        check(&module, "rust", 65536, "disagreement").status.code(),
-        Some(1)
-    );
+    let out = check(&module, "rust", 65536, "disagreement");
+    assert!(out.status.success(), "{out:?}");
 }
 
 /// The stage sources under `src/selfhost/kel`, as file stems.

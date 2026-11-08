@@ -1,0 +1,40 @@
+COMPLETION CONDITION — every row of the state table has a disposition
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test enumerates the rows of the state table in the resume section of this
+   line's handoff and requires each one to carry exactly one disposition: its
+   figure is checked against the tree, or it names the commit at which it was
+   measured, or it is marked as carrying no figure. A row with no disposition
+   fails the test, and the message names that row.
+
+2. The enumeration derives the set of rows from the table itself, so that a row
+   added later is subject to the same requirement without any edit to the test. A
+   test that names in advance which rows matter does not satisfy this.
+
+3. If the enumeration finds fewer rows than a recorded floor, the test fails as a
+   broken probe rather than passing.
+
+4. Every row whose disposition is "checked" is in fact compared against a value
+   derived from the tree, and a wrong figure in any such row fails the test.
+
+5. The corpus row's figures are derived using the same enumeration and source
+   composition the differential harness uses, not by counting files.
+
+6. No row presents a figure that the tree states must not be relied upon. Where a
+   quantity changes independently of this line's work, the row gives the means to
+   derive it rather than a number.
+
+7. Figures that cannot be derived from the tree are attributed to a commit rather
+   than given an invented derivation.
+
+8. The figures in that table agree with the tree at the time the work is finished.
+
+9. The recorded test population figures agree with the tree, and the backend gate
+   passes in both float configurations.
+
+10. Files under src/ and tests/ at the repository root are unmodified.

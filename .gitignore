@@ -66,8 +66,10 @@ secret/
 # See `examples/rtos/build.rs` for the canonical pattern.
 *.kel.bin
 
-# Python bytecode from the scripts/ tooling
+# Python bytecode from the mutation-sweep tooling. Regenerated on every run,
+# so tracking it dirties the tree and puts a binary diff in unrelated commits.
 __pycache__/
+*.py[cod]
 
 # Environment files, which usually hold credentials. Commit an example with
 # placeholder values instead. From sgeos/project-template.

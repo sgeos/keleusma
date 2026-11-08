@@ -48,6 +48,30 @@ fn word_bytes() -> usize {
     keleusma::target::Target::host().word_bits() as usize / 8
 }
 
+/// The most negative and most positive signed word of this build. A literal or
+/// a result outside this range wraps under a narrow-word selector, so every
+/// extreme an expectation uses is derived from here rather than written as an
+/// `i64` constant.
+fn word_range() -> (i64, i64) {
+    let bits = (word_bytes() * 8) as u32;
+    if bits >= 64 {
+        (i64::MIN, i64::MAX)
+    } else {
+        (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1)
+    }
+}
+
+/// Slice bounds covering one above the most negative word, the small
+/// boundary values and the most positive word, all representable in a word
+/// of this build. `extra` adds values that are representable at every width.
+fn slice_bounds(extra: &[i64]) -> Vec<i64> {
+    let (min, max) = word_range();
+    let mut v = vec![min + 1, -1, 0, 1, 2, 3, 4, 5];
+    v.extend_from_slice(extra);
+    v.push(max);
+    v
+}
+
 /// The flat body of a `Text<cap>` holding `bytes`, built from the
 /// specification and not from compiler output. It always satisfies the
 /// invariant, so a result compared against it is checked for the invariant as
@@ -298,12 +322,12 @@ fn slice_model(s: &[u8], start: i64, end: i64) -> Vec<u8> {
 
 #[test]
 fn slice_matches_the_clamped_model() {
-    let bounds: &[i64] = &[i64::MIN + 1, -1, 0, 1, 2, 3, 4, 5, 100, i64::MAX];
+    let bounds = slice_bounds(&[100]);
     let mut reached = 0usize;
     for s in ["", "abcd", "a\0b"] {
         let cap = s.len() + 2;
-        for &start in bounds {
-            for &end in bounds {
+        for &start in &bounds {
+            for &end in &bounds {
                 let src = format!(
                     "fn main() -> Text<{cap}> {{ ({} as Text<{cap}>).slice({start}, {end}) }}",
                     lit(s)
@@ -350,17 +374,7 @@ impl Raw {
 /// past it, and the most positive word. Each is representable in a word of
 /// this build, because the extremes are derived from the word width.
 fn bad_lengths(cap: usize) -> Vec<i64> {
-    let bits = (word_bytes() * 8) as u32;
-    let min = if bits >= 64 {
-        i64::MIN
-    } else {
-        -(1i64 << (bits - 1))
-    };
-    let max = if bits >= 64 {
-        i64::MAX
-    } else {
-        (1i64 << (bits - 1)) - 1
-    };
+    let (min, max) = word_range();
     let cap = cap as i64;
     vec![min, -1, 0, 1, cap - 1, cap, cap + 1, max]
 }
@@ -492,12 +506,12 @@ fn eq_of_malformed_texts_compares_their_contents() {
 
 #[test]
 fn slice_of_a_malformed_text_slices_its_content() {
-    let bounds: &[i64] = &[i64::MIN + 1, -1, 0, 1, 2, 3, 4, 5, i64::MAX];
+    let bounds = slice_bounds(&[]);
     let mut reached = 0usize;
     for len in bad_lengths(FOUR.len()) {
         let t = Raw { len, bytes: FOUR };
-        for &start in bounds {
-            for &end in bounds {
+        for &start in &bounds {
+            for &end in &bounds {
                 let got = run_with(
                     &format!("fn main() -> Text<4> {{ (\"1\" as Text<4>).slice({start}, {end}) }}"),
                     &[t],
@@ -514,10 +528,12 @@ fn slice_of_a_malformed_text_slices_its_content() {
 #[test]
 fn a_malformed_host_argument_reads_as_its_effective_content() {
     // The same rule holds for a body a host builds and passes to an entry,
-    // which is the path the design record names for a malformed value.
+    // which is the path the design record names for a malformed value. The
+    // three lengths are digits in base five, since each lies in `0..=4`, so the
+    // largest result, 124, still fits an 8-bit word.
     let module = compile_src(
         "fn main(t: Text<4>) -> Word { \
-         t.len() * 1000 + t.concat(\"\" as Text<1>).len() * 100 + t.slice(0, 9).len() }",
+         t.len() * 25 + t.concat(\"\" as Text<1>).len() * 5 + t.slice(0, 9).len() }",
     );
     keleusma::verify::verify(&module).expect("verify");
     let wb = word_bytes();
@@ -540,7 +556,7 @@ fn a_malformed_host_argument_reads_as_its_effective_content() {
             .unwrap_or_else(|e| panic!("length {len}: {e:?}"));
         let l = Raw { len, bytes: FOUR }.content().len() as i64;
         match got {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, l * 1101, "length {len}"),
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, l * 31, "length {len}"),
             other => panic!("length {len}: {other:?}"),
         }
         reached += 1;
@@ -597,15 +613,17 @@ fn labels_flow_through_an_operation() {
 #[test]
 fn a_user_type_keeps_its_own_method_of_the_same_name() {
     // The operations are resolved by receiver type, so a trait method named
-    // `len` or `eq` on a struct still resolves to the impl.
+    // `len` or `eq` on a struct still resolves to the impl. The struct's `len`
+    // gives 42 and the text's gives 3, combined so the result, 72, fits an
+    // 8-bit word.
     let src = "struct S { a: Word }\n\
                trait Size { fn len(s: S) -> Word; fn eq(s: S, o: S) -> bool; }\n\
                impl Size for S { fn len(s: S) -> Word { s.a + 40 } \
                fn eq(s: S, o: S) -> bool { s.a != o.a } }\n\
                fn main() -> Word { let s = S { a: 2 }; \
                let t = \"abc\" as Text<4>; \
-               if s.eq(S { a: 2 }) { 0 } else { s.len() * 10 + t.len() } }";
-    assert_eq!(run_word(src), 423);
+               if s.eq(S { a: 2 }) { 0 } else { s.len() + t.len() * 10 } }";
+    assert_eq!(run_word(src), 72);
 }
 
 #[test]
@@ -807,21 +825,66 @@ fn the_static_cost_is_finite_and_linear_in_the_capacity() {
 
 // --- The self-hosted compiler ---
 
-/// The stages under `kel/` do not mirror the operations. A program using one
-/// necessarily names a `Text<N>`, because the literal cast is the only way to
-/// make an operand, so the shipping entry refuses it as unsupported before any
-/// stage runs. This lives here rather than in a `selfhost_*` binary because the
-/// workspace job, the only one that enables `text` together with `self-host`,
-/// does not run those binaries.
+/// The stages under `kel/` lower the five operations to the reference's
+/// instruction sequences. Each identical case is compiled through the shipping
+/// entry, which returns a module only after comparing it with the reference
+/// field by field, and its artifact is then compared byte for byte. The cases
+/// cover every operation, each receiver form the parser lays out as a text body,
+/// the hidden locals of nested and chained operations and of an argument that
+/// declares its own, a position above the immediate range, a guard, a match arm
+/// and a yield. The refusals pin the limits the stages keep, each refused
+/// rather than emitted divergently. This lives here rather than in a
+/// `selfhost_*` binary because the workspace job, the only one that enables
+/// `text` together with `self-host`, does not run those binaries.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_bundled_text_operation_is_outside_the_self_hosted_subset() {
-    let src = "fn main() -> Word { (\"ab\" as Text<2>).concat(\"c\" as Text<2>).len() }";
-    match keleusma::selfhost::self_hosted_compile(src, &keleusma::target::Target::host()) {
-        Err(keleusma::selfhost::SelfHostError::Unsupported { detail }) => {
-            assert!(detail.contains("Text<N>"), "{detail}");
+fn the_self_hosted_compiler_lowers_the_operations_byte_identically() {
+    use keleusma::selfhost::{SelfHostError, self_hosted_compile};
+    let target = keleusma::target::Target::host();
+    let identical = [
+        "fn main() -> Word { let t = \"ab\" as Text<4>; t.len() }",
+        "fn main() -> Word { (\"a\" as Text<40>).capacity() }",
+        "fn main() -> Text<6> { let a = \"ab\" as Text<4>; let b = \"c\" as Text<2>; a.concat(b) }",
+        "fn main() -> Text<24> { let a = \"ab\" as Text<20>; let b = \"c\" as Text<4>; a.concat(b) }",
+        "fn main() -> bool { (\"ab\" as Text<20>).eq(\"ab\" as Text<17>) }",
+        "fn main() -> Text<4> { (\"abcd\" as Text<4>).slice(1, 3) }",
+        "fn main() -> Word { let t = \"abcdefghijklmnopqrst\" as Text<20>; t.slice(16, 19).len() }",
+        "fn main(t: Text<4>) -> Word { t.len() * 1000 + t.concat(\"\" as Text<1>).len() * 100 + t.slice(0, 9).len() }",
+        "fn main() -> Word { (\"ab\" as Text<2>).concat(\"c\" as Text<2>).len() }",
+        "fn main() -> Text<9> { let a = \"ab\" as Text<2>; let b = \"c\" as Text<3>; a.concat(b).concat(\"de\" as Text<4>) }",
+        "fn main() -> Word { let a = \"ab\" as Text<4>; let b = \"c\" as Text<2>; let c = a.concat(b.concat(b)); c.len() }",
+        "fn main() -> Text<4> { let t = \"abcd\" as Text<4>; let u = \"ab\" as Text<4>; t.slice(u.len(), 3) }",
+        "fn main() -> Text<4> { let t = \"abcd\" as Text<4>; let u = \"ab\" as Text<4>; t.slice(1, u.len()) }",
+        "fn mk() -> Text<4> { \"ab\" as Text<4> }\nfn main() -> Word { mk().len() }",
+        "fn main() -> Word { let xs = [\"ab\" as Text<4>, \"c\" as Text<4>]; xs[1].len() }",
+        "struct S { n: Word, t: Text<5> }\nfn main() -> Word { let s = S { n: 1, t: \"abc\" as Text<5> }; s.t.len() }",
+        "enum E { A, V(Text<8>) }\nfn f(e: E) -> Word { match e { E::A => 0, E::V(t) => t.len() } }\nfn main() -> Word { f(E::V(\"a\" as Text<8>)) }",
+        "fn f(t: Text<4>) -> Word when t.len() > 1 { 1 }\nfn f(t: Text<4>) -> Word { 0 }\nfn main() -> Word { f(\"ab\" as Text<4>) }",
+        "loop main(e: Word) -> Text<4> { let n = yield (\"h\" as Text<2>).concat(\"i\" as Text<2>); n }",
+        "struct S { a: Word }\ntrait Size { fn len(s: S) -> Word; }\nimpl Size for S { fn len(s: S) -> Word { s.a + 40 } }\nfn main() -> Word { let s = S { a: 2 }; let t = \"abc\" as Text<4>; s.len() * 10 + t.len() }",
+    ];
+    let mut compared = 0usize;
+    for src in identical {
+        let ours = self_hosted_compile(src, &target)
+            .unwrap_or_else(|e| panic!("{src}\n  expected a byte-identical module, got {e:?}"));
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            compile_src(src).to_bytes().unwrap(),
+            "{src}"
+        );
+        compared += 1;
+    }
+    assert_eq!(compared, 20, "a byte comparison was skipped");
+    for src in [
+        // An instruction count past the code generator's budget.
+        "fn main() -> Text<600> { let a = \"ab\" as Text<300>; let b = \"c\" as Text<300>; a.concat(b) }",
+        // A text value passed to a generic function.
+        "fn id<T>(x: T) -> T { x }\nfn main() -> Text<5> { id((\"ab\" as Text<2>).concat(\"c\" as Text<3>)) }",
+    ] {
+        match self_hosted_compile(src, &target) {
+            Err(SelfHostError::Unsupported { .. }) => {}
+            other => panic!("{src}\n  expected an unsupported refusal, got {other:?}"),
         }
-        other => panic!("expected an unsupported refusal, got {other:?}"),
     }
 }
 

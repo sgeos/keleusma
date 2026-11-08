@@ -783,7 +783,7 @@ pub const VERIFY_OP_CAP: usize = 8192;
 pub const LEX_SOURCE_CAP: usize = 524288;
 
 /// How many distinct identifiers `src.istart`/`src.ilen` in `lexer.kel` hold.
-pub const LEX_INTERN_CAP: usize = 1280;
+pub const LEX_INTERN_CAP: usize = 1536;
 
 /// Slot of `src.len`, the source byte count.
 pub const BR_LEX_LEN: usize = 0;
@@ -955,6 +955,19 @@ pub const BR_P_NT_BEGIN: usize = BR_P_NT_REFINED + NEWTYPE_CAP;
 pub const BR_P_NT_END: usize = BR_P_NT_BEGIN + NEWTYPE_CAP;
 /// Per newtype, its refinement predicate's chunk index, else -1.
 pub const BR_P_NT_PRED: usize = BR_P_NT_END + NEWTYPE_CAP;
+/// The scalar kind of `loop main`'s first parameter, 1 `bool`, 2 `Byte` or 3 `Word`, -1 for
+/// a parameter of another type and 0 for none, the type the reference gives every `yield`.
+pub const BR_P_RES_MAIN: usize = BR_P_NT_PRED + NEWTYPE_CAP;
+/// One in a probe round, the only round in which `parse.kel` reports a fixed resume kind.
+pub const BR_P_RES_PROBE: usize = BR_P_RES_MAIN + 1;
+/// The number of seeded resume kinds.
+pub const BR_P_RES_COUNT: usize = BR_P_RES_PROBE + 1;
+/// Per seeded resume kind, the token position of its `yield`.
+pub const BR_P_RES_AT: usize = BR_P_RES_COUNT + 1;
+/// Per seeded resume kind, the kind an annotated `let` fixed for that `yield`.
+pub const BR_P_RES_KIND: usize = BR_P_RES_AT + RESUME_FACT_CAP;
+/// Seeded resume kinds `parse.kel` holds, restated from `toks.res_at`.
+pub const RESUME_FACT_CAP: usize = 16;
 /// Newtypes `parse.kel` holds, restated from `toks.nt_name`.
 pub const NEWTYPE_CAP: usize = 16;
 /// Generic templates `parse.kel` holds, restated from `toks.gen_name`.
@@ -973,6 +986,15 @@ pub const PARSE_OPAQUE_TYPE_TAG: i64 = 141;
 /// sixteen times the key.
 /// No other record, body records included, uses this tag.
 pub const PARSE_GENERIC_REQUEST_TAG: i64 = 140;
+/// The tag `parse.kel` reports a resume value's fixed kind under in a probe round, carrying
+/// the `yield`'s token position times sixteen plus the kind. No other record uses this tag.
+pub const PARSE_RESUME_FACT_TAG: i64 = 142;
+/// The capacity `N` of a `Text<N>` type, following the `Text` type record it qualifies, in
+/// a signature, a `let` annotation or a declaration. The payload is the positive literal
+/// capacity. It is a type record, so in a body it is diverted with the annotation that
+/// carries it and never reaches `reconstruct.kel`, where the generic argument tags would
+/// collide with the outcome records.
+pub const PARSE_TEXT_CAPACITY_TAG: i64 = 143;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -1122,6 +1144,11 @@ mod shared_layout_tests {
             ("nt_begin", "BR_P_NT_BEGIN", BR_P_NT_BEGIN),
             ("nt_end", "BR_P_NT_END", BR_P_NT_END),
             ("nt_pred", "BR_P_NT_PRED", BR_P_NT_PRED),
+            ("res_main", "BR_P_RES_MAIN", BR_P_RES_MAIN),
+            ("res_probe", "BR_P_RES_PROBE", BR_P_RES_PROBE),
+            ("res_count", "BR_P_RES_COUNT", BR_P_RES_COUNT),
+            ("res_at", "BR_P_RES_AT", BR_P_RES_AT),
+            ("res_kind", "BR_P_RES_KIND", BR_P_RES_KIND),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

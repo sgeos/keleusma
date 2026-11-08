@@ -1,0 +1,55 @@
+COMPLETION CONDITION — does structural awkwardness concentrate
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE CLAIM IS MEASURED, NOT ILLUSTRATED
+   An executable check reports, over one named corpus, how several structurally
+   unusual properties are distributed across modules. The properties are stated,
+   and each is one the backend cares about for a reason given independently of
+   which modules turn out to hold it.
+
+2. THE CONCLUSION FOLLOWS THE DISTRIBUTION
+   The tree states whether the properties concentrate in a few modules or are
+   spread widely, with the counts that support it. If the previously published
+   clustering claim is not supported, it is visibly retracted rather than quietly
+   dropped, and the superseded wording remains quoted.
+
+3. CONCENTRATION IS REPORTED AGAINST A BASELINE
+   Any statement that a property is concentrated is accompanied by how many
+   modules hold it out of how many, so the same words cannot describe a rare and
+   a common property alike.
+
+4. SELECTION BY ATTENTION IS ADDRESSED
+   The tree acknowledges that modules investigated often will appear often, and
+   the measurement does not rest on how frequently a module appears in this
+   line's own notes.
+
+5. THE CHECK CAN FAIL
+   Any check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively, and no guard's conclusion is
+   made automatic by its own precondition.
+
+6. WALKS USE TRUE POP AND PUSH COUNTS
+   Any reconstruction of which instruction produced a value derives from the
+   source documented as giving true pop and push counts, not the operand-stack
+   peak model.
+
+7. FIGURES ARE RE-DERIVED AND CARRY THEIR POPULATION
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed, and every figure names the set it was measured over.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's state
+   is recorded, either from a run or with a stated reason why the change could
+   not affect it.
+
+9. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree says
+   why not. Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs,
+   and the CI workflow directory.

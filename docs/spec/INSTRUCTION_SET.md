@@ -44,10 +44,10 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| GetData | u24 slot | 1 | Push data segment slot value onto stack. |
-| SetData | u24 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
-| GetDataIndexed | u24 base, u24 len | 8 | Pop a Word, Byte or Unit fallback and then a Word index. Read in range, otherwise use the supplied fallback. Push value, index, four Word byte limbs of the bound and an outcome flag. Invalid spans and operand types remain contract errors. |
-| SetDataIndexed | u24 base, u24 len | 8 | Pop value and Word index. A valid index writes one slot. An invalid index performs no write. Push the index, four Word byte limbs of the bound and flag zero for success or one for invalid. Invalid spans and storage-contract violations remain errors. |
+| GetData | u24 field | 1 | Push the value of element zero of the data field the operand names by its layout index. |
+| SetData | u24 field | 1 | Pop value and store into element zero of the data field the operand names. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the field's record gives (no dedicated composite-write opcode). |
+| GetDataIndexed | u24 field, u24 len | 8 | Pop a Word, Byte or Unit fallback and then a Word index. The span names one data field and its length is at most that field's element count. Read element `index` of the field in range, otherwise use the supplied fallback. Push value, index, four Word byte limbs of the bound and an outcome flag. Invalid spans and operand types remain contract errors. |
+| SetDataIndexed | u24 field, u24 len | 8 | Pop value and Word index. The span is as for `GetDataIndexed`. A valid index writes one element of the field. An invalid index performs no write. Push the index, four Word byte limbs of the bound and flag zero for success or one for invalid. Invalid spans and storage-contract violations remain errors. |
 | BoundsCheck | u16 bound | 7 | Preserve the Word index and append four Word byte limbs of the unsigned bound, little-endian, then a flag. An invalid index reifies as flag `1`, while an index in `[0, bound)` yields flag `0`. The limbs are sign-extended from eight bits. No indexed data access or language bounds fault occurs. |
 
 ## Arithmetic

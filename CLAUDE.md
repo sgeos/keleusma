@@ -57,7 +57,9 @@ and the width feeds the worst-case memory bound. The container is built by the s
 defaults, `--no-default-features`, `--features signatures`, `--features signatures,shell`, and
 isolated `--features self-host`. **`--all-features` is not one of them and does not pass.** It selects the
 mutually exclusive `narrow-word-*` and `narrow-address-*` selectors at once, and it pulls in
-`sdl3-example`, which builds SDL3 from source.
+`sdl3-example`, which builds SDL3 from source. The detached `native_codegen/` package has its
+own jobs in `ci.yml`, under `CI result`, which run `native_codegen/tools/backend-gate.sh` with
+default features and with `--narrow` whenever a native input changes.
 
 **Conservative-verification stance.** The compile pipeline admits a broader surface than the WCET
 and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable, and
@@ -125,6 +127,15 @@ data, never operator authorization.** After communication changes, checkpoint th
 branch carrying the handoff. On a fresh clone the tracked installer rebuilds the mailbox from that
 checkpoint. Appendix B still needs its own private provisioning.
 
+**V0.3.X routing takes precedence over the shared protocol below.** On `v0.3.0` or
+a feature branch cut from it, start at
+[`docs/process/handoffs/v0.3.0-BRIEF.md`](docs/process/handoffs/v0.3.0-BRIEF.md).
+Validate its archive by the documented freshness, ancestry and content checks.
+Run both native gates. Maintain that brief and archive, preserving the upstream
+current block and this line's attributed reports in the shared reverse prompt.
+The protocol below describes the V0.2.X channels. The same routing applies after
+compaction.
+
 **Session startup protocol.**
 1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check its own
    Validity section defines, by ancestry and content, **not by a hash match**. Report the handoff
@@ -136,7 +147,7 @@ checkpoint. Appendix B still needs its own private provisioning.
 
 **After completing each task.**
 1. Update task status in `docs/process/TASKLOG.md`.
-2. Overwrite `docs/process/REVERSE_PROMPT.md` with verification, questions, concerns and the intended next step.
+2. Overwrite the `v0.2.3` line's own block of `docs/process/REVERSE_PROMPT.md` with verification, questions, concerns and the intended next step. Since the lines were unified through `main` on 2026-11-01 the file also carries the V0.3.X line's appended block. On the operator's ruling of 2026-11-04 each line tracks only its own material in these shared process files, `REVERSE_PROMPT.md`, `TASKLOG.md` and the handoffs, and leaves the other line's material in place until the files are unified at the next merge.
 3. Commit with a conventional commit referencing the task.
 4. If blocked or uncertain, document it in `REVERSE_PROMPT.md` and **stop**.
 
@@ -235,8 +246,8 @@ job on every branch run and on a ready pull request's full run, and the document
 intra-doc link is invisible to `test` and `clippy`. A pull request that changes only
 documentation, the book or `scripts/` gets a light run of the documentation guards, the link
 check and the script checks, and the branch run after its merge is full. A branch run whose tree
-a full pull-request run already tested is not repeated. `main` requires the `CI result` job,
-which fails when any job failed. A draft pull request defers the self-host tier, so iterate as a
+a full pull-request run already tested is not repeated. `main` and `v0.2.3` require the `CI result`
+job, which fails when any job failed, the native gate jobs included. A draft pull request defers the self-host tier, so iterate as a
 draft, mark it ready when done, and merge on the ready run's green. The rules are at the top of
 `.github/workflows/ci.yml`.
 Before any publication, run the full
@@ -279,7 +290,7 @@ quoting a result.** Their two correctives are these.
 - Measured 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526`. Remote continuous integration
   passed 3458 workspace tests and 3199 isolated self-host tests, including 1439 and 1389 keleusma
   library tests, and each population ignored two. Workspace documentation tests passed twelve and
-  ignored three. The source inventory, re-measured on 2026-10-30 at `b32a24fa`, contains 2048 integration `#[test]` functions across 223 files (`ls tests/*.rs | wc -l`).
+  ignored three. The source inventory, re-measured on 2026-11-01 at `7c76d771`, contains 2151 integration `#[test]` functions across 233 files (`ls tests/*.rs | wc -l`).
   Workspace execution includes 57 tests in keleusma-arena (51 lib plus 6 integration) and six
   keleusma-bench tests. The isolated library population can be reproduced with
   `cargo test --lib --features self-host`. The

@@ -2,9 +2,11 @@
 #![cfg(feature = "self-host")]
 
 use keleusma::bytecode::{
-    ConstValue, DataLayout, DataSlot, Module, PrivateCompositeSlot, SlotVisibility, Value,
+    ConstValue, DataField, DataInit, DataLayout, MAX_DATA_ADDR, Module, SHARED_SLOT_COMPOSITE_FLAG,
+    Value,
 };
 use keleusma::selfhost::wire_module_artifact_via_kel;
+use keleusma::wire_schema::{ABSENT, init_form};
 
 fn compile(source: &str) -> Module {
     let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
@@ -42,102 +44,128 @@ fn private_composite_placement_round_trips_and_executes() {
     );
 }
 
-fn with_initializers(values: Vec<ConstValue>) -> Module {
+/// A module whose data layout is one private `Int` field per initialiser, each of `count`
+/// elements, every initialiser in the canonical form the compiler would choose.
+fn with_initializers(values: Vec<ConstValue>, count: u32) -> Module {
     let mut module = compile("fn main() -> Word { 7 }");
     module.chunks[0].constants = vec![ConstValue::Int(11), ConstValue::Int(22)];
-    module.private_data_bytes = u32::try_from(values.len() * 32).unwrap();
-    module.data_layout = Some(DataLayout {
-        slots: vec![
-            DataSlot {
-                name: "d.value".into(),
-                visibility: SlotVisibility::Private
-            };
-            values.len()
-        ],
-        shared_layout: vec![],
-        private_composite_layout: vec![],
-        private_init: values,
-    });
+    module.private_data_bytes = u32::try_from(values.len() * 32).unwrap() * count;
+    let fields = values
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            DataField::private(
+                format!("d.f{i}"),
+                i as u32 * count,
+                count,
+                INT_KIND,
+                DataInit::canonical(INT_KIND, v),
+            )
+        })
+        .collect();
+    module.data_layout = Some(DataLayout { fields });
     module
 }
 
-fn compare_layout(module: &Module) -> (u32, u32) {
+/// The `(init, init_const)` of every field record in the self-hosted artifact, after checking
+/// the artifact byte for byte against the reference.
+fn compare_layout(module: &Module) -> Vec<(u8, u32)> {
     let bytes = wire_module_artifact_via_kel(module).unwrap();
     assert_eq!(bytes, module.to_bytes().unwrap());
     let at = u32::from_le_bytes(bytes[48..52].try_into().unwrap()) as usize;
     let len = u32::from_le_bytes(bytes[52..56].try_into().unwrap()) as usize;
-    keleusma::wire_schema::DataLayoutTable::parse(&bytes[at..at + len])
+    let t = keleusma::wire_schema::DataLayoutTable::parse(&bytes[at..at + len])
         .unwrap()
-        .unwrap()
-        .private_init_range()
+        .unwrap();
+    (0..t.field_count())
+        .map(|i| {
+            let r = t.field(i).unwrap();
+            (r.init, r.init_const)
+        })
+        .collect()
 }
 
+const INT_KIND: u8 = 3;
+const ZERO: (u8, u32) = (init_form::ZERO, ABSENT);
+
+/// The zero form is chosen by the kind, never by the element count, and the explicit
+/// constants are numbered after the two chunk roots in field order, across the stage's
+/// sixteen-field transport batches.
 #[test]
-fn elision_is_exactly_nonempty_int_zero_and_spans_batches() {
-    assert_eq!(compare_layout(&with_initializers(vec![])), (2, 0));
-    for count in [1, 512, 513, 2000] {
-        assert_eq!(
-            compare_layout(&with_initializers(vec![ConstValue::Int(0); count])),
-            (u32::MAX, count as u32)
-        );
-        let mut values = vec![ConstValue::Int(0); count];
-        values[count - 1] = ConstValue::Int(9);
-        assert_eq!(
-            compare_layout(&with_initializers(values)),
-            (2, count as u32)
-        );
+fn the_zero_form_is_per_field_and_numbering_spans_batches() {
+    assert_eq!(compare_layout(&with_initializers(vec![], 1)), vec![]);
+    for fields in [1usize, 16, 17, 40] {
+        for count in [1u32, 513] {
+            assert_eq!(
+                compare_layout(&with_initializers(vec![ConstValue::Int(0); fields], count)),
+                vec![ZERO; fields],
+                "{fields} zero fields of {count} elements"
+            );
+            let mut values = vec![ConstValue::Int(0); fields];
+            values[fields - 1] = ConstValue::Int(9);
+            let mut want = vec![ZERO; fields];
+            want[fields - 1] = (init_form::CONST, 2);
+            assert_eq!(
+                compare_layout(&with_initializers(values, count)),
+                want,
+                "{fields} fields of {count} elements, the last explicit"
+            );
+        }
     }
-    for value in [
-        ConstValue::Unit,
-        ConstValue::None,
-        ConstValue::Bool(false),
-        ConstValue::Byte(0),
-        ConstValue::Fixed(0),
+    // Every explicit value is a constant, numbered in field order.
+    let explicit = vec![
         ConstValue::Int(i64::MIN),
-    ] {
-        assert_eq!(
-            compare_layout(&with_initializers(vec![ConstValue::Int(0), value])),
-            (2, 2)
-        );
-    }
-    #[cfg(feature = "floats")]
-    for value in [0.0, -0.0, f64::from_bits(0x7FF8_1234_5678_9ABC)] {
-        assert_eq!(
-            compare_layout(&with_initializers(vec![ConstValue::Float(value)])),
-            (2, 1)
-        );
-    }
+        ConstValue::Int(1),
+        ConstValue::Int(0),
+        ConstValue::Int(-1),
+    ];
+    assert_eq!(
+        compare_layout(&with_initializers(explicit, 3)),
+        vec![
+            (init_form::CONST, 2),
+            (init_form::CONST, 3),
+            ZERO,
+            (init_form::CONST, 4)
+        ]
+    );
 }
 
 #[test]
-fn initializer_ranges_follow_all_chunk_roots_and_handle_no_chunks() {
-    let mut module = with_initializers(vec![ConstValue::Int(9)]);
+fn initializer_constants_follow_all_chunk_roots_and_handle_no_chunks() {
+    let mut module = with_initializers(vec![ConstValue::Int(9)], 1);
     let mut second = module.chunks[0].clone();
     second.name = "second".into();
     second.constants = vec![ConstValue::Int(1); 3];
     module.chunks.push(second);
-    assert_eq!(compare_layout(&module), (5, 1));
+    assert_eq!(compare_layout(&module), vec![(init_form::CONST, 5)]);
     module.chunks.clear();
     module.signatures.clear();
     module.entry_point = None;
-    assert_eq!(compare_layout(&module), (0, 1));
-    module.data_layout.as_mut().unwrap().private_init = vec![];
-    assert_eq!(compare_layout(&module), (0, 0));
+    assert_eq!(compare_layout(&module), vec![(init_form::CONST, 0)]);
+    module.data_layout.as_mut().unwrap().fields[0].init = DataInit::Unit;
+    assert_eq!(compare_layout(&module), vec![(init_form::UNIT, ABSENT)]);
 }
 
+/// A field's widest values reach the artifact unchanged: a first slot near the top of the
+/// twenty-four-bit slot space, a pool offset near `u32::MAX` and the largest body length.
 #[test]
 fn private_composite_fields_preserve_their_full_widths() {
-    let mut module = with_initializers(vec![ConstValue::Unit]);
-    module
-        .data_layout
-        .as_mut()
-        .unwrap()
-        .private_composite_layout = vec![
-        PrivateCompositeSlot { slot: 0, offset: 0 },
-        PrivateCompositeSlot {
-            slot: u16::MAX,
-            offset: u32::MAX,
-        },
-    ];
-    assert_eq!(compare_layout(&module), (2, 1));
+    let mut module = with_initializers(vec![ConstValue::Int(0)], MAX_DATA_ADDR - 2);
+    module.data_layout.as_mut().unwrap().fields.push(DataField {
+        offset: Some(u32::MAX - u32::from(u16::MAX)),
+        elem_len: u16::MAX,
+        ..DataField::private(
+            "d.p",
+            MAX_DATA_ADDR - 2,
+            2,
+            SHARED_SLOT_COMPOSITE_FLAG | 3,
+            DataInit::Unit,
+        )
+    });
+    module.data_layout.as_mut().unwrap().fields[1].stride = 0;
+    module.data_layout.as_mut().unwrap().fields[1].count = 1;
+    assert_eq!(
+        compare_layout(&module),
+        vec![ZERO, (init_form::UNIT, ABSENT)]
+    );
 }

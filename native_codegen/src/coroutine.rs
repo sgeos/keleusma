@@ -1,0 +1,1068 @@
+//! Returned-continuation lowering of bytecode streams and reentrant entries.
+//!
+//! The caller owns the frame, reply cell, and the ordinary shared, private and
+//! composite regions as disjoint reservations for the entire lifetime of a suspended instance. Start
+//! returns a continuation and yielded scalar bits or a flat body pointer. Before each resume the caller
+//! writes scalar bits or a flat body pointer to the reply cell, then calls the continuation with
+//! `(frame, false)`. Release calls it with `(frame, true)` and invalidates the
+//! instance. Float bits occupy the low 32 or all 64 bits according to the
+//! module width. Byte and Boolean inputs must be in their declared ranges.
+//! Read a yielded flat body before the next resume or release. Its declared
+//! byte size is carried by its dialogue contract, and its storage belongs to the
+//! instance regions, including the coroutine frame for copied host values.
+//! A flat argument is an i64 pointer to its signature's exact packed body.
+//! A flat reply uses the selected dialogue's body extent. The host supplies
+//! readable bytes with the declared layout and valid field values at each call. The buffer may be reused
+//! immediately after that call returns. It must be disjoint from instance
+//! storage. Host-derived values are copied into bounded storage when transferred;
+//! ordinary region and private-data references preserve VM aliasing semantics.
+//! The start argument retains its normal native type. A released frame may be reused; a live frame may not be moved.
+//!
+//! LLVM manages the continuation and captures live allocas. The emitted module
+//! is accepted only if splitting eliminates every overflow allocator use.
+//! This API admits scalar or flat arguments to a Stream or Reentrant entry,
+//! with ordinary, reentrant or stream callees. Flat-input modules inline all
+//! bytecode callees before splitting. [`lower`] chooses a uniform dialogue from
+//! the entry return shape and first argument shape, or Unit without arguments.
+//! [`lower_with_dialogues`] accepts independent output and reply shapes at each
+//! reachable yield site, including delegated sites. Unused chunks do not impose
+//! dialogue contracts or emit bodies. Original chunk and instruction indices
+//! remain the host site identifiers. Whole-module verification and resource
+//! admission still apply, as they do when constructing a VM. The host queries the suspended site
+//! before interpreting its output or supplying a reply. These are native host
+//! contracts, not restrictions imposed by the source language on reentrants.
+//! Replies update only a Stream entry's first parameter, and must match its
+//! declared shape. Reentrant entries retain their original arguments. A nested
+//! stream clears its own locals on Reset. A consuming operation checks a
+//! possibly cleared value before using its otherwise proven kind. Enum inspection
+//! and scalar equality retain the VM's valid Unit behavior. Admission follows
+//! actual reply tags through control flow and refuses unresolved type mixtures.
+//! Composite construction packs actual operand sizes within a proven reservation.
+//! Tuple and array lengths follow those values. Struct and enum slack is zeroed.
+//! Field reads and host transfers check variable extents before access. Internal
+//! calls carry bits, kinds and actual extents. Private body slots retain view
+//! lengths and Unit values. Private scalar kinds persist with their payloads,
+//! including across frame release. Zero a fresh private region before installing
+//! its private initialization image. Ordering selects the actual numeric kind
+//! and traps on unequal kinds. Arithmetic still requires one proven kind.
+//! [`lower_with_contracts`] admits native composite results
+//! with an explicit [`NativeBodyReturn`] contract. Snapshot results are copied
+//! into bounded storage; instance borrows retain their aliases. Without a
+//! contract a called native body result remains refused, including modules with
+//! only scalar host values. Native implementations must uphold these lifetimes.
+//!
+//! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
+//! arguments or i64 body pointers followed by shared, private, composite-region, frame and reply
+//! pointers. It returns `{ptr, i64}`. Continuations take `(ptr, i1)` and return
+//! that same pair. The value field is meaningful only with a non-null pointer.
+//! Normal Reentrant completion returns a null continuation and writes its
+//! final value into the reply cell. A trap also returns a null continuation.
+//! It stores its code plus one in the aligned word at [`trap_offset`] within
+//! the frame, which start clears and which is zero after a completion. Owned flat results occupy a reserved tail
+//! inside frame_bytes, outside LLVM's continuation storage. Borrowed results
+//! retain their original region aliases. Read completed bodies before release
+//! or the next start, while all supplied regions remain allocated and unchanged.
+//! Keep the emitted code and instance buffers alive until release. Initialise the
+//! ordinary data regions using their existing contracts before start. LLVM
+//! initialises the frame itself; its previous bytes need not be cleared.
+//! Never resume a released instance or invoke one continuation concurrently.
+//!
+//! Stable arena handles use `kel_coroutine_<entry>_start`, `_resume` and `_release`.
+//! Reserve [`slot_bytes`] bytes aligned to [`FRAME_ALIGN`]. Start takes the normal
+//! scalar arguments or body pointers, shared, private and composite-region pointers, then the slot.
+//! Resume takes the same slot and an i64 reply bit pattern or body pointer. Both return
+//! `{i64 status, i64 value}`. Status one marks a yielded value. Status two
+//! reports normal Reentrant completion exactly once, with its final value.
+//! Status three reports a trap exactly once, with its code as the value, and
+//! leaves the instance inactive. The code is a `TrapKind` code, or
+//! [`TRAP_CONTRACT`] for a failed contract guard.
+//! Status zero returns a zero payload for an inactive instance. Release takes
+//! the slot and returns nothing. It clears
+//! the continuation, is idempotent, and makes subsequent resume return zeros.
+//! Start may reuse a released slot but must never overwrite a live one. The slot
+//! needs no prior initialization before start and must remain allocated and
+//! unmoved until release. These provisional entry points use the same code and
+//! ordinary-region lifetime contract as the raw interface above. They manage
+//! continuation state, not allocation or ownership of the caller's arena pool.
+
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::memory_buffer::MemoryBuffer;
+use inkwell::module::Module as LlvmModule;
+use inkwell::passes::PassBuilderOptions;
+use inkwell::targets::TargetMachine;
+use inkwell::types::BasicMetadataTypeEnum;
+use inkwell::values::{BasicValue, CallSiteValue, FunctionValue, InstructionOpcode, PointerValue};
+use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
+
+use crate::{LowerError, LowerOptions};
+
+pub(crate) mod arithmetic;
+pub(crate) mod dialogue;
+pub use dialogue::{Dialogue, HostContracts, NativeBodyReturn, NativeOpaque, YieldSite};
+mod host;
+pub(crate) mod kinds;
+pub(crate) mod ownership;
+pub(crate) mod packing;
+pub mod pool;
+pub(crate) mod private;
+pub(crate) mod types;
+
+/// Alignment required for the caller-provided coroutine frame.
+pub const FRAME_ALIGN: u32 = 8;
+
+/// The trap code reported when a contract guard fails rather than a `Trap`.
+///
+/// The emitted code checks representation contracts the bytecode alone does
+/// not establish, such as a host body's extent or a resumed value's kind. A
+/// failed guard ends the instance like a trap. Its code lies outside the
+/// `TrapKind` range, which fits in a `u16`.
+pub const TRAP_CONTRACT: u64 = 0x1_0000;
+
+/// Frame offset of the trap record for a `frame_bytes` reservation.
+///
+/// The record is the aligned word below the dialogue metadata when dialogues
+/// are explicit, and below the end of the reservation otherwise. It lies
+/// outside LLVM's continuation storage and survives coro.end.
+pub fn trap_offset(frame_bytes: u32, explicit_dialogues: bool) -> Option<u32> {
+    let end = if explicit_dialogues {
+        frame_bytes.checked_sub(8)? & !7
+    } else {
+        frame_bytes & !7
+    };
+    end.checked_sub(8)
+}
+
+/// Bytes for a stable host slot, including its continuation and reply header.
+/// The slot requires [`FRAME_ALIGN`] alignment and remains reserved until release.
+pub fn slot_bytes(frame_bytes: u32) -> Result<u32, LowerError> {
+    if !(FRAME_ALIGN..=i32::MAX as u32).contains(&frame_bytes) {
+        return Err(error(
+            "coroutine frame size must be between 8 and i32::MAX bytes",
+        ));
+    }
+    Ok(frame_bytes + host::HEADER_BYTES)
+}
+
+/// The smallest frame reservation `program` lowers with under `contracts`.
+///
+/// This is the coroutine's static frame bound, the size the design gives its
+/// arena region. LLVM fixes the continuation frame's layout before it consults
+/// the reservation, and the lowering refuses exactly when the frame and the
+/// reserved tail do not fit, so feasibility is monotone in the reservation. The
+/// bound is found by doubling from [`FRAME_ALIGN`] to the first reservation that
+/// lowers and then bisecting on multiples of [`FRAME_ALIGN`]. Each attempt is a
+/// complete lowering in its own context. An error that persists at the largest
+/// reservation tried is returned as it is, since no size would cure it.
+pub fn minimum_frame_bytes(
+    program: &Module,
+    machine: &TargetMachine,
+    contracts: &HostContracts,
+) -> Result<u32, LowerError> {
+    const LARGEST: u32 = 1 << 30;
+    let fits = |frame: u32| {
+        let ctx = Context::create();
+        lower_with_contracts(&ctx, program, machine, frame, contracts).map(|_| ())
+    };
+    let mut high = FRAME_ALIGN;
+    loop {
+        match fits(high) {
+            Ok(()) => break,
+            Err(e) if high >= LARGEST => return Err(e),
+            Err(_) => high = high.saturating_mul(2).min(LARGEST),
+        }
+    }
+    // Invariant: `high` lowers and every multiple of FRAME_ALIGN at or below
+    // `low` was refused, or `low` is zero. Terminates because the gap halves.
+    let mut low = high / 2 / FRAME_ALIGN * FRAME_ALIGN;
+    if high == FRAME_ALIGN {
+        return Ok(high);
+    }
+    while high - low > FRAME_ALIGN {
+        let mid = (low + (high - low) / 2) / FRAME_ALIGN * FRAME_ALIGN;
+        let mid = mid.max(low + FRAME_ALIGN);
+        if fits(mid).is_ok() {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    Ok(high)
+}
+
+fn error(message: impl ToString) -> LowerError {
+    LowerError::UnsupportedShape(message.to_string())
+}
+
+/// Emit and split a verified, resource-bounded coroutine for `machine`.
+///
+/// `frame_bytes` is the exact caller reservation, not an estimate of LLVM's
+/// internal frame. A flat Reentrant result reserves its declared byte size,
+/// or one byte for an empty body, at the tail of this reservation. LLVM may use
+/// only the remaining bytes. An insufficient reservation is a lowering error. Buffer
+/// bounds for shared, private and composite storage remain those published by
+/// [`crate::region`]. They are additional to this frame and the eight-byte
+/// reply cell. The returned module owns all emitted functions. Do not execute
+/// partial output following an error.
+pub fn lower<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        &HostContracts::default(),
+        LowerOptions::default(),
+    )
+}
+
+/// Lower with a contract for every Yield in chunks reachable from the entry.
+/// Contracts for unused chunks are permitted but do not affect this instance.
+/// The host reads `kel_coroutine_<entry>_yield_site(slot)` after status one to
+/// select the output and reply shapes. Its result is YieldSite::id(), or
+/// u64::MAX for an inactive slot. Query only an allocated slot initialized by start.
+/// The raw interface stores this identifier in the final aligned eight bytes
+/// of frame_bytes. This storage is excluded from LLVM's continuation frame.
+pub fn lower_with_dialogues<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    dialogues: &std::collections::BTreeMap<YieldSite, Dialogue>,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    let contracts = HostContracts {
+        dialogues: Some(dialogues.clone()),
+        ..HostContracts::default()
+    };
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        &contracts,
+        LowerOptions::default(),
+    )
+}
+
+/// Lower with explicit dialogue and native body lifetime contracts.
+/// Snapshot native results use the same bounded ownership transfers as host
+/// replies. Instance borrows retain their original region aliases. The supplied
+/// native functions must uphold the documented NativeBodyReturn obligations.
+pub fn lower_with_contracts<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        contracts,
+        LowerOptions::default(),
+    )
+}
+
+/// [`lower_with_contracts`] with the instruction meter of
+/// [`LowerOptions::op_meter`]. Instrumentation for differential tests only.
+pub fn lower_metered<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    let options = LowerOptions {
+        op_meter: true,
+        ..LowerOptions::default()
+    };
+    lower_impl(ctx, program, machine, frame_bytes, contracts, options)
+}
+
+/// Lower with explicit [`LowerOptions`], such as [`LowerOptions::static_kinds`].
+pub fn lower_with_options<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+    options: LowerOptions,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(ctx, program, machine, frame_bytes, contracts, options)
+}
+
+/// Where a coroutine's native code needs a run-time kind, counted from the
+/// coroutine type analysis rather than from the emitted code.
+///
+/// Native operands are untagged words. A coroutine nevertheless keeps a
+/// run-time kind beside a value wherever control flow can join different
+/// kinds, such as a local that holds `Unit` after `Reset` and a `Word` before
+/// it, and the emitted code then dispatches on that kind or guards it. Where
+/// every fact names one kind the stored kinds are constants, which promotion
+/// folds, and the code dispatches on nothing. Workstream G asks for exactly
+/// that, the flat machine in native code.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KindCensus {
+    /// Reachable instructions the analysis reached.
+    pub instructions: usize,
+    /// Instructions that read an operand whose kind is not unique.
+    ///
+    /// An instruction reads the operands it pops, except `PopN`, which
+    /// discards them, and `Trap`, whose native code stores only the trap code.
+    /// `Return` pops nothing by its depth effect but reads the value on top.
+    /// An ambiguous entry deeper in the stack is not counted here, because
+    /// whichever instruction later pops it is counted at its own facts. Until
+    /// 2026-10-29 every stack entry counted, which called the ten `piano_roll`
+    /// coroutines dynamic for a native result that only `PopN` and the
+    /// soft-failure trap ever pop.
+    pub dynamic_operands: usize,
+    /// Instructions with a local whose kind is not unique, among those whose
+    /// operands are all unique. **Counted, not refused.** A local joins `Unit`
+    /// and a value at a loop head because the virtual machine clears locals at
+    /// `Reset`, but code consumes a local's kind only after `GetLocal` pushes
+    /// it, where it is an operand and is counted as one.
+    pub dynamic_locals: usize,
+    /// Instructions carrying a run-time kind guard.
+    pub guarded: usize,
+    /// The first instruction that needs a run-time kind, and why.
+    pub first_dynamic: Option<String>,
+}
+
+impl KindCensus {
+    /// Whether the coroutine lowers with no run-time kind at all.
+    pub fn is_static(&self) -> bool {
+        self.first_dynamic.is_none()
+    }
+}
+
+/// How many operands `op` pops and reads the kind of, as [`KindCensus`]
+/// defines a read.
+fn kind_reads(op: &Op, chunk: &keleusma::bytecode::Chunk) -> usize {
+    match op {
+        Op::PopN(_) | Op::Trap(_) => 0,
+        Op::Return => 1,
+        _ => keleusma::verify::op_depth_effect(op, chunk).0 as usize,
+    }
+}
+
+fn census_of(program: &Module, analysis: &types::Analysis) -> KindCensus {
+    let unique = |mask: &u16| *mask == 0 || types::kind(*mask).count_ones() == 1;
+    let mut census = KindCensus::default();
+    for (chunk, facts) in analysis.facts.iter().enumerate() {
+        let code = &program.chunks[chunk];
+        for (ip, f) in facts {
+            census.instructions += 1;
+            let reads = kind_reads(&code.ops[*ip], code);
+            let start = f
+                .stack
+                .len()
+                .checked_sub(reads)
+                .expect("verified stack depth");
+            let read = &f.stack[start..];
+            let reason = if !f.guards.is_empty() {
+                census.guarded += 1;
+                Some("it guards an operand's kind")
+            } else if !read.iter().all(unique) {
+                census.dynamic_operands += 1;
+                Some("it reads an operand that may hold more than one kind")
+            } else {
+                if !f.locals.iter().all(unique) {
+                    census.dynamic_locals += 1;
+                }
+                None
+            };
+            if let (Some(why), None) = (reason, &census.first_dynamic) {
+                census.first_dynamic = Some(format!("at chunk {chunk} instruction {ip} {why}"));
+            }
+        }
+    }
+    census
+}
+
+/// The [`KindCensus`] of `program` lowered as a coroutine under `contracts`.
+///
+/// This runs the admission the lowering runs, verification, the dialogue plan
+/// and the coroutine type analysis, at a reservation large enough that the
+/// frame never limits it. A program the coroutine route refuses returns its
+/// refusal.
+pub fn kind_census(program: &Module, contracts: &HostContracts) -> Result<KindCensus, LowerError> {
+    keleusma::verify::verify(program).map_err(|e| error(format!("verification: {e:?}")))?;
+    let entry = program
+        .entry_point
+        .ok_or_else(|| error("coroutine needs an entry point"))?;
+    let plan = dialogue::Plan::new(
+        program,
+        entry,
+        contracts.dialogues.as_ref(),
+        1 << 20,
+        &contracts.native_body_returns,
+        &contracts.fallible_natives,
+    )?;
+    Ok(census_of(program, &types::check(program, entry, plan)?))
+}
+
+/// Whether `{i64, i64}` returns in the same two registers as the C structure
+/// `{ int64_t value; int64_t failed; }` on `machine`.
+///
+/// AAPCS64 and the System V x86-64 convention return such a structure in two
+/// general registers, and LLVM lowers the two-word aggregate to those same
+/// registers. The Microsoft x64 convention returns it through a hidden
+/// pointer, and a 32-bit target splits the words differently, so a fallible
+/// native is refused there rather than called with a mismatched convention.
+fn two_word_returns_match_c(machine: &TargetMachine) -> bool {
+    let triple = machine.get_triple();
+    let triple = triple.as_str().to_string_lossy();
+    (triple.starts_with("aarch64") || triple.starts_with("arm64") || triple.starts_with("x86_64"))
+        && !triple.contains("windows")
+}
+
+fn lower_impl<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+    options: LowerOptions,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    let dialogues = contracts.dialogues.as_ref();
+    let native_body_returns = &contracts.native_body_returns;
+    if !contracts.fallible_natives.is_empty() && !two_word_returns_match_c(machine) {
+        return Err(error(
+            "fallible natives return two words, which this target does not return as the C \
+             structure they are declared as",
+        ));
+    }
+    if frame_bytes < FRAME_ALIGN || frame_bytes > i32::MAX as u32 {
+        return Err(error(
+            "coroutine frame size must be between 8 and i32::MAX bytes",
+        ));
+    }
+    keleusma::verify::verify(program).map_err(|e| error(format!("verification: {e:?}")))?;
+    keleusma::vm::auto_arena_capacity_for(program, &[])
+        .map_err(|e| error(format!("resource admission: {e:?}")))?;
+    let entry = program
+        .entry_point
+        .ok_or_else(|| error("coroutine needs an entry point"))?;
+    // The shared emitter checks allocation confinement for the coroutine
+    // path itself. The legacy preflight cannot use proven unreachable arms.
+    let stream = program
+        .chunks
+        .get(entry)
+        .ok_or_else(|| error("coroutine entry is out of range"))?;
+    if !matches!(stream.block_type, BlockType::Stream | BlockType::Reentrant)
+        || stream.param_types.iter().any(|tag| {
+            !matches!(
+                tag,
+                TypeTag::Word
+                    | TypeTag::Byte
+                    | TypeTag::Bool
+                    | TypeTag::Fixed
+                    | TypeTag::Float
+                    | TypeTag::Unit
+                    | TypeTag::Composite
+            )
+        })
+        || (stream.block_type == BlockType::Stream
+            && (!matches!(stream.ops.first(), Some(Op::Stream))
+                || !matches!(stream.ops.last(), Some(Op::Reset))
+                || stream.ops.iter().any(|op| matches!(op, Op::Return))))
+    {
+        return Err(error(
+            "retcon requires a scalar or flat-input Stream or Reentrant entry; a Stream must end in Reset",
+        ));
+    }
+    // Completion retains the entry result shape. Explicit dialogue outputs
+    // and replies are independent of that signature.
+    let result_shape = program
+        .signatures
+        .get(entry)
+        .ok_or_else(|| error("coroutine needs an entry signature"))?
+        .ret;
+    for (tag, shape) in stream
+        .param_types
+        .iter()
+        .zip(&program.signatures[entry].params)
+    {
+        if *tag == TypeTag::Composite
+            && !matches!(
+                shape,
+                keleusma::bytecode::WireShape::Flat { kind: 0..=3, .. }
+            )
+        {
+            return Err(error(
+                "retcon requires a bounded flat composite input signature",
+            ));
+        }
+    }
+    let plan = dialogue::Plan::new(
+        program,
+        entry,
+        dialogues,
+        frame_bytes,
+        native_body_returns,
+        &contracts.fallible_natives,
+    )?;
+    for (index, callee) in program.chunks.iter().enumerate() {
+        if !plan.reachable[index] || index == entry || callee.block_type != BlockType::Stream {
+            continue;
+        }
+        if !matches!(callee.ops.first(), Some(Op::Stream))
+            || !matches!(callee.ops.last(), Some(Op::Reset))
+            || callee.ops.iter().any(|op| matches!(op, Op::Return))
+        {
+            return Err(error(
+                "a nested Stream must begin with Stream and end with Reset",
+            ));
+        }
+    }
+    let metadata_offset = plan.metadata_offset;
+    let trap_offset = plan.trap_offset;
+    // Completion outlives coro.end. Reserve a disjoint tail for owned flat
+    // results, outside the bytes LLVM may use for the continuation frame. The
+    // trap record follows it, and the dialogue metadata, when present, ends
+    // the reservation.
+    let completion_bytes = match (stream.block_type, result_shape) {
+        (BlockType::Reentrant, keleusma::bytecode::WireShape::Flat { size, .. }) => size.max(1),
+        _ => 0,
+    };
+    let continuation_bytes = trap_offset
+        .checked_sub(completion_bytes)
+        .filter(|bytes| *bytes >= FRAME_ALIGN)
+        .ok_or_else(|| {
+            error(
+                "coroutine frame exceeds the caller reservation, whose completion reservation \
+                 and trap record leave fewer than eight continuation bytes",
+            )
+        })?;
+    let owns_host_values = plan.owns_bodies;
+    let analysis = types::check(program, entry, plan)?;
+    if options.static_kinds {
+        let census = census_of(program, &analysis);
+        if let Some(why) = census.first_dynamic {
+            return Err(error(format!(
+                "static kinds requested, but {why}, so the code would dispatch on a run-time kind"
+            )));
+        }
+    }
+    let mut prepared = program.clone();
+    for &(chunk, ip) in &analysis.false_inspections {
+        // Both instructions leave the inspected value in place and push Bool.
+        // Keeping instruction indices preserves all structured branch targets.
+        prepared.chunks[chunk].ops[ip] = Op::PushImmediate(2);
+    }
+    let program = &prepared;
+    let module = ctx.create_module("kel_retcon");
+    module.set_triple(&machine.get_triple());
+    module.set_data_layout(&machine.get_target_data().get_data_layout());
+    crate::lower_module_with(
+        ctx,
+        &module,
+        program,
+        options,
+        None,
+        None,
+        Some((continuation_bytes, &analysis)),
+    )?;
+    if !matches!(program.signatures.get(entry).map(|s| &s.ret),
+        Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
+        && !matches!(
+            result_shape,
+            keleusma::bytecode::WireShape::Flat { kind: 0..=3, .. }
+        )
+    {
+        return Err(error(
+            "retcon requires a scalar or flat entry result signature",
+        ));
+    }
+    if owns_host_values {
+        // Owned host bodies returned by ordinary callees must not escape a
+        // machine-stack alloca. Inline every bytecode call before frame capture.
+        for index in 0..program.chunks.len() {
+            if index != entry && analysis.plan.reachable[index] {
+                mark_delegate(
+                    ctx,
+                    module.get_function(&format!("kel_chunk_{index}")).unwrap(),
+                );
+            }
+        }
+    }
+    // All allocations have static extents. Hoist them before inlining too,
+    // otherwise LLVM brackets a callee's non-entry allocas with stacksave and
+    // stackrestore. Restoring a pre-suspension C stack on resume is invalid.
+    for function in module.get_functions() {
+        hoist_allocas(ctx, function);
+    }
+    module.verify().map_err(error)?;
+    // The verified call graph is acyclic. Inline suspension-capable callees
+    // into the one coroutine before splitting, so LLVM captures each live
+    // call frame and abnormal resume bypasses every remaining callee effect.
+    module
+        .run_passes(
+            "always-inline,globaldce",
+            machine,
+            PassBuilderOptions::create(),
+        )
+        .map_err(error)?;
+    if module.get_functions().any(is_delegate) {
+        return Err(error("a suspension-capable callee survived inlining"));
+    }
+    // mem2reg promotes only entry-block allocas. The intrinsic scaffold
+    // precedes the bytecode body, so move its fixed scalar slots to that entry.
+    let f = module.get_function(&format!("kel_chunk_{entry}")).unwrap();
+    let cleanup = f
+        .get_basic_blocks()
+        .into_iter()
+        .find(|b| b.get_name().to_bytes() == b"retcon.cleanup")
+        .unwrap();
+    // Retcon requires one fallthrough coro.end. Redirect inlined abnormal
+    // resume exits to the entry's cleanup, before the coroutine passes run.
+    let cleanup_builder = ctx.create_builder();
+    for block in f.get_basic_blocks().into_iter().filter(|b| *b != cleanup) {
+        let ends: Vec<_> = block
+            .get_instructions()
+            .filter(|i| {
+                CallSiteValue::try_from(*i)
+                    .ok()
+                    .and_then(|c| c.get_called_fn_value())
+                    .is_some_and(|callee| callee.get_name().to_bytes() == b"llvm.coro.end")
+            })
+            .collect();
+        for end in ends {
+            let terminal = end
+                .get_next_instruction()
+                .ok_or_else(|| error("coroutine cleanup has no terminator"))?;
+            if terminal.get_opcode() != InstructionOpcode::Unreachable {
+                return Err(error("coroutine cleanup has effects after coro.end"));
+            }
+            terminal.erase_from_basic_block();
+            end.erase_from_basic_block();
+            cleanup_builder.position_at_end(block);
+            cleanup_builder.build_unconditional_branch(cleanup).unwrap();
+        }
+    }
+    hoist_allocas(ctx, f);
+    module.verify().map_err(error)?;
+    // Promote scalar slots before splitting, so only values actually live at
+    // suspension occupy the frame. No handwritten resume dispatch is emitted.
+    module
+        .run_passes(
+            "function(sroa,mem2reg),coro-early,coro-split,coro-cleanup",
+            machine,
+            PassBuilderOptions::create(),
+        )
+        .map_err(error)?;
+    module.verify().map_err(error)?;
+    if module
+        .get_function("kel_retcon_overflow")
+        .is_some_and(|f| f.as_global_value().get_first_use().is_some())
+    {
+        return Err(error("coroutine frame exceeds the caller reservation"));
+    }
+    if module
+        .get_function("kel_retcon_free")
+        .is_some_and(|f| f.as_global_value().get_first_use().is_some())
+    {
+        return Err(error("coroutine retained an unexpected deallocator use"));
+    }
+    if module.get_functions().any(|f| {
+        (f.get_name().to_bytes().starts_with(b"llvm.coro.")
+            || f.get_name().to_bytes().starts_with(b"llvm.stacksave")
+            || f.get_name().to_bytes().starts_with(b"llvm.stackrestore"))
+            && f.as_global_value().get_first_use().is_some()
+    }) {
+        return Err(error(
+            "coroutine or dynamic-stack intrinsic survived splitting",
+        ));
+    }
+    host::emit(
+        ctx,
+        &module,
+        f,
+        entry,
+        stream.block_type == BlockType::Reentrant,
+        metadata_offset,
+        trap_offset,
+    );
+    module.verify().map_err(error)?;
+    Ok(module)
+}
+
+fn hoist_allocas(ctx: &Context, function: FunctionValue<'_>) {
+    let Some(header) = function.get_first_basic_block() else {
+        return;
+    };
+    let Some(first) = header
+        .get_instructions()
+        .find(|i| i.get_opcode() != InstructionOpcode::Alloca)
+    else {
+        return;
+    };
+    let builder = ctx.create_builder();
+    builder.position_before(&first);
+    let allocas: Vec<_> = function
+        .get_basic_blocks()
+        .iter()
+        .flat_map(|b| b.get_instructions())
+        .filter(|i| i.get_opcode() == InstructionOpcode::Alloca)
+        .collect();
+    for alloca in allocas {
+        alloca.remove_from_basic_block();
+        builder.insert_instruction(&alloca, None);
+    }
+}
+
+pub(crate) fn declare<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    index: usize,
+    params: &[BasicMetadataTypeEnum<'ctx>],
+    frame_bytes: u32,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    let mut arguments: Vec<_> = params
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| format!("{} %arg{i}", ty.print_to_string().to_string()))
+        .collect();
+    arguments.push("ptr %buffer".into());
+    arguments.push("ptr %reply".into());
+    // Tokens are not BasicValueEnum values in inkwell. Parse only the fixed
+    // intrinsic scaffold, then emit all bytecode operations through the shared
+    // builder. No user strings are interpolated into this fragment.
+    let mut ir = format!(
+        r#"
+declare token @llvm.coro.id.retcon(i32, i32, ptr, ptr, ptr, ptr)
+declare ptr @llvm.coro.begin(token, ptr)
+declare i1 @llvm.coro.suspend.retcon.i1(...)
+declare void @llvm.coro.end(ptr, i1, token)
+declare ptr @kel_retcon_overflow(i32)
+declare void @kel_retcon_free(ptr)
+declare {{ptr, i64}} @kel_retcon_prototype(ptr, i1)
+define {{ptr, i64}} @kel_chunk_{index}({args}) presplitcoroutine {{
+retcon.header:
+  %id = call token @llvm.coro.id.retcon(i32 {frame_bytes}, i32 {FRAME_ALIGN}, ptr %buffer, ptr @kel_retcon_prototype, ptr @kel_retcon_overflow, ptr @kel_retcon_free)
+  %hdl = call ptr @llvm.coro.begin(token %id, ptr null)
+  br label %retcon.cleanup
+retcon.cleanup:
+  call void @llvm.coro.end(ptr %hdl, i1 false, token none)
+  unreachable
+}}
+"#,
+        args = arguments.join(", ")
+    );
+    ir.push('\0');
+    let buffer = MemoryBuffer::create_from_memory_range_copy(ir.as_bytes(), "retcon scaffold");
+    let scaffold = ctx.create_module_from_ir(buffer).map_err(error)?;
+    module.link_in_module(scaffold).map_err(error)?;
+    Ok(module.get_function(&format!("kel_chunk_{index}")).unwrap())
+}
+
+/// The latest host value survives local assignment and Reset. Its metadata
+/// travels with the payload, including when a delegated yield updates it.
+pub(crate) struct ReplyState<'ctx> {
+    pub value: PointerValue<'ctx>,
+    pub owned: PointerValue<'ctx>,
+    pub kind: PointerValue<'ctx>,
+    pub bytes: PointerValue<'ctx>,
+}
+impl<'ctx> ReplyState<'ctx> {
+    pub fn new(
+        b: &Builder<'ctx>,
+        value: inkwell::values::IntValue<'ctx>,
+        shape: keleusma::bytecode::WireShape,
+    ) -> Self {
+        let ty = value.get_type();
+        let state = Self {
+            value: b.build_alloca(ty, "latest_reply").unwrap(),
+            owned: b.build_alloca(ty, "latest_owned").unwrap(),
+            kind: b.build_alloca(ty, "latest_kind").unwrap(),
+            bytes: b.build_alloca(ty, "latest_bytes").unwrap(),
+        };
+        state.store(b, value, shape);
+        state
+    }
+    pub fn store(
+        &self,
+        b: &Builder<'ctx>,
+        value: inkwell::values::IntValue<'ctx>,
+        shape: keleusma::bytecode::WireShape,
+    ) {
+        let ty = value.get_type();
+        let bytes = match shape {
+            keleusma::bytecode::WireShape::Flat { size, .. } => size,
+            _ => 0,
+        };
+        for (slot, bits) in [
+            (self.value, value),
+            (
+                self.owned,
+                ty.const_int(
+                    u64::from(matches!(shape, keleusma::bytecode::WireShape::Flat { .. })),
+                    false,
+                ),
+            ),
+            (
+                self.kind,
+                ty.const_int(u64::from(types::kind(types::shape(shape))), false),
+            ),
+            (self.bytes, ty.const_int(u64::from(bytes), false)),
+        ] {
+            b.build_store(slot, bits).unwrap();
+        }
+    }
+}
+
+/// Hidden context belongs to the entry instance, never to a callee's locals.
+/// Scalar replacement removes these pointer slots before frame splitting.
+pub(crate) fn delegate_context<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    reply: PointerValue<'ctx>,
+    entry_parameter: PointerValue<'ctx>,
+    latest: &ReplyState<'ctx>,
+    entry_metadata: [PointerValue<'ctx>; 3],
+    site: Option<PointerValue<'ctx>>,
+) -> PointerValue<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let context = builder.build_alloca(ty, "delegate_context").unwrap();
+    for (index, value) in [
+        reply,
+        entry_parameter,
+        latest.value,
+        entry_metadata[0],
+        site.unwrap_or(ptr.const_null()),
+        entry_metadata[1],
+        entry_metadata[2],
+        latest.owned,
+        latest.kind,
+        latest.bytes,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let field = builder
+            .build_struct_gep(ty, context, index as u32, "context_field")
+            .unwrap();
+        builder.build_store(field, value).unwrap();
+    }
+    context
+}
+
+/// A delegated `loop` is the innermost stream frame while its body runs, so a
+/// resume rebinds its parameter and not the entry's, as `Vm::resume_after_enter`
+/// does since upstream 704. Its own yields and the delegates it calls receive a
+/// copy of the inherited context whose parameter destinations are this loop's
+/// slot and flags. The latest-reply fields are kept, so its `Reset` can restore
+/// the parameter from them.
+pub(crate) fn rebind_delegate_parameter<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    inherited: PointerValue<'ctx>,
+    parameter: PointerValue<'ctx>,
+    metadata: [PointerValue<'ctx>; 3],
+) -> PointerValue<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let context = builder.build_alloca(ty, "loop_delegate_context").unwrap();
+    for index in 0..10 {
+        let value = match index {
+            1 => parameter,
+            3 => metadata[0],
+            5 => metadata[1],
+            6 => metadata[2],
+            _ => {
+                let field = builder
+                    .build_struct_gep(ty, inherited, index, "inherited_field")
+                    .unwrap();
+                builder
+                    .build_load(ptr, field, "inherited")
+                    .unwrap()
+                    .into_pointer_value()
+            }
+        };
+        let field = builder
+            .build_struct_gep(ty, context, index, "context_field")
+            .unwrap();
+        builder.build_store(field, value).unwrap();
+    }
+    context
+}
+
+/// The entry's latest-reply state, read through a delegate's context.
+pub(crate) fn inherited_latest<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    context: PointerValue<'ctx>,
+) -> ReplyState<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let load = |index| {
+        let field = builder
+            .build_struct_gep(ty, context, index, "latest_field")
+            .unwrap();
+        builder
+            .build_load(ptr, field, "latest")
+            .unwrap()
+            .into_pointer_value()
+    };
+    ReplyState {
+        value: load(2),
+        owned: load(7),
+        kind: load(8),
+        bytes: load(9),
+    }
+}
+
+pub(crate) fn mark_delegate(ctx: &Context, function: FunctionValue<'_>) {
+    function.set_linkage(inkwell::module::Linkage::Internal);
+    function.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0),
+    );
+    function.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_string_attribute("kel.retcon.delegate", ""),
+    );
+}
+
+pub(crate) fn is_delegate(function: FunctionValue<'_>) -> bool {
+    function
+        .get_string_attribute(AttributeLoc::Function, "kel.retcon.delegate")
+        .is_some()
+}
+
+pub(crate) fn delegate_yield<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    resume_shape: Option<keleusma::bytecode::WireShape>,
+    site: u64,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    let name = format!("kel_retcon_delegate_yield_{site}");
+    if let Some(function) = module.get_function(&name) {
+        return Ok(function);
+    }
+    // After inlining, lower redirects this helper's abnormal exit to the
+    // enclosing coroutine's single cleanup block. No helper survives splitting.
+    let ir = r#"
+declare i1 @llvm.coro.suspend.retcon.i1(...)
+declare void @llvm.coro.end(ptr, i1, token)
+define i64 @kel_retcon_delegate_yield(i64 %value, ptr %context) alwaysinline {
+entry:
+  %reply_slot = getelementptr {ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 0
+  %parameter_slot = getelementptr {ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 1
+  %latest_slot = getelementptr {ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 2
+  %reply = load ptr, ptr %reply_slot
+  %parameter = load ptr, ptr %parameter_slot
+  %latest = load ptr, ptr %latest_slot
+  %unwind = call i1 (...) @llvm.coro.suspend.retcon.i1(i64 %value)
+  br i1 %unwind, label %cleanup, label %resume
+cleanup:
+  call void @llvm.coro.end(ptr null, i1 false, token none)
+  unreachable
+resume:
+  %result = load i64, ptr %reply
+  store i64 %result, ptr %parameter
+  store i64 %result, ptr %latest
+  ret i64 %result
+}
+"#;
+    let ir = ir.replace("kel_retcon_delegate_yield", &name);
+    let buffer = MemoryBuffer::create_from_memory_range_copy(
+        format!("{ir}\0").as_bytes(),
+        "delegate scaffold",
+    );
+    module
+        .link_in_module(ctx.create_module_from_ir(buffer).map_err(error)?)
+        .map_err(error)?;
+    let function = module.get_function(&name).unwrap();
+    let resume = function
+        .get_basic_blocks()
+        .into_iter()
+        .find(|b| b.get_name().to_bytes() == b"resume")
+        .unwrap();
+    let result = resume.get_first_instruction().unwrap();
+    let shape = resume_shape.unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 });
+    let flat = matches!(shape, keleusma::bytecode::WireShape::Flat { .. });
+    if flat {
+        // Preserve the established scalar scaffold. Only flat payloads replace
+        // its raw stores with owned copies before returning to the host.
+        while let Some(next) = result.get_next_instruction() {
+            next.erase_from_basic_block();
+        }
+    } else {
+        resume.get_terminator().unwrap().erase_from_basic_block();
+    }
+    let b = ctx.create_builder();
+    b.position_at_end(resume);
+    let context = function.get_nth_param(1).unwrap().into_pointer_value();
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let bits = result.try_into().unwrap();
+    let size = match shape {
+        keleusma::bytecode::WireShape::Flat { size, .. } => size,
+        _ => 0,
+    };
+    let owned = ctx.i64_type().const_int(
+        u64::from(matches!(shape, keleusma::bytecode::WireShape::Flat { .. })),
+        false,
+    );
+    let tag = ctx
+        .i64_type()
+        .const_int(u64::from(types::kind(types::shape(shape))), false);
+    // Each destination is initialized by the entry. It points either into the
+    // entry metadata or the separate latest-reply state in the same frame.
+    for (value_index, owned_index, kind_index, size_index) in [(1, 3, 5, 6), (2, 7, 8, 9)] {
+        let payload = flat.then(|| ownership::copy(&b, bits, crate::Width::Body(size), owned));
+        for (index, value) in [
+            payload.map(|value| (value_index, value)),
+            Some((owned_index, owned)),
+            Some((kind_index, tag)),
+            Some((size_index, ctx.i64_type().const_int(u64::from(size), false))),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let slot = b
+                .build_struct_gep(ty, context, index, "reply_destination_slot")
+                .unwrap();
+            let destination = b
+                .build_load(ptr, slot, "reply_destination")
+                .unwrap()
+                .into_pointer_value();
+            b.build_store(destination, value).unwrap();
+        }
+    }
+    b.build_return(Some(&bits)).unwrap();
+    mark_delegate(ctx, function);
+    Ok(function)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    /// The census's read rule, op by op. `Return` is the case the depth
+    /// effect alone gets wrong, and no corpus coroutine returns a value of
+    /// more than one kind, so only this test fails if its rule is dropped.
+    #[test]
+    fn kind_reads_counts_what_the_native_code_inspects() {
+        let src = "loop main(r: Word) -> Word { yield r }";
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let chunk = &m.chunks[0];
+        assert_eq!(kind_reads(&Op::Return, chunk), 1);
+        assert_eq!(kind_reads(&Op::PopN(3), chunk), 0);
+        assert_eq!(kind_reads(&Op::Trap(9), chunk), 0);
+        assert_eq!(kind_reads(&Op::Add, chunk), 2);
+        assert_eq!(kind_reads(&Op::SetLocal(0), chunk), 1);
+        assert_eq!(kind_reads(&Op::Yield, chunk), 1);
+        assert_eq!(kind_reads(&Op::IsStruct(0), chunk), 1);
+    }
+}

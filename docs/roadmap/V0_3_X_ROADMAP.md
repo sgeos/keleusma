@@ -2,7 +2,10 @@
 
 > **Navigation**: [Roadmap](./README.md) | [Documentation Root](../README.md)
 
-**Status**: Preliminary. Gated on the V0.3.0 full self-hosting solution landing. This document
+**Status**: In progress. Orders 1 to 5 of this line are recorded as met, Order 6
+is met in part, and its acceptance is the operator's question 23, as recorded in
+[`ORDER_6_COMPLETION.md`](../decisions/ORDER_6_COMPLETION.md). The paragraph below is the plan as
+first written and is kept as written. This document
 mirrors [`V0_2_X_ROADMAP.md`](./V0_2_X_ROADMAP.md): it sequences the V0.3.x release line toward
 its milestone. The milestone is **V0.4.0, full native code generation**, whose architecture
 stays authoritative in [`V0_4_0_NATIVE_CODEGEN.md`](./V0_4_0_NATIVE_CODEGEN.md). Because the
@@ -26,6 +29,58 @@ expected along the way rather than front-loaded.
 The bytecode shape does not go away. Per `V0_4_0_NATIVE_CODEGEN.md`, native is a second
 deployment shape; the bytecode remains the verification artefact and the portable form, and the
 VM remains for embedding and fallback.
+
+## CORRECTION: the entry baseline is NOT a gate on Workstreams A to D
+
+**Operator challenge, 2026-08-20: "I am not convinced native codegen actually requires self
+hosting." Measured, and the challenge is correct.**
+
+The status line above says this line is "Gated on the V0.3.0 full self-hosting solution landing"
+and that "the V0.3.x work has not started". **Both statements are false as written**, and the
+second is falsified by artefacts already in the tree.
+
+**Native code generation consumes BYTECODE. It does not care which compiler produced it.**
+`native_codegen/tests/corpus_differential.rs` builds every module with the Rust reference
+compiler -- `compile(&parse(&tokenize(src)))` -- and lowers it. No self-hosted compiler appears
+anywhere in the native path. Measured on this tree: **64 modules compile, 1027 of 1027 chunks
+lower, 88,246 of 88,246 opcode instances lower, and 44 modules execute natively and agree with the
+virtual machine.**
+
+**Where the original reasoning came from, and why it does not generalise.**
+`V0_3_0_SELF_HOSTING.md` argues that without the self-hosted compiler, V0.4.0 "has nothing to
+compile to native code". That is true of ONE deliverable -- an ahead-of-time self-hosted compiler
+shipped as a static library, removing the virtual machine from the compilation path. It is not a
+precondition for lowering bytecode to native code, which is what Workstreams A to D actually do.
+
+**The self-hosting-style subset is already being lowered.** Each workstream is written as targeting
+"the self-hosted compiler itself" first. That needs the stage SOURCES to exist, not the self-hosted
+compiler to be finished. `src/selfhost/kel/*.kel` are in the corpus today and lower today.
+
+**What genuinely does depend on V0.3.0**: compiling the self-hosted compiler ahead of time so the
+virtual machine leaves the compilation path, and any claim that "the full language lowers" resting
+on a full-language corpus that only a complete self-hosted compiler exercises. **Neither blocks
+Workstream A, B, C or D from proceeding on reference-compiled bytecode.**
+
+**The measured gap is a different one, and it is now named.** "100% of corpus opcode instances
+lower" is a statement about the CORPUS. The milestone is that the whole LANGUAGE lowers. Those are
+different populations: **16 of the 66 declared opcodes have no corpus witness at all**, so the
+100% figure says nothing whatever about them. See
+`native_codegen/tests/isa_coverage_census.rs`, which names them and derives the instruction set
+from `src/bytecode.rs` rather than transcribing it.
+
+**All sixteen are EMITTABLE, so the gap is closable.** Each has an `fc.emit` site in
+`src/compiler.rs`, and `Byte` arithmetic witnesses `Add`, `Sub` and `Mul` in one line each --
+verified by compiling snippets. **An example exercising every opcode is therefore constructible**,
+which would turn "100% of corpus opcode instances lower" into a claim about the instruction set
+rather than about the corpus. The constructs are not all obvious: `Word` division emits `Div`, not
+`CheckedDiv`, and a runtime array index emits `GetIndex`, not `Len`/`BoundsCheck` -- the checked
+and length forms come from the fixed-point and dynamic-length surfaces.
+
+**DONE, IN PART, AND IT FOUND REAL SCOPE.** `examples/scripts/native_witnesses/opcode_witness.kel` witnesses ten of
+the sixteen and takes the census to **60 of 66**. **The native backend REFUSES it**, on
+`UnsupportedOp` for `Add`, `WordToFixed(16)` and `IntToFloat` -- the first concrete, demonstrated
+items of remaining Workstream A scope. The corpus's previous zero backend refusals was a fact about
+the corpus, not about the lowering.
 
 ## Entry baseline (what V0.3.0 hands to V0.3.x)
 
@@ -55,15 +110,102 @@ The load-bearing primitive. A Keleusma `loop`/`yield`/`resume` coroutine lowers 
 coroutine so a host can call coroutine-driven native functions whose state machines LLVM
 manages. This is the piece the V0.4.0 strategy identifies as where the risk concentrates.
 
+The coroutine implementation integrated through pull request 482. Absorption 83
+reconciles it with upstream `f213f421`, including total FixedDiv outcomes.
+The [acceptance record](../decisions/WORKSTREAM_B_COMPLETION.md) maps suspension,
+delegation, completion, ownership and resource checks to executable evidence.
+It retains shared-backend dependencies and stage-coverage residuals, and separates
+current local checks from historical local and hosted full-gate results.
+This work does not complete Workstreams A, C or D.
+
+> **MEASURED QUALIFICATION (2026-08-10): most of the corpus routes AROUND this workstream.**
+>
+> The paragraph above remains correct for the general case and is not withdrawn. What the
+> measurement changes is how much of the near-term work actually depends on it.
+>
+> A `loop` chunk compiles to `Stream ; body ; PopN(1) ; Reset`, and `Reset` clears every local,
+> truncates the operand stack, and rewinds to just after `Stream`. When the body's **single**
+> `yield` is its tail expression, no state crosses the suspension, the inter-yield partition has
+> one element, and the chunk lowers to an ordinary function with **no coroutine intrinsic, no
+> frame, and no callback**:
+>
+> ```
+> kel_chunk_N_step(resume, shared, private) -> i64
+> ```
+>
+> One entry point suffices. `Vm::resume_after_enter` writes the resume value into the entry
+> chunk's slot 0 and iteration zero takes its value from the `call` argument, so `step(a)`,
+> `step(r1)`, `step(r2)` reproduces the virtual machine's sequence with no distinguished first
+> call.
+>
+> **Of the ten self-hosted stage modules, eight have exactly this shape** — `parse`, `analyze`,
+> `reconstruct` and the five `verify_*`. One (`codegen`) delegates its whole body to a
+> multiheaded `yield` callee, and one (`lexer`) nests its yields inside `if`. Only those two need
+> this workstream.
+>
+> **Epistemic status, stated because it changes what may be concluded.** The eight-of-ten split is
+> a **source-level reading** of the ten `loop` blocks, not a bytecode count; the op shape and the
+> single-entry-point result are *derived* from the emission path and the resume path respectively.
+> **Sufficiency is NOT measured**: `lower_module` refuses on the first unsupported opcode and
+> `Op::Stream` is the first op of every stream chunk, so nothing behind it has been examined and
+> composites may sit there. Handling the degenerate form is **necessary** for those eight stages.
+>
+> ---
+>
+> ⚠ **SUFFICIENCY HAS SINCE BEEN MEASURED, AND THE CAVEAT ABOVE IS SUPERSEDED. 2026-09-02.**
+>
+> The caveat was correct when written on 2026-08-10, and **nothing corrected it for three weeks while
+> the instrument that answers it ran in the package suite on every invocation.** It is retained above
+> rather than deleted, because its EXPIRY is the finding and not its wrongness.
+>
+> **Measured by `native_codegen/tests/spike_stream_sufficiency.rs`**, which walks `examples/scripts`,
+> `src/selfhost/kel`, `examples/rtos/scripts` and `compiler/kel` — **a different population from the
+> 69-module figure used elsewhere in this line's censuses**:
+>
+> ```text
+>   stages freed by the stream work alone : 12
+>   stages needing more                   : 0
+> ```
+>
+> **"Freed" means no OTHER unsupported opcode sits behind the refusal.** It does **not** mean the
+> module lowers: `Op::Stream` is still refused, deliberately, and the backend's coverage residual
+> depends on that refusal standing.
+>
+> **And it does NOT answer whether those stages need coroutine intrinsics.** That is the separate
+> question the source-level reading above addresses, and it remains a source-level reading.
+> Conflating the two would replace one overclaim with another.
+>
+> **What it does settle** is the risk this section names: the concern was that handling `Stream` and
+> `Reset` might not deliver the stage modules because unexamined blockers sat behind them. Measured,
+> none do.
+> Nothing here shows it is **sufficient**, and this note must not be read as saying Workstream B
+> can be deferred past Order 1.
+>
+> Two preconditions belong in the admissibility check rather than in prose. A **multiheaded**
+> stream chunk wraps its dispatch in `Loop`/`EndLoop`, so its yields are nested by construction and
+> it can never be degenerate. And a chunk that **calls a non-`Func` chunk** delegates a suspension
+> the virtual machine handles by writing the *entry* chunk's resume slot, which native code does
+> not reproduce; `category_can_call` makes the direct call sites an exact test rather than an
+> approximation.
+>
+> Detail and derivations: [`../decisions/NATIVE_LOWERING_INVENTORY.md`](../decisions/NATIVE_LOWERING_INVENTORY.md),
+> section "READ THIS FIRST".
+
 ### C. Arena-resident coroutine frames and the native arena model
 
 Coroutine frames live in the arena, not the C stack, preserving the bounded-WCMU model in
 native code. The native runtime reproduces the arena bump-and-reset discipline.
 
+Each coroutine's frame bound is derived from its lowering, and a fixed pool reserves slots of that
+size from the host arena and returns them to a free list on release. The
+[acceptance record](../decisions/WORKSTREAM_C_COMPLETION.md) maps each requirement to executable
+evidence and states the limits.
+
 ### D. Static-library linkage, the host ABI, and foreign-linkable object files
 
 The native artefact links as a static library against a Rust host and exposes sub-coroutine
-entry points. The ABI between native Keleusma code and the host, including the native form of
+entry points. The [acceptance record](../decisions/WORKSTREAM_D_COMPLETION.md) maps each
+requirement below to executable evidence and states what is deferred. The ABI between native Keleusma code and the host, including the native form of
 the marshalling boundary, is specified here (it is the native counterpart of the V0.2.x native
 ABI definition).
 
@@ -136,6 +278,49 @@ Indicative and revised as increments land.
 | 5 | Flat-machine ISA and hot replacement | G, H | The flat-machine ISA in native; native hot swap. |
 | 6 | **Full native code generation → V0.4.0** | A (full), plus widening | The full language lowers to native across the target set; native is a first-class deployment shape. |
 
+**Order 1 status, 2026-10-24.** Met under the strict reading: all 14 self-hosted stage sources
+execute natively and agree with the virtual machine on real input. The evidence and its limits are
+in [`ORDER_1_GATE_ASSESSMENT.md`](../decisions/ORDER_1_GATE_ASSESSMENT.md). Workstream B, Order 2's
+first workstream, completed earlier; see
+[`WORKSTREAM_B_COMPLETION.md`](../decisions/WORKSTREAM_B_COMPLETION.md). This table's Order numbers
+are this line's and differ from the V0.2.X roadmap's.
+
+**Order 2 status, 2026-10-24.** Met. Coroutine-driven native functions are callable from a host
+through stable slots ([Workstream B](../decisions/WORKSTREAM_B_COMPLETION.md)), and their frames
+occupy statically bounded slots of an arena pool
+([Workstream C](../decisions/WORKSTREAM_C_COMPLETION.md)). Both records state their limits.
+
+**Order 3 status, 2026-10-25.** Met. The self-hosted lexer lowers as a coroutine library,
+links as a static archive against a Rust host, and agrees with the virtual machine on every
+yield and shared byte. A C host links the same archive. The arena requirement and the trap
+verdict are exported as symbols. The execution-time bound is not, and the V0.4.0 mangling is
+deferred. The evidence and its limits are in
+[`WORKSTREAM_D_COMPLETION.md`](../decisions/WORKSTREAM_D_COMPLETION.md).
+
+**Order 4 status, 2026-10-25.** Met, with the cost claim carried in part. A trap in a coroutine
+library reaches the host as an outcome with its kind, a host native can fail softly, and every
+handled first-pass outcome runs natively as a branch. Native execution follows the bytecode's cost
+path instruction for instruction, a bytecode cost claim composed through calls is exported with a
+status, and a measured machine stack bound is exported. The cost claim is in bytecode units, best
+effort as native time while open decision 1 stands, and is not established for the self-hosted
+lexer. The evidence and its limits are in
+[`ORDER_4_COMPLETION.md`](../decisions/ORDER_4_COMPLETION.md).
+
+**Order 5 status, 2026-10-25.** Met for the native half of the flat machine. A coroutine lowers
+with no run-time kind when its analysis permits, and all 14 self-hosted stage sources do so and
+agree with the virtual machine. A native library is replaced while its host runs, under the virtual
+machine's schema rule, and agrees with `Vm::replace_module`. The bytecode half of the flat-machine
+redesign, which would change the instruction set, is open decision 3 and the operator's. The
+evidence and its limits are in [`ORDER_5_COMPLETION.md`](../decisions/ORDER_5_COMPLETION.md).
+
+**Order 6 status, 2026-10-25.** Met in part. Every opcode a compiler can emit lowers, every
+grammar construct agrees with the virtual machine natively or is covered by a named file, Tier 1
+targets build and both macOS architectures execute, and `kel-native` makes native a deployment
+shape of its own. A `Text` crossing the host boundary and opaque handles wait on host ABI
+decisions, the Linux targets are built and not executed, and the full-language corpus is the
+V0.2.X line's Order 6. V0.4.0 is not released. The evidence and its limits are in
+[`ORDER_6_COMPLETION.md`](../decisions/ORDER_6_COMPLETION.md).
+
 ## The oracle and trust story
 
 Native code raises the same trust question as a self-hosted validator: native output that
@@ -164,10 +349,13 @@ Carried from `V0_4_0_NATIVE_CODEGEN.md`'s open questions, resolved as V0.3.x app
 
 1. **WCET on native is hard or best-effort.** Whether native execution preserves a hard WCET
    bound or a best-effort one; the V0.5.0 host strategy already treats native WCET as
-   best-effort, which informs this.
+   best-effort, which informs this. **Answered 2026-10-28**, question 1: best effort, in
+   bytecode cost units.
 2. **JIT versus AOT scope.** Whether V0.3.x pursues ahead-of-time only or admits a JIT path.
+   **Answered 2026-10-30**, question 21: both. Deployed native code is built ahead of time, and
+   the toolchain may compile in process, as the native self-hosted compiler does.
 3. **Flat-machine ISA timing.** Whether the B28 flat-machine redesign lands within V0.3.x or is
-   staged into V0.4.x.
+   staged into V0.4.x. **Answered 2026-10-28**, question 2: deferred.
 
 ## Relationship to other roadmaps
 

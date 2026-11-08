@@ -1,0 +1,44 @@
+COMPLETION CONDITION — the uninitialised composite data slot
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. READING A COMPOSITE DATA SLOT THAT WAS NEVER WRITTEN DOES NOT RETURN A VALUE.
+   A program that writes a composite data slot on one path only, and reads it on
+   a path where the write did not happen, faults natively rather than answering.
+   The reference's outcome for the same program and input is recorded beside it,
+   from the reference itself rather than from description.
+
+2. THE WRITTEN PATH IS UNAFFECTED.
+   The same program, on an input that does perform the write, agrees with the
+   reference. The corpus module that homes a composite in a private slot still
+   lowers and still agrees across several stream cycles.
+
+3. THE INITIALISATION STATE IS NOT INFERRED FROM THE DATA.
+   Whatever distinguishes written from unwritten is separate from the body bytes,
+   so a legitimate body of any value cannot be mistaken for an unwritten slot.
+
+4. IT SURVIVES A STREAM RESET.
+   A subject that writes a composite slot in one stream cycle and reads it in a
+   later one still agrees with the reference, so the mechanism did not make the
+   slot look unwritten again after a rewind.
+
+5. THE HOST FIGURE ACCOUNTS FOR IT.
+   Any persistent storage the mechanism adds is included in the figure this
+   backend publishes for a host to allocate, and something in the tree fails if
+   the two disagree.
+
+6. THE MEASUREMENT IS REPORTED TO THE OTHER LINE AS A QUESTION.
+   The tree records that the reference compiler rejects an unconditional
+   read-before-write of a composite slot and accepts a conditional one, states
+   what the runtime does in that case, and asks whether that is intended rather
+   than declaring it a defect.
+
+7. NO NEW OPCODE AND NO BYTECODE_VERSION CHANGE.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.
+
+9. WHAT THE MECHANISM DOES NOT COVER IS WRITTEN DOWN next to it.

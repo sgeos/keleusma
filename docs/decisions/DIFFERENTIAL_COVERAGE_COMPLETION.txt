@@ -1,0 +1,42 @@
+COMPLETION CONDITION — differential coverage per opcode
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test determines, for each bytecode opcode, whether the shared corpus provides
+   a witness inside a module the differential actually executes, distinguishing
+   that from a module the differential merely lowers or compiles.
+
+2. The set of modules treated as not executed is justified against the
+   differential's own classification rather than by a separately invented rule,
+   and the test fails if the count of executed and non-executed modules stops
+   agreeing with that classification.
+
+3. Every opcode found to lack a corpus witness is either accompanied by a named
+   alternative source of differential evidence, or recorded as having none.
+
+4. Where alternative evidence is named, the test verifies it rather than asserting
+   it: the named witness is compiled and shown to emit that opcode, and the
+   witness is shown to be present in the file claimed to drive it. A bare claim
+   that an opcode is covered elsewhere does not satisfy this.
+
+5. The test fails when an opcode's coverage class changes, with a message asking
+   for the change to be explained rather than for a list to be edited.
+
+6. If the enumeration yields fewer opcodes or modules than a recorded floor, the
+   test fails as a broken probe rather than passing.
+
+7. The tree does not claim that an executed module exercises every opcode it
+   contains.
+
+8. Every assertion added is accompanied by evidence that it fails when the
+   condition it describes is violated.
+
+9. The recorded test population figures and the handoff's state-table figures
+   agree with the tree, and the backend gate passes in both float configurations.
+
+10. Files under src/ and tests/ at the repository root carry no changes
+    originating from this line.
