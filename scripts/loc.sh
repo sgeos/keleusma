@@ -107,8 +107,10 @@ count() {
   # cloc's version banner is dropped. Its output goes through a file rather than a
   # pipe so that a cloc failure still fails the script, which POSIX sh cannot see
   # through a pipeline.
-  cloc --quiet --hide-rate --read-lang-def="$LANG_DEF" --force-lang='Linker Script,x' \
-    --list-file="$LIST" > "$OUT"
+  # `--timeout 0` stops cloc skipping a file that runs past its per-file time guard,
+  # which cloc 2.06 did on a CI runner on 2026-11-08. `.v` files here are Rocq.
+  cloc --quiet --hide-rate --timeout 0 --read-lang-def="$LANG_DEF" \
+    --force-lang='Linker Script,x' --force-lang='Coq,v' --list-file="$LIST" > "$OUT"
   sed '/^github\.com\/AlDanial\/cloc/d' "$OUT"
 }
 
