@@ -82,6 +82,13 @@ verifier's core now. Ruled by the operator on 2026-11-07.
 - **Kani now.** A bounded model checker for Rust, applied to the verifier's core for the
   absence of panics and overflow. It has no certification precedent either, but it is cheap
   and immediately useful evidence.
+- **It also serves the generational continuity scenarios.** The operator confirmed on
+  2026-11-07 that the decision serves that family too. There no outside party grants
+  credit, so trust rests on what each generation can re-check for itself. Rocq's small
+  kernel, its standalone checker and the MetaRocq project's type checker for Rocq's theory,
+  itself verified in Rocq, suit that better than a prover whose proofs no separate checker
+  can verify. The first increment below, a verifier trust root, is also where that family's
+  own work begins.
 
 ## The first increment for the proofs line
 
