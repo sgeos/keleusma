@@ -86,7 +86,9 @@ wait_for_swap() {
 
 # Internal mode. Runs one harness, writes its log and a one-line verdict file
 # holding SUCCESSFUL, VACUOUS, FAILED, UNKNOWN or BLOCKED followed by the
-# seconds taken. BLOCKED means the machine monitor refused the start.
+# seconds taken and the peak memory footprint in bytes, or `unknown`. BLOCKED
+# means the machine monitor refused the start. Each peak is also appended to
+# peaks.txt in the log directory.
 if [ "${1:-}" = "--one" ]; then
     name="$2"
     log_dir="$3"
@@ -97,7 +99,29 @@ if [ "${1:-}" = "--one" ]; then
         exit 0
     fi
     start="$(date +%s)"
-    cargo kani --output-format terse --exact --harness "$name" > "$log" 2>&1 || true
+    # Peak memory, where `/usr/bin/time -l` works. Inside some sandboxes it
+    # fails on a refused sysctl, and the peak is then recorded as unknown,
+    # never as zero.
+    peak="unknown"
+    if /usr/bin/time -l true > /dev/null 2>&1; then
+        /usr/bin/time -l cargo kani --output-format terse --exact --harness "$name" \
+            > "$log" 2> "$log.time" || true
+        # The maximum resident set size comes first because it covers the
+        # model checker, a grandchild of this process. The peak memory
+        # footprint covers only the direct child, `cargo`, which measured
+        # under two megabytes beside a model checker of hundreds.
+        peak="$(awk '/maximum resident set size/ { print $1 }' "$log.time")"
+        if [ -z "$peak" ]; then
+            peak="$(awk '/peak memory footprint/ { print $1 }' "$log.time")"
+        fi
+        if [ -z "$peak" ]; then
+            peak="unknown"
+        fi
+        # Kani's own diagnostics went to the timing file, so keep them in the log.
+        cat "$log.time" >> "$log"
+    else
+        cargo kani --output-format terse --exact --harness "$name" > "$log" 2>&1 || true
+    fi
     end="$(date +%s)"
     verdict="UNKNOWN"
     if grep -q '^VERIFICATION:- SUCCESSFUL' "$log"; then
@@ -110,8 +134,9 @@ if [ "${1:-}" = "--one" ]; then
     elif grep -q '^VERIFICATION:- FAILED' "$log"; then
         verdict="FAILED"
     fi
-    echo "$verdict $(( end - start ))" > "$log_dir/${name##*::}.verdict"
-    printf '%-60s %-10s %5ss\n' "$name" "$verdict" "$(( end - start ))"
+    echo "$verdict $(( end - start )) $peak" > "$log_dir/${name##*::}.verdict"
+    echo "$name $peak" >> "$log_dir/peaks.txt"
+    printf '%-60s %-10s %5ss  peak %s bytes\n' "$name" "$verdict" "$(( end - start ))" "$peak"
     exit 0
 fi
 
