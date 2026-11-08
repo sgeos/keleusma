@@ -1015,7 +1015,7 @@ jobs:
       # Tests that need llc and llvm-readobj FAIL rather than skip when absent.
       KEL_REQUIRE_LLVM_TOOLS: '1'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # Native provenance tests inspect historical commits.
           fetch-depth: 0
@@ -1090,7 +1090,7 @@ jobs:
       CARGO_TERM_COLOR: always
       KEL_REQUIRE_LLVM_TOOLS: '1'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
