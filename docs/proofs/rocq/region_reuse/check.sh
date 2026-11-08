@@ -51,7 +51,7 @@ echo "check.sh: $(rocq --version | head -1)"
 
 # 1. Forbidden constructs, counted per file so an empty scan is visible. This is a
 #    first line only. Step 3's summary is what covers every constant.
-forbidden='\<(Admitted|admit|Admit|Abort|Axioms?|Parameters?|Conjectures?|bypass_check)\>|Unset[[:space:]]+(Guard|Positivity|Universe)|Set[[:space:]]+Warnings|warnings[[:space:]]*='
+forbidden='\<(Admitted|admit|Admit|Abort|Axioms?|Parameters?|Conjectures?|bypass_check)\>|Unset[[:space:]]+(Guard|Positivity|Universe)|Set[[:space:]]+Warnings|warnings?[[:space:]]*=|\<Redirect\>'
 # A source with comments removed and whitespace collapsed to single spaces.
 flat() {
     perl -0777 -pe 's/\(\*.*?\*\)/ /gs' "$1" | tr -s '[:space:]' ' '
