@@ -23,8 +23,13 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > line, the compiler accepting recursion against its documentation and the stream figure
 > counting no callee bodies. These two landed on `v0.2.3` at `f13b6fab`. **The formal
 > instantiation of B1** is in `docs/proofs/rocq/instance/`, instantiating B1's trace model with
-> B2's core and rederiving B2's theorem from B1's, without a flow certificate. **The Kani work**
-> was in progress on `proof/kani-verifier` when this stamp was written.
+> B2's core and rederiving B2's theorem from B1's, without a flow certificate, and landed at
+> `a4eba5bd`. **The Kani work** is in `tools/proof-kani/`. Its light tier, five harnesses
+> expected to verify and three expected failures, ran green locally. Its heavy tier, the walk
+> harnesses, one of which held about 30 GB, has no green run, and running it here is the
+> operator's decision on the admin session's advice. Kani found two defects in `src/verify.rs`,
+> reported to the V0.2.X line. A long-term plan for running these checks in continuous
+> integration was requested from the Kaizen line on 2026-11-08.
 > None of these relates any model to the shipping verifier by proof. The interline export hold
 > below still stands.
 
