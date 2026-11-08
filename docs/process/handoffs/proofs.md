@@ -14,17 +14,19 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > `v0.3.0`, and `main` have moved since `003f25c6`, read the peer handoffs and the mailbox, and
 > report what changed before acting on anything here.
 
-> **REFRESHED 2026-11-08, eighth stamp, describing increments B1, A and B2 complete.** The
-> operator ruled the order B1, A, B2 on 2026-11-07. B1 landed on `v0.2.3` at `8657a85a` under
-> `docs/proofs/rocq/region_reuse/`, and A at `9bebdbdc` under `docs/proofs/rocq/core_bounds/`.
-> B2 is on `proof/rocq-region-core` under `docs/proofs/rocq/region_core/`. It extends A's core
-> with composite regions and a confinement checker, and proves that for every accepted module
-> and every plan giving distinct sites distinct slots the reuse run and the baseline run agree
-> on every observation. **B2 does not formally instantiate B1's abstract records**, which was
-> the plan's literal wording. It proves the reuse result directly for a concrete machine, which
-> closes B1's main limit, that confinement was a caller-supplied certificate, and relates to
-> B1's axioms by a recorded argument. None of the increments relates to the shipping Rust
-> verifier yet. Each README states every limit. The interline export hold below still stands.
+> **REFRESHED 2026-11-08, ninth stamp, describing the four follow-on tasks.** The operator
+> ruled the order B1, A, B2 on 2026-11-07, all three of which landed on `v0.2.3`, and on
+> 2026-11-08 commissioned four further tasks, to run in parallel. **Shared slots**, an excluded
+> case of B2, is in `docs/proofs/rocq/shared_slots/`, covering arm groups and sequential sharing
+> with no injectivity premise. **The differential test** of the Rust verifier against
+> increment A's model is in `tools/proof-difftest/`, and reported two findings to the V0.2.X
+> line, the compiler accepting recursion against its documentation and the stream figure
+> counting no callee bodies. These two landed on `v0.2.3` at `f13b6fab`. **The formal
+> instantiation of B1** is in `docs/proofs/rocq/instance/`, instantiating B1's trace model with
+> B2's core and rederiving B2's theorem from B1's, without a flow certificate. **The Kani work**
+> was in progress on `proof/kani-verifier` when this stamp was written.
+> None of these relates any model to the shipping verifier by proof. The interline export hold
+> below still stands.
 
 ## Validity
 
@@ -50,6 +52,8 @@ ls docs/proofs/ | wc -l             # 5, the proof, three AUDIT records, and roc
 ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
 ls docs/proofs/rocq/core_bounds/*.v | wc -l    # 6, increment A
 ls docs/proofs/rocq/region_core/*.v | wc -l    # 6, increment B2
+ls docs/proofs/rocq/shared_slots/*.v | wc -l   # 8, shared slots
+ls docs/proofs/rocq/instance/*.v | wc -l       # 8, the instantiation of B1
 ```
 
 ## Structure of the line

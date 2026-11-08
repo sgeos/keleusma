@@ -78,10 +78,17 @@ rows=$(mktemp "${TMPDIR:-/tmp}/footprint.XXXXXX")
 trap 'rm -f "$rows"' EXIT
 trap 'exit 130' INT TERM
 
+# Each build waits while the shared machine is elevated or critical, by the playbook
+# scripts/machine-guard.sh applies. It returns at once where no monitor exists.
+# The sourced file is checked on its own, as every script under scripts/ is.
+# shellcheck disable=SC1091
+. scripts/machine-guard.sh
+
 # Build one configuration and append "name features text data bss" to the rows.
 measure() {
   name=$1
   features=$2
+  machine_guard_wait "footprint build, $name"
   if [ -n "$features" ]; then
     (cd "$PROBE" && cargo build --release --locked --quiet --features "$features")
   else

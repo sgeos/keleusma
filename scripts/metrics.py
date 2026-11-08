@@ -57,6 +57,22 @@ def run(args, cwd=ROOT, check=True):
     return result.stdout
 
 
+def first_json(text):
+    """The first JSON object in a tool's output, and any text after it.
+
+    cloc 2.06 on the CI runner printed text after its JSON on 2026-11-08, which a plain
+    parse refused, so the object is read on its own and the rest is kept as a note.
+    """
+    start = text.find('{')
+    if start < 0:
+        raise Unavailable(f'no JSON object in the output: {text.strip()[:200]}')
+    try:
+        value, end = json.JSONDecoder().raw_decode(text, start)
+    except json.JSONDecodeError as error:
+        raise Unavailable(f'the output is not JSON: {error}') from None
+    return value, text[end:].strip()
+
+
 def tracked(*pathspecs):
     out = run(['git', '-c', 'core.quotePath=false', 'ls-files', '--', *pathspecs])
     return [ROOT / line for line in out.splitlines() if line]
@@ -74,21 +90,27 @@ def lines(_args):
     """Lines by category, as scripts/loc.sh counts them, from cloc's JSON output."""
     if not shutil.which('cloc'):
         raise Unavailable('cloc is not installed')
-    result, tmp = {}, ROOT / 'target' / 'metrics' / 'loc-files.txt'
+    result, notes, tmp = {}, {}, ROOT / 'target' / 'metrics' / 'loc-files.txt'
     tmp.parent.mkdir(parents=True, exist_ok=True)
     for category in LOC_CATEGORIES:
         tmp.write_text(run(['sh', 'scripts/loc.sh', '--files', category]))
         if not tmp.read_text().strip():
             result[category] = {'files': 0, 'code': 0, 'comment': 0, 'blank': 0}
             continue
-        data = json.loads(run(['cloc', '--json', '--quiet', '--read-lang-def=tools/cloc.lang',
-                               "--force-lang=Linker Script,x", f'--list-file={tmp}']))
+        # `.v` is ambiguous to cloc, Coq or Verilog, and every `.v` here is Rocq.
+        out = run(['cloc', '--json', '--quiet', '--read-lang-def=tools/cloc.lang',
+                   '--force-lang=Linker Script,x', '--force-lang=Coq,v', f'--list-file={tmp}'])
+        data, trailing = first_json(out)
+        if trailing:
+            notes.setdefault(category, trailing[:300])
         total = data['SUM']
         result[category] = {'files': total['nFiles'], 'code': total['code'],
                             'comment': total['comment'], 'blank': total['blank'],
                             'by_language': {k: v['code'] for k, v in data.items()
                                             if k not in ('header', 'SUM')}}
     tmp.unlink()
+    if notes:
+        result['cloc_notes'] = notes
     shipping = result['runtime']['code'] + result['crates']['code']
     result['derived'] = {
         'shipping_code': shipping,
@@ -295,10 +317,32 @@ def tightness(args):
     return json.loads(path.read_text())
 
 
+def machine(args):
+    """Peak footprints the playbook helper recorded, per job label, from its local log."""
+    path = ROOT / args.machine_log
+    if not path.exists():
+        raise Unavailable(f'{args.machine_log} is missing. scripts/machine-guard.sh run writes it')
+    jobs = {}
+    for line in path.read_text().splitlines():
+        fields = line.split('\t')
+        if len(fields) != 6:
+            continue
+        stamp, label, footprint, resident, seconds, status = fields
+        entry = jobs.setdefault(label, {'runs': 0, 'peak_footprint': None, 'peak_resident': None})
+        entry['runs'] += 1
+        entry['last_run'] = stamp
+        entry['last_status'] = int(status) if status.lstrip('-').isdigit() else status
+        entry['last_seconds'] = int(seconds) if seconds.isdigit() else None
+        for key, value in (('peak_footprint', footprint), ('peak_resident', resident)):
+            if value.isdigit():
+                entry[key] = max(entry[key] or 0, int(value))
+    return {'jobs': jobs}
+
+
 COLLECTORS = {'lines': lines, 'tests': tests, 'unsafe': unsafe_code, 'invariants': invariants,
               'footprint': footprint, 'documentation': documentation, 'process': process,
               'dependencies': dependencies, 'proofs': proofs, 'github': github,
-              'tightness': tightness}
+              'tightness': tightness, 'machine': machine}
 
 
 def collect(args):
@@ -312,6 +356,9 @@ def collect(args):
             report['metrics'][name] = {'status': 'ok', 'values': collector(args)}
         except Unavailable as error:
             report['metrics'][name] = {'status': 'unavailable', 'reason': str(error)}
+        except Exception as error:  # noqa: BLE001, one collector's defect must not hide the others
+            report['metrics'][name] = {'status': 'error',
+                                       'reason': f'{type(error).__name__}: {error}'[:500]}
     return report
 
 
@@ -333,6 +380,7 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--footprint', type=Path, default=Path('footprint/target/footprint.json'))
     parser.add_argument('--tightness', type=Path, default=Path('target/metrics/tightness.json'))
+    parser.add_argument('--machine-log', type=Path, default=Path('target/machine-guard/peaks.tsv'))
     parser.add_argument('--github', metavar='OWNER/REPO')
     parser.add_argument('--branch', default=os.environ.get('KEL_TRUNK', 'v0.2.3'))
     parser.add_argument('--days', type=int, default=7)
