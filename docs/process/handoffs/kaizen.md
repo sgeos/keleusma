@@ -97,8 +97,9 @@ authority, so the startup-file positions reach them first-hand.
 5. The proofs line resumes when the operator starts its session, with Rocq and Kani as
    ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
    was sent in the interline mailbox. Public records use the coded vocabulary of that file.
-6. Report the cheap metrics of [the metrics record](../kaizen/2026-11-07-metrics.md) in
-   one script once the operator picks them, and track bound tightness.
+6. `scripts/metrics.py` tracks every reasonable metric, by
+   [the metrics record](../kaizen/2026-11-07-metrics.md). Add the tightness runner to CI
+   when V0.2.X provides it, asked in sequence 379.
 
 ## Open with the operator
 

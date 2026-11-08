@@ -24,8 +24,8 @@
 #      statement mentions does not; see README.md. The script requires the
 #      expected number of type pins.
 #
-# The trusted base is the Rocq kernel, rocqchk, the Stdlib modules List, Arith
-# and Lia imported by the sources, and the statements as written. Whether the
+# The trusted base is the Rocq kernel, rocqchk, the Stdlib modules imported by
+# the sources, List, Arith and Lia, and the statements as written. Whether the
 # core models Keleusma's verifier is not checked here; see README.md.
 #
 # Usage: docs/proofs/rocq/core_bounds/check.sh
@@ -59,11 +59,29 @@ echo "check.sh: $(rocq --version | head -1)"
 # 1. Forbidden constructs, counted per file so an empty scan is visible. This is a
 #    first line only. Step 3's summary is what covers every constant.
 forbidden='\<(Admitted|admit|Admit|Abort|Axioms?|Parameters?|Conjectures?|bypass_check)\>|Unset[[:space:]]+(Guard|Positivity|Universe)|Set[[:space:]]+Warnings|warnings[[:space:]]*='
+# A source with comments removed and whitespace collapsed to single spaces.
+flat() {
+    perl -0777 -pe 's/\(\*.*?\*\)/ /gs' "$1" | tr -s '[:space:]' ' '
+}
 hits=0
 for m in "${modules[@]}"; do
-    n=$(grep -cE "$forbidden" "$src/$m.v" || true)
+    # The scan reads the source with its comments removed and its whitespace
+    # collapsed, so a construct split across lines or by a comment is still
+    # matched.
+    n=$(flat "$src/$m.v" | { grep -oE "$forbidden" || true; } | wc -l | tr -d ' ')
     if [ "$n" -ne 0 ]; then
-        grep -nE "$forbidden" "$src/$m.v" >&2
+        flat "$src/$m.v" | grep -oE "$forbidden" | sed "s|^|$m.v: |" >&2
+        hits=$((hits + n))
+    fi
+done
+# The pins and the controls may not open a section or declare a hypothesis,
+# variable or context, which could discharge a premise added to a pinned
+# statement.
+for m in Statements Controls; do
+    [ -f "$src/$m.v" ] || continue
+    n=$(flat "$src/$m.v" | { grep -oE '\<(Section|Hypothes[ie]s|Hypothesis|Variables?|Context)\>' || true; } | wc -l | tr -d ' ')
+    if [ "$n" -ne 0 ]; then
+        echo "check.sh: $m.v opens a section or declares a hypothesis, variable or context" >&2
         hits=$((hits + n))
     fi
 done
@@ -75,7 +93,7 @@ echo "check.sh: scanned ${#modules[@]} sources, no forbidden construct"
 
 # The pinned statements. Statements.v must compile, which step 2 checks, and must
 # hold exactly the expected number of type pins, so a deleted pin is visible.
-pins=$(grep -c '^Definition pin_' "$src/Statements.v" || true)
+pins=$(grep -cE '^(Definition|Lemma) pin_' "$src/Statements.v" || true)
 if [ "$pins" -ne "$pins_expected" ]; then
     echo "check.sh: Statements.v holds $pins type pins, expected $pins_expected" >&2
     exit 1
