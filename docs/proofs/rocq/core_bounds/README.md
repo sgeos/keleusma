@@ -30,7 +30,9 @@ this increment's audit. It fails unless all of the following hold.
 
 1. No source contains an admitted or assumed proof, a command unsetting guard, positivity or
    universe checking, or a `Set Warnings` command or `warnings` attribute that could silence
-   the next step.
+   the next step, scanned with comments removed and whitespace collapsed, and `Statements.v` and `Controls.v`
+   open no section and declare no hypothesis, variable or context. The last two checks were
+   added after increment B2's audit.
 2. All six modules compile with no output at all.
 3. `rocqchk` re-verifies every module, and its summary reports no axiom, no unsafe fixpoint, no
    type-in-type and no assumed positivity for any constant.
