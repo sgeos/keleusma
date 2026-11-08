@@ -100,6 +100,9 @@ authority, so the startup-file positions reach them first-hand.
 6. `scripts/metrics.py` tracks every reasonable metric, by
    [the metrics record](../kaizen/2026-11-07-metrics.md). Add the tightness runner to CI
    when V0.2.X provides it, asked in sequence 379.
+7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
+   which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
+   machine's playbook to Keleusma's own heavy scripts.
 
 ## Open with the operator
 

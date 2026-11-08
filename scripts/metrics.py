@@ -295,10 +295,32 @@ def tightness(args):
     return json.loads(path.read_text())
 
 
+def machine(args):
+    """Peak footprints the playbook helper recorded, per job label, from its local log."""
+    path = ROOT / args.machine_log
+    if not path.exists():
+        raise Unavailable(f'{args.machine_log} is missing. scripts/machine-guard.sh run writes it')
+    jobs = {}
+    for line in path.read_text().splitlines():
+        fields = line.split('\t')
+        if len(fields) != 6:
+            continue
+        stamp, label, footprint, resident, seconds, status = fields
+        entry = jobs.setdefault(label, {'runs': 0, 'peak_footprint': None, 'peak_resident': None})
+        entry['runs'] += 1
+        entry['last_run'] = stamp
+        entry['last_status'] = int(status) if status.lstrip('-').isdigit() else status
+        entry['last_seconds'] = int(seconds) if seconds.isdigit() else None
+        for key, value in (('peak_footprint', footprint), ('peak_resident', resident)):
+            if value.isdigit():
+                entry[key] = max(entry[key] or 0, int(value))
+    return {'jobs': jobs}
+
+
 COLLECTORS = {'lines': lines, 'tests': tests, 'unsafe': unsafe_code, 'invariants': invariants,
               'footprint': footprint, 'documentation': documentation, 'process': process,
               'dependencies': dependencies, 'proofs': proofs, 'github': github,
-              'tightness': tightness}
+              'tightness': tightness, 'machine': machine}
 
 
 def collect(args):
@@ -333,6 +355,7 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--footprint', type=Path, default=Path('footprint/target/footprint.json'))
     parser.add_argument('--tightness', type=Path, default=Path('target/metrics/tightness.json'))
+    parser.add_argument('--machine-log', type=Path, default=Path('target/machine-guard/peaks.tsv'))
     parser.add_argument('--github', metavar='OWNER/REPO')
     parser.add_argument('--branch', default=os.environ.get('KEL_TRUNK', 'v0.2.3'))
     parser.add_argument('--days', type=int, default=7)

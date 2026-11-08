@@ -34,7 +34,11 @@ cd "$(dirname "$0")/.."
 FILTER="${1:-}"
 CLIPPY_PKG="${2:--p keleusma}"
 
-step() { printf '\n\033[1mfast-check: %s\033[0m\n' "$1"; }
+# Each step waits while the shared machine is elevated or critical. See scripts/machine-guard.sh.
+# The sourced file is checked on its own, as every script under scripts/ is.
+# shellcheck disable=SC1091
+. scripts/machine-guard.sh
+step() { machine_guard_wait "fast-check, $1"; printf '\n\033[1mfast-check: %s\033[0m\n' "$1"; }
 
 # `self-host` is required: the self-host tests this lane exists for are gated on it.
 # Measured 2026-10-24: without it, the header's own
