@@ -13,9 +13,10 @@ checked with no axiom.
 > **What A does not establish, read first.** The core and its checker are models written for
 > this proof. Neither is Keleusma's Rust verifier, and nothing here relates the two. The
 > operator's ruling of 2026-11-07 links them by differential testing of the Rust verifier
-> against this model on generated modules, which is future work and not part of this
-> increment. Until then, the theorem says that **this checker** is sound for **this
-> semantics**, and it says nothing about the shipping verifier. The full list of limits is
+> against this model on generated modules. That test now exists in
+> [`tools/proof-difftest/`](../../../../tools/proof-difftest/README.md), added on 2026-11-08. It
+> samples, and proves nothing. The theorem says that **this checker** is sound for **this
+> semantics**, and the test is the only evidence relating it to the shipping verifier. The full list of limits is
 > under "What is not modelled" below.
 
 ## How to check it
@@ -143,8 +144,8 @@ yield, a call to an earlier function, and an `If` whose arms both yield.
 
 ## What is not modelled
 
-1. **The link to the Rust verifier.** As stated at the top, the differential testing that the
-   operator's ruling names is not done here.
+1. **The link to the Rust verifier.** As stated at the top, it is a differential test in
+   `tools/proof-difftest/`, which samples generated modules and is not a proof.
 2. **Costs.** Every core instruction, loop iteration and reset costs one unit, and the block
    delimiters `EndIf` and `Return` and the stream entry are not charged separately. The
    shipping analysis uses calibrated per-instruction costs from `keleusma-bench`. A cost table

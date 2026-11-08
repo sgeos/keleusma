@@ -163,7 +163,8 @@ a function are rejected, for which there is no separate control.
    shipping virtual machine's handles carry offsets, so address opacity, M8, holds here by
    construction. Nothing relates this core to the shipping virtual machine or verifier.
 3. **Arm groups, Theorem A2 and Corollary A3.** A plan must give distinct sites distinct slots,
-   so sharing one slot between the arms of a conditional is excluded.
+   so sharing one slot between the arms of a conditional is excluded here. The extension in
+   [`../shared_slots/`](../shared_slots/README.md), added on 2026-11-08, covers it.
 4. **Refined confinement, Theorem B1r.** A handle may not be stored to a local at all, so the
    boundary-dead slots of Definition 7 are not modelled.
 5. **The escape-copy discipline, Theorem B2 of Part I.** A handle may not escape at all, so no
