@@ -107,8 +107,10 @@ B1's observation `OBytes b` is the core's `ReadE (Some b)`, `OStale` is `ReadE N
    dereference outcomes from the history in order. `Causal.causal` shows that the replay agrees
    with the real run up to the next event, because an event depends only on the outcomes of the
    reads before it. `gen_is_run` concludes that `Trace.gen` under every plan `Q` produces
-   exactly the events of the core run under `Q`, and `core_log_is_B1_obs` that the core's log is
-   the projection of B1's observations of them.
+   exactly the events of the oracle interpreter's run under `Q`, and `core_log_is_B1_obs` that,
+   whenever the core finishes, its log is the projection of B1's observations of them. For a
+   run that runs out of fuel the core returns nothing, and the events are the oracle
+   interpreter's alone.
 3. **The checker discharges B1's per-slot obligation.** `Safety.safe_sim` maintains that every
    handle on the stack was allocated at its tagged site with no allocation into its cell since.
    The checker forbids a `New s` while a handle of `s` is on the stack, an injective plan sends a
@@ -161,7 +163,11 @@ B1's observation `OBytes b` is the core's `ReadE (Some b)`, `OStale` is `ReadE N
    README.
 5. **Stopping is not a B1 observation.** B1's events have no halt. Agreement on whether the two
    runs stop is derived in `reuse_sound_via_B1` from equal observations and `replay`, outside
-   B1's theorem. `core_log_is_B1_obs` says nothing about a run that stops for want of fuel.
+   B1's theorem. `core_log_is_B1_obs` says nothing about a run that stops for want of fuel, so
+   the extra strength of `instance_sound` over B2's `reuse_sound`, agreement on every prefix of
+   such a run, is a statement about the oracle interpreter and not about the core. The audit of
+   2026-11-08 also observed that the checker's necessity is shown only through the contrapositive
+   of `lemma4_composition` with `loop_bad_unsound_in_B1`, not as a stated theorem.
 6. **The machine is per configuration.** `next` is fixed by the module, the host, the fuel and
    the number of cycles, so B1's theorem is applied once per configuration. B1 folds the host
    into its machine in the same way.
