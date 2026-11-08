@@ -51,7 +51,7 @@ echo "check.sh: $(rocq --version | head -1)"
 
 # 1. Forbidden constructs, counted per file so an empty scan is visible. This is a
 #    first line only. Step 3's summary is what covers every constant.
-forbidden='\<(Admitted|admit|Admit|Abort|Axioms?|Parameters?|Conjectures?|bypass_check)\>|Unset[[:space:]]+(Guard|Positivity|Universe)'
+forbidden='\<(Admitted|admit|Admit|Abort|Axioms?|Parameters?|Conjectures?|bypass_check)\>|Unset[[:space:]]+(Guard|Positivity|Universe)|Set[[:space:]]+Warnings|warnings[[:space:]]*='
 hits=0
 for m in "${modules[@]}"; do
     n=$(grep -cE "$forbidden" "$src/$m.v" || true)

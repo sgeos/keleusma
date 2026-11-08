@@ -14,15 +14,17 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > `v0.3.0`, and `main` have moved since `003f25c6`, read the peer handoffs and the mailbox, and
 > report what changed before acting on anything here.
 
-> **REFRESHED 2026-11-08, sixth stamp, describing increment B1 complete on its branch.**
-> The operator confirmed Rocq and Kani first-hand on 2026-11-07 and ruled the order B1, A, B2.
-> B1, the Rocq mechanisation of Part I of the existing proof, is on the branch
-> `proof/rocq-region-reuse-theory` under `docs/proofs/rocq/region_reuse/`, checked by its
-> `check.sh` with every named result closed under the global context, audited by two fresh
-> contexts with every finding repaired or disclosed in its `AUDIT_2026-11-07.md`. **Its most
-> important limit is that the reuse theorems take the flow model as a certificate the caller
-> supplies**, so increment B2 must build that certificate from the machine's semantics, not
-> merely show that one exists. The README there states every limit. The interline export hold
+> **REFRESHED 2026-11-08, seventh stamp, describing increments B1 and A complete.** The
+> operator confirmed Rocq and Kani first-hand on 2026-11-07 and ruled the order B1, A, B2. B1,
+> the Rocq mechanisation of Part I of the existing proof, landed on `v0.2.3` at `8657a85a`
+> under `docs/proofs/rocq/region_reuse/`. A, a Rocq core of the structural instruction set
+> with an executable bound checker and a theorem that every accepted module terminates within
+> its time and memory figures for every host, is on `proof/rocq-core-bounds` under
+> `docs/proofs/rocq/core_bounds/`, checked by its `check.sh`, audited by two fresh contexts
+> and a delta check, its findings in `AUDIT_2026-11-08.md`. **Neither increment relates to the
+> shipping Rust verifier yet**, and B1's reuse theorems take their flow model as a
+> certificate, so B2 must build that certificate from A's semantics after extending it with
+> regions, handles and epochs. Each README states every limit. The interline export hold
 > below still stands.
 
 ## Validity
@@ -47,6 +49,7 @@ grep -c '^\*\*Corollary' $P         # 4
 grep -c 'blacksquare' $P            # 15, one per proof block
 ls docs/proofs/ | wc -l             # 5, the proof, three AUDIT records, and rocq/
 ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
+ls docs/proofs/rocq/core_bounds/*.v | wc -l    # 6, increment A
 ```
 
 ## Structure of the line
@@ -54,7 +57,8 @@ ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
 | branch | role | state |
 |---|---|---|
 | `proofs` | top-level integration branch | B1 merged in with a no-fast-forward merge |
-| `proof/rocq-region-reuse-theory` | increment B1, the Rocq mechanisation of Part I | complete and audited, merged into `proofs` |
+| `proof/rocq-region-reuse-theory` | increment B1, the Rocq mechanisation of Part I | complete and audited, landed on `v0.2.3` at `8657a85a` |
+| `proof/rocq-core-bounds` | increment A, the Rocq core and its bound theorem | complete and audited, merged into `proofs` |
 | `proof/composite-region-reuse` | the first proof's feature branch | complete and merged at tip `f779be7d`, its remote branch pruned by the V0.2.X line and its local branch and worktree removed by this line on 2026-10-31 |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
@@ -172,14 +176,19 @@ its `main` merge on 2026-11-01.
    correspondence. This line keeps both kinds of work, on separate `proof/rocq-*` and
    `proof/kani-*` branches, and the V0.2.X line reviews any change to code it owns. Work that
    touches the release path, a new job in `.github/workflows/ci.yml` or a change to
-   `src/verify.rs`, waits for the release or is agreed with the V0.2.X line first. **B1 is
-   complete.** The next increment is A. Running `check.sh` in continuous integration is
-   deferred under the same rule. B2 inherits B1's recorded obligations, the certificate's
-   construction from the machine's semantics first among them.
+   `src/verify.rs`, waits for the release or is agreed with the V0.2.X line first. **B1 and A
+   are complete.** The next increment is B2. Running either `check.sh` in continuous
+   integration is deferred under the same rule. B2 inherits B1's recorded obligations, the
+   certificate's construction from the machine's semantics first among them, and must first
+   extend A's core with composites, regions, handles and epochs, which A does not model. The
+   differential testing that links A's checker to the Rust verifier is also open.
 4. **The floating-point application binary interface question**, which predates this line.
    This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
    2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
    was answered or dropped is unverified, so ask the operator before treating it as open.
+5. **B1's statements are not pinned.** Increment A's audit showed by execution that a
+   checking script of this kind cannot detect a statement weakened by an added premise. A pins
+   its headline statements in `Statements.v`, and B1's directory needs the same.
 
 ## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
 
