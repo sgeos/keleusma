@@ -31,7 +31,13 @@ if ! rustc --version >/dev/null 2>&1; then
   exit 1
 fi
 
-step() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
+# Each step is new heavy work, so it waits while the shared machine is elevated or
+# critical, by the playbook scripts/machine-guard.sh applies. It returns at once where
+# no machine monitor exists, as on a CI runner.
+# The sourced file is checked on its own, as every script under scripts/ is.
+# shellcheck disable=SC1091
+. scripts/machine-guard.sh
+step() { machine_guard_wait "release gate, $1"; printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
 
 # Reap orphaned test binaries before timing anything.
 #

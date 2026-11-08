@@ -5,7 +5,8 @@ toolchain and its target, so these tests replace cargo, rustc and llvm-size with
 stand-ins on PATH. The stand-in llvm-size reports sizes chosen per feature set, which
 lets each test fix the figures and check what the script makes of them: the differences
 from the baseline, the JSON it overwrites, and the ceilings that --check enforces. The
-CI footprint job runs the real build.
+CI footprint job runs the real build. The machine guard is switched off, so that no test
+depends on the live machine's level.
 """
 
 from pathlib import Path
@@ -69,7 +70,8 @@ class FootprintTests(unittest.TestCase):
         self.repo = self.tmp / 'repo'
         (self.repo / 'scripts').mkdir(parents=True)
         (self.repo / 'footprint').mkdir()
-        shutil.copy2(ROOT / 'scripts' / 'footprint.sh', self.repo / 'scripts' / 'footprint.sh')
+        for name in ('footprint.sh', 'machine-guard.sh'):
+            shutil.copy2(ROOT / 'scripts' / name, self.repo / 'scripts' / name)
         self.write_budget(CEILINGS)
         for args in (['init', '-q', '-b', 'main'], ['add', '-A'], ['commit', '-q', '-m', 'initial']):
             subprocess.run(['git', '-C', str(self.repo), *args], check=True, capture_output=True,
@@ -90,7 +92,7 @@ class FootprintTests(unittest.TestCase):
 
     def run_footprint(self, *args, **extra):
         env = dict(os.environ, PATH=f'{self.bin}{os.pathsep}{os.environ["PATH"]}',
-                   FAKE_SYSROOT=str(self.sysroot), **extra)
+                   FAKE_SYSROOT=str(self.sysroot), KEL_MACHINE_GUARD='off', **extra)
         return subprocess.run([shutil.which('sh'), str(self.repo / 'scripts' / 'footprint.sh'), *args],
                               capture_output=True, text=True, env=env)
 
@@ -164,7 +166,7 @@ class FootprintTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('dash'), 'dash is not installed')
     def test_it_runs_under_dash(self):
         env = dict(os.environ, PATH=f'{self.bin}{os.pathsep}{os.environ["PATH"]}',
-                   FAKE_SYSROOT=str(self.sysroot))
+                   FAKE_SYSROOT=str(self.sysroot), KEL_MACHINE_GUARD='off')
         result = subprocess.run([shutil.which('dash'), str(self.repo / 'scripts' / 'footprint.sh'), '--check'],
                                 capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
