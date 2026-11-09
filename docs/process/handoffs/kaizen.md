@@ -103,6 +103,8 @@ authority, so the startup-file positions reach them first-hand.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
+8. Write the `proofs` CI job of [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md)
+   once V0.2.X agrees or the release is cut.
 
 ## Open with the operator
 
