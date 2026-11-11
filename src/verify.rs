@@ -1090,6 +1090,52 @@ pub(crate) fn shared_composite_copyout_bytes(
     layout.map_or(0, |dl| dl.operand_shared_composite_max_len(field, len))
 }
 
+/// An instruction's slot count as a signed operand-stack offset, saturating.
+///
+/// Every count the instruction set produces is far below `i32::MAX`. The
+/// conversion is total so that the walk's arithmetic is defined for any `Op`
+/// value a caller constructs.
+fn slots_i32(slots: u32) -> i32 {
+    i32::try_from(slots).unwrap_or(i32::MAX)
+}
+
+/// The peak a signed operand-stack offset contributes, which is the offset
+/// where it is positive and zero otherwise.
+fn peak_of(offset: i32) -> u32 {
+    u32::try_from(offset.max(0)).unwrap_or(0)
+}
+
+/// Refuse a slot width of zero.
+///
+/// The width converts the slot count into bytes, and the memory walk divides a
+/// callee's bytes by it to recover the callee's slots. Zero divides by zero
+/// there and makes every stack figure zero elsewhere, so it is refused at
+/// every public entry that takes the width. Kani found the missing check, as
+/// finding F2.
+fn check_value_slot_bytes(chunk_name: &str, value_slot_bytes: u32) -> Result<(), VerifyError> {
+    if value_slot_bytes == 0 {
+        return Err(VerifyError {
+            chunk_name: String::from(chunk_name),
+            message: String::from(
+                "value_slot_bytes is zero, and the operand-stack slot width must be at least \
+                 one byte for the memory bound to mean anything",
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The stack bound in bytes of a chunk with `local_count` locals and a body
+/// peak of `body_peak` slots, saturating.
+///
+/// The product was a plain `*` in three places until 2026-11-11, which
+/// panicked under overflow checks and otherwise wrapped to a small figure.
+fn stack_bytes_of(local_count: u16, body_peak: u32, value_slot_bytes: u32) -> u32 {
+    u32::from(local_count)
+        .saturating_add(body_peak)
+        .saturating_mul(value_slot_bytes)
+}
+
 /// Compute the worst-case memory usage over a region of instructions
 /// `[start, end)`. The analysis tracks operand-stack depth in slots and
 /// arena heap bytes.
@@ -1166,12 +1212,12 @@ fn wcmu_region_at(
         let op = &ops[ip];
         match op {
             Op::Break(_) => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 break_results.push(McuResult {
                     peak_above_initial: peak,
                     delta: current_offset,
@@ -1191,12 +1237,12 @@ fn wcmu_region_at(
                 // have held them. Discarding them is what made every
                 // multiheaded function, which ends in a dispatch trap, report a
                 // body peak of zero.
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 let _ = current_offset;
                 return Ok(McuOutcome::exits(peak, heap));
             }
@@ -1212,19 +1258,19 @@ fn wcmu_region_at(
                 // Like Trap it reports what was consumed before leaving, and it
                 // does not push to `break_results`, because it transfers control
                 // out of the chunk rather than to an enclosing loop.
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 return Ok(McuOutcome::exits(peak, heap));
             }
             Op::BreakIf(_) => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 break_results.push(McuResult {
                     peak_above_initial: peak,
                     delta: current_offset,
@@ -1234,12 +1280,12 @@ fn wcmu_region_at(
             }
             Op::If(target) => {
                 // Account for the If instruction itself before recursing.
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
 
                 let target = *target as usize;
                 if target > 0 && target <= ops.len() && matches!(&ops[target - 1], Op::Else(_)) {
@@ -1310,12 +1356,12 @@ fn wcmu_region_at(
                 }
             }
             Op::Loop(target) => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
 
                 let loop_exit_target = *target as usize;
                 // Saturating so a malformed `Loop(exit = 0)` reaching a
@@ -1385,15 +1431,30 @@ fn wcmu_region_at(
                 // minus the n args being passed plus the callee's stack
                 // is the peak observed.
                 let (callee_stack_bytes, callee_heap_bytes) = resolver.resolve_chunk(*callee_idx);
-                let callee_stack_slots = (callee_stack_bytes / value_slot_bytes) as i32;
-                let n = *n_args as i32;
-                let during_peak = (current_offset + callee_stack_slots - n)
-                    .max(current_offset + 1)
-                    .max(0) as u32;
+                let n = i32::from(*n_args);
+                // A callee whose stack figure saturated has no known slot
+                // count. Dividing the saturated bytes back into slots would
+                // give a count below the true one, and the caller's product
+                // could then fall back under the range, so the saturation is
+                // carried as a saturated peak. The division cannot be by zero,
+                // since every public entry refuses a zero width, and it is
+                // total all the same. The sum is taken in 64 bits, where an
+                // `i32` offset, a `u32` slot count and a `u8` argument count
+                // cannot overflow.
+                let during_peak = match callee_stack_bytes.checked_div(value_slot_bytes) {
+                    Some(callee_stack_slots) if callee_stack_bytes != u32::MAX => {
+                        let offset = i64::from(current_offset);
+                        let during = (offset + i64::from(callee_stack_slots) - i64::from(n))
+                            .max(offset + 1)
+                            .max(0);
+                        u32::try_from(during).unwrap_or(u32::MAX)
+                    }
+                    _ => u32::MAX,
+                };
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(callee_heap_bytes);
                 // Net stack effect: pop n args, push 1 return value.
-                current_offset += 1 - n;
+                current_offset = current_offset.saturating_add(1).saturating_sub(n);
                 ip += 1;
             }
             Op::CallVerifiedNative(native_idx, _) | Op::CallExternalNative(native_idx, _) => {
@@ -1410,24 +1471,24 @@ fn wcmu_region_at(
                 // once moved the offset by 1 - 129 for a one-argument
                 // reified call and so understated the bound.
                 let native_heap = resolver.resolve_native(*native_idx);
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(native_heap);
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 ip += 1;
             }
             Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
                 ip += 1;
             }
             _ => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 ip += 1;
             }
         }
@@ -1471,17 +1532,17 @@ fn wcmu_subregion(
     // Lift breaks from the subregion into the caller's frame of reference.
     for b in sub_breaks {
         break_results.push(McuResult {
-            peak_above_initial: (offset_at_start.max(0) as u32) + b.peak_above_initial,
-            delta: offset_at_start + b.delta,
+            peak_above_initial: peak_of(offset_at_start).saturating_add(b.peak_above_initial),
+            delta: offset_at_start.saturating_add(b.delta),
             heap_total: b.heap_total,
         });
     }
     // The peak is lifted whether or not the subregion falls through, so that an
     // exiting subregion still contributes its consumption to the caller.
     Ok(McuOutcome {
-        peak_above_initial: (offset_at_start.max(0) as u32) + result.peak_above_initial,
+        peak_above_initial: peak_of(offset_at_start).saturating_add(result.peak_above_initial),
         heap_total: result.heap_total,
-        delta: result.delta.map(|d| offset_at_start + d),
+        delta: result.delta.map(|d| offset_at_start.saturating_add(d)),
     })
 }
 
@@ -1510,10 +1571,23 @@ pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
 /// runtime's actual slot footprint rather than the conservative
 /// 64-bit-runtime default. The default-parameter shape is
 /// preserved through [`wcmu_stream_iteration`].
+///
+/// # Width and saturation
+///
+/// A `value_slot_bytes` of zero is refused with a `VerifyError`, here and at
+/// every other public entry that takes the width. Every sum and product of
+/// the memory analysis saturates at `u32::MAX`, so **a component equal to
+/// `u32::MAX` is not a bound**. It means that component is `u32::MAX` bytes or
+/// more. The admission functions compare the figures against the arena
+/// capacity as they stand, so a saturated figure admits no arena smaller than
+/// `u32::MAX` bytes, and the compiler writes the overflow sentinel to the
+/// module header for it. A caller that sizes an arena from these figures
+/// directly must refuse a saturated one itself.
 pub fn wcmu_stream_iteration_with_value_slot_bytes(
     chunk: &Chunk,
     value_slot_bytes: u32,
 ) -> Result<(u32, u32), VerifyError> {
+    check_value_slot_bytes(&chunk.name, value_slot_bytes)?;
     if chunk.block_type != BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -1556,8 +1630,7 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
     let body_peak = body.peak_above_initial;
     let body_heap = body.heap_total;
 
-    let stack_slots = chunk.local_count as u32 + body_peak;
-    let stack_bytes = stack_slots * value_slot_bytes;
+    let stack_bytes = stack_bytes_of(chunk.local_count, body_peak, value_slot_bytes);
 
     Ok((stack_bytes, body_heap))
 }
@@ -1980,11 +2053,13 @@ pub fn wcmu_whole_chunk(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
 
 /// Variant of [`wcmu_whole_chunk`] that uses a host-supplied
 /// `value_slot_bytes`. See
-/// [`wcmu_stream_iteration_with_value_slot_bytes`].
+/// [`wcmu_stream_iteration_with_value_slot_bytes`], including for the refusal
+/// of a zero width and the meaning of a saturated figure.
 pub fn wcmu_whole_chunk_with_value_slot_bytes(
     chunk: &Chunk,
     value_slot_bytes: u32,
 ) -> Result<(u32, u32), VerifyError> {
+    check_value_slot_bytes(&chunk.name, value_slot_bytes)?;
     if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -2004,8 +2079,7 @@ pub fn wcmu_whole_chunk_with_value_slot_bytes(
         value_slot_bytes,
     )?;
 
-    let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
-    let stack_bytes = stack_slots * value_slot_bytes;
+    let stack_bytes = stack_bytes_of(chunk.local_count, body.peak_above_initial, value_slot_bytes);
     Ok((stack_bytes, body.heap_total))
 }
 
@@ -2033,11 +2107,16 @@ pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32
 /// `size_of::<GenericValue<W, F>>()` so the bound matches the
 /// runtime's actual slot footprint rather than the conservative
 /// 64-bit-runtime default.
+///
+/// A width of zero is refused, and a component of `u32::MAX` is saturated and
+/// is not a bound, as [`wcmu_stream_iteration_with_value_slot_bytes`] states.
+/// A callee whose stack figure saturated saturates every caller's.
 pub fn module_wcmu_with_value_slot_bytes(
     module: &Module,
     native_wcmu: &[u32],
     value_slot_bytes: u32,
 ) -> Result<Vec<(u32, u32)>, VerifyError> {
+    check_value_slot_bytes("<module>", value_slot_bytes)?;
     // The WCMU analysis is sound only for acyclic call graphs that
     // the static analysis can fully traverse. V0.2.0 Phase 4
     // retired the closure family (`Op::PushFunc`, `Op::MakeClosure`,
@@ -2426,11 +2505,15 @@ pub struct NativeIterationBound {
 /// Hosts that need only per-call attestations call the simpler
 /// [`module_wcmu`] entry point, which under the hood routes
 /// through this function with all-verified bounds.
+///
+/// A width of zero is refused, and a component of `u32::MAX` is saturated and
+/// is not a bound, as [`wcmu_stream_iteration_with_value_slot_bytes`] states.
 pub fn module_wcmu_with_bounds(
     module: &Module,
     bounds: &[NativeIterationBound],
     value_slot_bytes: u32,
 ) -> Result<Vec<(u32, u32)>, VerifyError> {
+    check_value_slot_bytes("<module>", value_slot_bytes)?;
     let n = module.chunks.len();
     let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
     let mut chunk_returns_text: Vec<bool> = alloc::vec![false; n];
@@ -2691,8 +2774,7 @@ fn compute_chunk_wcmu(
     let mut breaks: Vec<McuResult> = Vec::new();
     let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?;
 
-    let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
-    let stack_bytes = stack_slots * value_slot_bytes;
+    let stack_bytes = stack_bytes_of(chunk.local_count, body.peak_above_initial, value_slot_bytes);
 
     // Augment the heap bound with the chunk's text-allocation bound
     // computed by the text-size abstract interpretation pass. The

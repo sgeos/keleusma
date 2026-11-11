@@ -213,3 +213,156 @@ fn a_saturated_time_bound_records_no_proof_witness() {
         "a saturated figure is not a proven bound: {saturated:?}"
     );
 }
+
+// --- F2, the slot width ---------------------------------------------------------------------
+
+const CALLS: &str = "fn leaf(a: Word) -> Word { let b = a + 1; let c = b + 1; c }\n\
+                     fn mid(a: Word) -> Word { let b = leaf(a); b + leaf(b) }\n\
+                     loop main(x: Word) -> Word { let y = mid(x); yield y; x }";
+
+#[test]
+fn a_zero_slot_width_is_refused_at_every_public_entry() {
+    let module = compile_src(CALLS);
+    let stream = &module.chunks[stream_chunk(&module)];
+    let func = module
+        .chunks
+        .iter()
+        .find(|c| c.block_type == BlockType::Func)
+        .expect("a Func chunk");
+    let named = |r: Result<(), verify::VerifyError>, entry: &str| {
+        let e = r.expect_err(&format!("{entry} accepted a slot width of zero"));
+        assert!(
+            e.message.contains("value_slot_bytes") && e.message.contains("zero"),
+            "{entry}: {}",
+            e.message
+        );
+    };
+    named(
+        verify::wcmu_stream_iteration_with_value_slot_bytes(stream, 0).map(|_| ()),
+        "wcmu_stream_iteration_with_value_slot_bytes",
+    );
+    named(
+        verify::wcmu_whole_chunk_with_value_slot_bytes(func, 0).map(|_| ()),
+        "wcmu_whole_chunk_with_value_slot_bytes",
+    );
+    named(
+        verify::module_wcmu_with_value_slot_bytes(&module, &[], 0).map(|_| ()),
+        "module_wcmu_with_value_slot_bytes",
+    );
+    named(
+        verify::module_wcmu_with_bounds(&module, &[], 0).map(|_| ()),
+        "module_wcmu_with_bounds",
+    );
+    named(
+        verify::verify_resource_bounds_with_natives_and_value_slot_bytes(
+            &module,
+            usize::MAX,
+            &[],
+            0,
+        ),
+        "verify_resource_bounds_with_natives_and_value_slot_bytes",
+    );
+    named(
+        verify::verify_resource_bounds_with_bounds(&module, usize::MAX, &[], 0),
+        "verify_resource_bounds_with_bounds",
+    );
+    let zero_width = CostModel {
+        value_slot_bytes: 0,
+        ..NOMINAL_COST_MODEL
+    };
+    named(
+        verify::verify_resource_bounds_with_cost_model(&module, usize::MAX, &zero_width, &[]),
+        "verify_resource_bounds_with_cost_model",
+    );
+}
+
+#[test]
+fn the_default_width_and_the_unit_width_are_still_accepted() {
+    // The control for the refusals above, and the two widths the crate itself passes.
+    let module = compile_src(CALLS);
+    verify::module_wcmu(&module, &[]).expect("the default width");
+    verify::module_wcmu_with_value_slot_bytes(&module, &[], 1).expect("the unit width");
+    verify::module_runtime_footprint(&module, &[]).expect("the footprint, at the unit width");
+}
+
+#[test]
+fn the_stack_bound_is_the_slot_count_times_the_width_saturated() {
+    // The oracle is the slot count, taken at a width of one, multiplied in 64 bits. Every width
+    // must give exactly that product, or `u32::MAX` where the product does not fit. A wrapped
+    // product is below it, and a saturated callee whose caller divides the saturated figure back
+    // into slots is below it as well.
+    let module = compile_src(CALLS);
+    let slots = verify::module_wcmu_with_value_slot_bytes(&module, &[], 1).expect("slots");
+    assert!(slots.iter().all(|&(s, _)| s >= 1), "{slots:?}");
+    let mut saturated = 0usize;
+    for width in [
+        1u32,
+        32,
+        1 << 16,
+        1 << 30,
+        (1 << 31) - 1,
+        1 << 31,
+        (1 << 31) + 1,
+        u32::MAX - 1,
+        u32::MAX,
+    ] {
+        let got = verify::module_wcmu_with_value_slot_bytes(&module, &[], width)
+            .unwrap_or_else(|e| panic!("width {width}: {}", e.message));
+        let with_bounds = verify::module_wcmu_with_bounds(&module, &[], width)
+            .unwrap_or_else(|e| panic!("width {width}: {}", e.message));
+        for (i, (&(slot_count, _), &(stack, _))) in slots.iter().zip(&got).enumerate() {
+            let exact = slot_count as u64 * width as u64;
+            let expected = exact.min(u32::MAX as u64) as u32;
+            assert_eq!(
+                stack, expected,
+                "chunk {i} at width {width}: {slot_count} slots give {stack}"
+            );
+            assert_eq!(with_bounds[i].0, expected, "chunk {i} at width {width}");
+            if exact > u32::MAX as u64 {
+                saturated += 1;
+            }
+        }
+    }
+    assert!(
+        saturated >= 6,
+        "only {saturated} products exceeded the range, so the saturation was barely reached"
+    );
+}
+
+#[test]
+fn the_chunk_entries_saturate_at_a_large_width() {
+    let module = compile_src(CALLS);
+    let stream = &module.chunks[stream_chunk(&module)];
+    let (stack, _) = verify::wcmu_stream_iteration_with_value_slot_bytes(stream, u32::MAX)
+        .expect("a saturated figure, not a refusal");
+    assert_eq!(stack, u32::MAX);
+    for chunk in module
+        .chunks
+        .iter()
+        .filter(|c| c.block_type == BlockType::Func)
+    {
+        let (stack, _) = verify::wcmu_whole_chunk_with_value_slot_bytes(chunk, u32::MAX)
+            .expect("a saturated figure, not a refusal");
+        assert_eq!(stack, u32::MAX, "{}", chunk.name);
+    }
+}
+
+#[test]
+fn a_saturated_memory_bound_admits_no_arena_below_its_own_size() {
+    // A saturated component means at least `u32::MAX` bytes, so admission against a capacity
+    // below that refuses the module. This is the existing contract and it is pinned so that the
+    // saturation above cannot be read as a small figure by the admission check.
+    let module = compile_src(CALLS);
+    let err = verify::verify_resource_bounds_with_natives_and_value_slot_bytes(
+        &module,
+        u32::MAX as usize - 1,
+        &[],
+        u32::MAX,
+    )
+    .expect_err("a saturated bound was admitted into a smaller arena");
+    assert!(
+        err.message.contains("exceeds arena capacity"),
+        "{}",
+        err.message
+    );
+}
