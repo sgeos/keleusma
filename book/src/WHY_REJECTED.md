@@ -131,12 +131,12 @@ When the bound is genuinely runtime-known, the program is outside the safe-verif
 ### Recursive Call Detected
 
 ```
-recursive call detected during WCMU topological sort
+recursive call detected: `count_down` -> `count_down`
 ```
 
-**Category.** First. Direct or mutual recursion in `fn` or `yield` functions is rejected by language design; only `loop` admits cyclic execution and only through the productive RESET cycle.
+**Category.** First. Direct or mutual recursion is rejected by language design in every function category. Only `loop` admits cyclic execution, and only through the productive RESET cycle.
 
-**Trigger.** A `fn` calls itself directly or transitively through another `fn`.
+**Trigger.** A function calls itself directly or transitively through other functions. The message names the functions of the cycle in call order. The compiler reports it as a type error at the call that closes the cycle, and the verifier reports the same text for compiled bytecode that holds a cycle.
 
 ```
 fn count_down(n: Word) -> Word {

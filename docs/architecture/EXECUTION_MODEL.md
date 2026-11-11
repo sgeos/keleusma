@@ -336,6 +336,8 @@ Programs are verified at load time through structural analysis. The verifier (`v
 
 A program is valid only if all paths satisfy these constraints. Invalid programs are rejected before execution begins.
 
+One further check is on the module as a whole. The call graph must have no cycle. `verify()` refuses a module in which a chunk calls itself or in which chunks call each other in a ring, with a diagnostic that names the chunks of the cycle in call order. `verify::find_call_cycle` reports the cycle to a caller that wants it. The check runs last, after the per-chunk passes.
+
 Additionally, `wcet_stream_iteration()` computes the worst-case execution cost of one Stream-to-Reset iteration. Each instruction carries a relative cost via `Op::cost()`. The analysis recursively traverses block-structured control flow, taking the maximum cost branch at each join point, and returns the worst-case total as a unitless integer.
 
 ### Indirect Dispatch and Recursion
@@ -343,6 +345,8 @@ Additionally, `wcet_stream_iteration()` computes the worst-case execution cost o
 Definitive WCET and WCMU is the language's load-bearing guarantee. The verifier rejects any program whose execution time or memory use cannot be statically bounded. The rejection is conservative by design: programs whose bound is unprovable, and programs whose bound is provable in principle but not yet computable by the current analysis, are both rejected. See [LANGUAGE_DESIGN.md Conservative Verification](./LANGUAGE_DESIGN.md#conservative-verification) for the design stance behind this choice.
 
 V0.2.0 Phase 4 of the ISA reset retired the closure family (`Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`, `Op::CallIndirect`) along with the corresponding `Value::Func` runtime variant. First-class function values and indirect-call dispatch are no longer representable in the bytecode; closure-shaped source expressions are rejected at the type-checker stage. The previous module-verification rejection path (which scanned for `Op::MakeRecursiveClosure` and `Op::CallIndirect`) is gone because the opcodes themselves do not exist. The conservative-verification stance is preserved at compile time rather than at load time for this case.
+
+Recursion is refused at three points. The type checker refuses a call cycle among the calls it resolves, which are plain calls, pipes, trait methods on a receiver of known type and the predicate of a refined newtype, and its diagnostic names the functions of the cycle and carries the span of the call that closes it. The compiler runs the check again after monomorphization, where a method on a generic receiver has been resolved. `verify()` refuses a cycle in the bytecode call graph, which covers bytecode from another producer. Until 2026-11-11 none of the three did, and a recursive program compiled, verified and carried a finite declared worst-case execution time. Only the memory analysis that `Vm::new` runs refused it, so a host that loaded with `Vm::new_unchecked` received it. The proofs line found this with a differential test.
 
 The valid form of unbounded execution is the top-level `loop` block in the productive divergent function category. The structural verifier enforces the productivity rule at this level: every control flow path from `Op::Stream` to `Op::Reset` must pass through at least one `Op::Yield`. The bounded-step contract holds yield-to-yield, so unbounded execution across the RESET cycle is the expected steady-state of a stream processor.
 

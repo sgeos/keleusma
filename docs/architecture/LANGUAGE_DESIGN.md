@@ -104,7 +104,7 @@ The rejection-by-default stance is the dual of the conventional acceptance-by-de
 
 Closure-shaped expressions and first-class function references are rejected by the **type checker** in V0.2.0 with a diagnostic that names the construct. The legacy verifier-stage rejection through `Op::CallIndirect` and `Op::MakeRecursiveClosure` is no longer the relevant path: those opcodes and the `Value::Func` runtime variant were retired in V0.2.0 Phase 4 along with the closure-hoisting compiler pass.
 
-Recursive call-graph cycles are rejected by the **compiler** with a diagnostic that names the cycle. Recursion is a first-category construct: a self-referential or mutually-referential call chain admits unbounded execution within a single Stream-to-Reset slice by construction.
+Recursive call-graph cycles are rejected by the **compiler** with a diagnostic that names the cycle. The type checker makes the refusal for every call it resolves, the diagnostic carries the span of the call that closes the cycle, and the bytecode verifier refuses any cycle that reaches it. Recursion is a first-category construct: a self-referential or mutually-referential call chain admits unbounded execution within a single Stream-to-Reset slice by construction.
 
 A `loop` function without a guaranteed `yield` on every cycle is rejected by the **verifier** as a productivity violation. The productivity rule keeps `loop` functions from spinning without progress.
 

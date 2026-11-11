@@ -2098,12 +2098,13 @@ pub struct RuntimeFootprint {
 
 /// Maximum call-frame depth of the module's static call graph.
 ///
-/// The call graph is acyclic because the type checker rejects direct and
-/// mutual recursion, so the depth is finite and computed in one pass over
-/// the topological order (callees before callers, so a caller sees each
-/// callee's resolved depth). A chunk with no calls has depth one. Returns
-/// an error if a cycle is detected (which `topological_call_order` already
-/// rejects).
+/// The call graph of a verified module is acyclic, because the type checker
+/// refuses the direct and mutual recursion it resolves and [`verify`] refuses
+/// any cycle left in the bytecode. The depth is therefore finite and computed
+/// in one pass over the topological order (callees before callers, so a caller
+/// sees each callee's resolved depth). A chunk with no calls has depth one.
+/// Returns an error naming the cycle when the module was not verified and has
+/// one.
 pub fn module_call_depth(module: &Module) -> Result<u32, VerifyError> {
     let n = module.chunks.len();
     let order = topological_call_order(module)?;
@@ -2503,49 +2504,131 @@ pub fn module_chunk_text_analyses(
     Ok(analyses)
 }
 
-/// Topological order of the call graph. Leaves come first, roots last.
-pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
-    let n = module.chunks.len();
-    let mut visited = alloc::vec![false; n];
-    let mut on_stack = alloc::vec![false; n];
-    let mut order = Vec::new();
-    for i in 0..n {
-        if !visited[i] {
-            topo_visit(module, i, &mut visited, &mut on_stack, &mut order)?;
-        }
-    }
-    Ok(order)
+/// The outcome of one walk of the call graph.
+enum CallGraphWalk {
+    /// Every chunk, callees before callers.
+    Order(Vec<usize>),
+    /// The chunks of one call cycle, in call order. The last calls the first.
+    Cycle(Vec<usize>),
 }
 
-fn topo_visit(
-    module: &Module,
-    idx: usize,
-    visited: &mut [bool],
-    on_stack: &mut [bool],
-    order: &mut Vec<usize>,
-) -> Result<(), VerifyError> {
-    if on_stack[idx] {
-        return Err(VerifyError {
-            chunk_name: module.chunks[idx].name.clone(),
-            message: String::from("recursive call detected during WCMU topological sort"),
-        });
-    }
-    if visited[idx] {
-        return Ok(());
-    }
-    on_stack[idx] = true;
-    for op in &module.chunks[idx].ops {
-        if let Op::Call(callee, _) = op {
-            let callee_idx = *callee as usize;
-            if callee_idx < module.chunks.len() {
-                topo_visit(module, callee_idx, visited, on_stack, order)?;
+/// Walk the call graph depth first, in chunk order and then in instruction order.
+///
+/// The walk is iterative. Its depth is the length of the longest call chain, which a module from
+/// another producer sets, so a recursive walk would spend one native stack frame per chunk of
+/// that chain. Each chunk is entered once and each instruction is examined once, so the walk
+/// ends within the number of chunks plus the number of instructions.
+///
+/// A `Call` naming a chunk that does not exist is skipped here. The structural pass of
+/// [`verify`] refuses it, and the composed time bound refuses it by name.
+fn walk_call_graph(module: &Module) -> CallGraphWalk {
+    let n = module.chunks.len();
+    // 0 not yet entered, 1 on the current path, 2 finished.
+    let mut state = alloc::vec![0u8; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    // The current path, as a chunk and the next instruction of it to examine.
+    let mut path: Vec<(usize, usize)> = Vec::new();
+    for root in 0..n {
+        if state[root] != 0 {
+            continue;
+        }
+        state[root] = 1;
+        path.push((root, 0));
+        while let Some(&(idx, ip)) = path.last() {
+            let ops = &module.chunks[idx].ops;
+            let mut descend: Option<usize> = None;
+            let mut next_ip = ip;
+            while next_ip < ops.len() && descend.is_none() {
+                if let Op::Call(callee, _) = &ops[next_ip] {
+                    let callee_idx = *callee as usize;
+                    if callee_idx < n {
+                        match state[callee_idx] {
+                            1 => {
+                                let from =
+                                    path.iter().position(|&(c, _)| c == callee_idx).unwrap_or(0);
+                                return CallGraphWalk::Cycle(
+                                    path[from..].iter().map(|&(c, _)| c).collect(),
+                                );
+                            }
+                            0 => descend = Some(callee_idx),
+                            _ => {}
+                        }
+                    }
+                }
+                next_ip += 1;
+            }
+            if let Some(last) = path.last_mut() {
+                last.1 = next_ip;
+            }
+            match descend {
+                Some(callee_idx) => {
+                    state[callee_idx] = 1;
+                    path.push((callee_idx, 0));
+                }
+                None => {
+                    state[idx] = 2;
+                    order.push(idx);
+                    path.pop();
+                }
             }
         }
     }
-    on_stack[idx] = false;
-    visited[idx] = true;
-    order.push(idx);
-    Ok(())
+    CallGraphWalk::Order(order)
+}
+
+/// The chunks of one call cycle in `module`, in call order, or `None` when the call graph is
+/// acyclic.
+///
+/// Each chunk of the result calls the next, and the last calls the first, so a chunk that calls
+/// itself is reported as a cycle of one. The cycle reported is the first that a depth-first walk
+/// in chunk order and then instruction order closes, which makes the answer deterministic. A
+/// module may hold other cycles, and they are not listed.
+///
+/// Keleusma admits no recursion. [`verify`] refuses a module for which this is `Some`, and the
+/// memory and composed time analyses refuse it as well, since neither has a bound for a cycle.
+pub fn find_call_cycle(module: &Module) -> Option<Vec<usize>> {
+    match walk_call_graph(module) {
+        CallGraphWalk::Order(_) => None,
+        CallGraphWalk::Cycle(cycle) => Some(cycle),
+    }
+}
+
+/// The name of chunk `idx`, or a placeholder for an index out of range.
+fn chunk_name_of(module: &Module, idx: usize) -> &str {
+    module
+        .chunks
+        .get(idx)
+        .map(|c| c.name.as_str())
+        .unwrap_or("<unknown>")
+}
+
+/// The refusal of a call cycle, naming its chunks in call order.
+///
+/// The text begins `recursive call detected`, which the guide and the command-line tests quote.
+fn call_cycle_error(module: &Module, cycle: &[usize]) -> VerifyError {
+    let mut rendered = String::new();
+    for &idx in cycle {
+        rendered.push_str(&alloc::format!("`{}` -> ", chunk_name_of(module, idx)));
+    }
+    let first = cycle.first().copied().unwrap_or(0);
+    rendered.push_str(&alloc::format!("`{}`", chunk_name_of(module, first)));
+    VerifyError {
+        chunk_name: String::from(chunk_name_of(module, first)),
+        message: alloc::format!(
+            "recursive call detected: {rendered}. Recursion is prohibited, direct or mutual, \
+             because a call cycle has no static bound on time or memory"
+        ),
+    }
+}
+
+/// Topological order of the call graph. Leaves come first, roots last.
+///
+/// Returns the refusal of [`find_call_cycle`]'s cycle when the graph has one.
+pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
+    match walk_call_graph(module) {
+        CallGraphWalk::Order(order) => Ok(order),
+        CallGraphWalk::Cycle(cycle) => Err(call_cycle_error(module, &cycle)),
+    }
 }
 
 /// Compute the WCMU of a single chunk given a resolver populated for
@@ -2859,6 +2942,12 @@ pub fn chunk_verification_obligations(
 /// 4. Break containment: Every Break and BreakIf is inside a Loop/EndLoop.
 /// 5. Productivity rule (Stream chunks only): All control flow paths from
 ///    Stream to Reset pass through at least one Yield.
+///
+/// One check is on the module as a whole. The call graph must be acyclic, since
+/// Keleusma admits no recursion. A module with a call cycle is refused with a
+/// diagnostic naming the chunks of the cycle, as [`find_call_cycle`] reports
+/// them. Until 2026-11-11 only the memory analysis that `Vm::new` runs refused
+/// such a module.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
     // Control-flow targets first (audit H1). The productivity classification
     // below walks regions using these operands, and it runs BEFORE
@@ -2893,6 +2982,12 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         chunk_name: alloc::string::String::from("<typed operand-stack pass>"),
         message: alloc::format!("typed operand-stack verification failed: {e:?}"),
     })?;
+    // The recursion prohibition, last. Every pass above tolerates a call cycle, so running this
+    // one after them changes no earlier verdict, and a module refused here is refused for the
+    // cycle alone. The self-hosted validator runs its own counterpart at the same point.
+    if let Some(cycle) = find_call_cycle(module) {
+        return Err(call_cycle_error(module, &cycle));
+    }
     Ok(())
 }
 
