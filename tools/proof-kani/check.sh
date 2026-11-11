@@ -46,6 +46,11 @@
 # spent paused are recorded beside its verdict. The operator ruled on
 # 2026-11-11 that heavy runs are allowed when guarded, and that self-pausing at
 # critical is the guard wanted.
+# KANI_WALK_SEL_LO, KANI_WALK_SEL_HI, KANI_CLOSE_SEL_LO and KANI_CLOSE_SEL_HI
+# narrow the instruction selectors of the generators at compile time, as
+# src/generators.rs describes, so that one piece of a heavy harness can be
+# measured alone. A run with any of them set exits 3 even when every selected
+# harness verified, because it verified only a piece.
 # KANI_STATUS_CMD replaces `machine-status --level` as the monitor command, so
 # the pausing can be exercised without a real critical level. It must exit 0
 # for ok, 1 for elevated, 2 for critical and 3 for stale.
@@ -165,16 +170,24 @@ release_watched() {
 # `sysctl vm.swapusage` decides, and where neither can be read the harness
 # starts ungated.
 gate_machine() {
-    local level
+    local level waited=0
     if have_monitor; then
         while true; do
             if monitor_level; then
+                if [ "$waited" -gt 0 ]; then
+                    echo "note: machine-status reports ok after ${waited} minutes elevated, starting" >&2
+                fi
                 return 0
             else
                 level=$?
             fi
             if [ "$level" -eq 1 ]; then
-                echo "note: machine-status reports elevated, waiting" >&2
+                # Said once, and then every hour, so a long wait does not
+                # flood the log.
+                if [ $(( waited % 60 )) -eq 0 ]; then
+                    echo "note: machine-status reports elevated, waiting, ${waited} minutes so far" >&2
+                fi
+                waited=$(( waited + 1 ))
                 sleep 60
             else
                 echo "note: machine-status exit $level, critical or stale, not starting" >&2
@@ -352,8 +365,23 @@ if [ "$tier" = "heavy" ] || [ "$tier" = "all" ]; then
     echo "note: the heavy tier can hold tens of gigabytes per harness, running $jobs at a time" >&2
 fi
 
+# The selector narrowing that src/generators.rs reads at compile time. A run
+# with any of it set is a measurement, never a pass.
+narrowed=""
+for var in KANI_WALK_SEL_LO KANI_WALK_SEL_HI KANI_CLOSE_SEL_LO KANI_CLOSE_SEL_HI; do
+    if [ -n "${!var+set}" ]; then
+        narrowed="$narrowed $var=${!var}"
+    fi
+done
+if [ -n "$narrowed" ]; then
+    echo "note: selectors narrowed by$narrowed, a measurement run that cannot pass" >&2
+fi
+
 log_dir="${KANI_LOG_DIR:-$(mktemp -d)}"
 mkdir -p "$log_dir"
+if [ -n "$narrowed" ]; then
+    echo "narrowed:$narrowed" > "$log_dir/narrowed.txt"
+fi
 
 # Build once, so that the parallel runs below find the build up to date. The
 # build is gated like a harness, since a fresh one compiles the whole crate.
@@ -424,4 +452,8 @@ if [ "$passed" -ne "${#PASSING[@]}" ]; then
 fi
 if [ "$problems" -ne 0 ]; then
     exit 1
+fi
+if [ -n "$narrowed" ]; then
+    echo "error: narrowed by$narrowed, so this run measured pieces of its harnesses and verified none whole" >&2
+    exit 3
 fi
