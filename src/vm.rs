@@ -6078,6 +6078,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// the module has no Stream chunk, and an error if any Stream chunk's WCET is
     /// not statically boundable.
     ///
+    /// The figure saturates. A result of `u32::MAX` is not a bound and means
+    /// the true figure is `u32::MAX` or more.
+    ///
     /// Available only when the `verify` feature is enabled.
     #[cfg(feature = "verify")]
     pub fn wcet_per_iteration(&self) -> Result<u32, VmError> {

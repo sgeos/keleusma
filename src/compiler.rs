@@ -4357,7 +4357,12 @@ fn compile_with_recorded_type_hook(
             }
             if matches!(chunk.block_type, crate::bytecode::BlockType::Stream) {
                 match crate::verify::wcet_stream_iteration(chunk) {
-                    Ok(c) => {
+                    // A figure of `u32::MAX` is saturated and is not a bound,
+                    // so it takes the overflow arm with a refusal. The header
+                    // value is `u32::MAX` either way. What the guard changes is
+                    // that a saturated chunk records neither a marker nor a
+                    // proof witness under debug emission.
+                    Ok(c) if c != u32::MAX => {
                         max_wcet = max_wcet.max(c);
                         // Under debug emission, record the chunk's
                         // declared per-iteration WCET as a WcetMarker so
@@ -4395,7 +4400,7 @@ fn compile_with_recorded_type_hook(
                             });
                         }
                     }
-                    Err(_) => {
+                    Ok(_) | Err(_) => {
                         wcet_overflow = true;
                     }
                 }

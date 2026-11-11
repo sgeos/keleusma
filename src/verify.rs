@@ -1637,6 +1637,16 @@ fn external_native_wcet(chunk: &Chunk, native_bounds: &[NativeIterationBound]) -
 /// This is the script-only bound: an `Op::Call` and a native call contribute
 /// their dispatch cycles only, not the callee body. The host-attested native
 /// body time is included by [`module_wcet_with_bounds`].
+///
+/// # Saturation
+///
+/// Every sum and product in the time analysis saturates at `u32::MAX`, so
+/// **a result of `u32::MAX` is not a bound**. It means the true figure is
+/// `u32::MAX` or more, and a caller must treat it as the absence of a bound.
+/// The compiler does so. It writes `u32::MAX` to the module header as the
+/// overflow sentinel, which `Vm::new` refuses, and it records no proof witness
+/// for the chunk. This holds for every function of the time analysis in this
+/// module, including the `_with_cost_model` and module-level forms.
 pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
     wcet_stream_iteration_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL, &[])
 }
@@ -1648,6 +1658,9 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
 /// than the nominal table. The model's `value_slot_bytes` field is
 /// not consulted by the WCET computation; the WCMU side uses it
 /// through [`wcmu_stream_iteration_with_value_slot_bytes`].
+///
+/// The model's costs are arbitrary `u32` values, so the figure can saturate.
+/// A result of `u32::MAX` is not a bound, as [`wcet_stream_iteration`] states.
 pub fn wcet_stream_iteration_with_cost_model(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
@@ -1694,8 +1707,13 @@ pub fn wcet_stream_iteration_with_cost_model(
     )?;
 
     // Include Stream and Reset instruction costs, plus the once-per-chunk
-    // external-native body contribution (#50).
-    let overhead = cost_model.cycles(&ops[stream_pos]) + cost_model.cycles(&ops[reset_pos]);
+    // external-native body contribution (#50). The sum saturates. Until
+    // 2026-11-11 it was a plain `+`, which panicked under overflow checks and
+    // otherwise wrapped, so a host cost model could make the figure smaller
+    // than the cost of `Stream` alone. Kani found it, as finding F1.
+    let overhead = cost_model
+        .cycles(&ops[stream_pos])
+        .saturating_add(cost_model.cycles(&ops[reset_pos]));
     let region_cost = body_cost.cost;
 
     Ok(overhead
@@ -1842,7 +1860,9 @@ pub fn wcet_whole_chunk_with_callees(
 /// script-to-script calls (an `Op::Call` contributes its dispatch cycle, not the
 /// callee body); only direct native calls fold in attested body time. A chunk
 /// whose WCET is not statically boundable (an unbounded-length text op, or a
-/// loop without an extractable iteration bound) yields `Err`.
+/// loop without an extractable iteration bound) yields `Err`. An entry of
+/// `u32::MAX` is a saturated figure and not a bound, as
+/// [`wcet_stream_iteration`] states.
 pub fn module_wcet_with_bounds(
     module: &Module,
     bounds: &[NativeIterationBound],

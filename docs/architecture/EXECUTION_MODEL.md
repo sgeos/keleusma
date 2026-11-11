@@ -166,7 +166,7 @@ bytes 60..64  : reserved (u32, zero)
 last 4 bytes  : CRC-32 trailer (over the entire framed range minus the trailer)
 ```
 
-The declared WCET and WCMU fields use two sentinel values. `0` means "auto", indicating the producer did not declare a value and the runtime computes the bound at load time through its own verifier pass. `u32::MAX` means "overflow", indicating the producer attempted to compute a bound but the result exceeded the field's range; the safe constructor `Vm::new` rejects on either sentinel through the `LoadError::WcetOverflow` and `LoadError::WcmuOverflow` variants. Other values are the producer's declared bound.
+The declared WCET and WCMU fields use two sentinel values. `0` means "auto", indicating the producer did not declare a value and the runtime computes the bound at load time through its own verifier pass. `u32::MAX` means "overflow", indicating the producer attempted to compute a bound but the result exceeded the field's range. Every sum and product of the time and memory analyses saturates at that value, so a figure of `u32::MAX` from any analysis function is never a bound and means the true figure is that large or larger; the safe constructor `Vm::new` rejects on either sentinel through the `LoadError::WcetOverflow` and `LoadError::WcmuOverflow` variants. Other values are the producer's declared bound.
 
 The bytecode loader strips a leading shebang line (`#!...\n`) before validating the magic and CRC residue. Compiled bytecode files prepended with `#!/usr/bin/env keleusma` are therefore Unix-executable through the kernel shebang dispatch; the envelope is not part of the signed payload.
 
