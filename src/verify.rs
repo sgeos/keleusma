@@ -1709,7 +1709,10 @@ fn external_native_wcet(chunk: &Chunk, native_bounds: &[NativeIterationBound]) -
 ///
 /// This is the script-only bound: an `Op::Call` and a native call contribute
 /// their dispatch cycles only, not the callee body. The host-attested native
-/// body time is included by [`module_wcet_with_bounds`].
+/// body time is included by [`module_wcet_with_bounds`]. **For a chunk that
+/// calls a function it is therefore not a bound on what executes.**
+/// [`module_wcet_composed_with_bounds`] charges each call its callee and is
+/// the figure to use for such a chunk.
 ///
 /// # Saturation
 ///
@@ -1825,7 +1828,8 @@ pub fn wcet_stream_iteration_with_cost_model(
 ///
 /// Like the Stream path, the cost is shallow with respect to calls: an
 /// `Op::Call` contributes its dispatch cycle only, not the callee's
-/// body (there is no transitive WCET resolver). Returns an error for a
+/// body. This function resolves no callee. The composed figure, which does,
+/// is [`module_wcet_composed_with_bounds`]. Returns an error for a
 /// `Stream` chunk (use [`wcet_stream_iteration`]) or if a loop lacks a
 /// statically extractable iteration bound.
 pub fn wcet_whole_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
@@ -1931,7 +1935,9 @@ pub fn wcet_whole_chunk_with_callees(
 ///
 /// Like the per-chunk WCET functions, the bound is shallow with respect to
 /// script-to-script calls (an `Op::Call` contributes its dispatch cycle, not the
-/// callee body); only direct native calls fold in attested body time. A chunk
+/// callee body); only direct native calls fold in attested body time. For a
+/// chunk that calls a function the entry is therefore below what can execute,
+/// and [`module_wcet_composed_with_bounds`] is the composed counterpart. A chunk
 /// whose WCET is not statically boundable (an unbounded-length text op, or a
 /// loop without an extractable iteration bound) yields `Err`. An entry of
 /// `u32::MAX` is a saturated figure and not a bound, as
@@ -1950,6 +1956,196 @@ pub fn module_wcet_with_bounds(
             _ => wcet_whole_chunk_with_callees(chunk, cost_model, bounds, &returns_text),
         })
         .collect()
+}
+
+/// Per-chunk worst-case execution time **composed through calls**. Returns a
+/// vector parallel to `module.chunks`.
+///
+/// [`module_wcet_with_bounds`] is shallow. An `Op::Call` contributes its
+/// dispatch cycles and not the callee's body, so its figure bounds no chunk
+/// that calls a function. This function closes that. The chunks are visited
+/// callees first over the acyclic call graph, and each `Op::Call` is charged
+/// its dispatch cycles plus the callee's own composed figure. The charge is a
+/// per-instruction extra in the region walk, so a call inside a loop is
+/// charged once per pass, exactly as every other instruction cost is scaled by
+/// loop multiplicity, and the larger arm is taken at every branch.
+///
+/// **This is an addition.** The shallow functions, the module header
+/// `wcet_cycles` and [`crate::vm::GenericVm::wcet_per_iteration`] return what
+/// they returned before. Whether any of them adopts this figure is an open
+/// decision for the operator.
+///
+/// # What each entry bounds
+///
+/// The unit is the cost model's cycles, with the host-attested native time of
+/// `bounds` folded in as [`module_wcet_with_bounds`] folds it.
+///
+/// - **A `Func` chunk.** One whole call, callees included.
+/// - **A `Reentrant` chunk**, a `yield` function. One whole call from entry to
+///   return, across every yield, callees included. **This is not a bound per
+///   resume.** A resume slice can begin in a caller, run into the callee and
+///   stop at a yield there, or begin in the callee and run on into the caller,
+///   so no slice is confined to one chunk, and a tight figure per slice would
+///   need the walk to follow slices across call boundaries. The whole call is
+///   charged instead, which bounds every slice it contains. The shallow figure
+///   for the same chunk is the longest single resume, so the two differ in
+///   kind as well as in size.
+/// - **A `Stream` chunk**, a `loop`. One iteration, from the chunk's first
+///   instruction to its `Reset`, callees included. **This is a bound per
+///   iteration, not per resume slice.** An iteration contains at least one
+///   yield, and each yield-to-yield slice of it is bounded by the figure of the
+///   whole iteration and by nothing tighter here. The walk starts at
+///   instruction zero, so instructions before the `Stream` marker, which run on
+///   the first iteration only, are charged to every iteration. The compiler
+///   emits the marker first, and for such a chunk without calls this figure
+///   equals the shallow one.
+///
+/// # A delegated loop
+///
+/// A `loop` may call a `loop`, which never returns. Each reset is then the
+/// callee's, and control never comes back to the caller, as
+/// `docs/decisions/NESTED_LOOP_ARENAS.md` records. The call site is charged
+/// the callee's per-iteration figure like any other call. Two statements
+/// follow, and a host scheduling a delegating program needs both.
+///
+/// - Every iteration after the first runs the innermost delegated loop alone
+///   and is bounded by **that chunk's own entry**.
+/// - The first iteration also runs each delegating caller's instructions up
+///   to its delegation. It is bounded by the **entry chunk's** figure, which
+///   holds the caller's whole body and the callee's first iteration. The walk
+///   continues past the delegation, so the caller's figure also charges
+///   instructions that never run. That is loose and sound.
+///
+/// The largest figure over the `Stream` chunks therefore bounds every
+/// iteration, which is what
+/// [`crate::vm::GenericVm::wcet_per_iteration_composed`] reports.
+///
+/// # Agreement with the native route
+///
+/// `native_codegen/src/cost.rs` composes the same way, by giving `Op::Call`
+/// the cost of its dispatch plus the callee's bound and running the shallow
+/// walk. On a module whose callees are all `Func` chunks and which calls no
+/// host native, the two give the same figure under the nominal cost model,
+/// which `tests/wcet_composed.rs` checks against a restatement of that method.
+/// The native route refuses a chunk that calls a suspending chunk or a host
+/// native. This function bounds both, by the whole-call charge above and by
+/// the host's attestation.
+///
+/// # Saturation and refusals
+///
+/// Every sum and product saturates. **An entry of `u32::MAX` is not a bound.**
+/// A chunk that calls a saturated chunk is itself reported as `u32::MAX`, by
+/// an explicit carry, so a caller's own arithmetic cannot bring a saturated
+/// figure back into range.
+///
+/// The whole query is refused with an error when the call graph has a cycle,
+/// when a call names a chunk that does not exist, when a loop with a
+/// fall-through body has no extractable iteration bound, or when a text
+/// operation has no bounded length. The refusal covers every chunk, including
+/// one that no `Stream` chunk reaches, as [`module_wcet_with_bounds`] does.
+///
+/// Each chunk is walked with the per-instruction text table the shallow walk
+/// uses for its kind, so the two figures differ by the callee charges alone.
+/// For a `Func` or `Reentrant` chunk that table knows each callee's declared
+/// return shape. For a `Stream` chunk it does not, so a call result there is
+/// read as possibly text of unbounded length, and an operation on it that the
+/// shallow walk refuses for that reason is refused here as well.
+///
+/// # What is and is not shown
+///
+/// `tests/wcet_composed.rs` measures the operations a run dispatches, under a
+/// cost model of one cycle per operation, and checks that this figure is at
+/// least the count on a corpus of nine programs. That is a test on samples.
+/// It is not a proof that the figure bounds every program, and the walk's own
+/// soundness for calls rests on the argument above.
+pub fn module_wcet_composed_with_bounds(
+    module: &Module,
+    bounds: &[NativeIterationBound],
+    cost_model: &crate::bytecode::CostModel,
+) -> Result<Vec<u32>, VerifyError> {
+    let n = module.chunks.len();
+    let returns_text = module_chunk_returns_text(module)?;
+    // Callees first. A cycle is refused here, by name.
+    let order = topological_call_order(module)?;
+    let mut figures: Vec<u32> = alloc::vec![0; n];
+    for idx in order {
+        let chunk = &module.chunks[idx];
+        // This entry is public and may be handed an unverified module, and the
+        // region walk does not terminate on a backward target (audit H1).
+        check_forward_control_flow_targets(chunk)?;
+        // The same per-instruction extras the shallow walk uses for this kind
+        // of chunk, so the two figures differ by the callee charges alone.
+        let mut extra = match chunk.block_type {
+            BlockType::Stream => chunk_wcet_extra(chunk, cost_model, bounds),
+            BlockType::Func | BlockType::Reentrant => {
+                chunk_wcet_extra_with_callees(chunk, cost_model, bounds, &returns_text)
+            }
+        };
+        let mut saturated = false;
+        for (ip, op) in chunk.ops.iter().enumerate() {
+            let Op::Call(callee, _) = op else {
+                continue;
+            };
+            let callee_figure =
+                figures
+                    .get(*callee as usize)
+                    .copied()
+                    .ok_or_else(|| VerifyError {
+                        chunk_name: chunk.name.clone(),
+                        message: alloc::format!(
+                            "call at instruction {ip} names chunk {callee}, which does not exist"
+                        ),
+                    })?;
+            let Some(slot) = extra.get_mut(ip) else {
+                continue;
+            };
+            // `u32::MAX` in the table is the walk's marker for a text operation
+            // of unbounded length, which the walk refuses. It is left in place.
+            if *slot == u32::MAX {
+                continue;
+            }
+            let charged = slot.saturating_add(callee_figure);
+            if charged == u32::MAX {
+                // Saturated, by the callee or by the sum. The marker value
+                // cannot carry that, so the walk is given the largest value
+                // below it and the result is forced after the walk.
+                saturated = true;
+                *slot = u32::MAX - 1;
+            } else {
+                *slot = charged;
+            }
+        }
+        let (end, tail) = match chunk.block_type {
+            BlockType::Stream => {
+                if !chunk.ops.iter().any(|op| matches!(op, Op::Stream)) {
+                    return Err(VerifyError {
+                        chunk_name: chunk.name.clone(),
+                        message: String::from("Stream block missing Stream instruction"),
+                    });
+                }
+                let reset_pos = chunk
+                    .ops
+                    .iter()
+                    .position(|op| matches!(op, Op::Reset))
+                    .ok_or_else(|| VerifyError {
+                        chunk_name: chunk.name.clone(),
+                        message: String::from("Stream block missing Reset instruction"),
+                    })?;
+                (reset_pos, cost_model.cycles(&chunk.ops[reset_pos]))
+            }
+            BlockType::Func | BlockType::Reentrant => (chunk.ops.len(), 0),
+        };
+        let mut break_costs: Vec<u32> = Vec::new();
+        // No productive-yield clamp. The clamp tightens a per-resume figure,
+        // and this figure is per whole call or per whole iteration.
+        let body = wcet_region(chunk, 0, end, &mut break_costs, cost_model, false, &extra)?;
+        let total = body
+            .cost
+            .saturating_add(tail)
+            .saturating_add(external_native_wcet(chunk, bounds));
+        figures[idx] = if saturated { u32::MAX } else { total };
+    }
+    Ok(figures)
 }
 
 /// The worst-case execution cost of a single resumption of a
