@@ -12,6 +12,53 @@ use keleusma::bytecode::{
 };
 use keleusma::value_layout::{CompositeKind, ScalarKind};
 
+/// Measurement narrowing of the instruction selectors.
+///
+/// The selector of [`with_walk_op`] is confined to the closed range from
+/// `KANI_WALK_SEL_LO` to `KANI_WALK_SEL_HI`, and the selector of
+/// [`with_close_op`] to the range from `KANI_CLOSE_SEL_LO` to
+/// `KANI_CLOSE_SEL_HI`, each read from the environment when this package is
+/// compiled. Unset, the ranges are 0 to 255 and the confinement assumes
+/// nothing. A narrowed run verifies only the instructions in its range, so it
+/// is a measurement of one piece of a harness and never a verification of the
+/// whole harness. `check.sh` reports such a run as narrowed and does not pass
+/// it. A value that is not a decimal number from 0 to 255, or a range whose
+/// low end exceeds its high end, fails the build.
+pub const WALK_SEL_LO: u8 = parse_selector(option_env!("KANI_WALK_SEL_LO"), 0);
+/// See [`WALK_SEL_LO`].
+pub const WALK_SEL_HI: u8 = parse_selector(option_env!("KANI_WALK_SEL_HI"), u8::MAX);
+/// See [`WALK_SEL_LO`].
+pub const CLOSE_SEL_LO: u8 = parse_selector(option_env!("KANI_CLOSE_SEL_LO"), 0);
+/// See [`WALK_SEL_LO`].
+pub const CLOSE_SEL_HI: u8 = parse_selector(option_env!("KANI_CLOSE_SEL_HI"), u8::MAX);
+const _: () = assert!(WALK_SEL_LO <= WALK_SEL_HI, "KANI_WALK_SEL_LO exceeds KANI_WALK_SEL_HI");
+const _: () = assert!(CLOSE_SEL_LO <= CLOSE_SEL_HI, "KANI_CLOSE_SEL_LO exceeds KANI_CLOSE_SEL_HI");
+
+/// Parses a selector bound, a decimal number from 0 to 255, at compile time.
+/// Absent, it is `default`. Anything else stops the build.
+const fn parse_selector(text: Option<&str>, default: u8) -> u8 {
+    let Some(text) = text else {
+        return default;
+    };
+    let bytes = text.as_bytes();
+    assert!(
+        !bytes.is_empty() && bytes.len() <= 3,
+        "a selector bound must be a decimal number from 0 to 255"
+    );
+    let mut value: u16 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        assert!(
+            bytes[i].is_ascii_digit(),
+            "a selector bound must be a decimal number from 0 to 255"
+        );
+        value = value * 10 + (bytes[i] - b'0') as u16;
+        i += 1;
+    }
+    assert!(value <= 255, "a selector bound must be a decimal number from 0 to 255");
+    value as u8
+}
+
 /// Any scalar kind enabled under the default feature set.
 pub fn any_scalar_kind() -> ScalarKind {
     match kani::any::<u8>() % 8 {
@@ -377,6 +424,7 @@ pub fn with_target<F: FnMut(u16)>(n: u16, f: &mut F) {
 /// [`MAX_COUNT`].
 pub fn with_walk_op<F: FnMut(Op)>(n: u16, f: &mut F) {
     let sel: u8 = kani::any();
+    kani::assume(WALK_SEL_LO <= sel && sel <= WALK_SEL_HI);
     match sel {
         0 => f(Op::Stream),
         1 => f(Op::Reset),
@@ -408,7 +456,9 @@ pub fn with_walk_op<F: FnMut(Op)>(n: u16, f: &mut F) {
 /// target from `lo` to `n`. Only the `Else` target is followed by the region
 /// walks, which is why only it is enumerated.
 pub fn with_close_op<F: FnMut(Op)>(lo: u16, n: u16, f: &mut F) {
-    match kani::any::<u8>() {
+    let sel: u8 = kani::any();
+    kani::assume(CLOSE_SEL_LO <= sel && sel <= CLOSE_SEL_HI);
+    match sel {
         0 => f(Op::Yield),
         1 => f(Op::EndIf),
         2 => f(Op::Return),
