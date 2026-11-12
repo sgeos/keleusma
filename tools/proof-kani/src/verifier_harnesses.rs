@@ -266,7 +266,7 @@ fn wcet_straight_line_is_exact() {
     with_plain_op(&mut |b1| {
         // Each branch calls the check with a concrete chunk, for the reason
         // given at the top of `generators.rs`.
-        let mut check = |b2: Op| {
+        let check = |b2: Op| {
             let chunk = chunk_of(vec![Op::Stream, b1, b2, Op::Reset], BlockType::Stream, 0);
             let w =
                 verify::wcet_stream_iteration_with_cost_model(&chunk, &model(unit_cycles, 1), &[]);
