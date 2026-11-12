@@ -1090,6 +1090,52 @@ pub(crate) fn shared_composite_copyout_bytes(
     layout.map_or(0, |dl| dl.operand_shared_composite_max_len(field, len))
 }
 
+/// An instruction's slot count as a signed operand-stack offset, saturating.
+///
+/// Every count the instruction set produces is far below `i32::MAX`. The
+/// conversion is total so that the walk's arithmetic is defined for any `Op`
+/// value a caller constructs.
+fn slots_i32(slots: u32) -> i32 {
+    i32::try_from(slots).unwrap_or(i32::MAX)
+}
+
+/// The peak a signed operand-stack offset contributes, which is the offset
+/// where it is positive and zero otherwise.
+fn peak_of(offset: i32) -> u32 {
+    u32::try_from(offset.max(0)).unwrap_or(0)
+}
+
+/// Refuse a slot width of zero.
+///
+/// The width converts the slot count into bytes, and the memory walk divides a
+/// callee's bytes by it to recover the callee's slots. Zero divides by zero
+/// there and makes every stack figure zero elsewhere, so it is refused at
+/// every public entry that takes the width. Kani found the missing check, as
+/// finding F2.
+fn check_value_slot_bytes(chunk_name: &str, value_slot_bytes: u32) -> Result<(), VerifyError> {
+    if value_slot_bytes == 0 {
+        return Err(VerifyError {
+            chunk_name: String::from(chunk_name),
+            message: String::from(
+                "value_slot_bytes is zero, and the operand-stack slot width must be at least \
+                 one byte for the memory bound to mean anything",
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The stack bound in bytes of a chunk with `local_count` locals and a body
+/// peak of `body_peak` slots, saturating.
+///
+/// The product was a plain `*` in three places until 2026-11-11, which
+/// panicked under overflow checks and otherwise wrapped to a small figure.
+fn stack_bytes_of(local_count: u16, body_peak: u32, value_slot_bytes: u32) -> u32 {
+    u32::from(local_count)
+        .saturating_add(body_peak)
+        .saturating_mul(value_slot_bytes)
+}
+
 /// Compute the worst-case memory usage over a region of instructions
 /// `[start, end)`. The analysis tracks operand-stack depth in slots and
 /// arena heap bytes.
@@ -1166,12 +1212,12 @@ fn wcmu_region_at(
         let op = &ops[ip];
         match op {
             Op::Break(_) => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 break_results.push(McuResult {
                     peak_above_initial: peak,
                     delta: current_offset,
@@ -1191,12 +1237,12 @@ fn wcmu_region_at(
                 // have held them. Discarding them is what made every
                 // multiheaded function, which ends in a dispatch trap, report a
                 // body peak of zero.
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 let _ = current_offset;
                 return Ok(McuOutcome::exits(peak, heap));
             }
@@ -1212,19 +1258,19 @@ fn wcmu_region_at(
                 // Like Trap it reports what was consumed before leaving, and it
                 // does not push to `break_results`, because it transfers control
                 // out of the chunk rather than to an enclosing loop.
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 return Ok(McuOutcome::exits(peak, heap));
             }
             Op::BreakIf(_) => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 break_results.push(McuResult {
                     peak_above_initial: peak,
                     delta: current_offset,
@@ -1234,12 +1280,12 @@ fn wcmu_region_at(
             }
             Op::If(target) => {
                 // Account for the If instruction itself before recursing.
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
 
                 let target = *target as usize;
                 if target > 0 && target <= ops.len() && matches!(&ops[target - 1], Op::Else(_)) {
@@ -1310,12 +1356,12 @@ fn wcmu_region_at(
                 }
             }
             Op::Loop(target) => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
 
                 let loop_exit_target = *target as usize;
                 // Saturating so a malformed `Loop(exit = 0)` reaching a
@@ -1385,15 +1431,30 @@ fn wcmu_region_at(
                 // minus the n args being passed plus the callee's stack
                 // is the peak observed.
                 let (callee_stack_bytes, callee_heap_bytes) = resolver.resolve_chunk(*callee_idx);
-                let callee_stack_slots = (callee_stack_bytes / value_slot_bytes) as i32;
-                let n = *n_args as i32;
-                let during_peak = (current_offset + callee_stack_slots - n)
-                    .max(current_offset + 1)
-                    .max(0) as u32;
+                let n = i32::from(*n_args);
+                // A callee whose stack figure saturated has no known slot
+                // count. Dividing the saturated bytes back into slots would
+                // give a count below the true one, and the caller's product
+                // could then fall back under the range, so the saturation is
+                // carried as a saturated peak. The division cannot be by zero,
+                // since every public entry refuses a zero width, and it is
+                // total all the same. The sum is taken in 64 bits, where an
+                // `i32` offset, a `u32` slot count and a `u8` argument count
+                // cannot overflow.
+                let during_peak = match callee_stack_bytes.checked_div(value_slot_bytes) {
+                    Some(callee_stack_slots) if callee_stack_bytes != u32::MAX => {
+                        let offset = i64::from(current_offset);
+                        let during = (offset + i64::from(callee_stack_slots) - i64::from(n))
+                            .max(offset + 1)
+                            .max(0);
+                        u32::try_from(during).unwrap_or(u32::MAX)
+                    }
+                    _ => u32::MAX,
+                };
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(callee_heap_bytes);
                 // Net stack effect: pop n args, push 1 return value.
-                current_offset += 1 - n;
+                current_offset = current_offset.saturating_add(1).saturating_sub(n);
                 ip += 1;
             }
             Op::CallVerifiedNative(native_idx, _) | Op::CallExternalNative(native_idx, _) => {
@@ -1410,24 +1471,24 @@ fn wcmu_region_at(
                 // once moved the offset by 1 - 129 for a one-argument
                 // reified call and so understated the bound.
                 let native_heap = resolver.resolve_native(*native_idx);
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(native_heap);
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 ip += 1;
             }
             Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
                 ip += 1;
             }
             _ => {
-                let shrink = op.stack_shrink() as i32;
-                let growth = op.stack_growth() as i32;
-                let during_peak = (current_offset + growth).max(0) as u32;
+                let shrink = slots_i32(op.stack_shrink());
+                let growth = slots_i32(op.stack_growth());
+                let during_peak = peak_of(current_offset.saturating_add(growth));
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
-                current_offset += growth - shrink;
+                current_offset = current_offset.saturating_add(growth).saturating_sub(shrink);
                 ip += 1;
             }
         }
@@ -1471,17 +1532,17 @@ fn wcmu_subregion(
     // Lift breaks from the subregion into the caller's frame of reference.
     for b in sub_breaks {
         break_results.push(McuResult {
-            peak_above_initial: (offset_at_start.max(0) as u32) + b.peak_above_initial,
-            delta: offset_at_start + b.delta,
+            peak_above_initial: peak_of(offset_at_start).saturating_add(b.peak_above_initial),
+            delta: offset_at_start.saturating_add(b.delta),
             heap_total: b.heap_total,
         });
     }
     // The peak is lifted whether or not the subregion falls through, so that an
     // exiting subregion still contributes its consumption to the caller.
     Ok(McuOutcome {
-        peak_above_initial: (offset_at_start.max(0) as u32) + result.peak_above_initial,
+        peak_above_initial: peak_of(offset_at_start).saturating_add(result.peak_above_initial),
         heap_total: result.heap_total,
-        delta: result.delta.map(|d| offset_at_start + d),
+        delta: result.delta.map(|d| offset_at_start.saturating_add(d)),
     })
 }
 
@@ -1510,10 +1571,23 @@ pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
 /// runtime's actual slot footprint rather than the conservative
 /// 64-bit-runtime default. The default-parameter shape is
 /// preserved through [`wcmu_stream_iteration`].
+///
+/// # Width and saturation
+///
+/// A `value_slot_bytes` of zero is refused with a `VerifyError`, here and at
+/// every other public entry that takes the width. Every sum and product of
+/// the memory analysis saturates at `u32::MAX`, so **a component equal to
+/// `u32::MAX` is not a bound**. It means that component is `u32::MAX` bytes or
+/// more. The admission functions compare the figures against the arena
+/// capacity as they stand, so a saturated figure admits no arena smaller than
+/// `u32::MAX` bytes, and the compiler writes the overflow sentinel to the
+/// module header for it. A caller that sizes an arena from these figures
+/// directly must refuse a saturated one itself.
 pub fn wcmu_stream_iteration_with_value_slot_bytes(
     chunk: &Chunk,
     value_slot_bytes: u32,
 ) -> Result<(u32, u32), VerifyError> {
+    check_value_slot_bytes(&chunk.name, value_slot_bytes)?;
     if chunk.block_type != BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -1556,8 +1630,7 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
     let body_peak = body.peak_above_initial;
     let body_heap = body.heap_total;
 
-    let stack_slots = chunk.local_count as u32 + body_peak;
-    let stack_bytes = stack_slots * value_slot_bytes;
+    let stack_bytes = stack_bytes_of(chunk.local_count, body_peak, value_slot_bytes);
 
     Ok((stack_bytes, body_heap))
 }
@@ -1636,7 +1709,20 @@ fn external_native_wcet(chunk: &Chunk, native_bounds: &[NativeIterationBound]) -
 ///
 /// This is the script-only bound: an `Op::Call` and a native call contribute
 /// their dispatch cycles only, not the callee body. The host-attested native
-/// body time is included by [`module_wcet_with_bounds`].
+/// body time is included by [`module_wcet_with_bounds`]. **For a chunk that
+/// calls a function it is therefore not a bound on what executes.**
+/// [`module_wcet_composed_with_bounds`] charges each call its callee and is
+/// the figure to use for such a chunk.
+///
+/// # Saturation
+///
+/// Every sum and product in the time analysis saturates at `u32::MAX`, so
+/// **a result of `u32::MAX` is not a bound**. It means the true figure is
+/// `u32::MAX` or more, and a caller must treat it as the absence of a bound.
+/// The compiler does so. It writes `u32::MAX` to the module header as the
+/// overflow sentinel, which `Vm::new` refuses, and it records no proof witness
+/// for the chunk. This holds for every function of the time analysis in this
+/// module, including the `_with_cost_model` and module-level forms.
 pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
     wcet_stream_iteration_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL, &[])
 }
@@ -1648,6 +1734,9 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
 /// than the nominal table. The model's `value_slot_bytes` field is
 /// not consulted by the WCET computation; the WCMU side uses it
 /// through [`wcmu_stream_iteration_with_value_slot_bytes`].
+///
+/// The model's costs are arbitrary `u32` values, so the figure can saturate.
+/// A result of `u32::MAX` is not a bound, as [`wcet_stream_iteration`] states.
 pub fn wcet_stream_iteration_with_cost_model(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
@@ -1694,8 +1783,13 @@ pub fn wcet_stream_iteration_with_cost_model(
     )?;
 
     // Include Stream and Reset instruction costs, plus the once-per-chunk
-    // external-native body contribution (#50).
-    let overhead = cost_model.cycles(&ops[stream_pos]) + cost_model.cycles(&ops[reset_pos]);
+    // external-native body contribution (#50). The sum saturates. Until
+    // 2026-11-11 it was a plain `+`, which panicked under overflow checks and
+    // otherwise wrapped, so a host cost model could make the figure smaller
+    // than the cost of `Stream` alone. Kani found it, as finding F1.
+    let overhead = cost_model
+        .cycles(&ops[stream_pos])
+        .saturating_add(cost_model.cycles(&ops[reset_pos]));
     let region_cost = body_cost.cost;
 
     Ok(overhead
@@ -1734,7 +1828,8 @@ pub fn wcet_stream_iteration_with_cost_model(
 ///
 /// Like the Stream path, the cost is shallow with respect to calls: an
 /// `Op::Call` contributes its dispatch cycle only, not the callee's
-/// body (there is no transitive WCET resolver). Returns an error for a
+/// body. This function resolves no callee. The composed figure, which does,
+/// is [`module_wcet_composed_with_bounds`]. Returns an error for a
 /// `Stream` chunk (use [`wcet_stream_iteration`]) or if a loop lacks a
 /// statically extractable iteration bound.
 pub fn wcet_whole_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
@@ -1840,9 +1935,13 @@ pub fn wcet_whole_chunk_with_callees(
 ///
 /// Like the per-chunk WCET functions, the bound is shallow with respect to
 /// script-to-script calls (an `Op::Call` contributes its dispatch cycle, not the
-/// callee body); only direct native calls fold in attested body time. A chunk
+/// callee body); only direct native calls fold in attested body time. For a
+/// chunk that calls a function the entry is therefore below what can execute,
+/// and [`module_wcet_composed_with_bounds`] is the composed counterpart. A chunk
 /// whose WCET is not statically boundable (an unbounded-length text op, or a
-/// loop without an extractable iteration bound) yields `Err`.
+/// loop without an extractable iteration bound) yields `Err`. An entry of
+/// `u32::MAX` is a saturated figure and not a bound, as
+/// [`wcet_stream_iteration`] states.
 pub fn module_wcet_with_bounds(
     module: &Module,
     bounds: &[NativeIterationBound],
@@ -1857,6 +1956,196 @@ pub fn module_wcet_with_bounds(
             _ => wcet_whole_chunk_with_callees(chunk, cost_model, bounds, &returns_text),
         })
         .collect()
+}
+
+/// Per-chunk worst-case execution time **composed through calls**. Returns a
+/// vector parallel to `module.chunks`.
+///
+/// [`module_wcet_with_bounds`] is shallow. An `Op::Call` contributes its
+/// dispatch cycles and not the callee's body, so its figure bounds no chunk
+/// that calls a function. This function closes that. The chunks are visited
+/// callees first over the acyclic call graph, and each `Op::Call` is charged
+/// its dispatch cycles plus the callee's own composed figure. The charge is a
+/// per-instruction extra in the region walk, so a call inside a loop is
+/// charged once per pass, exactly as every other instruction cost is scaled by
+/// loop multiplicity, and the larger arm is taken at every branch.
+///
+/// **This is an addition.** The shallow functions, the module header
+/// `wcet_cycles` and [`crate::vm::GenericVm::wcet_per_iteration`] return what
+/// they returned before. Whether any of them adopts this figure is an open
+/// decision for the operator.
+///
+/// # What each entry bounds
+///
+/// The unit is the cost model's cycles, with the host-attested native time of
+/// `bounds` folded in as [`module_wcet_with_bounds`] folds it.
+///
+/// - **A `Func` chunk.** One whole call, callees included.
+/// - **A `Reentrant` chunk**, a `yield` function. One whole call from entry to
+///   return, across every yield, callees included. **This is not a bound per
+///   resume.** A resume slice can begin in a caller, run into the callee and
+///   stop at a yield there, or begin in the callee and run on into the caller,
+///   so no slice is confined to one chunk, and a tight figure per slice would
+///   need the walk to follow slices across call boundaries. The whole call is
+///   charged instead, which bounds every slice it contains. The shallow figure
+///   for the same chunk is the longest single resume, so the two differ in
+///   kind as well as in size.
+/// - **A `Stream` chunk**, a `loop`. One iteration, from the chunk's first
+///   instruction to its `Reset`, callees included. **This is a bound per
+///   iteration, not per resume slice.** An iteration contains at least one
+///   yield, and each yield-to-yield slice of it is bounded by the figure of the
+///   whole iteration and by nothing tighter here. The walk starts at
+///   instruction zero, so instructions before the `Stream` marker, which run on
+///   the first iteration only, are charged to every iteration. The compiler
+///   emits the marker first, and for such a chunk without calls this figure
+///   equals the shallow one.
+///
+/// # A delegated loop
+///
+/// A `loop` may call a `loop`, which never returns. Each reset is then the
+/// callee's, and control never comes back to the caller, as
+/// `docs/decisions/NESTED_LOOP_ARENAS.md` records. The call site is charged
+/// the callee's per-iteration figure like any other call. Two statements
+/// follow, and a host scheduling a delegating program needs both.
+///
+/// - Every iteration after the first runs the innermost delegated loop alone
+///   and is bounded by **that chunk's own entry**.
+/// - The first iteration also runs each delegating caller's instructions up
+///   to its delegation. It is bounded by the **entry chunk's** figure, which
+///   holds the caller's whole body and the callee's first iteration. The walk
+///   continues past the delegation, so the caller's figure also charges
+///   instructions that never run. That is loose and sound.
+///
+/// The largest figure over the `Stream` chunks therefore bounds every
+/// iteration, which is what
+/// [`crate::vm::GenericVm::wcet_per_iteration_composed`] reports.
+///
+/// # Agreement with the native route
+///
+/// `native_codegen/src/cost.rs` composes the same way, by giving `Op::Call`
+/// the cost of its dispatch plus the callee's bound and running the shallow
+/// walk. On a module whose callees are all `Func` chunks and which calls no
+/// host native, the two give the same figure under the nominal cost model,
+/// which `tests/wcet_composed.rs` checks against a restatement of that method.
+/// The native route refuses a chunk that calls a suspending chunk or a host
+/// native. This function bounds both, by the whole-call charge above and by
+/// the host's attestation.
+///
+/// # Saturation and refusals
+///
+/// Every sum and product saturates. **An entry of `u32::MAX` is not a bound.**
+/// A chunk that calls a saturated chunk is itself reported as `u32::MAX`, by
+/// an explicit carry, so a caller's own arithmetic cannot bring a saturated
+/// figure back into range.
+///
+/// The whole query is refused with an error when the call graph has a cycle,
+/// when a call names a chunk that does not exist, when a loop with a
+/// fall-through body has no extractable iteration bound, or when a text
+/// operation has no bounded length. The refusal covers every chunk, including
+/// one that no `Stream` chunk reaches, as [`module_wcet_with_bounds`] does.
+///
+/// Each chunk is walked with the per-instruction text table the shallow walk
+/// uses for its kind, so the two figures differ by the callee charges alone.
+/// For a `Func` or `Reentrant` chunk that table knows each callee's declared
+/// return shape. For a `Stream` chunk it does not, so a call result there is
+/// read as possibly text of unbounded length, and an operation on it that the
+/// shallow walk refuses for that reason is refused here as well.
+///
+/// # What is and is not shown
+///
+/// `tests/wcet_composed.rs` measures the operations a run dispatches, under a
+/// cost model of one cycle per operation, and checks that this figure is at
+/// least the count on a corpus of nine programs. That is a test on samples.
+/// It is not a proof that the figure bounds every program, and the walk's own
+/// soundness for calls rests on the argument above.
+pub fn module_wcet_composed_with_bounds(
+    module: &Module,
+    bounds: &[NativeIterationBound],
+    cost_model: &crate::bytecode::CostModel,
+) -> Result<Vec<u32>, VerifyError> {
+    let n = module.chunks.len();
+    let returns_text = module_chunk_returns_text(module)?;
+    // Callees first. A cycle is refused here, by name.
+    let order = topological_call_order(module)?;
+    let mut figures: Vec<u32> = alloc::vec![0; n];
+    for idx in order {
+        let chunk = &module.chunks[idx];
+        // This entry is public and may be handed an unverified module, and the
+        // region walk does not terminate on a backward target (audit H1).
+        check_forward_control_flow_targets(chunk)?;
+        // The same per-instruction extras the shallow walk uses for this kind
+        // of chunk, so the two figures differ by the callee charges alone.
+        let mut extra = match chunk.block_type {
+            BlockType::Stream => chunk_wcet_extra(chunk, cost_model, bounds),
+            BlockType::Func | BlockType::Reentrant => {
+                chunk_wcet_extra_with_callees(chunk, cost_model, bounds, &returns_text)
+            }
+        };
+        let mut saturated = false;
+        for (ip, op) in chunk.ops.iter().enumerate() {
+            let Op::Call(callee, _) = op else {
+                continue;
+            };
+            let callee_figure =
+                figures
+                    .get(*callee as usize)
+                    .copied()
+                    .ok_or_else(|| VerifyError {
+                        chunk_name: chunk.name.clone(),
+                        message: alloc::format!(
+                            "call at instruction {ip} names chunk {callee}, which does not exist"
+                        ),
+                    })?;
+            let Some(slot) = extra.get_mut(ip) else {
+                continue;
+            };
+            // `u32::MAX` in the table is the walk's marker for a text operation
+            // of unbounded length, which the walk refuses. It is left in place.
+            if *slot == u32::MAX {
+                continue;
+            }
+            let charged = slot.saturating_add(callee_figure);
+            if charged == u32::MAX {
+                // Saturated, by the callee or by the sum. The marker value
+                // cannot carry that, so the walk is given the largest value
+                // below it and the result is forced after the walk.
+                saturated = true;
+                *slot = u32::MAX - 1;
+            } else {
+                *slot = charged;
+            }
+        }
+        let (end, tail) = match chunk.block_type {
+            BlockType::Stream => {
+                if !chunk.ops.iter().any(|op| matches!(op, Op::Stream)) {
+                    return Err(VerifyError {
+                        chunk_name: chunk.name.clone(),
+                        message: String::from("Stream block missing Stream instruction"),
+                    });
+                }
+                let reset_pos = chunk
+                    .ops
+                    .iter()
+                    .position(|op| matches!(op, Op::Reset))
+                    .ok_or_else(|| VerifyError {
+                        chunk_name: chunk.name.clone(),
+                        message: String::from("Stream block missing Reset instruction"),
+                    })?;
+                (reset_pos, cost_model.cycles(&chunk.ops[reset_pos]))
+            }
+            BlockType::Func | BlockType::Reentrant => (chunk.ops.len(), 0),
+        };
+        let mut break_costs: Vec<u32> = Vec::new();
+        // No productive-yield clamp. The clamp tightens a per-resume figure,
+        // and this figure is per whole call or per whole iteration.
+        let body = wcet_region(chunk, 0, end, &mut break_costs, cost_model, false, &extra)?;
+        let total = body
+            .cost
+            .saturating_add(tail)
+            .saturating_add(external_native_wcet(chunk, bounds));
+        figures[idx] = if saturated { u32::MAX } else { total };
+    }
+    Ok(figures)
 }
 
 /// The worst-case execution cost of a single resumption of a
@@ -1960,11 +2249,13 @@ pub fn wcmu_whole_chunk(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
 
 /// Variant of [`wcmu_whole_chunk`] that uses a host-supplied
 /// `value_slot_bytes`. See
-/// [`wcmu_stream_iteration_with_value_slot_bytes`].
+/// [`wcmu_stream_iteration_with_value_slot_bytes`], including for the refusal
+/// of a zero width and the meaning of a saturated figure.
 pub fn wcmu_whole_chunk_with_value_slot_bytes(
     chunk: &Chunk,
     value_slot_bytes: u32,
 ) -> Result<(u32, u32), VerifyError> {
+    check_value_slot_bytes(&chunk.name, value_slot_bytes)?;
     if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -1984,8 +2275,7 @@ pub fn wcmu_whole_chunk_with_value_slot_bytes(
         value_slot_bytes,
     )?;
 
-    let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
-    let stack_bytes = stack_slots * value_slot_bytes;
+    let stack_bytes = stack_bytes_of(chunk.local_count, body.peak_above_initial, value_slot_bytes);
     Ok((stack_bytes, body.heap_total))
 }
 
@@ -2013,11 +2303,16 @@ pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32
 /// `size_of::<GenericValue<W, F>>()` so the bound matches the
 /// runtime's actual slot footprint rather than the conservative
 /// 64-bit-runtime default.
+///
+/// A width of zero is refused, and a component of `u32::MAX` is saturated and
+/// is not a bound, as [`wcmu_stream_iteration_with_value_slot_bytes`] states.
+/// A callee whose stack figure saturated saturates every caller's.
 pub fn module_wcmu_with_value_slot_bytes(
     module: &Module,
     native_wcmu: &[u32],
     value_slot_bytes: u32,
 ) -> Result<Vec<(u32, u32)>, VerifyError> {
+    check_value_slot_bytes("<module>", value_slot_bytes)?;
     // The WCMU analysis is sound only for acyclic call graphs that
     // the static analysis can fully traverse. V0.2.0 Phase 4
     // retired the closure family (`Op::PushFunc`, `Op::MakeClosure`,
@@ -2098,12 +2393,13 @@ pub struct RuntimeFootprint {
 
 /// Maximum call-frame depth of the module's static call graph.
 ///
-/// The call graph is acyclic because the type checker rejects direct and
-/// mutual recursion, so the depth is finite and computed in one pass over
-/// the topological order (callees before callers, so a caller sees each
-/// callee's resolved depth). A chunk with no calls has depth one. Returns
-/// an error if a cycle is detected (which `topological_call_order` already
-/// rejects).
+/// The call graph of a verified module is acyclic, because the type checker
+/// refuses the direct and mutual recursion it resolves and [`verify`] refuses
+/// any cycle left in the bytecode. The depth is therefore finite and computed
+/// in one pass over the topological order (callees before callers, so a caller
+/// sees each callee's resolved depth). A chunk with no calls has depth one.
+/// Returns an error naming the cycle when the module was not verified and has
+/// one.
 pub fn module_call_depth(module: &Module) -> Result<u32, VerifyError> {
     let n = module.chunks.len();
     let order = topological_call_order(module)?;
@@ -2405,11 +2701,15 @@ pub struct NativeIterationBound {
 /// Hosts that need only per-call attestations call the simpler
 /// [`module_wcmu`] entry point, which under the hood routes
 /// through this function with all-verified bounds.
+///
+/// A width of zero is refused, and a component of `u32::MAX` is saturated and
+/// is not a bound, as [`wcmu_stream_iteration_with_value_slot_bytes`] states.
 pub fn module_wcmu_with_bounds(
     module: &Module,
     bounds: &[NativeIterationBound],
     value_slot_bytes: u32,
 ) -> Result<Vec<(u32, u32)>, VerifyError> {
+    check_value_slot_bytes("<module>", value_slot_bytes)?;
     let n = module.chunks.len();
     let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
     let mut chunk_returns_text: Vec<bool> = alloc::vec![false; n];
@@ -2503,49 +2803,131 @@ pub fn module_chunk_text_analyses(
     Ok(analyses)
 }
 
-/// Topological order of the call graph. Leaves come first, roots last.
-pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
-    let n = module.chunks.len();
-    let mut visited = alloc::vec![false; n];
-    let mut on_stack = alloc::vec![false; n];
-    let mut order = Vec::new();
-    for i in 0..n {
-        if !visited[i] {
-            topo_visit(module, i, &mut visited, &mut on_stack, &mut order)?;
-        }
-    }
-    Ok(order)
+/// The outcome of one walk of the call graph.
+enum CallGraphWalk {
+    /// Every chunk, callees before callers.
+    Order(Vec<usize>),
+    /// The chunks of one call cycle, in call order. The last calls the first.
+    Cycle(Vec<usize>),
 }
 
-fn topo_visit(
-    module: &Module,
-    idx: usize,
-    visited: &mut [bool],
-    on_stack: &mut [bool],
-    order: &mut Vec<usize>,
-) -> Result<(), VerifyError> {
-    if on_stack[idx] {
-        return Err(VerifyError {
-            chunk_name: module.chunks[idx].name.clone(),
-            message: String::from("recursive call detected during WCMU topological sort"),
-        });
-    }
-    if visited[idx] {
-        return Ok(());
-    }
-    on_stack[idx] = true;
-    for op in &module.chunks[idx].ops {
-        if let Op::Call(callee, _) = op {
-            let callee_idx = *callee as usize;
-            if callee_idx < module.chunks.len() {
-                topo_visit(module, callee_idx, visited, on_stack, order)?;
+/// Walk the call graph depth first, in chunk order and then in instruction order.
+///
+/// The walk is iterative. Its depth is the length of the longest call chain, which a module from
+/// another producer sets, so a recursive walk would spend one native stack frame per chunk of
+/// that chain. Each chunk is entered once and each instruction is examined once, so the walk
+/// ends within the number of chunks plus the number of instructions.
+///
+/// A `Call` naming a chunk that does not exist is skipped here. The structural pass of
+/// [`verify`] refuses it, and the composed time bound refuses it by name.
+fn walk_call_graph(module: &Module) -> CallGraphWalk {
+    let n = module.chunks.len();
+    // 0 not yet entered, 1 on the current path, 2 finished.
+    let mut state = alloc::vec![0u8; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    // The current path, as a chunk and the next instruction of it to examine.
+    let mut path: Vec<(usize, usize)> = Vec::new();
+    for root in 0..n {
+        if state[root] != 0 {
+            continue;
+        }
+        state[root] = 1;
+        path.push((root, 0));
+        while let Some(&(idx, ip)) = path.last() {
+            let ops = &module.chunks[idx].ops;
+            let mut descend: Option<usize> = None;
+            let mut next_ip = ip;
+            while next_ip < ops.len() && descend.is_none() {
+                if let Op::Call(callee, _) = &ops[next_ip] {
+                    let callee_idx = *callee as usize;
+                    if callee_idx < n {
+                        match state[callee_idx] {
+                            1 => {
+                                let from =
+                                    path.iter().position(|&(c, _)| c == callee_idx).unwrap_or(0);
+                                return CallGraphWalk::Cycle(
+                                    path[from..].iter().map(|&(c, _)| c).collect(),
+                                );
+                            }
+                            0 => descend = Some(callee_idx),
+                            _ => {}
+                        }
+                    }
+                }
+                next_ip += 1;
+            }
+            if let Some(last) = path.last_mut() {
+                last.1 = next_ip;
+            }
+            match descend {
+                Some(callee_idx) => {
+                    state[callee_idx] = 1;
+                    path.push((callee_idx, 0));
+                }
+                None => {
+                    state[idx] = 2;
+                    order.push(idx);
+                    path.pop();
+                }
             }
         }
     }
-    on_stack[idx] = false;
-    visited[idx] = true;
-    order.push(idx);
-    Ok(())
+    CallGraphWalk::Order(order)
+}
+
+/// The chunks of one call cycle in `module`, in call order, or `None` when the call graph is
+/// acyclic.
+///
+/// Each chunk of the result calls the next, and the last calls the first, so a chunk that calls
+/// itself is reported as a cycle of one. The cycle reported is the first that a depth-first walk
+/// in chunk order and then instruction order closes, which makes the answer deterministic. A
+/// module may hold other cycles, and they are not listed.
+///
+/// Keleusma admits no recursion. [`verify`] refuses a module for which this is `Some`, and the
+/// memory and composed time analyses refuse it as well, since neither has a bound for a cycle.
+pub fn find_call_cycle(module: &Module) -> Option<Vec<usize>> {
+    match walk_call_graph(module) {
+        CallGraphWalk::Order(_) => None,
+        CallGraphWalk::Cycle(cycle) => Some(cycle),
+    }
+}
+
+/// The name of chunk `idx`, or a placeholder for an index out of range.
+fn chunk_name_of(module: &Module, idx: usize) -> &str {
+    module
+        .chunks
+        .get(idx)
+        .map(|c| c.name.as_str())
+        .unwrap_or("<unknown>")
+}
+
+/// The refusal of a call cycle, naming its chunks in call order.
+///
+/// The text begins `recursive call detected`, which the guide and the command-line tests quote.
+fn call_cycle_error(module: &Module, cycle: &[usize]) -> VerifyError {
+    let mut rendered = String::new();
+    for &idx in cycle {
+        rendered.push_str(&alloc::format!("`{}` -> ", chunk_name_of(module, idx)));
+    }
+    let first = cycle.first().copied().unwrap_or(0);
+    rendered.push_str(&alloc::format!("`{}`", chunk_name_of(module, first)));
+    VerifyError {
+        chunk_name: String::from(chunk_name_of(module, first)),
+        message: alloc::format!(
+            "recursive call detected: {rendered}. Recursion is prohibited, direct or mutual, \
+             because a call cycle has no static bound on time or memory"
+        ),
+    }
+}
+
+/// Topological order of the call graph. Leaves come first, roots last.
+///
+/// Returns the refusal of [`find_call_cycle`]'s cycle when the graph has one.
+pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
+    match walk_call_graph(module) {
+        CallGraphWalk::Order(order) => Ok(order),
+        CallGraphWalk::Cycle(cycle) => Err(call_cycle_error(module, &cycle)),
+    }
 }
 
 /// Compute the WCMU of a single chunk given a resolver populated for
@@ -2588,8 +2970,7 @@ fn compute_chunk_wcmu(
     let mut breaks: Vec<McuResult> = Vec::new();
     let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?;
 
-    let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
-    let stack_bytes = stack_slots * value_slot_bytes;
+    let stack_bytes = stack_bytes_of(chunk.local_count, body.peak_above_initial, value_slot_bytes);
 
     // Augment the heap bound with the chunk's text-allocation bound
     // computed by the text-size abstract interpretation pass. The
@@ -2859,6 +3240,12 @@ pub fn chunk_verification_obligations(
 /// 4. Break containment: Every Break and BreakIf is inside a Loop/EndLoop.
 /// 5. Productivity rule (Stream chunks only): All control flow paths from
 ///    Stream to Reset pass through at least one Yield.
+///
+/// One check is on the module as a whole. The call graph must be acyclic, since
+/// Keleusma admits no recursion. A module with a call cycle is refused with a
+/// diagnostic naming the chunks of the cycle, as [`find_call_cycle`] reports
+/// them. Until 2026-11-11 only the memory analysis that `Vm::new` runs refused
+/// such a module.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
     // Control-flow targets first (audit H1). The productivity classification
     // below walks regions using these operands, and it runs BEFORE
@@ -2893,6 +3280,12 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         chunk_name: alloc::string::String::from("<typed operand-stack pass>"),
         message: alloc::format!("typed operand-stack verification failed: {e:?}"),
     })?;
+    // The recursion prohibition, last. Every pass above tolerates a call cycle, so running this
+    // one after them changes no earlier verdict, and a module refused here is refused for the
+    // cycle alone. The self-hosted validator runs its own counterpart at the same point.
+    if let Some(cycle) = find_call_cycle(module) {
+        return Err(call_cycle_error(module, &cycle));
+    }
     Ok(())
 }
 

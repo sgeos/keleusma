@@ -23,7 +23,7 @@ Anyone who has seen a little programming reaches, sooner or later, for a
 function that calls itself. It is a natural way to express "do this
 again." Here is one that counts down from a number:
 
-<!-- verify: reject: recursive call detected during WCMU topological sort -->
+<!-- verify: reject: recursive call detected: `count_down` -> `count_down` -->
 ```
 fn count_down(n: Word) -> Word {
     if n <= 0 { 0 } else { count_down(n - 1) }
@@ -37,11 +37,13 @@ fn main() -> Word {
 Run it with `keleusma run`. There is no result, only an error:
 
 ```
-error: verify: VerifyError("count_down: recursive call detected during WCMU topological sort")
+error: compile: type error: recursive call detected: `count_down` -> `count_down`. Recursion is prohibited, direct or mutual, because a call cycle has no static bound on time or memory. Rewrite it as a bounded `for` loop, or supply the algorithm as a host native
 ```
 
-The phrase that matters is recursive call detected. The rest names the
-internal check that found it.
+The phrase that matters is recursive call detected. After it the message
+names the cycle, here a function that calls itself, and says why the
+language refuses it. The compiler reports it before the program is ever
+loaded.
 
 ## Why recursion is rejected
 
