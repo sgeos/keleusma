@@ -16,7 +16,7 @@ tools/proof-kani/check.sh --only NAME           # one harness alone, to measure 
 ```
 
 The harnesses are split into two tiers so that the default run is safe on a shared machine.
-`--tier light`, the default, runs the five harnesses expected to verify that were measured to
+`--tier light`, the default, runs the seven harnesses expected to verify that were measured to
 finish quickly with a small footprint, and every expected failure. `--tier heavy` runs the
 instruction-walk and module harnesses, whose footprint is large or not yet measured, and
 `--tier all` runs both. **The heavy tier can hold tens of gigabytes per harness.** One of its
@@ -53,7 +53,9 @@ Times are wall-clock seconds measured on 2026-11-08 at base commit `502d2385`, o
 
 ## Status
 
-**The light tier is green.** On 2026-11-08 `check.sh --tier light --jobs 1` verified all five
+**The light tier is green with the findings fixed.** On 2026-11-12 `check.sh --tier light` at `c6a67185`, which merges the V0.2.X line's `fix/v02-proofs-findings` at `63825864`, verified all seven light harnesses, the two regressions for F1 and F2 among them, and found the negative control failing for its listed reason, in 249 seconds after waiting 247 minutes for the monitor to report ok. A full-output run of each regression showed its assertion reached and successful, not unreachable. The F1 and F2 rows of the expected-failure table were removed, since the harnesses that reproduced them now state the fixed behaviour.
+
+**Before the fixes.** On 2026-11-08 `check.sh --tier light --jobs 1` verified all five
 light harnesses and found all three expected failures failing for their listed reasons, in 238
 seconds with the machine monitor at ok throughout. The same tier run two at a time took 178
 seconds, and `--only` ran one harness in one second. The peaks were recorded as unknown,
@@ -87,30 +89,30 @@ The cause of the blow-up in `wcet_stream_single_op` is not established. A hypoth
 | `crc32_detects_bit_errors_in_four_bytes` | `crc32` changes under every one-bit and every two-bit flip of a four-byte message | All four-byte messages, unwind 9 | Verified | 14 s |
 | `secded_corrects_single_bit_errors` | `decode_word` reports a clean word clean, and corrects every one of the 72 single-bit flips of the codeword back to the original word | All `u64` words, unwind 73 | Verified | 24 s |
 | `secded_detects_double_bit_errors` | `decode_word` reports every flip of two distinct codeword bits as uncorrectable, so it never miscorrects | All `u64` words and bit pairs, unwind 73 | Verified | 171 s |
+| `f1_wcet_overhead_saturates` | Regression for F1. `wcet_stream_iteration_with_cost_model` does not panic or overflow on `Stream, Yield, Reset` under any cost model, and returns exactly `u32::MAX` under a model charging `u32::MAX / 2 + 1` per instruction | One chunk, unwind 5 | Verified on 2026-11-12, assertion reached | 13 s |
+| `f2_wcmu_slot_width_validated` | Regression for F2. `wcmu_stream_iteration_with_value_slot_bytes` does not panic or overflow on `Stream, Call(0, 0), Yield, Reset` for every slot width and local count, and refuses a slot width of zero | One chunk, unwind 5 | Verified on 2026-11-12, assertion reached | 8 s |
 
 ### Expected to fail
 
 | Harness | Purpose | Required failure | Result | Time |
 |---------|---------|------------------|--------|------|
-| `finding_f1_wcet_overhead_overflows` | Reproduces finding F1 | `attempt to add with overflow` in `wcet_stream_iteration_with_cost_model` | Failed as required | 13 s |
-| `finding_f2_wcmu_slot_width_unvalidated` | Reproduces finding F2 | `attempt to divide by zero` in `wcmu_region_at` and `attempt to multiply with overflow` in `wcmu_stream_iteration_with_value_slot_bytes` | Failed as required | 11 s |
 | `negative_control_false_wcet_bound` | Negative control, a false bound | The harness's own assertion | Failed as required | 31 s |
 
 ## Negative control
 
 `negative_control_false_wcet_bound` asserts that a straight-line chunk `Stream, b, Reset` costs at most two cycles under the unit cost model, with `b` any instruction of `with_plain_op`. The true cost is three, as `wcet_straight_line_is_exact` establishes. The negative control runs through the same continuation-based enumeration and the same public entry as the passing harnesses. Kani reports the assertion as failed, and `check.sh` requires that failure. A green run of the passing harnesses is evidence only together with this failure, because it shows that the toolchain, the enumeration and the entry point really check the property they are given.
 
-The finding harnesses act as further controls. Each fails on an overflow or a division by zero inside `keleusma::verify`, which shows that Kani's arithmetic checks reach into the verifier code and are not confined to the harness.
+Until the V0.2.X line fixed F1 and F2, the finding harnesses acted as further controls. Each failed on an overflow or a division by zero inside `keleusma::verify`, which showed that Kani's arithmetic checks reach into the verifier code and are not confined to the harness. With the fixes, the negative control is the only expected failure, and that evidence rests on the 2026-11-08 runs of the finding harnesses.
 
 ## Findings for the V0.2.X line
 
-These are real defects in `src/verify.rs`. They are recorded here and are not fixed, because that code belongs to the V0.2.X line. Each is reproduced by a harness that is expected to fail and is excluded from the pass count.
+These were real defects in `src/verify.rs`, found here and fixed by the V0.2.X line, whose code it is, on branch `fix/v02-proofs-findings`, F1 in `af4555ce` by saturating the sum and F2 in `040e29fb` by refusing a zero width with a `VerifyError` and saturating the products. Each was reproduced by a harness that was expected to fail, and each harness is now a regression expected to verify. The descriptions below are of the code before the fixes.
 
 ### F1. Unchecked sum of the stream envelope costs
 
 `wcet_stream_iteration_with_cost_model` computes `cost_model.cycles(&ops[stream_pos]) + cost_model.cycles(&ops[reset_pos])` with a plain addition. Every other cost sum in the walk, as read on 2026-11-08, saturates. A host cost model that charges more than half of `u32::MAX` for `Stream` and `Reset` together therefore panics in a build with overflow checks and wraps in a build without them. The wrapped value is a worst-case execution time bound, a WCET bound, that is far too small, which is the unsound direction.
 
-Minimal reproduction, reproduced by `finding_f1_wcet_overhead_overflows`.
+Minimal reproduction, reproduced by `finding_f1_wcet_overhead_overflows`, now `f1_wcet_overhead_saturates`.
 
 ```rust
 use keleusma::bytecode::{BlockType, Chunk, CostModel, Op, VALUE_SLOT_SIZE_BYTES};
@@ -135,7 +137,7 @@ let cm = CostModel { value_slot_bytes: VALUE_SLOT_SIZE_BYTES, op_cycles: huge, t
 let _ = keleusma::verify::wcet_stream_iteration_with_cost_model(&chunk, &cm, &[]);
 ```
 
-The likely remedy is `saturating_add` at that line, matching the rest of the walk. The passing WCET harnesses bound every per-instruction cost at half of `u32::MAX` so that they check the rest of the walk past this defect.
+The remedy adopted was `saturating_add` at that line, matching the rest of the walk, with a result of `u32::MAX` documented as saturated and not a bound. The passing WCET harnesses bound every per-instruction cost at half of `u32::MAX` so that they checked the rest of the walk past this defect, and the bound is kept so that their results stay comparable.
 
 ### F2. Unvalidated slot width in the memory bound
 
@@ -144,7 +146,7 @@ The likely remedy is `saturating_add` at that line, matching the rest of the wal
 1. A slot width of zero makes the `Op::Call` arm of `wcmu_region_at` divide by zero in `callee_stack_bytes / value_slot_bytes`, which panics in every build.
 2. A large slot width overflows the plain product `stack_slots * value_slot_bytes`. That panics with overflow checks on and wraps without them, giving a worst-case memory usage bound, a WCMU bound, that is too small.
 
-Minimal reproduction, reproduced by `finding_f2_wcmu_slot_width_unvalidated`, with the chunk built as in F1 but with `ops` set to `Stream, Call(0, 0), Yield, Reset`.
+Minimal reproduction, reproduced by `finding_f2_wcmu_slot_width_unvalidated`, now `f2_wcmu_slot_width_validated`, with the chunk built as in F1 but with `ops` set to `Stream, Call(0, 0), Yield, Reset`.
 
 ```rust
 // Panics with "attempt to divide by zero".
@@ -153,7 +155,7 @@ let _ = keleusma::verify::wcmu_stream_iteration_with_value_slot_bytes(&chunk, 0)
 let _ = keleusma::verify::wcmu_stream_iteration_with_value_slot_bytes(&chunk, 1 << 20);
 ```
 
-**Inferred by reading and not checked.** The same unchecked product appears in `wcmu_whole_chunk_with_value_slot_bytes` and in `compute_chunk_wcmu`, which `module_wcmu_with_value_slot_bytes` reaches, so those entries are expected to share both failure modes. At the default slot width of 32 bytes the product cannot overflow within one chunk of the sizes checked here. Whether a long call chain in `module_wcmu` can accumulate enough stack slots to overflow it at the default width was not checked.
+**Inferred by reading and not checked, before the fixes.** The V0.2.X line reports that its fix covers these entries too, which this package has not checked. The same unchecked product appears in `wcmu_whole_chunk_with_value_slot_bytes` and in `compute_chunk_wcmu`, which `module_wcmu_with_value_slot_bytes` reaches, so those entries are expected to share both failure modes. At the default slot width of 32 bytes the product cannot overflow within one chunk of the sizes checked here. Whether a long call chain in `module_wcmu` can accumulate enough stack slots to overflow it at the default width was not checked.
 
 ## Trusted base
 
