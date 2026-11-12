@@ -335,8 +335,8 @@ and was retracted.
 | construct | site | behaviour |
 |---|---|---|
 | every allocating op | `heap.saturating_add(...)` | accumulates |
-| `If` with both arms | `src/verify.rs:1278` | `heap + max(then, else)` |
-| **loop body** | `src/verify.rs:1367` and `src/verify.rs:1375` | **`body_heap_one * iter_count`** |
+| `If` with both arms | `src/verify.rs:1324` | `heap + max(then, else)` |
+| **loop body** | `src/verify.rs:1413` and `src/verify.rs:1421` | **`body_heap_one * iter_count`** |
 
 **Adopting Theorem B changes line 1079 and nothing else in shape**: the loop body's contribution
 would stop being multiplied by the iteration count where the restriction holds, and revert to
