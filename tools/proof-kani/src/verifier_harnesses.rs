@@ -18,7 +18,10 @@ use keleusma::verify;
 /// Largest per-instruction cycle cost the bounded cost models return.
 ///
 /// Below half of `u32::MAX`, so the sum of the `Stream` and `Reset` costs
-/// cannot overflow. Finding F1 in `README.md` explains why that matters.
+/// cannot reach `u32::MAX`. Before finding F1 in `README.md` was fixed, that
+/// sum was unchecked, and the passing WCET harnesses bounded every cost here
+/// to check the rest of the walk past it. The bound is kept since the fix, so
+/// that their results stay comparable with the earlier runs.
 const HALF_CYCLES: u32 = u32::MAX / 2;
 
 /// A cost model whose cost for every call is an independent symbolic value.
@@ -423,42 +426,56 @@ fn verify_does_not_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// Finding harnesses. Each reproduces a defect recorded under "Findings for the
-// V0.2.X line" in README.md and is expected to FAIL. `check.sh` requires the
-// failure and excludes these harnesses from the pass count.
+// Regression harnesses for the findings. Each was a finding harness that
+// reproduced a defect recorded under "Findings for the V0.2.X line" in
+// README.md and was expected to fail. The V0.2.X line fixed both, and each now
+// states the fixed behaviour and is expected to verify.
 // ---------------------------------------------------------------------------
 
-/// Finding F1. The Stream iteration WCET sums the `Stream` and `Reset` costs
-/// with an unchecked addition.
-///
-/// Expected to fail with an arithmetic overflow at the `overhead` sum in
-/// `wcet_stream_iteration_with_cost_model`, for a cost model that charges more
-/// than half of `u32::MAX` for those two instructions. The chunk is the
-/// smallest well-formed Stream chunk, so the reproduction is minimal.
-#[kani::proof]
-#[kani::unwind(5)]
-fn finding_f1_wcet_overhead_overflows() {
-    let chunk = chunk_of(vec![Op::Stream, Op::Yield, Op::Reset], BlockType::Stream, 1);
-    let cm = model(any_cycles, 1);
-    let _ = verify::wcet_stream_iteration_with_cost_model(&chunk, &cm, &[]);
+/// A cost model that charges one more than [`HALF_CYCLES`] for every
+/// instruction, so that the `Stream` and `Reset` costs alone exceed
+/// `u32::MAX`.
+fn over_half_cycles(_: &Op) -> u32 {
+    HALF_CYCLES + 1
 }
 
-/// Finding F2. The Stream iteration WCMU divides by and multiplies by a
-/// host-supplied slot width that is never validated.
+/// Regression for finding F1. The `Stream` and `Reset` costs of the Stream
+/// iteration WCET were summed with an unchecked addition, and now saturate.
 ///
-/// Expected to fail twice over. A slot width of zero divides by zero at the
-/// `Op::Call` arm of the memory walk, and a large slot width overflows the
-/// unchecked product `stack_slots * value_slot_bytes`.
+/// Under any cost model the analysis does not panic or overflow. Under
+/// [`over_half_cycles`], whose `Stream` and `Reset` costs alone exceed
+/// `u32::MAX`, the result is exactly `u32::MAX`, the saturated value that the
+/// analysis documents as not a bound. The chunk is the smallest well-formed
+/// Stream chunk.
 #[kani::proof]
 #[kani::unwind(5)]
-fn finding_f2_wcmu_slot_width_unvalidated() {
+fn f1_wcet_overhead_saturates() {
+    let chunk = chunk_of(vec![Op::Stream, Op::Yield, Op::Reset], BlockType::Stream, 1);
+    let _ = verify::wcet_stream_iteration_with_cost_model(&chunk, &model(any_cycles, 1), &[]);
+    let w = verify::wcet_stream_iteration_with_cost_model(&chunk, &model(over_half_cycles, 1), &[]);
+    assert!(matches!(w, Ok(u32::MAX)), "F1: the overhead must saturate to u32::MAX");
+}
+
+/// Regression for finding F2. The host-supplied slot width of the Stream
+/// iteration WCMU was never validated, and is now refused when zero, with the
+/// products saturating.
+///
+/// For every slot width and local count, the analysis does not panic or
+/// overflow, and a slot width of zero gives an error.
+#[kani::proof]
+#[kani::unwind(5)]
+fn f2_wcmu_slot_width_validated() {
     let local_count: u16 = kani::any();
+    let width: u32 = kani::any();
     let chunk = chunk_of(
         vec![Op::Stream, Op::Call(0, 0), Op::Yield, Op::Reset],
         BlockType::Stream,
         local_count,
     );
-    let _ = verify::wcmu_stream_iteration_with_value_slot_bytes(&chunk, kani::any());
+    let r = verify::wcmu_stream_iteration_with_value_slot_bytes(&chunk, width);
+    if width == 0 {
+        assert!(r.is_err(), "F2: a slot width of zero must be refused");
+    }
 }
 
 // ---------------------------------------------------------------------------

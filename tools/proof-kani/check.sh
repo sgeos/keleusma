@@ -7,9 +7,10 @@
 # number that do must equal the number selected.
 #
 # Expected to fail. Every harness in FAILING must report VERIFICATION FAILED
-# with each of the failure descriptions listed for it. These are the finding
-# harnesses and the negative control described in README.md. They are
-# excluded from the pass count.
+# with each of the failure descriptions listed for it. This is the negative
+# control described in README.md, excluded from the pass count. The finding
+# harnesses for F1 and F2 were listed here until the V0.2.X line fixed both,
+# and now verify as regressions in LIGHT.
 #
 # LIGHT, HEAVY and FAILING together must name every `#[kani::proof]` in src/, so that a
 # harness added without being listed fails this script instead of being
@@ -282,13 +283,17 @@ if [ "${1:-}" = "--one" ]; then
 fi
 
 # Expected to verify, measured light. Each finished in under three minutes,
-# the largest measured peak being 336 megabytes.
+# the largest measured peak being 336 megabytes. The two regressions for F1
+# and F2 run the chunks their finding harnesses ran, which took 13 and 11
+# seconds as expected failures.
 LIGHT=(
     verifier_harnesses::op_tables_are_total_and_agree
     wire_harnesses::maj3_is_bitwise_majority
     wire_harnesses::crc32_detects_bit_errors_in_four_bytes
     wire_harnesses::secded_corrects_single_bit_errors
     wire_harnesses::secded_detects_double_bit_errors
+    verifier_harnesses::f1_wcet_overhead_saturates
+    verifier_harnesses::f2_wcmu_slot_width_validated
 )
 
 # Expected to verify, heavy or not yet measured. None has a recorded green run
@@ -313,8 +318,6 @@ HEAVY=(
 # not merely a failed verdict, keeps an expected failure from passing for an
 # unrelated reason such as an unwinding bound that is too small.
 FAILING=(
-    "verifier_harnesses::finding_f1_wcet_overhead_overflows|attempt to add with overflow|in keleusma::verify::wcet_stream_iteration_with_cost_model"
-    "verifier_harnesses::finding_f2_wcmu_slot_width_unvalidated|attempt to divide by zero|in keleusma::verify::wcmu_region_at|attempt to multiply with overflow|in keleusma::verify::wcmu_stream_iteration_with_value_slot_bytes"
     "verifier_harnesses::negative_control_false_wcet_bound|in verifier_harnesses::negative_control_false_wcet_bound::{closure#0}"
 )
 
