@@ -33,6 +33,26 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > None of these relates any model to the shipping verifier by proof. The interline export hold
 > below still stands.
 
+> **REFRESHED 2026-11-12, tenth stamp, describing the Kani guard and the findings flip.** The
+> operator ruled first-hand in this line's session on 2026-11-11, verbatim, "This line can
+> handle heavy work. It is just important to make sure it does not crash the computer." and
+> "Self-pausing at critical is ideal." `tools/proof-kani/check.sh` now runs each harness in its
+> own process group, stops it with `SIGSTOP` when `machine-status` reports critical and resumes
+> it at ok, waits before starting a harness at elevated or critical, and refuses only at stale.
+> Compile-time selector narrowing, `KANI_WALK_SEL_*` and `KANI_CLOSE_SEL_*`, lets one piece of a
+> heavy harness be measured alone, and a narrowed run exits 3 so it never reads as a pass. This
+> is on `proof/kani-self-pause` at `74ddd0fc`, merged into `proofs`. The V0.2.X line accepted
+> all four findings and fixed them on `fix/v02-proofs-findings`, pull request 778, which it held
+> for this line. On `proof/kani-findings-flip` at `ca10524a`, which merges that branch's
+> `63825864`, the F1 and F2 finding harnesses became the regressions
+> `f1_wcet_overhead_saturates` and `f2_wcmu_slot_width_validated`, and the light tier verified
+> seven of seven with the negative control failing as required. That branch carries V0.2.X
+> commits, so it merges into `proofs` only after 778 is on `v0.2.3`. The V0.2.X line relayed,
+> second-hand, an operator instruction for this line, "Address all known proofs related work
+> that does not require my input". It is recorded as relayed by V0.2.X and was not confirmed
+> first-hand. The heavy tier still has no green run, and its peaks inside the sandbox read
+> unknown because `/usr/bin/time -l` is refused there.
+
 ## Validity
 
 Validate by ancestry and by content, never by a hash match.
@@ -231,7 +251,13 @@ its `main` merge on 2026-11-01.
 
 ## Owed by this line
 
-Nothing to any peer line. This line honors the Kaizen export hold above.
+To the V0.2.X line, after pull request 778 merges. Merge `proof/kani-findings-flip` into
+`proofs`, update finding 1 and the recursion tally of `tools/proof-difftest/README.md`, which
+the recursion refusal makes stale, extend difftest relation R6 to mains with calls against the
+composed time figure of `3dee17c2`, and measure the heavy harnesses that now reach
+`find_call_cycle`. To the Kaizen line, review of its Phase 1 proofs job when it arrives, and a
+committed peaks baseline from split heavy harnesses. This line honors the Kaizen export hold
+above.
 
 ## Owed to this line
 
