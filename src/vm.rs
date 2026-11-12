@@ -6078,6 +6078,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// the module has no Stream chunk, and an error if any Stream chunk's WCET is
     /// not statically boundable.
     ///
+    /// The figure is shallow with respect to calls between scripts. An
+    /// `Op::Call` contributes its dispatch cycles and not the callee's body, so
+    /// for a module that calls a function it is below what can execute.
+    /// [`Self::wcet_per_iteration_composed`] charges each call its callee.
+    ///
+    /// The figure saturates. A result of `u32::MAX` is not a bound and means
+    /// the true figure is `u32::MAX` or more.
+    ///
     /// Available only when the `verify` feature is enabled.
     #[cfg(feature = "verify")]
     pub fn wcet_per_iteration(&self) -> Result<u32, VmError> {
@@ -6091,6 +6099,63 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             if chunk.block_type == crate::bytecode::BlockType::Stream {
                 max_wcet = max_wcet.max(per_chunk[chunk_idx]);
             }
+        }
+        Ok(max_wcet)
+    }
+
+    /// Worst-case execution time of one Stream iteration **composed through
+    /// calls**, the counterpart of [`Self::wcet_per_iteration`] that charges
+    /// each `Op::Call` its callee.
+    ///
+    /// Returns the largest per-iteration figure over the module's Stream
+    /// chunks from [`verify::module_wcet_composed_with_bounds`], in the nominal
+    /// cost model's cycles, with the registered natives' attested time folded
+    /// in. Returns zero if the module has no Stream chunk.
+    ///
+    /// **The figure is per iteration, from the loop's first instruction to its
+    /// `Reset`, and not per resume slice.** An iteration may yield several
+    /// times, and every yield-to-yield slice of it is bounded by this figure.
+    /// A `yield` callee is charged its whole call. Where a loop delegates to
+    /// another loop, the maximum is taken over both, so the figure bounds the
+    /// first iteration, which also runs the delegating caller, and every later
+    /// one. [`verify::module_wcet_composed_with_bounds`] states the argument
+    /// and its limits.
+    ///
+    /// [`Self::wcet_per_iteration`] and the module's `wcet_cycles` header are
+    /// the shallow figure and are unchanged. For a module that calls no
+    /// function the two accessors agree.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned when any chunk has no static bound, which includes
+    /// a call cycle, and when the composed figure of a Stream chunk saturates
+    /// at `u32::MAX`, since a saturated figure is not a bound.
+    ///
+    /// Available only when the `verify` feature is enabled.
+    #[cfg(feature = "verify")]
+    pub fn wcet_per_iteration_composed(&self) -> Result<u32, VmError> {
+        let module = self.module_owned()?;
+        let bounds = self.native_iteration_bounds();
+        let per_chunk = verify::module_wcet_composed_with_bounds(
+            &module,
+            &bounds,
+            &crate::bytecode::NOMINAL_COST_MODEL,
+        )
+        .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        let mut max_wcet: u32 = 0;
+        for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
+            if chunk.block_type != crate::bytecode::BlockType::Stream {
+                continue;
+            }
+            let figure = per_chunk.get(chunk_idx).copied().unwrap_or(u32::MAX);
+            if figure == u32::MAX {
+                return Err(VmError::VerifyError(format!(
+                    "{}: the composed worst-case execution time saturated at u32::MAX, so no \
+                     bound is established",
+                    chunk.name
+                )));
+            }
+            max_wcet = max_wcet.max(figure);
         }
         Ok(max_wcet)
     }

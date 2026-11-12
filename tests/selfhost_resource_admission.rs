@@ -174,12 +174,20 @@ fn recursive_modules_do_not_receive_resource_admission() {
     let mut module = compile_src("fn main() -> Word { 0 }");
     module.chunks[0].ops = vec![Op::Call(0, 0), Op::Return];
     assert!(keleusma::verify::verify_resource_bounds(&module, usize::MAX).is_err());
+    // Since 2026-11-11 the reference `verify` refuses a call cycle itself, and the self-hosted
+    // counterpart refuses it at the same point, before resource admission is reached. The
+    // resource stage keeps its own refusal for a caller that reaches it directly.
+    assert!(keleusma::verify::verify(&module).is_err());
     assert!(matches!(
         admit_module_via_kel(&module, usize::MAX).unwrap(),
         VerificationVerdict::Rejected {
-            stage: "resource cycle",
-            ..
+            stage: "call cycle",
+            chunk: None,
         }
+    ));
+    assert!(!keleusma::selfhost::validate_module_via_kel(
+        &module,
+        i64::MAX
     ));
 }
 

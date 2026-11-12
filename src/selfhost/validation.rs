@@ -714,7 +714,7 @@ fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
 
 /// Run the bounded Keleusma counterpart of `verify`, without executing subject code.
 /// This checks structure, depth, productivity, definite initialization, typed
-/// operands and data layout.
+/// operands, data layout and, last, that the call graph has no cycle.
 /// Resource admission is provided by `admit_module_via_kel`. Capacity or incomplete
 /// analysis returns an error rather than an invalid-module verdict.
 /// Typed control-flow widening remains as documented by the stage.
@@ -810,6 +810,20 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
                 chunk: Some(index),
             });
         }
+    }
+    // The recursion prohibition, last, where the reference `verify` decides it. The traversal
+    // and the cycle verdict are the analyze stage's existing call-graph command, which resource
+    // admission already runs, so no stage source changes. Its capacity is 1,024 chunks, and a
+    // larger module is an unavailable analysis and not a verdict.
+    capacity("call cycle", "chunks", module.chunks.len(), 1024)?;
+    if super::call_order_via_kel(module)
+        .map_err(|error| execution("call cycle", error))?
+        .is_none()
+    {
+        return Ok(VerificationVerdict::Rejected {
+            stage: "call cycle",
+            chunk: None,
+        });
     }
     Ok(VerificationVerdict::Accepted)
 }

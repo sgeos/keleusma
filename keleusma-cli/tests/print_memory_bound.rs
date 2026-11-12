@@ -32,7 +32,37 @@ const BIN: &str = env!("CARGO_BIN_EXE_keleusma");
 
 /// Recursion makes the worst-case memory usage unprovable, so no bound exists. Taken from
 /// the guide's worked rejection, which keeps the fixture and the documentation in step.
+///
+/// Since 2026-11-11 the type checker refuses this source, so `run` and `compile` report the
+/// recursion as a compile error and never reach the memory analysis with it. The refusal
+/// still names `recursive call detected`. The memory analysis is reached with a recursive
+/// module through `recursive_module`, and with a source through `RUNTIME_COUNT`.
 const UNBOUNDED: &str = "fn count_down(n: Word) -> Word {\n    if n <= 0 { 0 } else { count_down(n - 1) }\n}\n\nfn main() -> Word {\n    count_down(5)\n}\n";
+
+/// A loop whose count arrives at runtime. It compiles, and its worst-case memory usage cannot
+/// be bounded, so it is the source that still reaches the memory analysis without a bound.
+/// Taken from the same chapter of the guide.
+const RUNTIME_COUNT: &str = "fn process(n: Word) -> Word {\n    for i in 0..n {\n        let _step = i;\n    }\n    0\n}\n\nfn main() -> Word {\n    process(3)\n}\n";
+
+/// A recursive module, as bytecode from a producer other than this compiler would be.
+///
+/// The compiler refuses recursion, so the module is the acyclic twin of `UNBOUNDED` with the
+/// body of `count_down` replaced by a call to itself.
+fn recursive_module() -> keleusma::bytecode::Module {
+    use keleusma::bytecode::Op;
+    let twin =
+        "fn count_down(n: Word) -> Word {\n    n\n}\n\nfn main() -> Word {\n    count_down(5)\n}\n";
+    let tokens = keleusma::lexer::tokenize(twin).expect("lex the fixture");
+    let program = keleusma::parser::parse(&tokens).expect("parse the fixture");
+    let mut module = keleusma::compiler::compile(&program).expect("compile the fixture");
+    let index = module
+        .chunks
+        .iter()
+        .position(|c| c.name == "count_down")
+        .expect("the count_down chunk");
+    module.chunks[index].ops = vec![Op::GetLocal(0), Op::Call(index as u16, 1), Op::Return];
+    module
+}
 
 /// An atomic program whose bound is computable.
 const BOUNDED: &str = "fn main() -> Word { 60 + 7 }\n";
@@ -93,11 +123,25 @@ fn a_program_with_no_memory_bound_is_refused_rather_than_given_a_default_figure(
         !text.contains("arena:"),
         "a figure was printed for a program with no bound, which is the defect itself: {text}"
     );
-    // The verifier's own reason, not a generic failure. A message that said only "failed"
-    // would leave an operator unable to tell an unbounded program from a broken tool.
+    // The reason itself, not a generic failure. A message that said only "failed" would
+    // leave an operator unable to tell an unbounded program from a broken tool. Since
+    // 2026-11-11 the reason comes from the type checker.
     assert!(
         text.contains("recursive call detected"),
-        "the refusal does not name the verifier's cause, so it cannot be acted on: {text}"
+        "the refusal does not name the cause, so it cannot be acted on: {text}"
+    );
+
+    // A source the compiler accepts and the memory analysis cannot bound takes the path this
+    // test was written for, and is refused with the verifier's own reason.
+    let src = dir.write("count.kel", RUNTIME_COUNT);
+    let (ok, text) = print_memory(&src);
+    assert!(
+        !ok && !text.contains("arena:"),
+        "a figure was printed for a loop with a runtime count: {text}"
+    );
+    assert!(
+        text.contains("no statically extractable iteration bound"),
+        "the refusal does not name the verifier's cause: {text}"
     );
 }
 
@@ -132,14 +176,13 @@ fn the_bytecode_input_path_behaves_the_same_in_both_directions() {
     let dir = TmpDir::new("bytecode");
     let bnd = dir.write("tune.kel", BOUNDED);
 
-    // `compile` refuses the unbounded program since the ruling of 2026-10-30, which
-    // `compile_refuses_a_program_with_no_memory_bound` pins below. Its artifact is
-    // therefore built through the library, the route a host with its own compiler
-    // takes, so the bytecode path of `run` is still reached with an unbounded module.
+    // Neither `compile` nor the library compiler emits the recursive program, the first
+    // since the ruling of 2026-10-30 and the second since the type checker began refusing
+    // recursion on 2026-11-11. Its artifact is therefore a module built by hand, as
+    // bytecode from another producer would be, so the bytecode path of `run` is still
+    // reached with a module that has no bound.
     let rec_bin = dir.0.join("rec.bin");
-    let tokens = keleusma::lexer::tokenize(UNBOUNDED).expect("lex the fixture");
-    let program = keleusma::parser::parse(&tokens).expect("parse the fixture");
-    let module = keleusma::compiler::compile(&program).expect("compile the fixture");
+    let module = recursive_module();
     std::fs::write(&rec_bin, module.to_bytes().expect("serialize the fixture"))
         .expect("write the fixture");
 
@@ -187,8 +230,8 @@ fn the_bytecode_input_path_behaves_the_same_in_both_directions() {
 #[test]
 fn compile_refuses_a_program_with_no_memory_bound() {
     let dir = TmpDir::new("compile-refusal");
-    let unb = dir.write("rec.kel", UNBOUNDED);
-    let out = dir.0.join("rec.bin");
+    let unb = dir.write("count.kel", RUNTIME_COUNT);
+    let out = dir.0.join("count.bin");
     let st = Command::new(BIN)
         .arg("compile")
         .arg(&unb)
@@ -202,7 +245,8 @@ fn compile_refuses_a_program_with_no_memory_bound() {
         "compile emitted an unloadable module: {err}"
     );
     assert!(
-        err.contains("cannot be computed") && err.contains("recursive call detected"),
+        err.contains("cannot be computed")
+            && err.contains("no statically extractable iteration bound"),
         "the refusal does not name the bound and its reason: {err}"
     );
     assert!(
@@ -210,6 +254,27 @@ fn compile_refuses_a_program_with_no_memory_bound() {
         "compile refused but still wrote {}",
         out.display()
     );
+
+    // The recursive program is refused earlier, by the type checker, and writes nothing.
+    let rec = dir.write("rec.kel", UNBOUNDED);
+    let rec_out = dir.0.join("rec.bin");
+    let st = Command::new(BIN)
+        .arg("compile")
+        .arg(&rec)
+        .arg("-o")
+        .arg(&rec_out)
+        .output()
+        .expect("run compile");
+    let err = String::from_utf8_lossy(&st.stderr);
+    assert!(
+        !st.status.success() && err.contains("recursive call detected"),
+        "compile did not refuse the recursive program by name: {err}"
+    );
+    assert!(
+        err.contains("`count_down` -> `count_down`"),
+        "the refusal does not name the cycle: {err}"
+    );
+    assert!(!rec_out.exists(), "compile refused but still wrote a file");
 
     let bnd = dir.write("tune.kel", BOUNDED);
     let st = Command::new(BIN)
