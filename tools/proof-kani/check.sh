@@ -164,33 +164,37 @@ release_watched() {
 #
 # Where the `machine-status` monitor is installed, it decides. Its exit status
 # is 0 for ok, 1 for elevated, 2 for critical and 3 for stale. A harness starts
-# only at ok. At elevated this waits and polls again every 60 seconds. At
-# critical or stale it refuses, so that the run reports the condition instead
-# of adding load. Where the monitor is absent, the swap figure from
+# only at ok. At elevated or critical this waits and polls again every 60
+# seconds, which is the self-pausing of a harness not yet started. At stale it
+# refuses, because a monitor that has stopped reporting may never report ok,
+# and the run then reports the condition instead of waiting without end. A
+# light-tier run of 2026-11-11 refused five harnesses at a critical level after
+# waiting eighteen hours at elevated, which is why critical now waits. Where the monitor is absent, the swap figure from
 # `sysctl vm.swapusage` decides, and where neither can be read the harness
 # starts ungated.
 gate_machine() {
-    local level waited=0
+    local level waited=0 last_level=""
     if have_monitor; then
         while true; do
             if monitor_level; then
                 if [ "$waited" -gt 0 ]; then
-                    echo "note: machine-status reports ok after ${waited} minutes elevated, starting" >&2
+                    echo "note: machine-status reports ok after ${waited} minutes waiting, starting" >&2
                 fi
                 return 0
             else
                 level=$?
             fi
-            if [ "$level" -eq 1 ]; then
-                # Said once, and then every hour, so a long wait does not
-                # flood the log.
-                if [ $(( waited % 60 )) -eq 0 ]; then
-                    echo "note: machine-status reports elevated, waiting, ${waited} minutes so far" >&2
+            if [ "$level" -eq 1 ] || [ "$level" -eq 2 ]; then
+                # Said when the level changes, and otherwise every hour, so a
+                # long wait does not flood the log.
+                if [ $(( waited % 60 )) -eq 0 ] || [ "$level" != "${last_level:-}" ]; then
+                    echo "note: machine-status exit $level, 1 elevated or 2 critical, waiting, ${waited} minutes so far" >&2
                 fi
+                last_level="$level"
                 waited=$(( waited + 1 ))
                 sleep 60
             else
-                echo "note: machine-status exit $level, critical or stale, not starting" >&2
+                echo "note: machine-status exit $level, stale or unknown, not starting" >&2
                 return 1
             fi
         done
