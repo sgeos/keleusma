@@ -12,6 +12,8 @@ license = "0BSD"
 [dependencies]
 keleusma = { path = "../.." }
 keleusma-wire = { path = "../../keleusma-wire", default-features = false }
+keleusma-arena = { path = "../../keleusma-arena", default-features = false }
+allocator-api2 = { version = "0.4", default-features = false }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

@@ -289,6 +289,10 @@ LIGHT=(
     wire_harnesses::crc32_detects_bit_errors_in_four_bytes
     wire_harnesses::secded_corrects_single_bit_errors
     wire_harnesses::secded_detects_double_bit_errors
+    arena_harnesses::arena_allocate_meets_layout
+    arena_harnesses::arena_allocations_are_disjoint
+    arena_harnesses::arena_grow_preserves_contents
+    arena_harnesses::arena_rewind_and_reset_restore
 )
 
 # Expected to verify, heavy or not yet measured. None has a recorded green run
@@ -316,6 +320,9 @@ FAILING=(
     "verifier_harnesses::finding_f1_wcet_overhead_overflows|attempt to add with overflow|in keleusma::verify::wcet_stream_iteration_with_cost_model"
     "verifier_harnesses::finding_f2_wcmu_slot_width_unvalidated|attempt to divide by zero|in keleusma::verify::wcmu_region_at|attempt to multiply with overflow|in keleusma::verify::wcmu_stream_iteration_with_value_slot_bytes"
     "verifier_harnesses::negative_control_false_wcet_bound|in verifier_harnesses::negative_control_false_wcet_bound::{closure#0}"
+    "arena_harnesses::negative_control_arena_overlap|in arena_harnesses::negative_control_arena_overlap"
+    "arena_harnesses::finding_a1_rewind_below_persistent_accounting|attempt to subtract with overflow|in keleusma_arena::Arena::bottom_used"
+    "arena_harnesses::finding_a1_rewind_below_persistent_placement|in arena_harnesses::finding_a1_rewind_below_persistent_placement"
 )
 
 tier="light"

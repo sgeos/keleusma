@@ -2,7 +2,7 @@
 
 > **Navigation**: [Tools](../README.md) | [Repository Root](../../README.md)
 
-This package holds bounded model checking harnesses, written for the Kani Rust Verifier, over the core of the Keleusma bytecode verifier in `src/verify.rs` and over the load-time trust path of `keleusma-wire`. The operator ruled that Kani is to check the verifier core for the absence of panics and arithmetic overflow through its public application programming interface. Every harness reaches the code under check through the public interface of `keleusma` or `keleusma-wire` and through nothing else.
+This package holds bounded model checking harnesses, written for the Kani Rust Verifier, over the core of the Keleusma bytecode verifier in `src/verify.rs`, over the load-time trust path of `keleusma-wire`, and, since 2026-11-12, over the `keleusma-arena` allocator against the safety contract of the `Allocator` trait, which Rust 1.100 stabilised in the standard library. The operator ruled that Kani is to check the verifier core for the absence of panics and arithmetic overflow through its public application programming interface. Every harness reaches the code under check through the public interface of `keleusma`, `keleusma-wire` or `keleusma-arena` and through nothing else.
 
 The package is detached. It has its own `[workspace]`, so the root workspace neither builds nor tests it, and `tools/` is excluded from the published crate. It changes no file outside `tools/`.
 
@@ -16,7 +16,7 @@ tools/proof-kani/check.sh --only NAME           # one harness alone, to measure 
 ```
 
 The harnesses are split into two tiers so that the default run is safe on a shared machine.
-`--tier light`, the default, runs the five harnesses expected to verify that were measured to
+`--tier light`, the default, runs the nine harnesses expected to verify that were measured to
 finish quickly with a small footprint, and every expected failure. `--tier heavy` runs the
 instruction-walk and module harnesses, whose footprint is large or not yet measured, and
 `--tier all` runs both. **The heavy tier can hold tens of gigabytes per harness.** One of its
@@ -53,7 +53,9 @@ Times are wall-clock seconds measured on 2026-11-08 at base commit `502d2385`, o
 
 ## Status
 
-**The light tier is green.** On 2026-11-08 `check.sh --tier light --jobs 1` verified all five
+**The light tier is green with the arena harnesses.** On 2026-11-12 `check.sh --tier light` verified nine of nine expected successes, the four arena harnesses among them, and found all six expected failures failing for their listed reasons, the arena negative control and the two harnesses of finding A1 among them, in 266 seconds with the monitor at ok. A full-output run of each arena harness showed every assertion of its own reached. The assertions reported unreachable were all in the core library or in the top-allocation branch for a buffer whose base address is below its alignment, which a buffer aligned to 32 cannot reach.
+
+**Before the arena harnesses.** On 2026-11-08 `check.sh --tier light --jobs 1` verified all five
 light harnesses and found all three expected failures failing for their listed reasons, in 238
 seconds with the machine monitor at ok throughout. The same tier run two at a time took 178
 seconds, and `--only` ran one harness in one second. The peaks were recorded as unknown,
@@ -87,6 +89,10 @@ The cause of the blow-up in `wcet_stream_single_op` is not established. A hypoth
 | `crc32_detects_bit_errors_in_four_bytes` | `crc32` changes under every one-bit and every two-bit flip of a four-byte message | All four-byte messages, unwind 9 | Verified | 14 s |
 | `secded_corrects_single_bit_errors` | `decode_word` reports a clean word clean, and corrects every one of the 72 single-bit flips of the codeword back to the original word | All `u64` words, unwind 73 | Verified | 24 s |
 | `secded_detects_double_bit_errors` | `decode_word` reports every flip of two distinct codeword bits as uncorrectable, so it never miscorrects | All `u64` words and bit pairs, unwind 73 | Verified | 171 s |
+| `arena_allocate_meets_layout` | After any earlier allocation and with any persistent region, one allocation from either end through the `Allocator` trait has the requested size and alignment and lies in the ephemeral region, and a failed allocation changes nothing | A 24-byte buffer aligned to 32, sizes 0 to 25, alignments 1 to 32 | Verified on 2026-11-12 | 5 s |
+| `arena_allocations_are_disjoint` | Three allocations from either end with any layouts give pairwise disjoint blocks of nonzero size | As above, unwind 4 | Verified on 2026-11-12 | 6 s |
+| `arena_grow_preserves_contents` | The trait's default `grow` on the bottom handle keeps the old contents | As above, symbolic contents, unwind 26 | Verified on 2026-11-12 | 7 s |
+| `arena_rewind_and_reset_restore` | A rewind to an earlier bottom mark restores the bottom usage, and a reset empties both ends and advances the epoch by one | As above | Verified on 2026-11-12 | 2 s |
 
 ### Expected to fail
 
@@ -95,16 +101,19 @@ The cause of the blow-up in `wcet_stream_single_op` is not established. A hypoth
 | `finding_f1_wcet_overhead_overflows` | Reproduces finding F1 | `attempt to add with overflow` in `wcet_stream_iteration_with_cost_model` | Failed as required | 13 s |
 | `finding_f2_wcmu_slot_width_unvalidated` | Reproduces finding F2 | `attempt to divide by zero` in `wcmu_region_at` and `attempt to multiply with overflow` in `wcmu_stream_iteration_with_value_slot_bytes` | Failed as required | 11 s |
 | `negative_control_false_wcet_bound` | Negative control, a false bound | The harness's own assertion | Failed as required | 31 s |
+| `negative_control_arena_overlap` | Negative control for the arena harnesses, a false claim that two successive bottom blocks share an address | The harness's own assertion | Failed as required | 3 s |
+| `finding_a1_rewind_below_persistent_accounting` | Reproduces finding A1, the accounting | `attempt to subtract with overflow` in `Arena::bottom_used` | Failed as required | 2 s |
+| `finding_a1_rewind_below_persistent_placement` | Reproduces finding A1, the placement | The harness's own assertion that a block lies above the persistent boundary | Failed as required | 3 s |
 
 ## Negative control
 
-`negative_control_false_wcet_bound` asserts that a straight-line chunk `Stream, b, Reset` costs at most two cycles under the unit cost model, with `b` any instruction of `with_plain_op`. The true cost is three, as `wcet_straight_line_is_exact` establishes. The negative control runs through the same continuation-based enumeration and the same public entry as the passing harnesses. Kani reports the assertion as failed, and `check.sh` requires that failure. A green run of the passing harnesses is evidence only together with this failure, because it shows that the toolchain, the enumeration and the entry point really check the property they are given.
+`negative_control_false_wcet_bound` asserts that a straight-line chunk `Stream, b, Reset` costs at most two cycles under the unit cost model, with `b` any instruction of `with_plain_op`. The true cost is three, as `wcet_straight_line_is_exact` establishes. The negative control runs through the same continuation-based enumeration and the same public entry as the passing harnesses. Kani reports the assertion as failed, and `check.sh` requires that failure. A green run of the passing harnesses is evidence only together with this failure, because it shows that the toolchain, the enumeration and the entry point really check the property they are given. `negative_control_arena_overlap` does the same for the arena harnesses, claiming that two successive four-byte bottom blocks share an address, through the same helpers the passing arena harnesses use.
 
 The finding harnesses act as further controls. Each fails on an overflow or a division by zero inside `keleusma::verify`, which shows that Kani's arithmetic checks reach into the verifier code and are not confined to the harness.
 
 ## Findings for the V0.2.X line
 
-These are real defects in `src/verify.rs`. They are recorded here and are not fixed, because that code belongs to the V0.2.X line. Each is reproduced by a harness that is expected to fail and is excluded from the pass count.
+These are real defects in `src/verify.rs`. They are recorded here and are not fixed, because that code belongs to the V0.2.X line. Each is reproduced by a harness that is expected to fail and is excluded from the pass count. Finding A1 is in `keleusma-arena`, which also belongs to the V0.2.X line, and is recorded the same way.
 
 ### F1. Unchecked sum of the stream envelope costs
 
@@ -154,6 +163,22 @@ let _ = keleusma::verify::wcmu_stream_iteration_with_value_slot_bytes(&chunk, 1 
 ```
 
 **Inferred by reading and not checked.** The same unchecked product appears in `wcmu_whole_chunk_with_value_slot_bytes` and in `compute_chunk_wcmu`, which `module_wcmu_with_value_slot_bytes` reaches, so those entries are expected to share both failure modes. At the default slot width of 32 bytes the product cannot overflow within one chunk of the sizes checked here. Whether a long call chain in `module_wcmu` can accumulate enough stack slots to overflow it at the default width was not checked.
+
+### A1. A rewind can move the bottom head below the persistent boundary
+
+Found on 2026-11-12 in `keleusma-arena`, which belongs to the V0.2.X line. `Arena::rewind_bottom` sets the bottom head to the lesser of the mark and the current head, and nothing keeps it at or above the persistent boundary. `resize_persistent_capacity` grows that boundary and relocates the bottom region above it, but a `BottomMark` taken before the grow still holds the old offset. Passing that mark to `rewind_bottom` therefore moves the bottom head into the persistent region. The rewind's safety contract asks only that no live value lie in the range rewound over, which an unused persistent region satisfies, so the sequence below meets the contract as written.
+
+```rust
+let mut arena = /* an arena over a 24-byte buffer, no persistent region */;
+let mark = arena.bottom_mark();          // offset 0
+let _ = arena.alloc_bottom_bytes(8);
+arena.resize_persistent_capacity(16)?;   // persistent region is now [0, 16)
+unsafe { arena.rewind_bottom(mark) };    // bottom head becomes 0, below 16
+let _ = arena.bottom_used();             // 0 - 16, overflows
+let block = arena.alloc_bottom_bytes(1); // placed at offset 0, inside the persistent region
+```
+
+Two consequences follow, each reproduced by its own harness, since a failed check ends the path it is on. `bottom_used` subtracts the persistent boundary from a smaller head, which panics with overflow checks on and wraps to a huge figure without them. A later bottom allocation is placed inside the persistent region, so writing to it overwrites persistent data that the arena documents as preserved across every form of reset. The sequence is reached through safe calls and one `unsafe` call whose stated contract it meets, so either the rewind should clamp at the persistent boundary, which is what this package would suggest, or the contract should forbid a mark taken before a persistent resize. Which is the V0.2.X line's decision. Whether the virtual machine or any host in this repository ever holds a mark across a persistent resize was not checked.
 
 ## Trusted base
 

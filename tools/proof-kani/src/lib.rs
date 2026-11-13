@@ -1,5 +1,6 @@
-//! Kani bounded model checking harnesses for the Keleusma verifier core and
-//! for the keleusma-wire load-time trust path.
+//! Kani bounded model checking harnesses for the Keleusma verifier core, for
+//! the keleusma-wire load-time trust path, and for the keleusma-arena
+//! allocator.
 //!
 //! Every harness reaches the code under check through the public application
 //! programming interface of `keleusma` or `keleusma-wire` only. Nothing here is
@@ -16,6 +17,9 @@
 
 #[cfg(kani)]
 extern crate alloc;
+
+#[cfg(kani)]
+mod arena_harnesses;
 
 #[cfg(kani)]
 mod generators;

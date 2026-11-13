@@ -69,7 +69,9 @@ dependencies = [
 name = "keleusma-proof-kani"
 version = "0.0.0"
 dependencies = [
+ "allocator-api2",
  "keleusma",
+ "keleusma-arena",
  "keleusma-wire",
 ]
 
