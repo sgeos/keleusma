@@ -71,7 +71,7 @@ and whitespace collapsed, the pin and control files open no section and declare 
 variable or context, every module compiles with no output, `rocqchk` reports no axiom and no
 unsafe construct, all 37 named results are closed, and `Statements.v` holds its 23 pins.
 
-`Claims.v` states the eight results above and five controls, and fixes the definitions the
+`Claims.v` states the eight results above and six controls, and fixes the definitions the
 conclusions rest on by proved equations, namely `footprint_at`, `cell_at`, `allocs_at`,
 `unplanned_at`, `within`, `indexed` by its two projections, and the controls' `run_of`, `fp` and
 `seq_run`. `Statements.v` imports no module of the project and pins each of those 23 items by the

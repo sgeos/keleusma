@@ -4,8 +4,8 @@
     up to conversion, so a statement weakened by an added premise or a
     changed conclusion fails to compile.  The definitions the conclusions
     rest on are fixed below by proved equations, so a change to what a
-    footprint counts also fails here.  The script requires the number of
-    pins below. *)
+    footprint counts also fails here.  Statements.v pins every item of this
+    file with fully qualified names, and the script counts the pins there. *)
 
 From Stdlib Require Import List.
 From RegionCore Require Import Core Shape.
