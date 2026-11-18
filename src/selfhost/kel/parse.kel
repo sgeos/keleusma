@@ -178,6 +178,9 @@ shared data toks {
     res_count: Word,
     res_at: [Word; 16],
     res_kind: [Word; 16],
+    // The built-in ring buffer type name `Ring`, interned id plus one, increment R1,
+    // APPENDED. Zero means the name does not occur, so an unseeded block never matches.
+    ring_id: Word,
 }
 
 // The instantiation state, Order 6. `active` is the row plus one being parsed, `next` the
@@ -830,6 +833,11 @@ fn pe_init_value() -> Word { 35 }
 fn pe_init_syntax() -> Word { 36 }
 fn pe_data_address() -> Word { 37 }
 fn pe_value_layout() -> Word { 38 }
+// A `Ring<T, N>` that breaks a ring rule the reference also enforces: a ring outside a
+// `private data` or `shared data` field, an element outside the five scalars, a capacity
+// that is not positive or exceeds the bound, or an expression naming a ring field, which
+// increment R1 refuses because no ring operation is built yet.
+fn pe_ring() -> Word { 43 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -1488,6 +1496,66 @@ private data di {
     kind: Word, value: Word, seen: Word, negate: Word, depth: Word,
     array: Word, sent: Word, pending: Word, ending: Word,
     type_depth: Word, type_names: Word, type_name: Word, type_composite: Word,
+    // A `Ring<T, N>` field type being read, increment R1. `ring` is the phase, 0 none,
+    // 1 after `Ring`, 2 after `<`, 3 after the element, 4 after `,` and 5 after the
+    // capacity, and `ring_n` the capacity of the field under construction, 0 when the
+    // field is not a ring.
+    ring: Word, ring_n: Word,
+}
+// 1 when the name `v` is the built-in `Ring`.
+fn is_ring(v: Word) -> Word {
+    if toks.ring_id > 0 andalso v + 1 == toks.ring_id { 1 } else { 0 }
+}
+// The tokens of a ring field type after `Ring`, `<`, the element, `,`, a literal
+// capacity and `>`. The element is one of the five scalars, kinds 1 to 5, and its type
+// record is emitted as an array element's is. The capacity goes out as record 145 after
+// it, which the host expands, with the field's name record, into the three hidden fields
+// `crate::ring` names. A `Fixed<F>` element and a capacity that is not one literal are
+// outside this stage and refused as such, not as source errors.
+fn header_ring(k: Word, v: Word) -> Word {
+    if di.ring == 1 {
+        if k == Tok::Lt() as Word { di.ring = 2; 0 } else { di.ring = 0; perr(pe_ring(), toks.at) }
+    } else {
+    if di.ring == 2 {
+        let kind = if k == Tok::Ident() as Word { scalar_kind_of(v) } else { 0 };
+        if kind < 1 orelse kind > 5 { di.ring = 0; perr(pe_ring(), toks.at) } else {
+            di.kind = kind; di.ring = 3; 6 + v * 64
+        }
+    } else {
+    if di.ring == 3 {
+        if k == Tok::Comma() as Word { di.ring = 4; 0 } else { di.ring = 0; perr(pe_unresolved_syntax(), toks.at) }
+    } else {
+    if di.ring == 4 {
+        if k != Tok::IntLit() as Word { di.ring = 0; perr(pe_unresolved_syntax(), toks.at) } else {
+        // `2 + N` stays below the 24-bit indexed data operand, `RING_CAPACITY_MAX`.
+        if v <= 0 orelse v > 16777213 { di.ring = 0; perr(pe_ring(), v) } else {
+            di.ring = 5; di.ring_n = v; ps.emit_arg = v; 145
+        } }
+    } else {
+        di.ring = 0;
+        if k == Tok::Gt() as Word { 0 } else { perr(pe_unresolved_syntax(), toks.at) }
+    } } } }
+}
+// Commit a ring field as the three entries its hidden fields take, a length word, a head
+// word and `N` elements, so every later field keeps the operand the reference gives it.
+// The three carry no source name. Their name slot holds minus two less the ring's own
+// name id, which no interned id equals, so a body access finds the ring and is refused.
+fn commit_ring_field() -> Word {
+    let n = di.ring_n;
+    if n + 2 > 16777216 - fields.base_ctr { perr(pe_data_address(), n + 2) } else {
+        for i in 0..3 {
+            fields.fvis[fields.field_count] = ps.dvis;
+            fields.fkind[fields.field_count] = if i == 2 { di.kind } else { 3 };
+            fields.dirty = 1;
+            fields.fdata[fields.field_count] = fields.cur_block;
+            fields.ffield[fields.field_count] = 0 - 2 - fields.cur_field;
+            fields.fbase[fields.field_count] = fields.field_count;
+            fields.flen[fields.field_count] = if i == 2 { n } else { 1 };
+            fields.field_count = field_push(fields.field_count);
+        }
+        fields.base_ctr = fields.base_ctr + n + 2;
+        0
+    }
 }
 fn data_group_type(k: Word, v: Word) -> Word {
     if k == Tok::Ident() as Word {
@@ -2935,11 +3003,17 @@ fn step_dafield(k: Word, v: Word) -> Word {
             da.da_kind = fields.fkind[i];
                 ps.found_flag = 1;
             }
+            // A ring field, whose hidden entries carry minus two less its name id. No
+            // ring operation is built, so naming one is refused as the reference does.
+            if fields.fdata[i] == da.da_data andalso fields.ffield[i] == 0 - 2 - v {
+                ps.found_flag = 2;
+            }
         }
         da.da_phase = 3;
         // An unresolved field used to read or write slot 0 silently. The table does not
         // model every field type a valid program may declare, so this refuses the program
         // as outside the subset rather than rejecting it as a source error.
+        if ps.found_flag == 2 { perr(pe_ring(), toks.at); }
         if ps.found_flag == 0 { perr(pe_unresolved_syntax(), toks.at); }
     }
     0
@@ -9148,6 +9222,7 @@ fn commit_field() -> Word {
             cdata.cval[cdata.ccount] = fields.cur_cval;
             cdata.ccount = cdata.ccount + 1;
         } else {
+            if di.ring_n > 0 { commit_ring_field(); } else {
             if fields.cur_len > 16777216 - fields.base_ctr { perr(pe_data_address(), fields.cur_len); } else {
             fields.fvis[fields.field_count] = ps.dvis;
             fields.fkind[fields.field_count] = di.kind;
@@ -9158,7 +9233,7 @@ fn commit_field() -> Word {
             fields.flen[fields.field_count] = fields.cur_len;
             fields.field_count = field_push(fields.field_count);
             fields.base_ctr = fields.base_ctr + fields.cur_len;
-            }
+            } }
         }
     }
     0
@@ -9267,6 +9342,16 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
 // length 1); an ASIZE sets its length; the `}` commits the last field. A `(T, T, ...)` field
 // type routes through `step_struct_tuple_field` to size the tuple field.
 fn header_field(k: Word, v: Word) -> Word {
+    if di.ring > 0 { header_ring(k, v) } else {
+    if k == 1 andalso ps.pname != 1 andalso is_ring(v) == 1 andalso (ps.ptype != 1 orelse ps.dvis > 1) {
+        // A ring anywhere in a field type but the whole type of a `private data` or
+        // `shared data` field: an array element, a tuple member, a generic argument, a
+        // struct field or a `const data` field.
+        perr(pe_ring(), toks.at)
+    } else {
+    if k == 1 andalso ps.ptype == 1 andalso is_ring(v) == 1 {
+        ps.ptype = 0; di.ring = 1; di.array = 1; 0
+    } else {
     if ps.tf == 1 {
         if ps.dvis == 3 { step_struct_tuple_field(k, v) } else { data_group_type(k, v) }
     } else {
@@ -9290,7 +9375,7 @@ fn header_field(k: Word, v: Word) -> Word {
             fields.cur_len = 1;
             fields.cur_cval = 0;
             di.kind = 0; di.value = 0; di.seen = 0; di.negate = 0;
-            di.depth = 0; di.array = 0; di.sent = 0;
+            di.depth = 0; di.array = 0; di.sent = 0; di.ring = 0; di.ring_n = 0;
             fields.has_field = 1;
             // A struct field's name is recorded in declaration order for the construction
             // reorder (see structdefs); data/const fields are not, as they never construct.
@@ -9398,7 +9483,7 @@ fn header_field(k: Word, v: Word) -> Word {
         record
     } else {
         0
-    } } } } } } } } } }
+    } } } } } } } } } } } } }
 }
 
 // A `Text<N>` field type. A struct field takes the tuple layout of the flat body, as a

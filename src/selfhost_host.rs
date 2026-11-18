@@ -77,7 +77,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36 | 39 | 40)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36 | 39 | 40 | 43)))
     }
 }
 
@@ -450,6 +450,12 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
         41 => format!("checked arithmetic nesting {detail} exceeds 32 contexts in parse.kel"),
         42 => format!(
             "checked operation near token {detail} is outside the implemented arithmetic families in parse.kel"
+        ),
+        43 => format!(
+            "a Ring<T, N> near token or capacity {detail} breaks a ring rule in parse.kel: a ring \
+             is admitted only as the whole type of a private or shared data field, with a Word, \
+             Byte, bool, Fixed or Float element and a capacity from 1 to 16777213, and no \
+             ring operation is built yet"
         ),
         38 => format!("expression layout unavailable near token {detail} in parse.kel"),
         30 => format!("expression block at token {detail} is outside the parse.kel subset"),
@@ -966,6 +972,9 @@ pub const BR_P_RES_COUNT: usize = BR_P_RES_PROBE + 1;
 pub const BR_P_RES_AT: usize = BR_P_RES_COUNT + 1;
 /// Per seeded resume kind, the kind an annotated `let` fixed for that `yield`.
 pub const BR_P_RES_KIND: usize = BR_P_RES_AT + RESUME_FACT_CAP;
+/// The interned id plus one of the built-in ring type name `Ring`, increment R1. Zero when
+/// the name does not occur.
+pub const BR_P_RING_ID: usize = BR_P_RES_KIND + RESUME_FACT_CAP;
 /// Seeded resume kinds `parse.kel` holds, restated from `toks.res_at`.
 pub const RESUME_FACT_CAP: usize = 16;
 /// Newtypes `parse.kel` holds, restated from `toks.nt_name`.
@@ -995,6 +1004,12 @@ pub const PARSE_RESUME_FACT_TAG: i64 = 142;
 /// carries it and never reaches `reconstruct.kel`, where the generic argument tags would
 /// collide with the outcome records.
 pub const PARSE_TEXT_CAPACITY_TAG: i64 = 143;
+/// The capacity `N` of a `Ring<T, N>` data field, increment R1, following the element's
+/// type record in a `private data` or `shared data` block. The payload is the positive
+/// literal capacity. The driver expands the field's name, element and capacity records
+/// into the three hidden fields [`crate::ring::hidden_field_names`] names, so the layout,
+/// the private initializers and the schema tokens follow from the ordinary field records.
+pub const PARSE_RING_CAPACITY_TAG: i64 = 145;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -1149,6 +1164,7 @@ mod shared_layout_tests {
             ("res_count", "BR_P_RES_COUNT", BR_P_RES_COUNT),
             ("res_at", "BR_P_RES_AT", BR_P_RES_AT),
             ("res_kind", "BR_P_RES_KIND", BR_P_RES_KIND),
+            ("ring_id", "BR_P_RING_ID", BR_P_RING_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

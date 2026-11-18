@@ -222,6 +222,12 @@ pub enum Type {
     /// possibly symbolic inside a generic body, exactly as for
     /// [`Type::Multiword`].
     TextN(ConstDim),
+    /// Compiler-managed ring buffer, `Ring<T, N>`, increment R1 of
+    /// `docs/decisions/RING_BUFFER_DESIGN.md`. A distinct nominal type that
+    /// unifies only with a ring of a unifying element type and an equal
+    /// capacity, and never with an array. It is admitted only as the declared
+    /// type of a `private data` or `shared data` field, see [`crate::ring`].
+    Ring(Box<Type>, ConstDim),
     /// Tuple of types.
     Tuple(Vec<Type>),
     /// Fixed-length array. The dimension is a [`ConstDim`]: a concrete
@@ -328,6 +334,15 @@ impl Type {
                 const_dim_from_expr(len),
             ),
             TypeExpr::TextN(n, _) => Type::TextN(const_dim_from_expr(n)),
+            TypeExpr::Ring(elem, n, _) => Type::Ring(
+                Box::new(Type::from_expr_with_params_and_frac(
+                    elem,
+                    defined_types,
+                    type_params,
+                    fixed_default_frac_bits,
+                )),
+                const_dim_from_expr(n),
+            ),
             TypeExpr::Multiword(words, frac, _) => {
                 Type::Multiword(const_dim_from_expr(words), const_dim_from_expr(frac))
             }
@@ -431,6 +446,7 @@ impl Type {
             }
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
             Type::TextN(n) => alloc::format!("Text<{}>", n),
+            Type::Ring(elem, n) => format!("Ring<{}, {}>", elem.display(), n),
             Type::Multiword(n, f) => {
                 if f.known() == Some(0) {
                     format!("Multiword<{}>", n)
@@ -468,7 +484,7 @@ impl Type {
         match self {
             Type::Var(v) => *v == var,
             Type::Tuple(items) => items.iter().any(|t| t.occurs(var)),
-            Type::Array(elem, _) => elem.occurs(var),
+            Type::Array(elem, _) | Type::Ring(elem, _) => elem.occurs(var),
             Type::Option(inner) => inner.occurs(var),
             Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|t| t.occurs(var)),
             Type::Newtype(_) => false,
@@ -487,6 +503,7 @@ impl Type {
             },
             Type::Tuple(items) => Type::Tuple(items.iter().map(|t| t.apply(subst)).collect()),
             Type::Array(elem, n) => Type::Array(Box::new(elem.apply(subst)), n.clone()),
+            Type::Ring(elem, n) => Type::Ring(Box::new(elem.apply(subst)), n.clone()),
             Type::Option(inner) => Type::Option(Box::new(inner.apply(subst))),
             Type::Struct(name, args) => {
                 Type::Struct(name.clone(), args.iter().map(|t| t.apply(subst)).collect())
@@ -632,6 +649,20 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
                 Err(UnifyError::Mismatch {
                     left: Type::TextN(a_n),
                     right: Type::TextN(b_n),
+                })
+            }
+        }
+        // A RING UNIFIES ONLY WITH A RING of a unifying element type and an equal
+        // capacity. There is deliberately no arm pairing `Ring` with `Array`: a
+        // ring carries a length and a head beside its elements, so it is not an
+        // array, and the absence of that arm is the rule.
+        (Type::Ring(a_e, a_n), Type::Ring(b_e, b_n)) => {
+            if const_dims_compatible(&a_n, &b_n) {
+                unify(&a_e, &b_e, subst)
+            } else {
+                Err(UnifyError::Mismatch {
+                    left: Type::Ring(a_e, a_n),
+                    right: Type::Ring(b_e, b_n),
                 })
             }
         }
@@ -1107,9 +1138,10 @@ fn type_contains_text_capacity(ctx: &Ctx, t: &Type) -> bool {
         match next {
             Type::TextN(_) => return true,
             Type::Tuple(items) => pending.extend(items.iter()),
-            Type::Array(inner, _) | Type::Option(inner) | Type::Labelled(inner, _) => {
-                pending.push(inner)
-            }
+            Type::Array(inner, _)
+            | Type::Ring(inner, _)
+            | Type::Option(inner)
+            | Type::Labelled(inner, _) => pending.push(inner),
             Type::Struct(name, args) | Type::Enum(name, args) => {
                 pending.extend(args.iter());
                 if seen.insert(name.as_str()) {
@@ -1214,6 +1246,9 @@ fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
             check_multiword_dim_range(n, true)?;
             check_multiword_dim_range(f, false)
         }
+        // The capacity is checked by `crate::ring::check_ring_declarations`,
+        // which names the ring restriction it enforces.
+        TypeExpr::Ring(elem, _, _) => check_composite_dimensions(elem),
         TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => Ok(()),
     }
 }
@@ -1283,6 +1318,7 @@ fn validate_no_nested_negative_labels(
             validate_no_nested_negative_labels(elem, false)
         }
         TypeExpr::Option(elem, _) => validate_no_nested_negative_labels(elem, false),
+        TypeExpr::Ring(elem, _, _) => validate_no_nested_negative_labels(elem, false),
         TypeExpr::Named(_, args, _, _) => {
             for arg in args {
                 validate_no_nested_negative_labels(arg, false)?;
@@ -1338,6 +1374,7 @@ fn type_head_name(t: &Type) -> Option<String> {
         // `Fixed`: a trait implemented for the family, not for one capacity.
         Type::TextN(_) => Some("Text".to_string()),
         Type::Multiword(_, _) => Some("Multiword".to_string()),
+        Type::Ring(_, _) => Some("Ring".to_string()),
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
         Type::Newtype(name) => Some(name.clone()),
@@ -1871,6 +1908,11 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
             span,
         ),
         Type::Option(inner) => TypeExpr::Option(Box::new(type_to_expr_full(inner, span)?), span),
+        Type::Ring(elem, n) => TypeExpr::Ring(
+            Box::new(type_to_expr_full(elem, span)?),
+            crate::ast::ConstExpr::Lit(n.known()?, span),
+            span,
+        ),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Newtype(name) | Type::Opaque(name) => {
             TypeExpr::Named(name.clone(), Vec::new(), Vec::new(), span)
         }
@@ -2067,6 +2109,12 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
 }
 
 fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<ResolvedResumes, TypeError> {
+    // Pass 0. The ring admissibility rules of increment R1, checked before any
+    // type is resolved so that a ring in a refused position, or a ring field
+    // with an inadmissible element, capacity or initializer, is reported with
+    // the restriction it breaks rather than as a downstream type mismatch.
+    crate::ring::check_ring_declarations(program)
+        .map_err(|e| TypeError::new(e.message, e.span))?;
     // Pass 1a. Collect type kinds (struct, enum, newtype) so name
     // resolution works while reading field signatures and newtype
     // underlying types.
@@ -3306,6 +3354,12 @@ fn check_data_index_write(
             )
         })?
         .clone();
+    if matches!(strip_labels(declared.clone()), Type::Ring(..)) {
+        return Err(TypeError::new(
+            crate::ring::ring_access_message(data_name, field),
+            span,
+        ));
+    }
     // Peel one Array layer per index, validating each index
     // as a Word and ensuring the final type is a scalar.
     let mut current = declared;
@@ -5025,6 +5079,12 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 )
             })?;
             let declared = declared.clone();
+            if matches!(strip_labels(declared.clone()), Type::Ring(..)) {
+                return Err(TypeError::new(
+                    crate::ring::ring_access_message(data_name, field),
+                    *span,
+                ));
+            }
             let negatives = ctx
                 .data_negative_labels
                 .get(data_name)
@@ -6051,6 +6111,15 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     if let Some(fields) = ctx.data.get(name)
                         && let Some(t) = fields.get(field)
                     {
+                        // R1 builds no ring operation, so every expression that
+                        // reaches a ring field, a read, an index, a method call
+                        // or an iteration, is refused here at its receiver.
+                        if matches!(strip_labels(t.clone()), Type::Ring(..)) {
+                            return Err(TypeError::new(
+                                crate::ring::ring_access_message(name, field),
+                                *span,
+                            ));
+                        }
                         return Ok(t.clone());
                     }
                     Err(TypeError::new(

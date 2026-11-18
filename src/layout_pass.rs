@@ -196,6 +196,12 @@ impl<'a> LayoutContext<'a> {
                     },
                 ]))
             }
+            // A ring has no value layout in increment R1. A ring data field is
+            // expanded into three ordinary fields before any layout is asked
+            // for, and every other position is refused by the type checker.
+            TypeExpr::Ring(_, _, _) => Err(LayoutError::UnsupportedType(String::from(
+                "Ring<T, N> has no value layout outside a data field",
+            ))),
             TypeExpr::Unit(_) => Ok(LayoutDescriptor::Scalar(ScalarKind::Unit)),
             TypeExpr::Prim(prim, _) => Ok(LayoutDescriptor::Scalar(scalar_kind_for_prim(*prim))),
             TypeExpr::Multiword(n, f, _) => {

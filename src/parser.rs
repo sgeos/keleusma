@@ -3096,6 +3096,35 @@ impl<'a> Parser<'a> {
             return Ok(TypeExpr::Prim(PrimType::Text, span));
         }
 
+        // Ring<T, N>: the compiler-managed ring buffer, a built-in type in the
+        // manner of `Multiword` and `Option`. One type argument, the element,
+        // then one const argument, the capacity. `Ring` is recognised by name in
+        // every type position, so the name is reserved there. What the type
+        // checker admits is narrower than what parses; see `crate::ring`.
+        if self.at_upper("Ring") {
+            self.pos += 1;
+            if !self.eat(&TokenKind::Lt) {
+                return Err(self.error(
+                    "expected `<` after `Ring`: the ring type is written `Ring<T, N>` with an \
+                     element type and a capacity",
+                ));
+            }
+            let elem = self.parse_type_expr()?;
+            if !self.eat(&TokenKind::Comma) {
+                return Err(self.error(
+                    "expected `,` and a capacity after the ring element type: the ring type is \
+                     written `Ring<T, N>`",
+                ));
+            }
+            let cap = self.parse_const_expr()?;
+            let end = self.expect(&TokenKind::Gt)?;
+            return Ok(TypeExpr::Ring(
+                Box::new(elem),
+                cap,
+                merge_spans(span, end),
+            ));
+        }
+
         // Option<T>.
         if self.at_upper("Option") {
             self.pos += 1;

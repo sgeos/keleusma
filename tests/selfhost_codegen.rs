@@ -8716,6 +8716,31 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "private data d { x: [Byte; 4] }\nfn f(i: Word) -> Byte { d.x[i] = 7 as Byte { ok(_, n) => n } }",
         ),
+        // --- ring buffer fields, increment R1 -------------------------------------
+        //
+        // A ring field is three hidden data fields, so a field after it is addressed two
+        // operands later than its declaration position. R1 builds no ring operation, so a
+        // body that names the ring itself is rejected by the reference.
+        (
+            "data/ring_declared_unread",
+            SOk,
+            "private data d { r: Ring<Word, 1> }\nfn f() -> Word { 7 }",
+        ),
+        (
+            "data/ring_private_fields_around",
+            SOk,
+            "private data d { a: Word, r: Ring<Word, 4>, b: Word }\nfn f() -> Word { d.b = 3; d.a + d.b }",
+        ),
+        (
+            "data/ring_shared_field_after",
+            SOk,
+            "shared data io { r: Ring<Byte, 3>, x: Word }\nfn f() -> Word { io.x }",
+        ),
+        (
+            "data/ring_field_read",
+            RefRejects,
+            "private data d { r: Ring<Word, 4> }\nfn f() -> Word { d.r }",
+        ),
         // --- composites: construction / access -----------------------------------
         (
             "comp/struct_ctor",
