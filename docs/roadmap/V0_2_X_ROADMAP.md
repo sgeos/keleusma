@@ -508,10 +508,13 @@ library entry. Capacity and protocol failures remain distinct from invalid-sourc
 The command-line tests assert independent rejection without an output artifact and valid artifact
 execution returning seven. These results do not complete Keleusma wire serialization or final gates.
 
-## Current construct-support boundary, 2026-11-02
+## Current construct-support boundary, 2026-11-18
 
-The executable table in `tests/selfhost_codegen.rs` contains 152 cases with
-142 SOk / 4 Refuses / 2 Diverges / 4 RefRejects. The literal suffixes of 2026-11-02 added four
+The executable table in `tests/selfhost_codegen.rs` contains 156 cases with
+145 SOk / 4 Refuses / 2 Diverges / 5 RefRejects. The ring buffer increment R1 of 2026-11-18
+added four `data` cases. Three are SOk, a ring field that is declared and not read, a private
+ring between two fields that are read, and a shared ring before a field that is read. One is the
+reference's rejection of a read of a ring field. The literal suffixes of 2026-11-02 added four
 `suffix` cases. Three are SOk, a `Byte` literal in byte arithmetic, a tuple mixing a word and a
 byte, and a byte array beside a `Word`-suffixed literal. One is the reference's rejection of a
 `Byte` literal above 255. The capacity-bounded text increment of

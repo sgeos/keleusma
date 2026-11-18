@@ -3048,6 +3048,13 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         "fn main() -> Text<8> { \"abc\" as Text<8> }",
         Identical,
     ),
+    // A ring is admitted only as a data field type, increment R1. The other positions and
+    // the refusals are in `ring_fields_have_their_pinned_self_hosted_outcomes`.
+    (
+        "TypeExpr::Ring",
+        "private data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }",
+        Identical,
+    ),
     (
         "TypeExpr::Labelled",
         "fn main(a: Word@Secret) -> Word@Secret { a }",
@@ -3564,16 +3571,46 @@ fn capacity_bounded_text_has_its_pinned_outcomes() {
 #[test]
 fn ring_fields_have_their_pinned_self_hosted_outcomes() {
     let mut cases: Vec<(&str, Class)> = vec![
-        ("private data d { r: Ring<Word, 1> }\nfn main() -> Word { 0 }", Identical),
-        ("private data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }", Identical),
-        ("private data d { r: Ring<Word, 5> }\nfn main() -> Word { 0 }", Identical),
-        ("shared data d { r: Ring<Word, 1> }\nfn main() -> Word { 0 }", Identical),
-        ("shared data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }", Identical),
-        ("shared data d { r: Ring<Word, 5> }\nfn main() -> Word { 0 }", Identical),
-        ("shared data d { r: Ring<Byte, 8> }\nfn main() -> Word { 0 }", Identical),
-        ("private data d { r: Ring<Byte, 3> }\nfn main() -> Word { 0 }", Identical),
-        ("private data d { r: Ring<bool, 2> }\nfn main() -> Word { 0 }", Identical),
-        ("private data d { r: Ring<Fixed, 4> }\nfn main() -> Word { 0 }", Identical),
+        (
+            "private data d { r: Ring<Word, 1> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Word, 5> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Word, 1> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Word, 5> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Byte, 8> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Byte, 3> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<bool, 2> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Fixed, 4> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
         (
             "private data d { a: Word, r: Ring<Word, 4>, b: Word }\nfn main() -> Word { d.b = 3; d.a + d.b }",
             Identical,
@@ -3646,7 +3683,10 @@ fn ring_fields_have_their_pinned_self_hosted_outcomes() {
         ),
     ];
     #[cfg(feature = "floats")]
-    cases.push(("private data d { r: Ring<Float, 4> }\nfn main() -> Word { 0 }", Identical));
+    cases.push((
+        "private data d { r: Ring<Float, 4> }\nfn main() -> Word { 0 }",
+        Identical,
+    ));
     let mut identical = 0usize;
     let mut mismatches = Vec::new();
     for (src, expected) in &cases {
@@ -3670,7 +3710,10 @@ fn ring_fields_have_their_pinned_self_hosted_outcomes() {
         );
         // The layout really carries the ring's three fields, so the comparison above
         // compared a ring and not an empty layout.
-        let layout = reference.data_layout.as_ref().expect("a ring program has data");
+        let layout = reference
+            .data_layout
+            .as_ref()
+            .expect("a ring program has data");
         assert!(
             layout.fields.iter().any(|f| f.name.ends_with(".buf")),
             "{src}"
@@ -3680,7 +3723,10 @@ fn ring_fields_have_their_pinned_self_hosted_outcomes() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     // Non-vacuity. The byte comparison ran for every case expected to be identical.
     let expected_identical = cases.iter().filter(|(_, c)| *c == Identical).count();
-    assert_eq!(identical, expected_identical, "a byte comparison was skipped");
+    assert_eq!(
+        identical, expected_identical,
+        "a byte comparison was skipped"
+    );
     #[cfg(feature = "floats")]
     assert_eq!(identical, 14, "the identical population moved");
 }

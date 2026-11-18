@@ -100,7 +100,11 @@ fn ring_without_its_two_arguments_is_a_parse_error() {
         "private data d { r: Ring<Word> }\nfn main() -> Word { 0 }",
     ] {
         let err = parse(&tokenize(src).expect("lex")).expect_err(src);
-        assert!(err.message.contains("Ring<T, N>"), "{src:?}: {}", err.message);
+        assert!(
+            err.message.contains("Ring<T, N>"),
+            "{src:?}: {}",
+            err.message
+        );
     }
 }
 
@@ -167,9 +171,13 @@ fn a_capacity_that_is_not_a_positive_constant_is_refused() {
 #[test]
 fn a_capacity_past_the_indexed_operand_bound_is_refused_at_the_boundary() {
     // `2 + N` must stay below 2^24, so N = 2^24 - 3 is the largest admitted.
+    // The admitted side stops at the type checker, where the capacity rule
+    // lives. A full compile would lay out sixteen million slots, whose
+    // memory cost was not measured and does not belong in an everyday test.
     let at = "private data d { r: Ring<Byte, 16777213> }\nfn main() -> Word { 0 }";
-    let layout = compile_src(at).data_layout.expect("layout");
-    assert_eq!(layout.slot_count(), 16_777_215);
+    let mut program = parse(&tokenize(at).expect("lex")).expect("parse");
+    keleusma::typecheck::check(&mut program)
+        .unwrap_or_else(|e| panic!("the largest capacity was refused: {}", e.message));
     assert_refused(
         "private data d { r: Ring<Byte, 16777214> }\nfn main() -> Word { 0 }",
         &["Ring capacity 16777214", "too large", "2 + N"],
@@ -194,10 +202,7 @@ fn an_element_outside_the_five_scalars_is_refused() {
         );
         assert_refused(
             &src,
-            &[
-                "Ring element type",
-                "Word, Byte, bool, Fixed and Float",
-            ],
+            &["Ring element type", "Word, Byte, bool, Fixed and Float"],
         );
     }
 }
@@ -332,7 +337,10 @@ fn every_expression_naming_a_ring_field_is_refused() {
         let src = format!("{decl}{body}");
         assert_refused(
             &src,
-            &["ring field `d.r`", "ring operations are not yet implemented"],
+            &[
+                "ring field `d.r`",
+                "ring operations are not yet implemented",
+            ],
         );
     }
 }
@@ -389,7 +397,10 @@ fn a_private_ring_costs_the_persistent_bytes_of_its_three_fields() {
             );
             assert_eq!(rl.private_slot_count(), 2 + n as usize);
             assert_eq!(rl.private_slot_count(), pl.private_slot_count());
-            assert_eq!(ring.private_data_bytes, plain.private_data_bytes, "{elem} {n}");
+            assert_eq!(
+                ring.private_data_bytes, plain.private_data_bytes,
+                "{elem} {n}"
+            );
             assert_eq!(
                 required_persistent_capacity_for(&ring),
                 required_persistent_capacity_for(&plain),
@@ -432,7 +443,9 @@ fn a_shared_ring_has_pinned_byte_offsets() {
         // Element by element, through the host's slot space.
         let first = layout.slot_of("io.r.buf").expect("buffer slot");
         for k in 0..3u32 {
-            let slot = layout.shared_slot(first + k as usize).expect("element slot");
+            let slot = layout
+                .shared_slot(first + k as usize)
+                .expect("element slot");
             assert_eq!(slot.offset, 17 + k * width, "{elem} element {k}");
         }
     }
@@ -450,10 +463,15 @@ fn a_host_reads_and_writes_a_shared_ring_by_its_hidden_names() {
     assert_eq!(shared.len(), 5 * 8);
     let len = layout.slot_of("io.r.len").expect("len");
     let head = layout.slot_of("io.r.head").expect("head");
-    vm.set_shared(&mut shared, len, Value::Int(2)).expect("set len");
-    vm.set_shared(&mut shared, head, Value::Int(1)).expect("set head");
+    vm.set_shared(&mut shared, len, Value::Int(2))
+        .expect("set len");
+    vm.set_shared(&mut shared, head, Value::Int(1))
+        .expect("set head");
     assert_eq!(vm.get_shared(&shared, len).expect("get len"), Value::Int(2));
-    assert_eq!(vm.get_shared(&shared, head).expect("get head"), Value::Int(1));
+    assert_eq!(
+        vm.get_shared(&shared, head).expect("get head"),
+        Value::Int(1)
+    );
     assert_eq!(&shared[0..8], &2i64.to_le_bytes());
     assert_eq!(&shared[8..16], &1i64.to_le_bytes());
     assert!(shared[16..].iter().all(|&b| b == 0));
@@ -480,7 +498,10 @@ fn the_schema_hash_distinguishes_capacity_element_and_a_plain_array() {
         for (i, a) in hashes.iter().enumerate() {
             assert_ne!(*a, 0, "{vis} hash {i} is the no-data sentinel");
             for b in &hashes[i + 1..] {
-                assert_ne!(a, b, "{vis}: two distinct declarations share a hash: {hashes:?}");
+                assert_ne!(
+                    a, b,
+                    "{vis}: two distinct declarations share a hash: {hashes:?}"
+                );
             }
         }
     }
@@ -504,7 +525,11 @@ fn a_private_ring_loads_empty() {
         assert_eq!(f.init, DataInit::Zero, "{name}");
         assert_eq!(f.visibility, SlotVisibility::Private, "{name}");
     }
-    let main_at = m.chunks.iter().position(|c| c.name == "main").expect("main");
+    let main_at = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main");
     assert!(m.chunks[main_at].ops.contains(&Op::GetData(3)));
     for operand in [0u32, 1, 2] {
         let mut patched = m.clone();

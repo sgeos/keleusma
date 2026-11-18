@@ -1517,10 +1517,13 @@ fn header_ring(k: Word, v: Word) -> Word {
         if k == Tok::Lt() as Word { di.ring = 2; 0 } else { di.ring = 0; perr(pe_ring(), toks.at) }
     } else {
     if di.ring == 2 {
-        let kind = if k == Tok::Ident() as Word { scalar_kind_of(v) } else { 0 };
+        // An element that is not one identifier, such as the parenthesised `(Word)` the
+        // reference reads as `Word`, is outside this stage rather than a source error.
+        if k != Tok::Ident() as Word { di.ring = 0; perr(pe_unresolved_syntax(), toks.at) } else {
+        let kind = scalar_kind_of(v);
         if kind < 1 orelse kind > 5 { di.ring = 0; perr(pe_ring(), toks.at) } else {
             di.kind = kind; di.ring = 3; 6 + v * 64
-        }
+        } }
     } else {
     if di.ring == 3 {
         if k == Tok::Comma() as Word { di.ring = 4; 0 } else { di.ring = 0; perr(pe_unresolved_syntax(), toks.at) }

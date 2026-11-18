@@ -630,7 +630,7 @@ that agree.
 
 ### Measured layout
 
-The following was measured on the host target, 64-bit words, by `tests/ring_buffer.rs`.
+The following is predicted for the host target, 64-bit words, and pinned by `tests/ring_buffer.rs`. **Not yet measured.** The tests were written before the machine allowed a build, and this section is corrected from their first run.
 
 - A ring takes `2 + N` slots and three fields, so a field declared after it is addressed by a
   data operand two higher than its declaration position.

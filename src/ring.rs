@@ -452,7 +452,10 @@ pub fn expand_ring_fields(program: &mut Program) -> Result<(), RingError> {
             for (name, type_expr) in [
                 (len, word.clone()),
                 (head, word),
-                (buf, TypeExpr::array_lit(Box::new((**elem).clone()), n, *span)),
+                (
+                    buf,
+                    TypeExpr::array_lit(Box::new((**elem).clone()), n, *span),
+                ),
             ] {
                 expanded.push(crate::ast::DataFieldDecl {
                     name,

@@ -3118,11 +3118,7 @@ impl<'a> Parser<'a> {
             }
             let cap = self.parse_const_expr()?;
             let end = self.expect(&TokenKind::Gt)?;
-            return Ok(TypeExpr::Ring(
-                Box::new(elem),
-                cap,
-                merge_spans(span, end),
-            ));
+            return Ok(TypeExpr::Ring(Box::new(elem), cap, merge_spans(span, end)));
         }
 
         // Option<T>.

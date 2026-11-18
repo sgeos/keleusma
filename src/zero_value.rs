@@ -124,9 +124,9 @@ fn zero_value_at(
         // A ring has no value in increment R1. It exists only as a data field,
         // which the compiler expands into three ordinary fields before any zero
         // is asked for, so reaching here means a pass was skipped.
-        TypeExpr::Ring(_, _, _) => Err(ZeroValueError::UnknownType(
-            alloc::string::String::from("Ring<T, N> has no value outside a data field"),
-        )),
+        TypeExpr::Ring(_, _, _) => Err(ZeroValueError::UnknownType(alloc::string::String::from(
+            "Ring<T, N> has no value outside a data field",
+        ))),
         TypeExpr::Option(_, _) => Ok(ConstValue::None),
         TypeExpr::Tuple(elems, _) => {
             let mut out = Vec::with_capacity(elems.len());

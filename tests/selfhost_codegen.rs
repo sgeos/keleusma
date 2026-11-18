@@ -8737,7 +8737,7 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             "shared data io { r: Ring<Byte, 3>, x: Word }\nfn f() -> Word { io.x }",
         ),
         (
-            "data/ring_field_read",
+            "data/ring_field_read__REJECT",
             RefRejects,
             "private data d { r: Ring<Word, 4> }\nfn f() -> Word { d.r }",
         ),

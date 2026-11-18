@@ -2113,8 +2113,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<ResolvedResumes, Typ
     // type is resolved so that a ring in a refused position, or a ring field
     // with an inadmissible element, capacity or initializer, is reported with
     // the restriction it breaks rather than as a downstream type mismatch.
-    crate::ring::check_ring_declarations(program)
-        .map_err(|e| TypeError::new(e.message, e.span))?;
+    crate::ring::check_ring_declarations(program).map_err(|e| TypeError::new(e.message, e.span))?;
     // Pass 1a. Collect type kinds (struct, enum, newtype) so name
     // resolution works while reading field signatures and newtype
     // underlying types.
