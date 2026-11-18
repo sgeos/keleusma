@@ -13,7 +13,11 @@ part whose arguments name a process or instruction document. For the
 gap, compacted or not, with the error rate of the calls that follow and the
 cache tokens the first assistant call after it wrote and read, by day.
 
-Usage: python3 -I context_quality.py > context-quality.json
+Usage: python3 -I context_quality.py [--since DAY] [--until DAY] > context-quality.json
+
+`--since` and `--until`, each a date such as 2026-11-01, limit the idle-gap resumptions to
+those whose day falls in the range, `--until` exclusive. They let the trial compare the
+weeks before and after `idleCompaction` changed. Every other figure covers all transcripts.
 
 Limits, stated so the output is not over-read:
 - A tool error is not a quality measure. A failing test run, a denied
@@ -32,6 +36,19 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path.home() / ".claude" / "projects"
+
+
+def day_option(name, default):
+    """The ISO day following `name` on the command line, or `default`."""
+    if name not in sys.argv:
+        return default
+    value = sys.argv[sys.argv.index(name) + 1]
+    datetime.date.fromisoformat(value)
+    return value
+
+
+GAPS_SINCE = day_option("--since", "0000-00-00")
+GAPS_UNTIL = day_option("--until", "9999-99-99")
 CONTEXT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 BUCKETS = ((50_000, "<50k"), (100_000, "50k-100k"), (200_000, "100k-200k"), (400_000, "200k-400k"),
            (700_000, "400k-700k"))
@@ -196,6 +213,8 @@ def main():
     for path in sorted(ROOT.glob("*keleusma*/*.jsonl")):
         events, compactions, gaps = scan(path)
         for gap in gaps:
+            if not GAPS_SINCE <= gap["day"] < GAPS_UNTIL:
+                continue
             gap["after"] = events[gap["at"]:gap["at"] + WINDOW]
             resumptions.append(gap)
         for event in events:
