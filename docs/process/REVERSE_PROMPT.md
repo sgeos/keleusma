@@ -168,7 +168,21 @@ proceeds without it.
 
 ## In progress
 
-Nothing is running except the queued clippy sweep. Both fix branches wait for consent to push.
+The operator directed on 2026-11-18 that Kaizen fixes the Rust 1.100.0 lints and that this line
+works the roadmap in parallel, so `fix/clippy-rust-1-100` is withdrawn and Kaizen was told of it.
+Three pieces of work are local, none pushed.
+
+- Ring buffer increment R1, the type surface and the data layout with its self-hosted twin, on
+  `feat/ring-r1` in the worktree `v02-ring-r1`, delegated to an agent under the rulings of
+  2026-10-31.
+- The memory tightness runner Kaizen asked for in sequence 379, `examples/tightness.rs` on
+  `feat/tightness-runner`. It measures the stack by painting the ephemeral region, because the
+  bottom end is reserved at construction and its arena peak equals the reservation. Its build is
+  queued behind the machine monitor and it is not yet compiled.
+- The process records on `docs/v02-handoff-20261118`.
+
+Heavy verification waits on the machine monitor, which reports elevated from memory pressure
+caused by applications outside these sessions and from disk below 50 GB free.
 
 ## Next, in order
 
@@ -211,6 +225,11 @@ Nothing is running except the queued clippy sweep. Both fix branches wait for co
 - The proofs line's heavy Kani harnesses, three of which reach `find_call_cycle` and
   `topological_call_order` after 778, have never had a green run. That line will measure them
   after 778 merges.
+- Read, not measured. The verifier admits a stream chunk with instructions before its `Stream`
+  marker, and the per-iteration time bound counts only from `Stream` to `Reset`. The first run of
+  such a hand-written chunk could exceed the hosted runtime's instruction bound. The compiler
+  never emits such a prologue. A fix belongs in `src/verify.rs` beside pull request 778, so it
+  waits for that merge.
 - The session scratchpad was emptied by the restart. The guard file and the agent brief were
   restored from the copies on the scratch volume.
 
