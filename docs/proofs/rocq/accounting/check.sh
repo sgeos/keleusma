@@ -36,13 +36,14 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/accounting}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(Accounting Footprint Controls ArmFootprint ArmControls Statements)
+modules=(Accounting Footprint Controls ArmFootprint ArmControls Claims Statements)
 ss_deps=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls)
-pins_expected=11
+pins_expected=23
 results=(
     Accounting.indexed_from_fst Accounting.indexed_app Accounting.nodup_length_le
     Accounting.NoDup_allocs_at Accounting.baseline_footprint Accounting.footprint_le_baseline
     Accounting.NoDup_below Accounting.footprint_slot_bound
+    Accounting.indexed_from_app Accounting.NoDup_fst_filter Accounting.NoDup_map_bump
     Footprint.within_same Footprint.pop_keeps Footprint.new_within Footprint.run_within
     Footprint.mem_within Footprint.same_allocations Footprint.reuse_footprint_bounded
     Controls.loop_ok_footprints Controls.loop_ok_bound_is_tight Controls.slots_alone_do_not_bound
@@ -50,8 +51,9 @@ results=(
     ArmFootprint.same_allocations_arm ArmFootprint.reuse_footprint_bounded_arm
     ArmControls.sequential_accepted_by_join ArmControls.sequential_shares_one_cell
     ArmControls.sequential_footprint_bounded
-    Statements.footprint_at_pinned Statements.cell_at_pinned Statements.allocs_at_pinned
-    Statements.indexed_pinned Statements.unplanned_at_pinned Statements.within_pinned
+    Claims.footprint_at_pinned Claims.cell_at_pinned Claims.allocs_at_pinned
+    Claims.indexed_pinned Claims.unplanned_at_pinned Claims.within_pinned
+    Claims.run_of_pinned Claims.fp_pinned Claims.seq_run_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -79,7 +81,7 @@ done
 # The pins and the controls may not open a section or declare a hypothesis,
 # variable or context, which could discharge a premise added to a pinned
 # statement.
-for m in Statements Controls; do
+for m in Statements Claims Controls; do
     [ -f "$src/$m.v" ] || continue
     n=$(flat "$src/$m.v" | { grep -oE '\<(Section|Hypothes[ie]s|Hypothesis|Variables?|Context)\>' || true; } | wc -l | tr -d ' ')
     if [ "$n" -ne 0 ]; then

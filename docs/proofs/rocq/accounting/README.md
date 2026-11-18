@@ -15,11 +15,21 @@ stream cycles. **The same holds with no injectivity premise for every module and
 join checker of [`../shared_slots/`](../shared_slots/README.md) accepts together**, which covers
 plans that put several sites in one slot. Every named result is checked with no axiom.
 
+**What this does not prove.** The count is per epoch, and reading it as the memory a cycle needs
+rests on an assumption that is stated here and not proved. The assumption is that during an
+epoch the run reads only cells of that epoch's allocations, so that storage from earlier epochs
+could be reclaimed at the reset. It is plausible, since a dereference checks the handle's epoch
+against the current one, but it needs an invariant tying every handle to its allocation's
+epoch, and no such invariant is proved here. The region core never frees a cell, so the memory
+it actually holds after `n` cycles is bounded only by the slots plus the unplanned allocations
+of every epoch together, which grows with `n`, and no theorem here bounds that total.
+
 ## Why the epoch
 
 The quantity bounded is the per-epoch footprint, the number of distinct cells the allocations of
 one epoch use. A cycle of the shipping virtual machine reclaims its bump storage at the reset
-that ends it, so the per-epoch footprint is what a worst-case memory bound must cover. The
+that ends it, so under the assumption stated above the per-epoch footprint is what a worst-case
+memory bound must cover. The
 bound `K + unplanned` does not grow with the number of times a reused site allocates in an
 epoch, which is the saving reuse exists for. A loop that allocates at a reused site a thousand
 times in one cycle uses one slot.
@@ -29,7 +39,7 @@ times in one cycle uses one slot.
 | Result | Module | Statement |
 |---|---|---|
 | `baseline_footprint` | `Accounting.v` | The baseline uses exactly one cell per allocation in each epoch |
-| `footprint_le_baseline` | `Accounting.v` | Any plan uses no more cells than the baseline, for any allocation record |
+| `footprint_le_baseline` | `Accounting.v` | Any plan uses no more cells than the baseline, for any allocation record. It holds even for a plan that is unsound, so the saving means something only together with `same_allocations`, which needs an accepted module |
 | `footprint_slot_bound` | `Accounting.v` | Theorem C at the core level. A plan with slots below `K` uses at most `K` plus the unplanned allocations, for any allocation record |
 | `mem_within` | `Footprint.v` | For every plan, module, host and fuel, accepted or not, every cell holding a value after a run is the cell of a recorded allocation |
 | `same_allocations` | `Footprint.v` | For an accepted module and an injective plan, the two runs record the same allocations |
@@ -51,17 +61,25 @@ eval $(opam env --switch=rocq)
 docs/proofs/rocq/accounting/check.sh
 ```
 
-The script follows the hardened scripts of the other directories. It builds and checks B2's
-sources and the shared-slot extension's sources as its dependencies, then this directory's six
-modules. It fails unless no source holds
+The script follows the hardened scripts of the other directories. It builds B2's sources and the
+shared-slot extension's sources as its dependencies, then this directory's seven modules. Only
+this directory's sources are scanned for forbidden constructs, and `rocqchk` re-verifies only
+this directory's modules, though its context summary lists any axiom of a dependency too. The
+dependencies' own pin files are not compiled here, so they are checked by their own scripts. It fails unless no source holds
 an admitted or assumed proof, a warning silencer or a `Redirect`, scanned with comments removed
 and whitespace collapsed, the pin and control files open no section and declare no hypothesis,
 variable or context, every module compiles with no output, `rocqchk` reports no axiom and no
-unsafe construct, all 31 named results are closed, and `Statements.v` holds its 11 pins.
+unsafe construct, all 37 named results are closed, and `Statements.v` holds its 23 pins.
 
-`Statements.v` pins the statements of the eight results above and of three controls, and fixes the
-definitions the conclusions rest on by proved equations, namely `footprint_at`, `cell_at`,
-`allocs_at`, `unplanned_at`, `within`, and `indexed` by its two projections. Three planted
+`Claims.v` states the eight results above and five controls, and fixes the definitions the
+conclusions rest on by proved equations, namely `footprint_at`, `cell_at`, `allocs_at`,
+`unplanned_at`, `within`, `indexed` by its two projections, and the controls' `run_of`, `fp` and
+`seq_run`. `Statements.v` imports no module of the project and pins each of those 23 items by the
+type Rocq printed with fully qualified names, because an audit of 2026-11-18 showed by execution
+that pins written with bare names under `Import` could be bypassed. A redefined `cycles` in
+`Footprint.v` made the headline vacuous while every such pin compiled. The same attack replayed
+against the fully qualified pins of `../region_core/` was refused. It was not replayed against
+this directory. Three planted
 defects were run against the script on 2026-11-18, in copies under `tmp/`. An `Admitted` lemma
 was refused by the scan. A premise added to `reuse_footprint_bounded`, with `Controls.v` patched
 to supply it, was refused at its pin in `Statements.v`. A change to the definition of
