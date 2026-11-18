@@ -113,6 +113,16 @@ impl Budget {
 /// position. Marks are tied to the arena that produced them; passing a
 /// mark to a different arena is a logic error and produces undefined
 /// behavior under the unsafe rewind contract.
+///
+/// The mark records the bottom end's length, measured from the persistent
+/// boundary, not an absolute offset into the buffer. The persistent
+/// resizes move that boundary. [`Arena::resize_persistent_capacity`]
+/// relocates the live bottom bytes with it, preserving their layout
+/// relative to the boundary, so a relative mark still names the same
+/// allocation boundary after the move. [`Arena::resize_persistent`] empties
+/// the bottom end, so a rewind to an earlier mark leaves it empty. Either
+/// way a rewind can never move the bottom head below the persistent
+/// boundary, which an absolute offset taken before a grow could do.
 #[derive(Debug, Clone, Copy)]
 pub struct BottomMark(usize);
 
@@ -711,7 +721,7 @@ impl Arena {
     /// Return a snapshot of the bottom-end bump pointer for later use
     /// with [`Arena::rewind_bottom`].
     pub fn bottom_mark(&self) -> BottomMark {
-        BottomMark(self.bottom_top.get())
+        BottomMark(self.bottom_used())
     }
 
     /// Return a snapshot of the top-end bump pointer for later use with
@@ -898,8 +908,11 @@ impl Arena {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that no live values reference memory in
-    /// the range `[mark.0, current_bottom_top)`. References obtained
+    /// The caller must ensure that no live value allocated from the
+    /// bottom end after the mark was taken is still referenced. With the
+    /// mark's recorded length `m`, the discarded range is
+    /// `[persistent_capacity + m, current_bottom_top)`, or nothing when the
+    /// bottom end is already no longer than `m`. References obtained
     /// through the `Allocator` trait, including those held by
     /// `allocator_api2::vec::Vec` and similar collections, must be
     /// dropped or otherwise abandoned before this call. Subsequent
@@ -908,8 +921,12 @@ impl Arena {
     ///
     /// Marks from a different arena are a logic error.
     pub unsafe fn rewind_bottom(&self, mark: BottomMark) {
-        let target = mark.0.min(self.bottom_top.get());
-        self.bottom_top.set(target);
+        // `bottom_used() <= capacity - persistent_capacity`, so the sum
+        // cannot overflow, and the target lies in
+        // `[persistent_capacity, bottom_top]`. The head never moves up and
+        // never crosses below the persistent boundary.
+        let kept = mark.0.min(self.bottom_used());
+        self.bottom_top.set(self.persistent_capacity.get() + kept);
     }
 
     /// Rewind the top end to a previously recorded mark.
@@ -1470,6 +1487,91 @@ mod tests {
             arena.rewind_bottom(mark);
         }
         assert_eq!(arena.bottom_used(), 0);
+    }
+
+    /// Offset of a bottom allocation from the start of the backing buffer.
+    #[cfg(feature = "alloc")]
+    fn bottom_offset(arena: &Arena, n: usize) -> usize {
+        let ptr = arena.alloc_bottom_bytes(n).unwrap().cast::<u8>().as_ptr();
+        (ptr as usize) - (arena.persistent_ptr().as_ptr() as usize)
+    }
+
+    /// Finding A1 of the proofs line, measured with Kani. A mark taken
+    /// before a preserving grow of the persistent region used to hold an
+    /// absolute offset below the new boundary, so the rewind moved the
+    /// bottom head into the persistent region, `bottom_used` overflowed,
+    /// and the next bottom allocation overwrote persistent bytes.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn rewind_after_persistent_grow_stays_above_the_boundary() {
+        let mut arena = Arena::with_capacity(24);
+        let mark = arena.bottom_mark();
+        let _ = arena.alloc_bottom_bytes(4).unwrap();
+        arena.resize_persistent_capacity(8).unwrap();
+        // SAFETY: no reference into the bottom end is retained.
+        unsafe { arena.rewind_bottom(mark) };
+        assert_eq!(arena.bottom_used(), 0);
+        // SAFETY: `persistent_ptr` is valid for the persistent region,
+        // which is eight bytes, and no other reference into it is live.
+        unsafe { core::ptr::write_bytes(arena.persistent_ptr().as_ptr(), 0xA5, 8) };
+        assert_eq!(bottom_offset(&arena, 1), 8);
+        // SAFETY: as above, the persistent region is eight bytes.
+        let persistent = unsafe { core::slice::from_raw_parts(arena.persistent_ptr().as_ptr(), 8) };
+        assert!(persistent.iter().all(|&b| b == 0xA5));
+    }
+
+    /// A mark between two bottom allocations names the same boundary after
+    /// the preserving resize relocates them, in either direction.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn rewind_after_preserving_resize_keeps_the_earlier_allocation() {
+        let mut arena = Arena::with_capacity(32);
+        let _ = arena.alloc_bottom_bytes(4).unwrap();
+        let mark = arena.bottom_mark();
+        let _ = arena.alloc_bottom_bytes(4).unwrap();
+        arena.resize_persistent_capacity(8).unwrap();
+        // SAFETY: no reference into the bottom end is retained.
+        unsafe { arena.rewind_bottom(mark) };
+        assert_eq!(arena.bottom_used(), 4);
+        assert_eq!(bottom_offset(&arena, 1), 12);
+
+        let mark = arena.bottom_mark();
+        let _ = arena.alloc_bottom_bytes(3).unwrap();
+        arena.resize_persistent_capacity(0).unwrap();
+        // SAFETY: no reference into the bottom end is retained.
+        unsafe { arena.rewind_bottom(mark) };
+        assert_eq!(arena.bottom_used(), 5);
+    }
+
+    /// The resetting resize empties the bottom end, so a rewind to a mark
+    /// taken before it leaves the bottom end empty at the new boundary.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn rewind_after_resetting_resize_leaves_the_bottom_empty() {
+        let mut arena = Arena::with_capacity(24);
+        let mark = arena.bottom_mark();
+        let _ = arena.alloc_bottom_bytes(6).unwrap();
+        arena.resize_persistent(8).unwrap();
+        // SAFETY: no reference into the bottom end is retained.
+        unsafe { arena.rewind_bottom(mark) };
+        assert_eq!(arena.bottom_used(), 0);
+        assert_eq!(bottom_offset(&arena, 1), 8);
+    }
+
+    /// A rewind never moves the head up, so a mark longer than the current
+    /// bottom end is a no-op.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn rewind_to_a_longer_mark_is_a_no_op() {
+        let arena = Arena::with_capacity(16);
+        let _ = arena.alloc_bottom_bytes(6).unwrap();
+        let mark = arena.bottom_mark();
+        // SAFETY: no reference into the bottom end is retained.
+        unsafe { arena.reset_bottom() };
+        let _ = arena.alloc_bottom_bytes(2).unwrap();
+        // SAFETY: no reference into the bottom end is retained.
+        unsafe { arena.rewind_bottom(mark) };
+        assert_eq!(arena.bottom_used(), 2);
     }
 
     #[cfg(feature = "alloc")]
