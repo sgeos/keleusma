@@ -67,7 +67,7 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > boundary, which V0.2.X reports fixed locally at `ca73895e`, unpushed, with a relative mark
 > encoding, so its two harnesses flip when that lands. Five Rocq branches wait, none pushed.
 > `proof/rocq-b1-pins` at `f7de65f6` pins 29 of B1's statements, closing open item 5.
-> `proof/rocq-accounting-arm` at `8f98207a`, which contains `proof/rocq-accounting`, proves
+> `proof/rocq-accounting-arm` at `51ae2f5b`, which contains `proof/rocq-accounting`, proves
 > memory accounting, Theorem C, for B2's region core epoch by epoch, for injective plans and for
 > plans the join checker accepts, and supersedes `proof/rocq-accounting` for landing.
 > `proof/rocq-termination` at `6afd00ca` proves that every module B2's checker accepts
@@ -77,8 +77,9 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > execution that pins written with bare names under `Import` can be bypassed by redefining a
 > name such as `cycles`, so every such `Statements.v` became `Claims.v` and a regenerated
 > `Statements.v` pins each item with fully qualified names and no project import. The other
-> audit findings were repaired, except that the per-epoch reading of the accounting is stated
-> as an unproved assumption. A delta check of the repairs on 2026-11-18 found the shadowing
+> audit findings were repaired. The per-epoch reading of the accounting, stated at first as an
+> unproved assumption, is proved since `51ae2f5b` for final states, with the per-`Get` reading
+> following from the proof's structure. A delta check of the repairs on 2026-11-18 found the shadowing
 > repair held against every attack tried, including a replay against accounting and core_bounds,
 > and found that a commented-out pin was still counted, now fixed in all seven scripts. It also
 > noted that global settings such as `Global Arguments` in a module loaded by `Require` alone
@@ -296,7 +297,7 @@ committed peaks baseline from split heavy harnesses. When V0.2.X pushes its fix 
 A1, flip the two A1 harnesses on `proof/kani-arena` to regressions. Land the waiting branches
 when the operator pulls everything together, `proof/rocq-pins-qualified` first since it repairs
 landed work, and `proof/rocq-accounting-arm` in place of `proof/rocq-accounting`. Open proof
-work: the handle-epoch invariant that would prove the accounting's per-epoch reading, the
+work: a statement of the per-epoch reading over intermediate states, the
 termination corollary for the join checker, and the remaining B2 exclusions, refined
 confinement, the escape-copy discipline and sites in called functions. The Kaizen export hold above is reported
 lifted, by relay only.
