@@ -203,7 +203,10 @@ jobs:
         run: cargo check --locked --workspace --all-targets
       - name: Clippy
         if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # --keep-going reports every crate that fails rather than stopping at the first, so
+        # that one run lists all findings. A new Clippy release raised one lint in several
+        # crates on 2026-11-12, and stopping at the first cost a CI run per crate.
+        run: cargo clippy --keep-going --workspace --all-targets -- -D warnings
       - name: Scan the dependency graph against the advisory database
         if: ${{ !cancelled() }}
         run: cargo audit
