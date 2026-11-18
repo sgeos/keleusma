@@ -39,7 +39,7 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-11-04
+## State on 2026-11-18
 
 - **Rulings.** Every operator ruling to this line is recorded verbatim with its
   dispositions in the dated open-decision lists under [`../kaizen/`](../kaizen/README.md),
@@ -49,9 +49,13 @@ run.
   green security-only PRs into `main` are pre-authorized, branch runs stay
   uncancelled, the pinned shard lists of PR 689 stay, and release signing begins at
   the first release after the operator makes a key.
-- **Merged.** This line's PRs into `v0.2.3` through PR 711, `be96737a`, on 2026-11-01.
-  V0.2.X merged `v0.2.3` into `main` as `3e71844a`, and V0.3.X merged `v0.3.0` into
-  `main` as `badd3e5c`, both before a release with no tag.
+- **Merged.** This line's PRs into `v0.2.3` through PR 776, `7e0e6c10`, on 2026-11-08,
+  among them the footprint and metrics tracking, the machine-status helper and the proof
+  CI plan. Nothing has merged into `v0.2.3` since `cf5c8d1f`, PR 775, on 2026-11-08.
+- **CI is red for every pull request** since Rust 1.100.0 reached the unpinned stable
+  toolchain on 2026-11-12. Its Clippy reports `needless_range_loop` in `src/vm.rs`,
+  `src/coroutine.rs` and `src/text.rs`, in the lint job and both native gates, on pull
+  requests that change none of those files. The code is V0.2.X's, told in sequence 493.
 - **Scratch volume.** This worktree's `target` links to
   `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
@@ -60,7 +64,8 @@ run.
 - **Fuzz.** The nightly run passes and starts six to ten hours after its 10:17 UTC
   cron time. The crash path's logic passed a local simulation on 2026-11-05. The
   artifact upload is untested, and a job stopped by its time limit would not upload.
-- **Idle compaction.** False from 05:42 UTC on 2026-11-01, D2 of 2026-11-01.
+- **Idle compaction.** False from 05:42 UTC on 2026-11-01. The second reading, in
+  [the result](../kaizen/2026-11-18-idle-compaction-result.md), recommends keeping it.
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner. The
   blog's Pages build holds a shared runner much of a busy day, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
@@ -90,7 +95,8 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Supply the release manifest when V0.2.X cuts V0.2.3, once the operator has made
    the signing key, E3 of 2026-11-04.
-2. Run `context_quality.py` again on about 2026-11-15 and compare with the trial report.
+2. Keep the toolchain question of 2026-11-18 moving: Rust 1.100.0's Clippy fails every
+   pull request through the unpinned CI toolchain, and pinning is the operator's call.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
 4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
@@ -103,8 +109,9 @@ authority, so the startup-file positions reach them first-hand.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
-8. Write the `proofs` CI job of [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md)
-   once V0.2.X agrees or the release is cut.
+8. Write the `proofs` CI job of [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md).
+   V0.2.X agreed in sequence 468, asking for a runner time limit and for F1 and F2 to flip to
+   expected passes with its fix. Pin Kani's nightly and the stable toolchain together.
 
 ## Open with the operator
 
