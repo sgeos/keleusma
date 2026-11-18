@@ -80,5 +80,6 @@ the definition of `bound`, and the one nontrivial case of `calls_i`. They do not
   checker of [`../shared_slots/`](../shared_slots/README.md) checks functions the same way but
   its main block with its own rules, and the same reading of its calls was not done here.
 - **Keleusma itself.** Nothing relates the region core to the shipping virtual machine. The
-  shipping compiler's refusal of recursion is the V0.2.X line's, and a finding of this line's
-  differential test reported it missing before that line fixed it.
+  shipping compiler's refusal of recursion is the V0.2.X line's. This line's differential test
+  reported it missing, and that line's fix, `f2346760` on pull request 778, was not merged when
+  this was written.
