@@ -96,7 +96,9 @@ echo "check.sh: scanned ${#modules[@]} sources, no forbidden construct"
 
 # The pinned statements. Statements.v must compile, which step 2 checks, and must
 # hold exactly the expected number of type pins, so a deleted pin is visible.
-pins=$(grep -cE '^(Definition|Lemma) pin_' "$src/Statements.v" || true)
+# Counted with comments removed, as the scan reads the sources, so a pin
+# commented out is not counted.
+pins=$(flat "$src/Statements.v" | { grep -oE '\<(Definition|Lemma) pin_' || true; } | wc -l | tr -d ' ')
 if [ "$pins" -ne "$pins_expected" ]; then
     echo "check.sh: Statements.v holds $pins type pins, expected $pins_expected" >&2
     exit 1

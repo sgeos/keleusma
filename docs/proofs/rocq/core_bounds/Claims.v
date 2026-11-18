@@ -3,8 +3,8 @@
     Each pin is a definition whose stated type must match the headline
     result's type up to conversion, so a statement weakened by an added
     premise or a changed conclusion fails to compile.  The adversarial audit of 2026-11-08 showed the other checks
-    could not detect such a weakening.  The script requires the number of
-    pins below. *)
+    could not detect such a weakening.  Statements.v pins every item of this
+    file with fully qualified names, and the script counts the pins there. *)
 
 From Stdlib Require Import List.
 From CoreBounds Require Import Core Check Algebra Soundness.

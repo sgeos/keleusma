@@ -79,7 +79,9 @@ statements and the definitions of `good`, `wcet` and `wcmu`, but not the definit
 statements mention, among them `run_b`, `cycle`, `cycles`, `reset`, `stream_segs`, `summary` and
 `le_summ`. The delta check showed by execution that a change to `stream_segs` passes the pins.
 Those definitions are therefore checked only by reading them and by the concrete values in
-`Controls.v`.
+`Controls.v`, and the controls themselves are not pinned, so a change to such a definition
+made together with weakened controls would pass every pin. An audit of 2026-11-18 noted this
+by reading and did not execute it.
 
 ## The core
 
