@@ -163,7 +163,9 @@
 // 848 -> 849: `the_runtimes_route_figures_are_the_backends` in
 // `region_supplement_formula.rs`, absorption 131, 2026-11-02. No name
 // disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 849;
+// 849 -> 850: `text_from_literal_returning_functions_compares_by_content` in
+// `text_comparison.rs`, 2026-11-18. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 850;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

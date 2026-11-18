@@ -2089,6 +2089,7 @@ pub fn lower_chunk<'ctx>(
             natives: &[],
             native_shapes: &[],
             chunk_signatures: &[],
+            literal_text_callees: &std::collections::BTreeSet::new(),
             float_bytes: 8,
             // `lower_chunk` sees no module, so it resolves no call and needs no
             // per-site offsets; it refuses `Op::Call` for the same reason.
@@ -2371,6 +2372,7 @@ fn lower_module_with<'ctx>(
                 || (c.block_type == BlockType::Stream
                     && degenerate_stream_yield(c, program).is_none())
         });
+    let literal_text_callees = text::literal_text_returns(&program.chunks, &program.signatures);
     let data = DataCtx {
         layout,
         stream_state_off: u32::try_from(keleusma::native_region::native_private_base_bytes(
@@ -2711,6 +2713,7 @@ fn lower_module_with<'ctx>(
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
             chunk_signatures: &program.signatures,
+            literal_text_callees: &literal_text_callees,
             float_bytes: 1u32 << program.float_bits_log2 >> 3,
             call_regions: &call_regions,
             visited: visits.as_ref().map(|_| &seen),
@@ -3130,6 +3133,11 @@ struct BodyCfg<'a> {
     /// result carries no width and any composite packing one is refused. Empty
     /// for the single-chunk entry point, which resolves no call at all.
     chunk_signatures: &'a [keleusma::bytecode::ChunkSignature],
+    /// The `fn` chunks that return only string literal records this backend
+    /// lays out, from [`text::literal_text_returns`]. A call to one yields an
+    /// operand of kind [`OperandKind::Text`], which a `Text` comparison accepts.
+    /// Empty for the single-chunk entry point.
+    literal_text_callees: &'a std::collections::BTreeSet<usize>,
     /// Region offset for each `Op::Call` in this chunk, by op index.
     ///
     /// **The caller-allocated return slot, expressed through the pointer the
@@ -3965,6 +3973,7 @@ fn lower_chunk_body<'ctx>(
         natives,
         native_shapes,
         chunk_signatures,
+        literal_text_callees,
         call_regions,
         visited,
         float_bytes,
@@ -6806,6 +6815,10 @@ fn lower_chunk_body<'ctx>(
                         OperandKind::Float
                     } else if sg_ret.is_some_and(shape_is_fixed) {
                         OperandKind::Fixed
+                    } else if literal_text_callees.contains(&usize::from(*idx)) {
+                        // The callee returns only literal records this backend
+                        // laid out, so a `Text` comparison may read it by content.
+                        OperandKind::Text
                     } else {
                         OperandKind::Unknown
                     };
