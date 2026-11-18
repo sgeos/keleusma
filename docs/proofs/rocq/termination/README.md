@@ -43,13 +43,20 @@ eval $(opam env --switch=rocq)
 docs/proofs/rocq/termination/check.sh
 ```
 
-The script follows the hardened scripts of the other directories. It builds and checks B2's
-sources as its dependency, then this directory's three modules. It fails unless no source holds
+The script follows the hardened scripts of the other directories. It builds B2's sources as its
+dependency, then this directory's four modules. Only this directory's sources are scanned for
+forbidden constructs, and `rocqchk` re-verifies only this directory's modules, though its context
+summary lists any axiom of a dependency too. It fails unless no source holds
 an admitted or assumed proof, a warning silencer or a `Redirect`, the pin and control files
 open no section and declare no hypothesis, variable or context, every module compiles with no
 output, `rocqchk` reports no axiom and no unsafe construct, all 21 named results are closed, and
-`Statements.v` holds its 5 pins. On 2026-11-18 a premise added to `accepted_terminates`, with
-its uses patched to supply it, was refused at its pin in `Statements.v`, in a copy under `tmp/`.
+`Statements.v` holds its 7 pins. `Claims.v` states the three headline results, two controls and
+two definition equations, and `Statements.v` imports no module of the project and pins each of
+those seven items by the type Rocq printed with fully qualified names, because an audit of
+2026-11-18 showed that pins written with bare names under `Import` could be bypassed by
+redefining a name they use. On 2026-11-18, before that regeneration, a premise added to
+`accepted_terminates`, with its uses patched to supply it, was refused at its pin, in a copy
+under `tmp/`.
 No log of that run is kept in the tree. Continuous integration does not yet run the script,
 under the operator's ruling that a new continuous-integration job waits for the release or for
 agreement with the V0.2.X line.

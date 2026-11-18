@@ -34,8 +34,8 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/termination}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(Termination Controls Statements)
-pins_expected=5
+modules=(Termination Controls Claims Statements)
+pins_expected=7
 results=(
     Termination.shape_calls Termination.calls_mono Termination.calls_from_nth
     Termination.check_funcs_calls Termination.fuel_agree Termination.ftab_prefix
@@ -43,7 +43,7 @@ results=(
     Termination.accepted_good Termination.accepted_terminates Termination.accepted_runs_agree
     Controls.loop_ok_bound_is_needed Controls.self_call_rejected Controls.forward_call_rejected
     Controls.call_chain_accepted_and_finishes Controls.P0_injective Controls.loop_ok_runs_agree
-    Statements.bound_pinned Statements.calls_call_pinned
+    Claims.bound_pinned Claims.calls_call_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -71,7 +71,7 @@ done
 # The pins and the controls may not open a section or declare a hypothesis,
 # variable or context, which could discharge a premise added to a pinned
 # statement.
-for m in Statements Controls; do
+for m in Statements Claims Controls; do
     [ -f "$src/$m.v" ] || continue
     n=$(flat "$src/$m.v" | { grep -oE '\<(Section|Hypothes[ie]s|Hypothesis|Variables?|Context)\>' || true; } | wc -l | tr -d ' ')
     if [ "$n" -ne 0 ]; then
