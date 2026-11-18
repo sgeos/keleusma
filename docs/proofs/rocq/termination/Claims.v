@@ -3,8 +3,8 @@
     Each pin is a definition whose stated type must match the result's type
     up to conversion, so a statement weakened by an added premise or a
     changed conclusion fails to compile.  The definition of [bound] is fixed
-    below by a proved equation.  The script requires the number of pins
-    below. *)
+    below by a proved equation.  Statements.v pins every item of this
+    file with fully qualified names, and the script counts the pins there. *)
 
 From Stdlib Require Import List.
 From RegionCore Require Import Core Shape.
