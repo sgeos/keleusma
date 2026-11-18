@@ -186,8 +186,10 @@ Proof.
 Qed.
 
 (** The premises of Theorem B1 hold of this instance, stated in full so that
-    the pin of this control fixes that B1 itself is applied, and not only
-    its conclusion. *)
+    the pin of this control fixes that B1's premises are satisfiable.  No pin
+    fixes a proof term, so the pin does not show that the conclusion below
+    is proved through B1, but with the pin of [theorem_B1] it shows that B1
+    is not vacuous. *)
 Theorem B1_premises_hold :
   Theorems.sole unit C_plan 0 /\
   (forall n, exists f, Clearance.flow_ok f /\
