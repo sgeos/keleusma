@@ -441,8 +441,8 @@ fn raw_array_length_pattern_requires_a_literal_origin() {
         size: 24,
     }];
     module.chunks[0].ops[0] = Op::CallVerifiedNative(0, 0);
-    for i in 1..4 {
-        module.chunks[0].ops[i] = Op::PopN(0);
+    for op in &mut module.chunks[0].ops[1..4] {
+        *op = Op::PopN(0);
     }
     assert!(keleusma::verify::verify(&module).is_ok());
     assert!(keleusma::verify::verify_resource_bounds(&module, 65536).is_err());
