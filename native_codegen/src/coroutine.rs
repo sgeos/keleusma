@@ -584,8 +584,14 @@ fn lower_impl<'ctx>(
     if owns_host_values {
         // Owned host bodies returned by ordinary callees must not escape a
         // machine-stack alloca. Inline every bytecode call before frame capture.
-        for index in 0..program.chunks.len() {
-            if index != entry && analysis.plan.reachable[index] {
+        for (index, &reachable) in analysis
+            .plan
+            .reachable
+            .iter()
+            .enumerate()
+            .take(program.chunks.len())
+        {
+            if index != entry && reachable {
                 mark_delegate(
                     ctx,
                     module.get_function(&format!("kel_chunk_{index}")).unwrap(),
