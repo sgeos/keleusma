@@ -66,19 +66,23 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > for the `keleusma-arena` allocator contract and finding A1, a rewind below the persistent
 > boundary, which V0.2.X reports fixed locally at `ca73895e`, unpushed, with a relative mark
 > encoding, so its two harnesses flip when that lands. Five Rocq branches wait, none pushed.
-> `proof/rocq-b1-pins` at `682a650c` pins 29 of B1's statements, closing open item 5.
-> `proof/rocq-accounting-arm` at `9962253a`, which contains `proof/rocq-accounting`, proves
+> `proof/rocq-b1-pins` at `f7de65f6` pins 29 of B1's statements, closing open item 5.
+> `proof/rocq-accounting-arm` at `8f98207a`, which contains `proof/rocq-accounting`, proves
 > memory accounting, Theorem C, for B2's region core epoch by epoch, for injective plans and for
 > plans the join checker accepts, and supersedes `proof/rocq-accounting` for landing.
-> `proof/rocq-termination` at `b6601192` proves that every module B2's checker accepts
+> `proof/rocq-termination` at `6afd00ca` proves that every module B2's checker accepts
 > finishes at a computed fuel, so B2's reuse theorem is not vacuous.
-> `proof/rocq-pins-qualified` at `654081a2` repairs the merged directories `core_bounds`,
+> `proof/rocq-pins-qualified` at `8d8a015f` repairs the merged directories `core_bounds`,
 > `region_core`, `shared_slots` and `instance`. A fresh-context audit of 2026-11-18 showed by
 > execution that pins written with bare names under `Import` can be bypassed by redefining a
 > name such as `cycles`, so every such `Statements.v` became `Claims.v` and a regenerated
 > `Statements.v` pins each item with fully qualified names and no project import. The other
 > audit findings were repaired, except that the per-epoch reading of the accounting is stated
-> as an unproved assumption. A delta check of the repairs was started on 2026-11-18. Kaizen
+> as an unproved assumption. A delta check of the repairs on 2026-11-18 found the shadowing
+> repair held against every attack tried, including a replay against accounting and core_bounds,
+> and found that a commented-out pin was still counted, now fixed in all seven scripts. It also
+> noted that global settings such as `Global Arguments` in a module loaded by `Require` alone
+> still reach `Statements.v`, with no way found to weaken a pin through them. Kaizen
 > relayed three operator rulings of 2026-11-18, not confirmed first-hand here. The toolchain
 > follows the latest stable Rust. The interline checkpoint export hold is lifted. Worktrees
 > stay under `keleusma-worktrees/`. Kaizen also relayed the answer "6, yes and yes", that heavy
