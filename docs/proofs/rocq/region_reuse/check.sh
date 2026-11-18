@@ -14,7 +14,7 @@
 #      they become explicit premises of each closed theorem.
 #   5. The number of results reported closed equals the number named, so a
 #      result that silently dropped out of the list cannot pass.
-#   6. Statements.v pins the exact type of 28 named results, and proves the
+#   6. Statements.v pins the exact type of 29 named results, and proves the
 #      definitions of Trace.sound and Trace.baseline by equations. A statement
 #      weakened by an added premise or a changed conclusion then fails to
 #      compile against its pin. The file must hold the expected number of pins.
@@ -33,7 +33,7 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/region_reuse}"
 modules=(Bound Trace Clearance Theorems Controls Statements)
-pins_expected=28
+pins_expected=29
 results=(
     Bound.A1_branch_bound Bound.A1s_static_bound Bound.cond_one_arm Bound.C_plan_bound
     Bound.B2a_accounting Bound.footprint_below_bump Bound.footprint_above_bump
@@ -48,6 +48,7 @@ results=(
     Controls.reuse_without_separation_is_unsound Controls.baseline_reads_first
     Controls.plan_reads_second Controls.unsound_plan_fails_the_premises
     Controls.premises_of_B1_are_satisfiable Controls.instance_reads_each_region
+    Controls.B1_premises_hold
     Statements.sound_pinned Statements.baseline_pinned
 )
 

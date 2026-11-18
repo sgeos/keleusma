@@ -125,6 +125,10 @@ Definition pin_unsound_plan_fails_the_premises :
   ~ (forall n k : nat, Theorems.element_ok unit nat unit unit Controls.C_plan k (Trace.gen unit nat unit unit Controls.C_sel Controls.C_next (Trace.baseline unit) n))
   := Controls.unsound_plan_fails_the_premises.
 
+Definition pin_B1_premises_hold :
+  Theorems.sole unit Controls.C_plan 0 /\ (forall n : nat, exists f : Clearance.flow, Clearance.flow_ok f /\ Theorems.describes unit nat unit unit f (Trace.gen unit nat unit unit Controls.C_sel Controls.I_next (Trace.baseline unit) n) /\ Theorems.separated_scopes unit nat unit unit Controls.C_plan 0 (Clearance.send f) (Trace.gen unit nat unit unit Controls.C_sel Controls.I_next (Trace.baseline unit) n) /\ Theorems.all_confined unit nat unit unit f Controls.C_plan 0 (Trace.gen unit nat unit unit Controls.C_sel Controls.I_next (Trace.baseline unit) n))
+  := Controls.B1_premises_hold.
+
 Definition pin_premises_of_B1_are_satisfiable :
   Trace.sound unit nat unit unit Controls.C_sel Controls.I_next Controls.C_plan
   := Controls.premises_of_B1_are_satisfiable.
