@@ -6,7 +6,8 @@
 //! Order 6 text equality reads four words of two string literal records. Each
 //! record is a constant global `{ i64 len, bytes }` that `static_string_global`
 //! initialises, and its operand kind is `Text` only when a string constant
-//! produced it. The two length reads read the records' first words. The two
+//! produced it or a call to a function that returns only such records, as
+//! `text::literal_text_returns` establishes since 2026-11-18. The two length reads read the records' first words. The two
 //! byte reads lie at offset eight plus an index the loop bounds by the length,
 //! so they stay inside a record whose lengths were just found equal.
 //!
@@ -121,7 +122,10 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 37 -> 41 for the four text equality reads described above.
 // 41 -> 42 for the copy at the yield's cursor, described above.
 // 42 -> 44 in absorption 129 for the delegated loop context's two reads.
-const RECORDED_READ_SITES: usize = 44;
+// 44 -> 48 for text ordering, 2026-11-18, which reads the same four words of
+// the same two literal records as text equality, each byte read at an index
+// below the shorter record's length.
+const RECORDED_READ_SITES: usize = 48;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

@@ -17,8 +17,10 @@
 //! A `Text` returned by a call to a function that returns only literals compares
 //! by content since 2026-11-18. A `Text` passed as a parameter, returned by a
 //! function that may return one, returned by a native or read from a field is
-//! still refused in a comparison. Ordering comparisons of
-//! `Text` are refused. Both are recorded in the Order 6 completion record.
+//! still refused in a comparison, equality and ordering alike. Since the same
+//! day an ordering comparison of two literal records lowers, by the virtual
+//! machine's `str` order. The limits are recorded in the Order 6 completion
+//! record.
 mod common;
 
 use keleusma_native::{LowerOptions, module_refusals};
@@ -80,6 +82,53 @@ fn text_from_literal_returning_functions_compares_by_content() {
             }
         }
     }
+}
+
+/// Ordering comparisons of literal records follow the virtual machine's `str`
+/// order, byte-wise over UTF-8 and then by length. They were refused until
+/// 2026-11-18. The pairs cover a proper prefix, a differing first byte, a
+/// differing later byte, equality, the empty string, a byte above 127 against
+/// an ASCII one, and a literal returned by a function.
+#[test]
+fn literal_text_orderings_agree_with_the_vm() {
+    let pairs = [
+        ("ab", "abc"),
+        ("b", "abc"),
+        ("abd", "abc"),
+        ("same", "same"),
+        ("", "a"),
+        ("é", "z"),
+    ];
+    let mut compared = 0;
+    for (x, y) in pairs {
+        for op in ["<", ">", "<=", ">="] {
+            for (l, r) in [(x, y), (y, x)] {
+                let src = format!(
+                    "fn main(a: Word, b: Word) -> Word {{ if \"{l}\" {op} \"{r}\" {{ 1 }} else {{ 0 }} }}"
+                );
+                let m = common::build(&src);
+                assert!(
+                    module_refusals(&m, LowerOptions::default()).is_empty(),
+                    "a literal ordering is refused: {src}"
+                );
+                for optimise in [false, true] {
+                    let (vm, native) = common::vm_and_native_two_arg_at(&src, 0, 0, optimise);
+                    assert_eq!(native, vm, "{src}, optimised {optimise}");
+                    compared += 1;
+                }
+            }
+        }
+    }
+    let src = "fn pick(a: Word) -> Text { if a > 0 { \"pear\" } else { \"apple\" } } \
+               fn main(a: Word, b: Word) -> Word { if pick(a) < \"banana\" { 1 } else { 0 } }";
+    for (a, b) in [(1, 0), (-1, 0)] {
+        for optimise in [false, true] {
+            let (vm, native) = common::vm_and_native_two_arg_at(src, a, b, optimise);
+            assert_eq!(native, vm, "{src} on ({a}, {b}), optimised {optimise}");
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 6 * 4 * 2 * 2 + 4);
 }
 
 /// MUST-NOT-FIRE for the tests above. A `Text` parameter, or a function that

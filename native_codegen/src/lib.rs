@@ -1961,6 +1961,131 @@ fn text_equality<'ctx>(
     result.as_basic_value().into_int_value()
 }
 
+/// The order of two string literal records, as an `i64` of -1, 0 or 1.
+///
+/// The virtual machine orders two `Text` values by Rust's `str` comparison,
+/// which is byte-wise lexicographic over the UTF-8 bytes, with a proper prefix
+/// ordering first. This compares the bytes up to the shorter length, unsigned,
+/// and on a tie compares the lengths. Both operands are records this backend
+/// laid out, `{ i64 len, bytes }`, as for [`text_equality`], so every read is
+/// within a record's stated length.
+fn text_ordering<'ctx>(
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    b: &Builder<'ctx>,
+    lhs: IntValue<'ctx>,
+    rhs: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let i64t = ctx.i64_type();
+    let i8t = ctx.i8_type();
+    let ptr = ctx.ptr_type(AddressSpace::default());
+    let (a, z) = (
+        b.build_int_to_ptr(lhs, ptr, "order_a").unwrap(),
+        b.build_int_to_ptr(rhs, ptr, "order_b").unwrap(),
+    );
+    let la = b
+        .build_load(i64t, a, "order_a_len")
+        .unwrap()
+        .into_int_value();
+    let lz = b
+        .build_load(i64t, z, "order_b_len")
+        .unwrap()
+        .into_int_value();
+    let a_shorter = b
+        .build_int_compare(IntPredicate::ULT, la, lz, "order_a_shorter")
+        .unwrap();
+    let shorter = b
+        .build_select(a_shorter, la, lz, "order_common")
+        .unwrap()
+        .into_int_value();
+    let start = b.get_insert_block().unwrap();
+    let head = ctx.append_basic_block(func, "order_head");
+    let body = ctx.append_basic_block(func, "order_body");
+    let step = ctx.append_basic_block(func, "order_step");
+    let lengths = ctx.append_basic_block(func, "order_lengths");
+    let done = ctx.append_basic_block(func, "order_done");
+    b.build_unconditional_branch(head).unwrap();
+
+    b.position_at_end(head);
+    let index = b.build_phi(i64t, "order_index").unwrap();
+    let at = index.as_basic_value().into_int_value();
+    let more = b
+        .build_int_compare(IntPredicate::ULT, at, shorter, "order_more")
+        .unwrap();
+    b.build_conditional_branch(more, body, lengths).unwrap();
+
+    b.position_at_end(body);
+    // The bytes start eight bytes into the record, after its length.
+    let offset = b
+        .build_int_add(at, i64t.const_int(8, false), "order_byte_offset")
+        .unwrap();
+    let pa = unsafe {
+        b.build_in_bounds_gep(i8t, a, &[offset], "order_a_byte")
+            .unwrap()
+    };
+    let pz = unsafe {
+        b.build_in_bounds_gep(i8t, z, &[offset], "order_b_byte")
+            .unwrap()
+    };
+    let ba = b
+        .build_load(i8t, pa, "order_a_at")
+        .unwrap()
+        .into_int_value();
+    let bz = b
+        .build_load(i8t, pz, "order_b_at")
+        .unwrap()
+        .into_int_value();
+    let same = b
+        .build_int_compare(IntPredicate::EQ, ba, bz, "order_same_byte")
+        .unwrap();
+    // A differing byte decides, compared unsigned as Rust compares `u8`.
+    let byte_less = b
+        .build_int_compare(IntPredicate::ULT, ba, bz, "order_byte_less")
+        .unwrap();
+    let byte_sign = b
+        .build_select(
+            byte_less,
+            i64t.const_all_ones(),
+            i64t.const_int(1, false),
+            "order_byte_sign",
+        )
+        .unwrap()
+        .into_int_value();
+    b.build_conditional_branch(same, step, done).unwrap();
+
+    b.position_at_end(step);
+    let next = b
+        .build_int_add(at, i64t.const_int(1, false), "order_next")
+        .unwrap();
+    b.build_unconditional_branch(head).unwrap();
+    index.add_incoming(&[(&i64t.const_zero(), start), (&next, step)]);
+
+    // Every common byte is equal, so the shorter record orders first.
+    b.position_at_end(lengths);
+    let len_less = b
+        .build_int_compare(IntPredicate::ULT, la, lz, "order_len_less")
+        .unwrap();
+    let len_more = b
+        .build_int_compare(IntPredicate::UGT, la, lz, "order_len_more")
+        .unwrap();
+    let len_sign = b
+        .build_select(
+            len_less,
+            i64t.const_all_ones(),
+            b.build_int_z_extend(len_more, i64t, "order_len_more_word")
+                .unwrap(),
+            "order_len_sign",
+        )
+        .unwrap()
+        .into_int_value();
+    b.build_unconditional_branch(done).unwrap();
+
+    b.position_at_end(done);
+    let result = b.build_phi(i64t, "text_order").unwrap();
+    result.add_incoming(&[(&byte_sign, body), (&len_sign, lengths)]);
+    result.as_basic_value().into_int_value()
+}
+
 /// Declare `llvm.trap`, reusing the existing declaration if the module already
 /// carries one. Lowering a second chunk into the same module must not redeclare
 /// it.
@@ -5815,10 +5940,7 @@ fn lower_chunk_body<'ctx>(
                 if text_comparisons.contains(&i) {
                     let literals =
                         st.kind_at(0) == OperandKind::Text && st.kind_at(1) == OperandKind::Text;
-                    if !(literals
-                        && st.runtime_kinds.is_none()
-                        && matches!(op, Op::CmpEq | Op::CmpNe))
-                    {
+                    if !(literals && st.runtime_kinds.is_none()) {
                         return Err(LowerError::unsupported_op(
                             &op_variant_name(op),
                             format!(
@@ -5832,11 +5954,25 @@ fn lower_chunk_body<'ctx>(
                     }
                     let rhs = st.pop();
                     let lhs = st.pop();
-                    let equal = text_equality(ctx, func, &st.b, lhs, rhs);
-                    let result = if matches!(op, Op::CmpNe) {
-                        st.b.build_not(equal, "text_ne").unwrap()
+                    let result = if matches!(op, Op::CmpEq | Op::CmpNe) {
+                        let equal = text_equality(ctx, func, &st.b, lhs, rhs);
+                        if matches!(op, Op::CmpNe) {
+                            st.b.build_not(equal, "text_ne").unwrap()
+                        } else {
+                            equal
+                        }
                     } else {
-                        equal
+                        // An ordering compares by the virtual machine's `str`
+                        // order, byte-wise and then by length.
+                        let order = text_ordering(ctx, func, &st.b, lhs, rhs);
+                        let predicate = match op {
+                            Op::CmpLt => IntPredicate::SLT,
+                            Op::CmpGt => IntPredicate::SGT,
+                            Op::CmpLe => IntPredicate::SLE,
+                            _ => IntPredicate::SGE,
+                        };
+                        st.b.build_int_compare(predicate, order, i64t.const_zero(), "text_order")
+                            .unwrap()
                     };
                     let v = st.b.build_int_z_extend(result, i64t, "text_cmp").unwrap();
                     st.push_w(v, Width::Scalar(1));

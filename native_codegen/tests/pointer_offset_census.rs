@@ -162,7 +162,11 @@
 // 52 -> 55 for the copy at the yield's three addresses described above.
 // 55 -> 58 in absorption 129 for the delegated loop context's three
 // constant field addresses described above.
-const RECORDED_GEP_SITES: usize = 58;
+// 58 -> 62 for text ordering, 2026-11-18. Like text equality it turns two
+// literal operands into pointers to constant records this backend emitted, and
+// forms two byte addresses at eight plus an index below the shorter record's
+// length, which is RUNTIME-AND-BOUNDED.
+const RECORDED_GEP_SITES: usize = 62;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second

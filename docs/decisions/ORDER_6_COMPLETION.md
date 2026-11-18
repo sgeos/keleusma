@@ -76,10 +76,13 @@ below. V0.4.0 is not released, since publication is held.
 
 - A `Text` parameter, a native's `Text`, a `Text` field, and the result of a
   function that may return one of those cannot be compared natively, and a
-  `Text` cannot be a composite field. Ordering comparisons of `Text` are
-  refused. Since 2026-11-18 the result of a function every `Return` of which
-  yields a string literal compares by content, checked against the virtual
-  machine in `text_comparison.rs`.
+  `Text` cannot be a composite field. Since 2026-11-18 the result of a
+  function every `Return` of which yields a string literal compares by content,
+  and two literal records also compare by ordering, by the virtual machine's
+  byte-wise `str` order, both checked against the virtual machine in
+  `text_comparison.rs`. A `Text` parameter stays refused even when every call
+  passes a literal, because on the module route every chunk keeps external
+  linkage and a host may call it with a `Text` this backend did not lay out.
 - **Corrected 2026-10-28.** This record said opaque handles are refused on every
   route. That was not measured, and a probe refuted it. An opaque value a native
   returns, passes to another native, holds across a yield or receives as a

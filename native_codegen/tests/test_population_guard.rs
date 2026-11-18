@@ -165,7 +165,9 @@
 // disappeared.
 // 849 -> 850: `text_from_literal_returning_functions_compares_by_content` in
 // `text_comparison.rs`, 2026-11-18. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 850;
+// 850 -> 851: `literal_text_orderings_agree_with_the_vm` in
+// `text_comparison.rs`, 2026-11-18. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 851;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
