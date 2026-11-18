@@ -15,21 +15,27 @@ stream cycles. **The same holds with no injectivity premise for every module and
 join checker of [`../shared_slots/`](../shared_slots/README.md) accepts together**, which covers
 plans that put several sites in one slot. Every named result is checked with no axiom.
 
-**What this does not prove.** The count is per epoch, and reading it as the memory a cycle needs
-rests on an assumption that is stated here and not proved. The assumption is that during an
-epoch the run reads only cells of that epoch's allocations, so that storage from earlier epochs
-could be reclaimed at the reset. It is plausible, since a dereference checks the handle's epoch
-against the current one, but it needs an invariant tying every handle to its allocation's
-epoch, and no such invariant is proved here. The region core never frees a cell, so the memory
-it actually holds after `n` cycles is bounded only by the slots plus the unplanned allocations
-of every epoch together, which grows with `n`, and no theorem here bounds that total.
+**The per-epoch reading, and what remains of it.** The count is per epoch. Reading it as the
+memory one cycle needs rests on the fact that during an epoch the run reads only cells of that
+epoch's allocations, so that earlier epochs' storage could be reclaimed at the reset. Since
+2026-11-18, `Epochs.v` proves the two parts of that fact. `cycles_ok` proves that in the state
+any run reaches from the start, every handle on the stack or in a local names a recorded
+allocation of the handle's own epoch, and its proof carries that invariant through every
+instruction, call and reset. `deref_current` proves that from any state where the invariant
+holds, a dereference that succeeds reads the cell of an allocation of the current epoch, a cell
+`footprint_at` counts for that epoch. The theorem statements cover the final state of a run,
+not each intermediate state, so that the dereference at every `Get` reads a current cell
+follows from the structure of the proof together with `deref_current` rather than from a single
+statement. The region core still never frees a cell, so the memory it actually holds after `n`
+cycles is bounded only by the slots plus the unplanned allocations of every epoch together,
+which grows with `n`, and no theorem here bounds that total.
 
 ## Why the epoch
 
 The quantity bounded is the per-epoch footprint, the number of distinct cells the allocations of
 one epoch use. A cycle of the shipping virtual machine reclaims its bump storage at the reset
-that ends it, so under the assumption stated above the per-epoch footprint is what a worst-case
-memory bound must cover. The
+that ends it, so given the reading established above the per-epoch footprint is what a
+worst-case memory bound must cover. The
 bound `K + unplanned` does not grow with the number of times a reused site allocates in an
 epoch, which is the saving reuse exists for. A loop that allocates at a reused site a thousand
 times in one cycle uses one slot.
@@ -46,6 +52,8 @@ times in one cycle uses one slot.
 | `reuse_footprint_bounded` | `Footprint.v` | The headline, combining the four above |
 | `same_allocations_arm` | `ArmFootprint.v` | For a module and plan the join checker accepts together, with no injectivity premise, the two runs record the same allocations |
 | `reuse_footprint_bounded_arm` | `ArmFootprint.v` | The headline for plans the join checker accepts, sharing slots included |
+| `cycles_ok` | `Epochs.v` | For every plan, module and host, every handle in a reached state names a recorded allocation of its own epoch |
+| `deref_current` | `Epochs.v` | A successful dereference from such a state reads a cell of an allocation of the current epoch |
 
 The counting in `Accounting.v` refers to no machine, so it holds of any allocation record. The
 machine enters through `mem_within`, which ties the memory a run holds to its record, and
@@ -62,19 +70,20 @@ docs/proofs/rocq/accounting/check.sh
 ```
 
 The script follows the hardened scripts of the other directories. It builds B2's sources and the
-shared-slot extension's sources as its dependencies, then this directory's seven modules. Only
+shared-slot extension's sources as its dependencies, then this directory's eight modules. Only
 this directory's sources are scanned for forbidden constructs, and `rocqchk` re-verifies only
 this directory's modules, though its context summary lists any axiom of a dependency too. The
 dependencies' own pin files are not compiled here, so they are checked by their own scripts. It fails unless no source holds
 an admitted or assumed proof, a warning silencer or a `Redirect`, scanned with comments removed
 and whitespace collapsed, the pin and control files open no section and declare no hypothesis,
 variable or context, every module compiles with no output, `rocqchk` reports no axiom and no
-unsafe construct, all 37 named results are closed, and `Statements.v` holds its 23 pins.
+unsafe construct, all 47 named results are closed, and `Statements.v` holds its 27 pins.
 
 `Claims.v` states the eight results above and six controls, and fixes the definitions the
 conclusions rest on by proved equations, namely `footprint_at`, `cell_at`, `allocs_at`,
 `unplanned_at`, `within`, `indexed` by its two projections, and the controls' `run_of`, `fp` and
-`seq_run`. `Statements.v` imports no module of the project and pins each of those 23 items by the
+`seq_run`, together with `cycles_ok`, `deref_current` and the definitions of `handles_ok` and
+`hok`. `Statements.v` imports no module of the project and pins each of those 27 items by the
 type Rocq printed with fully qualified names, because an audit of 2026-11-18 showed by execution
 that pins written with bare names under `Import` could be bypassed. A redefined `cycles` in
 `Footprint.v` made the headline vacuous while every such pin compiled. The same attack replayed

@@ -36,9 +36,9 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/accounting}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(Accounting Footprint Controls ArmFootprint ArmControls Claims Statements)
+modules=(Accounting Footprint Controls ArmFootprint ArmControls Epochs Claims Statements)
 ss_deps=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls)
-pins_expected=23
+pins_expected=27
 results=(
     Accounting.indexed_from_fst Accounting.indexed_app Accounting.nodup_length_le
     Accounting.NoDup_allocs_at Accounting.baseline_footprint Accounting.footprint_le_baseline
@@ -54,6 +54,9 @@ results=(
     Claims.footprint_at_pinned Claims.cell_at_pinned Claims.allocs_at_pinned
     Claims.indexed_pinned Claims.unplanned_at_pinned Claims.within_pinned
     Claims.run_of_pinned Claims.fp_pinned Claims.seq_run_pinned
+    Epochs.grows_trans Epochs.hok_grows Epochs.pop_ok Epochs.new_ok Epochs.run_ok
+    Epochs.cycles_ok Epochs.indexed_from_nth Epochs.deref_current
+    Claims.handles_ok_pinned Claims.hok_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }

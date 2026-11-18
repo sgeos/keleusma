@@ -14,7 +14,7 @@
 
 From RegionCore Require Core Shape Sim Reuse Controls.
 From SharedSlots Require SharedShape SharedSim Shared ArmShape ArmSim Arm Controls.
-From Accounting Require Accounting Footprint Controls ArmFootprint ArmControls.
+From Accounting Require Accounting Footprint Controls ArmFootprint ArmControls Epochs.
 From Accounting Require Claims.
 
 Definition pin_baseline_footprint :
@@ -108,3 +108,19 @@ Definition pin_unplanned_at_pinned :
 Definition pin_within_pinned :
   forall (P : RegionCore.Core.plan) (s : RegionCore.Core.state), Accounting.Footprint.within P s = (forall (c : RegionCore.Core.cell) (x : Corelib.Init.Datatypes.nat), RegionCore.Core.mem s c = Corelib.Init.Datatypes.Some x -> Stdlib.Lists.List.In c (Corelib.Lists.ListDef.map (Accounting.Accounting.cell_at P) (Accounting.Accounting.indexed (RegionCore.Core.regs s))))
   := Accounting.Claims.within_pinned.
+
+Definition pin_cycles_ok :
+  forall (P : RegionCore.Core.plan) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (m : RegionCore.Core.module) (fuel n : Corelib.Init.Datatypes.nat) (s : RegionCore.Core.state), RegionCore.Core.cycles P host m fuel n RegionCore.Core.init = Corelib.Init.Datatypes.Some s -> Accounting.Epochs.handles_ok s
+  := Accounting.Claims.pin_cycles_ok.
+
+Definition pin_deref_current :
+  forall (P : RegionCore.Core.plan) (s : RegionCore.Core.state) (v : RegionCore.Core.val) (x : Corelib.Init.Datatypes.nat), Accounting.Epochs.hok s v -> RegionCore.Core.deref P s v = Corelib.Init.Datatypes.Some x -> exists r site : Corelib.Init.Datatypes.nat, Stdlib.Lists.List.nth_error (RegionCore.Core.regs s) r = Corelib.Init.Datatypes.Some (site, RegionCore.Core.epoch s) /\ RegionCore.Core.mem s (RegionCore.Core.cell_of P site r) = Corelib.Init.Datatypes.Some x /\ Stdlib.Lists.List.In (RegionCore.Core.cell_of P site r) (Corelib.Lists.ListDef.map (Accounting.Accounting.cell_at P) (Accounting.Accounting.allocs_at (RegionCore.Core.regs s) (RegionCore.Core.epoch s)))
+  := Accounting.Claims.pin_deref_current.
+
+Definition pin_handles_ok_pinned :
+  forall s : RegionCore.Core.state, Accounting.Epochs.handles_ok s = ((forall v : RegionCore.Core.val, Stdlib.Lists.List.In v (RegionCore.Core.stk s) -> Accounting.Epochs.hok s v) /\ (forall j : Corelib.Init.Datatypes.nat, Accounting.Epochs.hok s (RegionCore.Core.locs s j)))
+  := Accounting.Claims.handles_ok_pinned.
+
+Definition pin_hok_pinned :
+  forall (s : RegionCore.Core.state) (r e : Corelib.Init.Datatypes.nat), Accounting.Epochs.hok s (RegionCore.Core.VH r e) = exists site : Corelib.Init.Datatypes.nat, Stdlib.Lists.List.nth_error (RegionCore.Core.regs s) r = Corelib.Init.Datatypes.Some (site, e)
+  := Accounting.Claims.hok_pinned.

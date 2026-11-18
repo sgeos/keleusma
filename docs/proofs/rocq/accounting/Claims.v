@@ -12,7 +12,7 @@ From RegionCore Require Import Core Shape.
 From RegionCore Require Controls.
 From SharedSlots Require Import ArmShape.
 From SharedSlots Require Controls.
-From Accounting Require Import Accounting Footprint ArmFootprint.
+From Accounting Require Import Accounting Footprint ArmFootprint Epochs.
 From Accounting Require Controls ArmControls.
 Import ListNotations.
 
@@ -148,6 +148,24 @@ Proof. reflexivity. Qed.
 
 Example seq_run_pinned : forall P,
   ArmControls.seq_run P = cycles P RegionCore.Controls.host_len SharedSlots.Controls.sequential 100 2 init.
+Proof. reflexivity. Qed.
+
+Definition pin_cycles_ok : forall P host m fuel n s,
+  cycles P host m fuel n init = Some s -> handles_ok s
+  := cycles_ok.
+
+Definition pin_deref_current : forall P s v x, hok s v -> deref P s v = Some x ->
+  exists r site, nth_error (regs s) r = Some (site, epoch s) /\
+    mem s (cell_of P site r) = Some x /\
+    In (cell_of P site r) (map (cell_at P) (allocs_at (regs s) (epoch s)))
+  := deref_current.
+
+Example handles_ok_pinned : forall s,
+  handles_ok s = ((forall v, In v (stk s) -> hok s v) /\ (forall j, hok s (locs s j))).
+Proof. reflexivity. Qed.
+
+Example hok_pinned : forall s r e,
+  hok s (VH r e) = (exists site, nth_error (regs s) r = Some (site, e)).
 Proof. reflexivity. Qed.
 
 (** The definitions the conclusions rest on, pinned by proved equations. *)
