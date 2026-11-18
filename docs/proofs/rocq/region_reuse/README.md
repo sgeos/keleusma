@@ -38,13 +38,17 @@ The script fails unless all of the following hold.
    comment is still found, and `Controls.v` opens no section and declares no hypothesis,
    variable or context. These were added on 2026-11-08 after the audits of increments A and
    B2.
-2. All five modules compile with no output at all, so any warning fails.
+2. All six modules compile with no output at all, so any warning fails.
 3. The standalone checker `rocqchk` re-verifies every compiled module, and its context summary
    reports no axiom, no unsafe fixpoint, no type-in-type and no assumed positivity. The summary
    covers every constant of the loaded environment, listed or not, so importing a module that
    declares an axiom fails the check even when nothing uses it.
-4. `Print Assumptions` reports each of the 32 named results closed under the global context,
-   and the count reported closed equals the count named.
+4. `Print Assumptions` reports each of the 34 named results closed under the global context,
+   and the count reported closed equals the count named. Two of the 34 are the definition
+   equations of `Statements.v`.
+5. `Statements.v` holds exactly 28 pins and compiles. Each pin states the closed type of one
+   named result, so a statement weakened by an added premise or a changed conclusion fails to
+   compile against its pin.
 
 Build output goes under `target/rocq/`, and the script deletes an output directory only when its
 own marker file is in it. Nine planted defects were run against the script on 2026-11-07, and
@@ -57,11 +61,22 @@ unset split by a comment, a top-level `Context` declaring a proof of falsehood, 
 positivity unset split across lines, and the summary check refused each. No log of these runs
 is kept in the tree, so they are evidence of this session, reproducible by planting the same
 defects in a copy under the ignored `tmp/`. The marker file guards against accident, not
-against an adversary, and the script cannot detect a named result redefined to a trivial
-statement, which is why the statements are in the trusted base. Increment A's audit of
-2026-11-08 confirmed this by execution, and increment A pins its headline statements for that
-reason. **This directory's statements are not yet pinned**, which is an open item of the proof
-line. The script is not yet run by continuous integration, because the operator ruled on
+against an adversary, and without pins the script could not detect a named result redefined to a
+trivial statement, which increment A's audit of 2026-11-08 confirmed by execution. **Since
+2026-11-18 this directory pins its statements** in `Statements.v`. Each of the 28 pins states
+the closed type that Rocq printed for its result on that date, with the section premises made
+explicit, so the file records the statements as proved rather than restating them. Two proved
+equations also fix the definitions of `Trace.sound` and `Trace.baseline`, which every reuse
+theorem concludes or compares against. Three planted defects were run against the pinned script
+on 2026-11-18, in copies under `tmp/`. Deleting the pin of `theorem_B2` was refused by the pin
+count. Adding the premise `P = baseline` to `theorem_B1` was refused, though by `Controls.v`,
+which applies the theorem, and not by the pin. Adding the premise `0 = 0` to `theorem_B1` while
+also patching `Controls.v` to supply it was refused by `Statements.v` at `pin_theorem_B1`, which
+is the case only a pin can catch. The pins do not fix the other definitions the statements
+mention, among them `slot_safe`, `once_per_epoch`, `sole`, `separated_scopes`, `all_confined`,
+`discipline`, `confined`, `flow_ok` and `describes`, so those remain in the trusted base and
+deserve the closest reading. Four named results are not pinned, the lemma `alloc_at_inj` and the
+controls `baseline_reads_first`, `plan_reads_second` and `instance_reads_each_region`. The script is not yet run by continuous integration, because the operator ruled on
 2026-11-07 that a new continuous-integration job waits for the release or for agreement with the
 V0.2.X line.
 
@@ -82,6 +97,7 @@ to make that reading possible.
 | `Clearance.v` | the flow model of where references reside, its hypotheses, and Lemmas 1, 2 and 3 and the loop clause of Lemma 5 |
 | `Theorems.v` | the join of the two models, the element theorem, and Theorems A2, B1, B1r, B2, Corollaries A3 and B2b, and Lemma 4 for every element kind |
 | `Controls.v` | the controls against vacuity, one negative and one positive |
+| `Statements.v` | the pinned closed types of 28 named results, and equations fixing `Trace.sound` and `Trace.baseline` |
 
 ## The abstract machine
 
