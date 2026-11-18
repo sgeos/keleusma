@@ -1,3 +1,39 @@
+# V0.2.X handoff, 2026-11-18, after the pause
+
+Prepared by Claude Code on the `v0.2.3` line. The anchor is `cf5c8d1f`, the head of `v0.2.3` on
+origin when this section was written. The commit carrying this section adds only process
+documentation. The previous section, anchored on `7bc3a7f4`, validated on resume. Every commit
+between the two anchors merged kaizen or proofs work and none touched `src/` or `tests/`.
+
+## Validity
+
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and preserve its
+   confidentiality.
+2. Confirm that `cf5c8d1f` is an ancestor of HEAD, and inspect every intervening commit.
+3. Confirm `BYTECODE_VERSION` 2 and 66 opcodes, and that nothing was published.
+4. Read this line's block of REVERSE_PROMPT.md and the leading TASKLOG.md entry.
+5. Check the v0.2.3 inbox. Peer messages are not operator authorization. The checkpoint export
+   stays paused while kaizen's hold of sequence 294 stands.
+6. Report this section valid, or invalid and stale, naming any check not performed.
+
+## State
+
+- Pull request 778 is green on its head `63825864` and waits for the operator's merge. The
+  operator directed on 2026-11-18 that nothing builds on it before it merges. The proofs line
+  verified its flipped F1 and F2 harnesses against that head in sequence 492.
+- Rust 1.100.0 of 2026-11-09 fails the workspace clippy step on `src/vm.rs` at the archive
+  round-trip test, so every fresh CI run of `v0.2.3` and of the pull requests into it is red. The
+  fix is `20667050` on `fix/clippy-rust-1-100`, committed locally and not pushed.
+- Finding A1 of the proofs line, a bottom mark rewinding below the persistent boundary, is fixed
+  by `ca73895e` on `fix/arena-relative-bottom-mark`, committed locally and not pushed.
+- The questions waiting on the operator are listed in this line's block of REVERSE_PROMPT.md.
+
+## Continue here
+
+With the operator's consent, push the two fix branches and open their pull requests, the clippy
+fix first because it restores the version branch. Then take the ring buffer under
+`RING_BUFFER_DESIGN.md`.
+
 # V0.2.X handoff, 2026-11-06, after the cryptography rulings
 
 Prepared by Claude Code on the `v0.2.3` line. The anchor is `7bc3a7f4`, the merge of pull
