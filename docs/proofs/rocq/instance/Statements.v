@@ -1,81 +1,66 @@
-(** * Statements.v -- the headline statements of the instantiation, pinned.
+(** * Statements.v -- the pinned statements, fully qualified.
 
-    Each pin is a definition whose stated type must match its theorem's type
-    up to conversion, so a statement weakened by an added premise or a
-    changed conclusion fails to compile.  [pin_reuse_sound_via_B1] repeats
-    the text of increment B2's own pin of [reuse_sound], and
-    [pin_same_as_B2] checks that the two theorems have one type.  The
-    definitions the statements mention, among them [next], [run_events],
-    [orun_all], [ans_plan], [strip] and [to_log], are not pinned and rest on
-    the trusted base, as the README records. *)
+    Each pin is a definition whose stated type must match the type of one
+    item of [Claims.v] up to conversion, so a statement weakened by an added
+    premise or a changed conclusion fails to compile.  Each stated type is the
+    type Rocq printed for the item with fully qualified names on the date of
+    regeneration.  This file imports no module of the project, so no
+    definition elsewhere can shadow a name it uses.  An audit of 2026-11-18
+    showed by execution that pins written with bare names under [Import] could
+    be bypassed by redefining such a name in an imported module.  [Claims.v]
+    holds the statements as first written, with their proofs, including the
+    proved equations that fix definitions.  The script requires the number of
+    pins below. *)
 
-From Stdlib Require Import List.
-From RegionCore Require Import Core Shape Reuse Controls.
 From RegionReuse Require Trace.
-From Instance Require Import Encode Memory Machine Safety Instance Witnesses.
-Import ListNotations.
+From RegionCore Require Core Shape Sim Reuse Controls.
+From Instance Require Encode Causal Memory Machine Safety Instance Witnesses.
+From Instance Require Claims.
 
-Definition pin_instance_sound : forall m ft, region_check m = Some ft ->
-  forall P, injective P -> forall host fuel n,
-  Trace.sound nat nat unit nat sel0 (next m host fuel n) P
-  := instance_sound.
+Definition pin_instance_sound :
+  forall (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), RegionCore.Shape.region_check m = Corelib.Init.Datatypes.Some ft -> forall P : RegionCore.Core.plan, RegionCore.Shape.injective P -> forall (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (fuel n : Corelib.Init.Datatypes.nat), RegionReuse.Trace.sound Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 (Instance.Machine.next m host fuel n) P
+  := Instance.Claims.pin_instance_sound.
 
-Definition pin_checked_slot_safe : forall m ft, region_check m = Some ft ->
-  forall P, injective P -> forall A host fuel n k,
-  Trace.slot_safe nat nat unit nat P k (otr (orun_all A host m fuel n))
-  := checked_slot_safe.
+Definition pin_checked_slot_safe :
+  forall (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), RegionCore.Shape.region_check m = Corelib.Init.Datatypes.Some ft -> forall P : RegionCore.Core.plan, RegionCore.Shape.injective P -> forall (A : Instance.Encode.oracle) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (fuel n k : Corelib.Init.Datatypes.nat), RegionReuse.Trace.slot_safe Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat P k (Instance.Encode.otr (Instance.Encode.orun_all A host m fuel n))
+  := Instance.Claims.pin_checked_slot_safe.
 
-Definition pin_gen_is_run : forall Q host m fuel n N,
-  Trace.gen nat nat unit nat sel0 (next m host fuel n) Q N = firstn N (run_events Q host m fuel n)
-  := gen_is_run.
+Definition pin_gen_is_run :
+  forall (Q : RegionReuse.Trace.plan Corelib.Init.Datatypes.nat) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (m : RegionCore.Core.module) (fuel n N : Corelib.Init.Datatypes.nat), RegionReuse.Trace.gen Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 (Instance.Machine.next m host fuel n) Q N = Corelib.Lists.ListDef.firstn N (Instance.Machine.run_events Q host m fuel n)
+  := Instance.Claims.pin_gen_is_run.
 
-Definition pin_core_is_oracle : forall Q host m fuel n,
-  match cycles Q host m fuel n init with
-  | Some s => ohalt (orun_all (ans_plan Q) host m fuel n) = false /\
-              ost (orun_all (ans_plan Q) host m fuel n) = strip s /\
-              log s = to_log (Trace.obs_of nat nat unit nat sel0 Q (otr (orun_all (ans_plan Q) host m fuel n)))
-  | None => ohalt (orun_all (ans_plan Q) host m fuel n) = true
-  end
-  := core_is_oracle.
+Definition pin_core_is_oracle :
+  forall (Q : RegionCore.Core.plan) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (m : RegionCore.Core.module) (fuel n : Corelib.Init.Datatypes.nat), match RegionCore.Core.cycles Q host m fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some s => Instance.Encode.ohalt (Instance.Encode.orun_all (Instance.Memory.ans_plan Q) host m fuel n) = Corelib.Init.Datatypes.false /\ Instance.Encode.ost (Instance.Encode.orun_all (Instance.Memory.ans_plan Q) host m fuel n) = Instance.Memory.strip s /\ RegionCore.Core.log s = Instance.Memory.to_log (RegionReuse.Trace.obs_of Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 Q (Instance.Encode.otr (Instance.Encode.orun_all (Instance.Memory.ans_plan Q) host m fuel n))) | Corelib.Init.Datatypes.None => Instance.Encode.ohalt (Instance.Encode.orun_all (Instance.Memory.ans_plan Q) host m fuel n) = Corelib.Init.Datatypes.true end
+  := Instance.Claims.pin_core_is_oracle.
 
-Definition pin_core_log_is_B1_obs : forall Q host m fuel n,
-  match cycles Q host m fuel n init with
-  | Some s => exists N0, forall N, N0 <= N ->
-      log s = to_log (Trace.obs_of nat nat unit nat sel0 Q (Trace.gen nat nat unit nat sel0 (next m host fuel n) Q N))
-  | None => True
-  end
-  := core_log_is_B1_obs.
+Definition pin_core_log_is_B1_obs :
+  forall (Q : RegionCore.Core.plan) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (m : RegionCore.Core.module) (fuel n : Corelib.Init.Datatypes.nat), match RegionCore.Core.cycles Q host m fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some s => exists N0 : Corelib.Init.Datatypes.nat, forall N : Corelib.Init.Datatypes.nat, N0 <= N -> RegionCore.Core.log s = Instance.Memory.to_log (RegionReuse.Trace.obs_of Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 Q (RegionReuse.Trace.gen Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 (Instance.Machine.next m host fuel n) Q N)) | Corelib.Init.Datatypes.None => Corelib.Init.Logic.True end
+  := Instance.Claims.pin_core_log_is_B1_obs.
 
-Definition pin_replay : forall Q host m fuel n,
-  orun_all (ans_of (Trace.obs_of nat nat unit nat sel0 Q (run_events Q host m fuel n))) host m fuel n =
-  orun_all (ans_plan Q) host m fuel n
-  := replay.
+Definition pin_replay :
+  forall (Q : RegionReuse.Trace.plan Corelib.Init.Datatypes.nat) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (m : RegionCore.Core.module) (fuel n : Corelib.Init.Datatypes.nat), Instance.Encode.orun_all (Instance.Machine.ans_of (RegionReuse.Trace.obs_of Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 Q (Instance.Machine.run_events Q host m fuel n))) host m fuel n = Instance.Encode.orun_all (Instance.Memory.ans_plan Q) host m fuel n
+  := Instance.Claims.pin_replay.
 
-Definition pin_reuse_sound_via_B1 : forall m ft, region_check m = Some ft ->
-  forall P, injective P -> forall host fuel n,
-  match cycles P host m fuel n init, cycles baseline host m fuel n init with
-  | Some sp, Some sb => log sp = log sb
-  | None, None => True
-  | _, _ => False
-  end
-  := reuse_sound_via_B1.
+Definition pin_reuse_sound_via_B1 :
+  forall (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), RegionCore.Shape.region_check m = Corelib.Init.Datatypes.Some ft -> forall P : RegionCore.Core.plan, RegionCore.Shape.injective P -> forall (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (fuel n : Corelib.Init.Datatypes.nat), match RegionCore.Core.cycles P host m fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some sp => match RegionCore.Core.cycles RegionCore.Core.baseline host m fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some sb => RegionCore.Core.log sp = RegionCore.Core.log sb | Corelib.Init.Datatypes.None => Corelib.Init.Logic.False end | Corelib.Init.Datatypes.None => match RegionCore.Core.cycles RegionCore.Core.baseline host m fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some _ => Corelib.Init.Logic.False | Corelib.Init.Datatypes.None => Corelib.Init.Logic.True end end
+  := Instance.Claims.pin_reuse_sound_via_B1.
 
-(** The instantiation reproves increment B2's theorem with the same type. *)
-Definition pin_same_as_B2 : reuse_sound = reuse_sound_via_B1 -> True := fun _ => I.
+Definition pin_same_as_B2 :
+  RegionCore.Reuse.reuse_sound = Instance.Instance.reuse_sound_via_B1 -> Corelib.Init.Logic.True
+  := Instance.Claims.pin_same_as_B2.
 
-(** The witnesses, pinned so that none can be weakened to a tautology. *)
 Definition pin_loop_bad_unsound_in_B1 :
-  region_check loop_bad = None /\ injective P0 /\
-  ~ Trace.sound nat nat unit nat sel0 (next loop_bad host_len 100 2) P0
-  := conj loop_bad_rejected (conj loop_bad_plan_injective loop_bad_unsound_in_B1).
+  RegionCore.Shape.region_check RegionCore.Controls.loop_bad = Corelib.Init.Datatypes.None /\ RegionCore.Shape.injective RegionCore.Controls.P0 /\ ~ RegionReuse.Trace.sound Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 (Instance.Machine.next RegionCore.Controls.loop_bad RegionCore.Controls.host_len 100 2) RegionCore.Controls.P0
+  := Instance.Claims.pin_loop_bad_unsound_in_B1.
 
 Definition pin_shared_slot_unsound_in_B1 :
-  region_check two_sites = Some [] /\
-  ~ Trace.sound nat nat unit nat sel0 (next two_sites host_len 100 2) P01
-  := conj two_sites_accepted shared_slot_unsound_in_B1.
+  RegionCore.Shape.region_check RegionCore.Controls.two_sites = Corelib.Init.Datatypes.Some Corelib.Init.Datatypes.nil /\ ~ RegionReuse.Trace.sound Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.nat Corelib.Init.Datatypes.unit Corelib.Init.Datatypes.nat Instance.Encode.sel0 (Instance.Machine.next RegionCore.Controls.two_sites RegionCore.Controls.host_len 100 2) RegionCore.Controls.P01
+  := Instance.Claims.pin_shared_slot_unsound_in_B1.
 
-Example sel0_pinned : forall v b, sel0 v b = b.
-Proof. reflexivity. Qed.
+Definition pin_sel0_pinned :
+  forall (v : Corelib.Init.Datatypes.unit) (b : Corelib.Init.Datatypes.nat), Instance.Encode.sel0 v b = b
+  := Instance.Claims.sel0_pinned.
 
-Example baseline_pinned : forall s, Trace.baseline nat s = None /\ baseline s = None.
-Proof. split; reflexivity. Qed.
+Definition pin_baseline_pinned :
+  forall s : Corelib.Init.Datatypes.nat, RegionReuse.Trace.baseline Corelib.Init.Datatypes.nat s = Corelib.Init.Datatypes.None /\ RegionCore.Core.baseline s = Corelib.Init.Datatypes.None
+  := Instance.Claims.baseline_pinned.

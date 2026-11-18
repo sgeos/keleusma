@@ -37,8 +37,8 @@ set -euo pipefail
 src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/region_core}"
-modules=(Core Shape Sim Reuse Controls Statements)
-pins_expected=5
+modules=(Core Shape Sim Reuse Controls Claims Statements)
+pins_expected=7
 results=(
     Sim.pop_spec Sim.pop_rel Sim.in_handle_site Sim.ts_no_handle Sim.cells_differ Sim.no_regions
     Sim.step_pop Sim.simulation
@@ -51,8 +51,8 @@ results=(
     Controls.reject_arms_differ Controls.reject_second_live_allocation
     Controls.accept_consumed_then_reallocated Controls.loop_dup_agrees
     Controls.sep_only_rejected_at_allocation Controls.sep_only_diverges Controls.accept_copies_consumed
-    Statements.pin_loop_bad_diverges Statements.pin_sep_only_diverges
-    Statements.injective_pinned Statements.baseline_pinned
+    Claims.pin_loop_bad_diverges Claims.pin_sep_only_diverges
+    Claims.injective_pinned Claims.baseline_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -80,7 +80,7 @@ done
 # The pins and the controls may not open a section or declare a hypothesis,
 # variable or context, which could discharge a premise added to a pinned
 # statement.
-for m in Statements Controls; do
+for m in Statements Claims Controls; do
     [ -f "$src/$m.v" ] || continue
     n=$(flat "$src/$m.v" | { grep -oE '\<(Section|Hypothes[ie]s|Hypothesis|Variables?|Context)\>' || true; } | wc -l | tr -d ' ')
     if [ "$n" -ne 0 ]; then

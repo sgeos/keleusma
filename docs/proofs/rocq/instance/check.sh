@@ -39,8 +39,8 @@ b1_src="$src/../region_reuse"
 b2_src="$src/../region_core"
 b1_modules=(Trace)
 b2_modules=(Core Shape Sim Reuse Controls)
-modules=(Encode Causal Memory Machine Safety Instance Witnesses Statements)
-pins_expected=10
+modules=(Encode Causal Memory Machine Safety Instance Witnesses Claims Statements)
+pins_expected=12
 results=(
     Encode.orun_extends Encode.ocycles_extends Encode.upto_app Encode.upto_prefix
     Encode.upto_nth Encode.read_before
@@ -52,11 +52,11 @@ results=(
     Instance.instance_sound Instance.core_log_is_B1_obs Instance.reuse_sound_via_B1
     Witnesses.loop_ok_events Witnesses.loop_bad_unsound_in_B1 Witnesses.loop_bad_plan_injective
     Witnesses.shared_slot_unsound_in_B1 Witnesses.shared_slot_premise_fails
-    Statements.pin_instance_sound Statements.pin_checked_slot_safe Statements.pin_gen_is_run
-    Statements.pin_core_is_oracle Statements.pin_core_log_is_B1_obs Statements.pin_replay
-    Statements.pin_reuse_sound_via_B1 Statements.pin_same_as_B2
-    Statements.pin_loop_bad_unsound_in_B1 Statements.pin_shared_slot_unsound_in_B1
-    Statements.sel0_pinned Statements.baseline_pinned
+    Claims.pin_instance_sound Claims.pin_checked_slot_safe Claims.pin_gen_is_run
+    Claims.pin_core_is_oracle Claims.pin_core_log_is_B1_obs Claims.pin_replay
+    Claims.pin_reuse_sound_via_B1 Claims.pin_same_as_B2
+    Claims.pin_loop_bad_unsound_in_B1 Claims.pin_shared_slot_unsound_in_B1
+    Claims.sel0_pinned Claims.baseline_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -81,7 +81,7 @@ for f in "${sources[@]}"; do
         hits=$((hits + n))
     fi
 done
-for m in Statements Witnesses; do
+for m in Statements Claims Witnesses; do
     n=$(flat "$src/$m.v" | { grep -oE '\<(Section|Hypothes[ie]s|Hypothesis|Variables?|Context)\>' || true; } | wc -l | tr -d ' ')
     if [ "$n" -ne 0 ]; then
         echo "check.sh: $m.v opens a section or declares a hypothesis, variable or context" >&2

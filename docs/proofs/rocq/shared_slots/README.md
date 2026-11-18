@@ -58,12 +58,28 @@ proof, a warning silencer of either attribute spelling, or a `Redirect`, scanned
 removed and whitespace collapsed, the pin
 and control files open no section and declare no hypothesis, variable or context, every
 module compiles with no output, `rocqchk` reports no axiom and no unsafe construct, all 36 named
-results are closed, and `Statements.v` holds the eight expected pins. Three planted defects were
+results are closed, and `Statements.v` holds the eight expected pins, fully qualified, of the items of `Claims.v`. Three planted defects were
 run against it on 2026-11-08, a premise added to `reuse_sound_shared`, which its pin refused, an
 `Admitted` lemma, and an unlisted theorem using the classical axiom, and it refused each. No log
 is kept in the tree. Continuous integration does not yet run the script, under the operator's
 ruling that a new continuous-integration job waits for the release or for agreement with the
 V0.2.X line.
+
+## The pins, regenerated on 2026-11-18
+
+An adversarial audit of 2026-11-18 showed by execution, in a sibling directory, that pins
+written with bare names under `Import` can be bypassed. A module that redefines a name the pins
+use, such as `cycles`, captures every bare use of it, so a headline can become vacuous while
+every pin still compiles. The statements first written here are therefore kept, with their
+proofs, in `Claims.v`, and `Statements.v` is regenerated so that it imports no module of the
+project. Each of its pins states, with fully qualified names, the type Rocq printed for one item
+of `Claims.v` on that date, the proved definition equations included. A redefined name then
+changes the type of an item of `Claims.v` without changing the pinned text, and compilation
+fails. The same attack was replayed against `region_core` in a copy under `tmp/`, a `cycles`
+that always returns `None` added to `Reuse.v` with `reuse_sound` proved trivially and the
+controls patched to compile, and `Statements.v` refused it at `pin_reuse_sound` while every
+other module compiled. Regenerating the pins from a tampered tree would record the tampering,
+so the pinned text itself remains part of the trusted base.
 
 ## The trusted base
 
