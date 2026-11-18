@@ -1,0 +1,360 @@
+{
+ "after_compaction": {
+  "calls": 2771,
+  "errors": 71,
+  "rate": 0.0256
+ },
+ "after_compaction_errors_by_tool": {
+  "Bash": 60,
+  "Edit": 11
+ },
+ "after_compaction_without_edit_guard": {
+  "calls": 2760,
+  "errors": 60,
+  "rate": 0.0217
+ },
+ "all_tools_by_context": {
+  "100k-200k": {
+   "calls": 4294,
+   "errors": 90,
+   "rate": 0.021
+  },
+  "200k-400k": {
+   "calls": 7127,
+   "errors": 96,
+   "rate": 0.0135
+  },
+  "400k-700k": {
+   "calls": 6431,
+   "errors": 61,
+   "rate": 0.0095
+  },
+  "50k-100k": {
+   "calls": 1156,
+   "errors": 33,
+   "rate": 0.0285
+  },
+  "<50k": {
+   "calls": 56,
+   "errors": 2,
+   "rate": 0.0357
+  },
+  ">=700k": {
+   "calls": 3263,
+   "errors": 37,
+   "rate": 0.0113
+  }
+ },
+ "before_compaction": {
+  "calls": 2847,
+  "errors": 49,
+  "rate": 0.0172
+ },
+ "before_compaction_without_edit_guard": {
+  "calls": 2839,
+  "errors": 41,
+  "rate": 0.0144
+ },
+ "by_calls_since_compaction": {
+  "0-9": {
+   "calls": 570,
+   "errors": 20,
+   "rate": 0.0351
+  },
+  "10-24": {
+   "calls": 840,
+   "errors": 24,
+   "rate": 0.0286
+  },
+  "100-199": {
+   "calls": 4546,
+   "errors": 69,
+   "rate": 0.0152
+  },
+  "25-49": {
+   "calls": 1361,
+   "errors": 27,
+   "rate": 0.0198
+  },
+  "50-99": {
+   "calls": 2678,
+   "errors": 44,
+   "rate": 0.0164
+  }
+ },
+ "by_compaction_kind": {
+  "idle": {
+   "after": {
+    "calls": 1850,
+    "errors": 38,
+    "rate": 0.0205
+   },
+   "before": {
+    "calls": 1889,
+    "errors": 27,
+    "rate": 0.0143
+   },
+   "paired": {
+    "after_more": 18,
+    "before_more": 9,
+    "tied": 11
+   }
+  },
+  "threshold": {
+   "after": {
+    "calls": 910,
+    "errors": 22,
+    "rate": 0.0242
+   },
+   "before": {
+    "calls": 950,
+    "errors": 14,
+    "rate": 0.0147
+   },
+   "paired": {
+    "after_more": 7,
+    "before_more": 5,
+    "tied": 7
+   }
+  }
+ },
+ "by_model_and_context": {
+  "claude-opus-5 100k-200k": {
+   "calls": 845,
+   "errors": 11,
+   "rate": 0.013
+  },
+  "claude-opus-5 200k-400k": {
+   "calls": 1703,
+   "errors": 13,
+   "rate": 0.0076
+  },
+  "claude-opus-5 400k-700k": {
+   "calls": 2309,
+   "errors": 21,
+   "rate": 0.0091
+  },
+  "claude-opus-5 50k-100k": {
+   "calls": 276,
+   "errors": 5,
+   "rate": 0.0181
+  },
+  "claude-opus-5 >=700k": {
+   "calls": 1522,
+   "errors": 9,
+   "rate": 0.0059
+  },
+  "claude-opus-5-5 100k-200k": {
+   "calls": 3449,
+   "errors": 79,
+   "rate": 0.0229
+  },
+  "claude-opus-5-5 200k-400k": {
+   "calls": 5424,
+   "errors": 83,
+   "rate": 0.0153
+  },
+  "claude-opus-5-5 400k-700k": {
+   "calls": 4122,
+   "errors": 40,
+   "rate": 0.0097
+  },
+  "claude-opus-5-5 50k-100k": {
+   "calls": 872,
+   "errors": 28,
+   "rate": 0.0321
+  },
+  "claude-opus-5-5 >=700k": {
+   "calls": 1732,
+   "errors": 28,
+   "rate": 0.0162
+  }
+ },
+ "compaction_window_calls": 50,
+ "compactions_paired": {
+  "after_more": 25,
+  "before_more": 14,
+  "tied": 18
+ },
+ "edit_after_compaction": {
+  "calls": 153,
+  "errors": 11,
+  "rate": 0.0719
+ },
+ "edit_before_compaction": {
+  "calls": 111,
+  "errors": 8,
+  "rate": 0.0721
+ },
+ "edit_error_classes": {
+  "not read or modified since read": 38,
+  "string not found": 1
+ },
+ "edit_tools_by_context": {
+  "100k-200k": {
+   "calls": 294,
+   "errors": 16,
+   "rate": 0.0544
+  },
+  "200k-400k": {
+   "calls": 364,
+   "errors": 17,
+   "rate": 0.0467
+  },
+  "400k-700k": {
+   "calls": 196,
+   "errors": 6,
+   "rate": 0.0306
+  },
+  "50k-100k": {
+   "calls": 36,
+   "errors": 0,
+   "rate": 0.0
+  },
+  "<50k": {
+   "calls": 1,
+   "errors": 0,
+   "rate": 0.0
+  },
+  ">=700k": {
+   "calls": 65,
+   "errors": 0,
+   "rate": 0.0
+  }
+ },
+ "fresh_session_start": {
+  "calls": 452,
+  "errors": 14,
+  "rate": 0.031
+ },
+ "fresh_session_start_without_edit_guard": {
+  "calls": 451,
+  "errors": 13,
+  "rate": 0.0288
+ },
+ "idle_gap_minutes": 30,
+ "idle_gap_resumptions": {
+  "compacted": {
+   "after": {
+    "calls": 100,
+    "errors": 3,
+    "rate": 0.03
+   },
+   "first_call_cache_read_median": 28910,
+   "first_call_cache_write_median": 47228,
+   "resumptions": 2
+  },
+  "uncompacted_past_cache_ttl": {
+   "after": {
+    "calls": 5107,
+    "errors": 46,
+    "rate": 0.009
+   },
+   "first_call_cache_read_median": 26956,
+   "first_call_cache_write_median": 654349,
+   "resumptions": 113
+  },
+  "uncompacted_within_cache_ttl": {
+   "after": {
+    "calls": 2038,
+    "errors": 19,
+    "rate": 0.0093
+   },
+   "first_call_cache_read_median": 457275,
+   "first_call_cache_write_median": 720,
+   "resumptions": 42
+  }
+ },
+ "idle_gap_resumptions_by_day": {
+  "2026-11-01": {
+   "compacted": 2,
+   "uncompacted": 18
+  },
+  "2026-11-02": {
+   "compacted": 0,
+   "uncompacted": 10
+  },
+  "2026-11-04": {
+   "compacted": 0,
+   "uncompacted": 4
+  },
+  "2026-11-05": {
+   "compacted": 0,
+   "uncompacted": 27
+  },
+  "2026-11-06": {
+   "compacted": 0,
+   "uncompacted": 15
+  },
+  "2026-11-07": {
+   "compacted": 0,
+   "uncompacted": 7
+  },
+  "2026-11-08": {
+   "compacted": 0,
+   "uncompacted": 27
+  },
+  "2026-11-09": {
+   "compacted": 0,
+   "uncompacted": 4
+  },
+  "2026-11-10": {
+   "compacted": 0,
+   "uncompacted": 4
+  },
+  "2026-11-11": {
+   "compacted": 0,
+   "uncompacted": 8
+  },
+  "2026-11-12": {
+   "compacted": 0,
+   "uncompacted": 9
+  },
+  "2026-11-13": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-11-14": {
+   "compacted": 0,
+   "uncompacted": 6
+  },
+  "2026-11-15": {
+   "compacted": 0,
+   "uncompacted": 5
+  },
+  "2026-11-16": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-11-17": {
+   "compacted": 0,
+   "uncompacted": 2
+  },
+  "2026-11-18": {
+   "compacted": 0,
+   "uncompacted": 5
+  }
+ },
+ "permission_denials_excluded": 16,
+ "recovery_reads": {
+  "compaction": {
+   "calls": 1691,
+   "context_at_window_end_total": 6965944,
+   "context_at_window_start_total": 4278984,
+   "result_chars": 3757764,
+   "startup_doc_calls": 303,
+   "startup_doc_chars": 990090,
+   "windows": 57
+  },
+  "fresh": {
+   "calls": 292,
+   "context_at_window_end_total": 1122703,
+   "context_at_window_start_total": 621406,
+   "result_chars": 811355,
+   "startup_doc_calls": 63,
+   "startup_doc_chars": 281881,
+   "windows": 14
+  }
+ },
+ "recovery_window_calls": 30
+}
