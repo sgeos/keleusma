@@ -59,16 +59,26 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > workstation allows, pulling everything together later. So nothing below is pushed or merged
 > yet, and pull request 779, `proofs` into `v0.2.3`, stays red on a Clippy lint in
 > `src/vm.rs` that is not this line's. This line drafted and then reverted a local fix of that
-> lint, to avoid duplicating Kaizen. Four branches wait, each in its own worktree.
+> lint, to avoid duplicating Kaizen. Seven branches wait, each in its own worktree.
 > `proof/kani-findings-flip` at `ca10524a` flips F1 and F2 to regressions and carries V0.2.X's
 > unmerged pull request 778, so it waits for 778, whose merge the operator reserved to
 > themself, as V0.2.X relayed. `proof/kani-arena` at `8fa36252`, pushed, adds Kani harnesses
 > for the `keleusma-arena` allocator contract and finding A1, a rewind below the persistent
 > boundary, which V0.2.X reports fixed locally at `ca73895e`, unpushed, with a relative mark
-> encoding, so its two harnesses flip when that lands. `proof/rocq-b1-pins` at `e0c0e276`,
-> not pushed, pins 28 of B1's statements, closing open item 5. `proof/rocq-accounting` at
-> `b2eceb03`, not pushed, proves memory accounting, Theorem C, for B2's region core, epoch by
-> epoch. Both Rocq branches are under a fresh-context audit started on 2026-11-18. Kaizen
+> encoding, so its two harnesses flip when that lands. Five Rocq branches wait, none pushed.
+> `proof/rocq-b1-pins` at `682a650c` pins 29 of B1's statements, closing open item 5.
+> `proof/rocq-accounting-arm` at `9962253a`, which contains `proof/rocq-accounting`, proves
+> memory accounting, Theorem C, for B2's region core epoch by epoch, for injective plans and for
+> plans the join checker accepts, and supersedes `proof/rocq-accounting` for landing.
+> `proof/rocq-termination` at `b6601192` proves that every module B2's checker accepts
+> finishes at a computed fuel, so B2's reuse theorem is not vacuous.
+> `proof/rocq-pins-qualified` at `654081a2` repairs the merged directories `core_bounds`,
+> `region_core`, `shared_slots` and `instance`. A fresh-context audit of 2026-11-18 showed by
+> execution that pins written with bare names under `Import` can be bypassed by redefining a
+> name such as `cycles`, so every such `Statements.v` became `Claims.v` and a regenerated
+> `Statements.v` pins each item with fully qualified names and no project import. The other
+> audit findings were repaired, except that the per-epoch reading of the accounting is stated
+> as an unproved assumption. A delta check of the repairs was started on 2026-11-18. Kaizen
 > relayed three operator rulings of 2026-11-18, not confirmed first-hand here. The toolchain
 > follows the latest stable Rust. The interline checkpoint export hold is lifted. Worktrees
 > stay under `keleusma-worktrees/`. Kaizen also relayed the answer "6, yes and yes", that heavy
@@ -279,8 +289,12 @@ the recursion refusal makes stale, extend difftest relation R6 to mains with cal
 composed time figure of `3dee17c2`, and measure the heavy harnesses that now reach
 `find_call_cycle`. To the Kaizen line, review of its Phase 1 proofs job when it arrives, and a
 committed peaks baseline from split heavy harnesses. When V0.2.X pushes its fix of finding
-A1, flip the two A1 harnesses on `proof/kani-arena` to regressions. Land the four waiting
-branches when the operator pulls everything together. The Kaizen export hold above is reported
+A1, flip the two A1 harnesses on `proof/kani-arena` to regressions. Land the waiting branches
+when the operator pulls everything together, `proof/rocq-pins-qualified` first since it repairs
+landed work, and `proof/rocq-accounting-arm` in place of `proof/rocq-accounting`. Open proof
+work: the handle-epoch invariant that would prove the accounting's per-epoch reading, the
+termination corollary for the join checker, and the remaining B2 exclusions, refined
+confinement, the escape-copy discipline and sites in called functions. The Kaizen export hold above is reported
 lifted, by relay only.
 
 ## Owed to this line
