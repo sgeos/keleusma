@@ -1326,6 +1326,7 @@ mod tests {
     extern crate alloc as test_alloc;
 
     use super::*;
+    #[cfg(feature = "alloc")]
     use allocator_api2::vec::Vec as ArenaVec;
 
     #[cfg(feature = "alloc")]
