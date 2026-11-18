@@ -254,8 +254,8 @@ fn chunk_coverage_with(
         Err(e) => return Err(format!("VM refuses to load: {e:?}")),
     };
     let total = m.chunks.len();
-    for c in 0..total {
-        if !m.chunks[c].ops.is_empty() {
+    for (c, chunk) in m.chunks.iter().enumerate() {
+        if !chunk.ops.is_empty() {
             vm.set_breakpoint(c, 0);
         }
     }
