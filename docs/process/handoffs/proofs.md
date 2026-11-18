@@ -53,6 +53,28 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > first-hand. The heavy tier still has no green run, and its peaks inside the sandbox read
 > unknown because `/usr/bin/time -l` is refused there.
 
+> **REFRESHED 2026-11-18, eleventh stamp, after a pause of six days and a machine restart.**
+> The operator told this session first-hand on 2026-11-18 that Rust 1.100 broke continuous
+> integration, that Kaizen is fixing it, and to do as much outstanding proof work as the
+> workstation allows, pulling everything together later. So nothing below is pushed or merged
+> yet, and pull request 779, `proofs` into `v0.2.3`, stays red on a Clippy lint in
+> `src/vm.rs` that is not this line's. This line drafted and then reverted a local fix of that
+> lint, to avoid duplicating Kaizen. Four branches wait, each in its own worktree.
+> `proof/kani-findings-flip` at `ca10524a` flips F1 and F2 to regressions and carries V0.2.X's
+> unmerged pull request 778, so it waits for 778, whose merge the operator reserved to
+> themself, as V0.2.X relayed. `proof/kani-arena` at `8fa36252`, pushed, adds Kani harnesses
+> for the `keleusma-arena` allocator contract and finding A1, a rewind below the persistent
+> boundary, which V0.2.X reports fixed locally at `ca73895e`, unpushed, with a relative mark
+> encoding, so its two harnesses flip when that lands. `proof/rocq-b1-pins` at `e0c0e276`,
+> not pushed, pins 28 of B1's statements, closing open item 5. `proof/rocq-accounting` at
+> `b2eceb03`, not pushed, proves memory accounting, Theorem C, for B2's region core, epoch by
+> epoch. Both Rocq branches are under a fresh-context audit started on 2026-11-18. Kaizen
+> relayed three operator rulings of 2026-11-18, not confirmed first-hand here. The toolchain
+> follows the latest stable Rust. The interline checkpoint export hold is lifted. Worktrees
+> stay under `keleusma-worktrees/`. Kaizen also relayed the answer "6, yes and yes", that heavy
+> Kani runs may be measured here and may pause themselves at critical, which matches the
+> operator's first-hand ruling of 2026-11-11.
+
 ## Validity
 
 Validate by ancestry and by content, never by a hash match.
@@ -73,7 +95,7 @@ grep -c '^\*\*Lemma' $P             # 5
 grep -c '^\*\*Theorem' $P           # 7
 grep -c '^\*\*Corollary' $P         # 4
 grep -c 'blacksquare' $P            # 15, one per proof block
-ls docs/proofs/ | wc -l             # 5, the proof, three AUDIT records, and rocq/
+ls docs/proofs/ | wc -l             # 7, the proof, its obligation, a README, three AUDIT records, and rocq/. The value 5 written here until 2026-11-18 was wrong from the start
 ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
 ls docs/proofs/rocq/core_bounds/*.v | wc -l    # 6, increment A
 ls docs/proofs/rocq/region_core/*.v | wc -l    # 6, increment B2
@@ -217,9 +239,9 @@ its `main` merge on 2026-11-01.
    This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
    2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
    was answered or dropped is unverified, so ask the operator before treating it as open.
-5. **B1's statements are not pinned.** Increment A's audit showed by execution that a
-   checking script of this kind cannot detect a statement weakened by an added premise. A pins
-   its headline statements in `Statements.v`, and B1's directory needs the same.
+5. **B1's statements are pinned on `proof/rocq-b1-pins`, not yet landed.** Increment A's audit
+   showed by execution that a checking script of this kind cannot detect a statement weakened
+   by an added premise. That branch pins 28 of B1's 32 named results in `Statements.v`.
 
 ## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
 
@@ -256,8 +278,10 @@ To the V0.2.X line, after pull request 778 merges. Merge `proof/kani-findings-fl
 the recursion refusal makes stale, extend difftest relation R6 to mains with calls against the
 composed time figure of `3dee17c2`, and measure the heavy harnesses that now reach
 `find_call_cycle`. To the Kaizen line, review of its Phase 1 proofs job when it arrives, and a
-committed peaks baseline from split heavy harnesses. This line honors the Kaizen export hold
-above.
+committed peaks baseline from split heavy harnesses. When V0.2.X pushes its fix of finding
+A1, flip the two A1 harnesses on `proof/kani-arena` to regressions. Land the four waiting
+branches when the operator pulls everything together. The Kaizen export hold above is reported
+lifted, by relay only.
 
 ## Owed to this line
 
