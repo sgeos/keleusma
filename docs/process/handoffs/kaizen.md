@@ -95,11 +95,13 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Supply the release manifest when V0.2.X cuts V0.2.3, once the operator has made
    the signing key, E3 of 2026-11-04.
-2. Keep the toolchain question of 2026-11-18 moving: Rust 1.100.0's Clippy fails every
-   pull request through the unpinned CI toolchain, and pinning is the operator's call.
+2. Bring Keleusma up to the latest stable Rust, which the operator ruled on 2026-11-18 it
+   follows unpinned: fix the new Clippy lints, then the pinned detached packages, then
+   unblock the waiting pull requests in order.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Export the interline checkpoint once the operator rules on E4 of 2026-11-04.
+4. Export the interline checkpoint at handoff. The hold is lifted, and a message that
+   matches a disclosure term is exported with its body redacted.
 5. The proofs line resumes when the operator starts its session, with Rocq and Kani as
    ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
    was sent in the interline mailbox. Public records use the coded vocabulary of that file.
@@ -115,12 +117,10 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-[The open decisions of 2026-11-04](../kaizen/2026-11-04-open-decisions.md) hold the
-list and the operator's ruling of that day. E4 asks whether the interline checkpoint
-keeps other projects' messages, and every line holds its export meanwhile, by sequences
-294 to 296. The signing key is the operator's to make, and V0.2.3's publication waits
-for it. The K-series checks are deferred. The operator ruled on 2026-11-07 that all
-reasonable metrics are tracked.
+[The rulings of 2026-11-18](../kaizen/2026-11-18-open-decisions.md) settle the toolchain,
+the worktree location, the checkpoint and the proofs line's two questions. The signing key
+is deferred until the operator prepares it, and V0.2.3's publication waits for it. The
+K-series checks are deferred.
 
 ## Concerns
 
