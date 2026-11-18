@@ -15,12 +15,14 @@
 #   4. Every result named below depends on no axiom: Print Assumptions reports
 #      it closed under the global context.
 #   5. The number of results reported closed equals the number named.
-#   6. Statements.v pins the exact type of each headline result and of the
+#   6. Statements.v pins the exact type of each headline result, for injective
+#      plans and for plans the join checker of ../shared_slots accepts, and of the
 #      controls, and fixes the definitions the conclusions rest on by proved
 #      equations. The script requires the expected number of type pins.
 #
 # The trusted base is the Rocq kernel, rocqchk, the Stdlib modules imported by
-# the sources, List, Arith and Lia, increment B2's definitions, and the
+# the sources, List, Arith and Lia, the definitions of increment B2 and of its
+# shared-slot extension, and the
 # statements as written. Whether the region core models Keleusma is not checked
 # here; see README.md.
 #
@@ -34,8 +36,9 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/accounting}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(Accounting Footprint Controls Statements)
-pins_expected=8
+modules=(Accounting Footprint Controls ArmFootprint ArmControls Statements)
+ss_deps=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls)
+pins_expected=11
 results=(
     Accounting.indexed_from_fst Accounting.indexed_app Accounting.nodup_length_le
     Accounting.NoDup_allocs_at Accounting.baseline_footprint Accounting.footprint_le_baseline
@@ -44,6 +47,9 @@ results=(
     Footprint.mem_within Footprint.same_allocations Footprint.reuse_footprint_bounded
     Controls.loop_ok_footprints Controls.loop_ok_bound_is_tight Controls.slots_alone_do_not_bound
     Controls.P0_injective Controls.loop_ok_footprint_bounded
+    ArmFootprint.same_allocations_arm ArmFootprint.reuse_footprint_bounded_arm
+    ArmControls.sequential_accepted_by_join ArmControls.sequential_shares_one_cell
+    ArmControls.sequential_footprint_bounded
     Statements.footprint_at_pinned Statements.cell_at_pinned Statements.allocs_at_pinned
     Statements.indexed_pinned Statements.unplanned_at_pinned Statements.within_pinned
 )
@@ -127,9 +133,24 @@ done
         fi
     done
 )
+# The second dependency, the shared-slot extension, is built and rechecked from its own sources.
+mkdir -p "$out/ss"
+for m in "${ss_deps[@]}"; do
+    cp "$src/../shared_slots/$m.v" "$out/ss/"
+done
+(
+    cd "$out/ss"
+    for m in "${ss_deps[@]}"; do
+        if ! rocq compile -Q ../dep RegionCore -Q . SharedSlots "$m.v" > "$m.log" 2>&1 || [ -s "$m.log" ]; then
+            cat "$m.log" >&2
+            echo "check.sh: dependency $m.v does not compile cleanly" >&2
+            exit 1
+        fi
+    done
+)
 cd "$out/own"
 for m in "${modules[@]}"; do
-    if ! rocq compile -Q ../dep RegionCore -Q . Accounting "$m.v" > "$m.log" 2>&1; then
+    if ! rocq compile -Q ../dep RegionCore -Q ../ss SharedSlots -Q . Accounting "$m.v" > "$m.log" 2>&1; then
         cat "$m.log" >&2
         echo "check.sh: $m.v does not compile" >&2
         exit 1
@@ -149,7 +170,7 @@ qualified=()
 for m in "${modules[@]}"; do
     qualified+=("Accounting.$m")
 done
-rocqchk -silent -o -Q ../dep RegionCore -Q . Accounting -norec "${qualified[@]}" > rocqchk.log 2>&1
+rocqchk -silent -o -Q ../dep RegionCore -Q ../ss SharedSlots -Q . Accounting -norec "${qualified[@]}" > rocqchk.log 2>&1
 required=(
     '* Axioms: <none>'
     '* Constants/Inductives relying on type-in-type: <none>'
@@ -172,7 +193,7 @@ echo "check.sh: rocqchk re-verified ${#modules[@]} modules, no axiom, no unsafe 
         echo "Print Assumptions Accounting.$r."
     done
 } > Assumptions.v
-rocq compile -Q ../dep RegionCore -Q . Accounting Assumptions.v > Assumptions.log 2>&1
+rocq compile -Q ../dep RegionCore -Q ../ss SharedSlots -Q . Accounting Assumptions.v > Assumptions.log 2>&1
 closed=$(grep -c '^Closed under the global context$' Assumptions.log || true)
 if [ "$closed" -ne "${#results[@]}" ]; then
     cat Assumptions.log >&2

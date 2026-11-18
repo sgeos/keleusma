@@ -10,8 +10,10 @@
 From Stdlib Require Import List.
 From RegionCore Require Import Core Shape.
 From RegionCore Require Controls.
-From Accounting Require Import Accounting Footprint.
-From Accounting Require Controls.
+From SharedSlots Require Import ArmShape.
+From SharedSlots Require Controls.
+From Accounting Require Import Accounting Footprint ArmFootprint.
+From Accounting Require Controls ArmControls.
 Import ListNotations.
 
 Definition pin_baseline_footprint : forall rs e,
@@ -62,6 +64,39 @@ Definition pin_loop_ok_footprints :
 Definition pin_slots_alone_do_not_bound :
   ~ (forall e, Accounting.Controls.fp baseline e <= 0)
   := Accounting.Controls.slots_alone_do_not_bound.
+
+Definition pin_same_allocations_arm : forall P m ft, region_checkA P m = Some ft ->
+  forall host fuel n,
+  match cycles P host m fuel n init, cycles baseline host m fuel n init with
+  | Some sp, Some sb => regs sp = regs sb
+  | None, None => True
+  | _, _ => False
+  end
+  := same_allocations_arm.
+
+Definition pin_reuse_footprint_bounded_arm : forall P m ft, region_checkA P m = Some ft ->
+  forall K, (forall s k, P s = Some k -> k < K) ->
+  forall host fuel n,
+  match cycles P host m fuel n init, cycles baseline host m fuel n init with
+  | Some sp, Some sb =>
+      regs sp = regs sb /\ within P sp /\
+      forall e,
+        footprint_at P (regs sp) e <= K + length (unplanned_at P (regs sp) e) /\
+        footprint_at P (regs sp) e <= footprint_at baseline (regs sb) e /\
+        footprint_at baseline (regs sb) e = length (allocs_at (regs sb) e)
+  | None, None => True
+  | _, _ => False
+  end
+  := reuse_footprint_bounded_arm.
+
+Definition pin_sequential_shares_one_cell :
+  match ArmControls.seq_run SharedSlots.Controls.Pshare, ArmControls.seq_run baseline with
+  | Some sp, Some sb =>
+      (footprint_at SharedSlots.Controls.Pshare (regs sp) 0, footprint_at baseline (regs sb) 0,
+       footprint_at SharedSlots.Controls.Pshare (regs sp) 1, footprint_at baseline (regs sb) 1)
+  | _, _ => (0, 0, 0, 0)
+  end = (1, 2, 1, 2)
+  := ArmControls.sequential_shares_one_cell.
 
 (** The definitions the conclusions rest on, pinned by proved equations. *)
 Example footprint_at_pinned : forall P rs e,
