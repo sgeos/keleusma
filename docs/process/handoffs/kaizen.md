@@ -22,7 +22,9 @@ operator gave this line the handling of Dependabot findings.
 
 ## Where to work and how to validate
 
-Work only in the `.worktrees/kaizen` worktree below the primary checkout. The line uses
+Work only in this line's own worktree, `../keleusma-worktrees/kaizen` beside the primary
+checkout, where every line's tree lives by the operator's ruling of 2026-11-18. Until the
+operator moves it there between sessions, it is `.worktrees/kaizen`. The line uses
 a short-lived branch per increment, cut from `origin/v0.2.3` with
 `git switch --no-track -c`, because the sandbox cannot write the shared git config that
 upstream tracking needs. The primary checkout and the sibling worktrees belong to other
@@ -100,8 +102,8 @@ authority, so the startup-file positions reach them first-hand.
    unblock the waiting pull requests in order.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Export the interline checkpoint at handoff. The hold is lifted, and a message that
-   matches a disclosure term is exported with its body redacted.
+4. At each handoff, export the interline checkpoint with every body that matches a kept
+   disclosure term redacted in the export, leaving the store unchanged.
 5. The proofs line resumes when the operator starts its session, with Rocq and Kani as
    ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
    was sent in the interline mailbox. Public records use the coded vocabulary of that file.
@@ -111,9 +113,9 @@ authority, so the startup-file positions reach them first-hand.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
-8. Write the `proofs` CI job of [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md).
-   V0.2.X agreed in sequence 468, asking for a runner time limit and for F1 and F2 to flip to
-   expected passes with its fix. Pin Kani's nightly and the stable toolchain together.
+8. Land the `proofs` CI job, `.github/workflows/proofs.yml`, Phase 1 of
+   [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md), and commit a Kani peak
+   baseline from its first artifact. F1 and F2 flip to expected passes with V0.2.X's fix.
 
 ## Open with the operator
 
@@ -124,6 +126,9 @@ K-series checks are deferred.
 
 ## Concerns
 
+- Interline messages reach the public checkpoint. Kaizen's own review note of 2026-11-08
+  quoted a scratchpad path that names the account, and was redacted on export. Messages
+  should name a file by its repository path, never by a local absolute path.
 - The self-host archive storage cost is unverified, item K10.
 - `minimatch` 10.2.6 stays in the extension. GitHub withdrew alert 6, but the advisory
   still covers that version and no client release accepts the fix.
@@ -140,7 +145,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
+| [Interline](../interline/checkpoint.json) | `df5c0dfb2e7f883701f8c05a890cdc3d4d2725a47d12ce846dc201c5ddeca04a`, 558 messages, 213 unacknowledged at export, none addressed to `kaizen`. Other projects' messages are kept, by the ruling of 2026-11-18, and the bodies of 111 that matched a kept disclosure term are redacted in the export only. It restored into a fresh store and re-exported identically |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `8efbc7acda0987da71408c436dd77413f4db812eccd174aba02b3f6860aee580`, 3 samples evaluated and labelled and 3 task outcomes, exported on 2026-11-05, restored into a fresh store and re-exported byte-identical |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 

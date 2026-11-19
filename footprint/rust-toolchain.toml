@@ -1,7 +1,9 @@
-# The same pin as examples/rtos, so that one toolchain bump moves both. A footprint is
-# comparable only between builds made by the same compiler, so scripts/footprint.sh
-# records the version beside every figure, and a bump is a deliberate re-baseline.
+# The latest stable Rust, as examples/rtos uses, by the operator's ruling of 2026-11-18
+# that Keleusma uses the latest toolchain. A footprint is comparable only between builds
+# made by the same compiler, so scripts/footprint.sh records the version beside every
+# figure. A new stable release can move the figures, and footprint/budget.tsv names the
+# compiler its ceilings were set under, so a move past a ceiling is reviewed with its cause.
 [toolchain]
-channel = "1.92"
+channel = "stable"
 components = ["rust-src", "llvm-tools", "rustfmt", "clippy"]
 targets = ["thumbv8m.main-none-eabihf"]

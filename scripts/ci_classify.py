@@ -66,6 +66,37 @@ NATIVE_PATTERNS = (
 )
 
 
+# Every input of the proofs job: the Rocq proofs, the difftest and the Kani harnesses, the
+# verifier and wire code they check, and the workflow that runs them. The operator ruled
+# that a new CI job for the proofs waits for the release or for agreement with V0.2.X, which
+# agreed on 2026-11-11 in interline sequence 468. See
+# docs/process/kaizen/2026-11-08-proof-ci-plan.md. `docs/proofs/` is otherwise a light
+# prefix, so this flag is independent of the mode, as the native one is. A `dir/**` entry
+# matches everything under `dir/`. Any other entry is an `fnmatch` pattern.
+PROOFS_PATTERNS = (
+    'docs/proofs/rocq/**',
+    'tools/proof-difftest/**',
+    'tools/proof-kani/**',
+    'src/verify.rs',
+    'src/bytecode.rs',
+    'keleusma-wire/**',
+    '.github/workflows/ci.yml',
+    '.github/workflows/proofs.yml',
+    'scripts/ci_classify.py',
+)
+
+
+def matches(path, patterns):
+    """True when `path` matches one of `patterns`, a `dir/**` entry or an fnmatch one."""
+    for pattern in patterns:
+        if pattern.endswith('/**'):
+            if path.startswith(pattern[:-2]):
+                return True
+        elif fnmatch.fnmatchcase(path, pattern):
+            return True
+    return False
+
+
 def is_light(path):
     """True when no job outside the light run reads `path`."""
     if path in GUARDED or path.endswith(FULL_SUFFIXES):
@@ -97,11 +128,13 @@ def classify(event, paths):
     else:
         mode = 'light' if all(is_light(p) for p in paths) else 'full'
     native = not paths or any(is_native(p) for p in paths)
+    proofs = not paths or any(matches(p, PROOFS_PATTERNS) for p in paths)
     # An empty list means the diff could not be read, so the extension check and the
     # native gate run too.
     return {
         'mode': mode,
         'native': 'true' if native else 'false',
+        'proofs': 'true' if proofs else 'false',
         'vscode': 'true' if vscode or not paths else 'false',
     }
 
