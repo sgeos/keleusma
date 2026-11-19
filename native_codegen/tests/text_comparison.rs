@@ -65,6 +65,8 @@ const AGREE_THROUGH_CALLS: &[&str] = &[
     "fn inner(a: Word) -> Text { if a > 0 { \"p\" } else { \"q\" } } \
      fn outer(a: Word) -> Text { inner(a + 1) } \
      fn main(a: Word, b: Word) -> Word { let t = outer(b); if t == \"p\" { 5 } else { 6 } }",
+    "fn pick(a: Word) -> Text { if a > 0 { \"yes\" } else { \"no\" } } \
+     fn main(a: Word, b: Word) -> Word { match pick(a) { \"yes\" => 10, \"no\" => 20, _ => 30 } }",
 ];
 
 #[test]
