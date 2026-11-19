@@ -131,7 +131,9 @@ impl Tightness {
             ));
         }
         Ok(Tightness {
-            measured_operand_bytes: self.measured_operand_bytes.max(other.measured_operand_bytes),
+            measured_operand_bytes: self
+                .measured_operand_bytes
+                .max(other.measured_operand_bytes),
             measured_frame_bytes: self.measured_frame_bytes.max(other.measured_frame_bytes),
             measured_heap_peak_bytes: self
                 .measured_heap_peak_bytes
@@ -158,7 +160,9 @@ impl Tightness {
             ("heap", self.measured_heap_peak_bytes, self.bound_heap_bytes),
         ] {
             if measured > bound {
-                out.push(format!("{name} measured {measured} above its bound {bound}"));
+                out.push(format!(
+                    "{name} measured {measured} above its bound {bound}"
+                ));
             }
         }
         out
