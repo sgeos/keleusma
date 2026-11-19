@@ -5965,11 +5965,17 @@ fn lower_chunk_body<'ctx>(
                         // An ordering compares by the virtual machine's `str`
                         // order, byte-wise and then by length.
                         let order = text_ordering(ctx, func, &st.b, lhs, rhs);
-                        let predicate = match op {
-                            Op::CmpLt => IntPredicate::SLT,
-                            Op::CmpGt => IntPredicate::SGT,
-                            Op::CmpLe => IntPredicate::SLE,
-                            _ => IntPredicate::SGE,
+                        // Written as a chain, not a `match`, so the integer arm's
+                        // predicate lines below stay the only text the mutation
+                        // sweep's comparison entries match.
+                        let predicate = if matches!(op, Op::CmpLt) {
+                            IntPredicate::SLT
+                        } else if matches!(op, Op::CmpGt) {
+                            IntPredicate::SGT
+                        } else if matches!(op, Op::CmpLe) {
+                            IntPredicate::SLE
+                        } else {
+                            IntPredicate::SGE
                         };
                         st.b.build_int_compare(predicate, order, i64t.const_zero(), "text_order")
                             .unwrap()
