@@ -630,13 +630,16 @@ that agree.
 
 ### Measured layout
 
-The following is predicted for the host target, 64-bit words, and pinned by `tests/ring_buffer.rs`. **Not yet measured.** The tests were written before the machine allowed a build, and this section is corrected from their first run.
+The following was measured on 2026-11-19 for the host target, 64-bit words, by `tests/ring_buffer.rs`, at its first green run. One prediction the tests were written with was wrong and is corrected below.
 
 - A ring takes `2 + N` slots and three fields, so a field declared after it is addressed by a
   data operand two higher than its declaration position.
-- A private ring costs the private bytes of the three ordinary fields it stands for, which is
-  `16 + N * size(T)` bytes of packed private storage, checked for `Word`, `Byte`, `bool` and
-  `Fixed` at `N` of 1, 5 and 8.
+- A private ring costs exactly the private bytes and the persistent capacity of the three
+  ordinary fields it stands for, checked for `Word`, `Byte`, `bool` and `Fixed` at `N` of 1, 5
+  and 8. The figure is not `16 + N * size(T)` as first predicted. A `Ring<Word, 1>` takes 96
+  private bytes, the same as `a: Word, b: Word, c: [Word; 1]`, so these three fields are not
+  stored packed to the element width. Why is not investigated here, since the ring adds no
+  cost of its own.
 - **The shared buffer has no padding**, which settles the point this document marked as
   unverified. In `shared data io { a: Byte, r: Ring<T, 3>, b: Word }` the length is at byte 1,
   the head at byte 9, element `k` at `17 + k * size(T)` and `b` immediately after the last

@@ -382,14 +382,15 @@ fn a_ring_field_takes_three_hidden_fields_in_two_plus_n_slots() {
 /// which is what the expansion promises, and those bytes are pinned for one case.
 #[test]
 fn a_private_ring_costs_the_persistent_bytes_of_its_three_fields() {
-    let elems: &[(&str, u32)] = &[("Word", 8), ("Byte", 1), ("bool", 1), ("Fixed", 8)];
-    for &(elem, width) in elems {
+    for elem in ["Word", "Byte", "bool", "Fixed"] {
         for n in [1u32, 5, 8] {
             let ring = compile_src(&format!(
                 "private data d {{ r: Ring<{elem}, {n}> }}\nfn main() -> Word {{ 0 }}"
             ));
+            // The plain block is written once, since a private block that is never
+            // written is refused. The write does not change the layout compared.
             let plain = compile_src(&format!(
-                "private data d {{ a: Word, b: Word, c: [{elem}; {n}] }}\nfn main() -> Word {{ 0 }}"
+                "private data d {{ a: Word, b: Word, c: [{elem}; {n}] }}\nfn main() -> Word {{ d.a = 1; 0 }}"
             ));
             let (rl, pl) = (
                 ring.data_layout.as_ref().expect("layout"),
@@ -406,9 +407,6 @@ fn a_private_ring_costs_the_persistent_bytes_of_its_three_fields() {
                 required_persistent_capacity_for(&plain),
                 "{elem} {n}"
             );
-            // Packed private storage at the host's 64-bit word: two words, then N
-            // elements of the element's width.
-            assert_eq!(ring.private_data_bytes, 16 + n * width, "{elem} {n}");
             assert_eq!(ring.shared_data_bytes, 0);
         }
     }
@@ -483,9 +481,16 @@ fn a_host_reads_and_writes_a_shared_ring_by_its_hidden_names() {
 #[test]
 fn the_schema_hash_distinguishes_capacity_element_and_a_plain_array() {
     for vis in ["shared", "private"] {
+        // The plain array is written once, since a private block that is never
+        // written is refused. The hash covers the data layout and not the code.
         let hash = |ty: &str| {
+            let body = if ty.starts_with('[') {
+                "s.r[0] = 1; 0"
+            } else {
+                "0"
+            };
             compile_src(&format!(
-                "{vis} data s {{ r: {ty} }}\nfn main() -> Word {{ 0 }}"
+                "{vis} data s {{ r: {ty} }}\nfn main() -> Word {{ {body} }}"
             ))
             .schema_hash
         };
