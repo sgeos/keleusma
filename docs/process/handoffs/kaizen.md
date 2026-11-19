@@ -111,9 +111,9 @@ authority, so the startup-file positions reach them first-hand.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
-8. Write the `proofs` CI job of [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md).
-   V0.2.X agreed in sequence 468, asking for a runner time limit and for F1 and F2 to flip to
-   expected passes with its fix. Pin Kani's nightly and the stable toolchain together.
+8. Land the `proofs` CI job, `.github/workflows/proofs.yml`, Phase 1 of
+   [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md), and commit a Kani peak
+   baseline from its first artifact. F1 and F2 flip to expected passes with V0.2.X's fix.
 
 ## Open with the operator
 

@@ -88,6 +88,8 @@ jobs:
       vscode: ${{ steps.classify.outputs.vscode }}
       # `true` when a changed path is a native gate input, on any event and in any mode.
       native: ${{ steps.classify.outputs.native }}
+      # `true` when a changed path is an input of the proofs, on any event and in any mode.
+      proofs: ${{ steps.classify.outputs.proofs }}
       # `true` only for a draft pull request. It defers the self-host tier and nothing else.
       draft: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'true' || 'false' }}
     steps:
@@ -885,6 +887,16 @@ jobs:
 
   # The extension reads only its own directory, so it runs when that directory changes,
   # or when the change list cannot be read.
+  # THE MACHINE-CHECKED PROOFS AND THE KANI LIGHT TIER, from .github/workflows/proofs.yml,
+  # which also runs weekly on its own. Phase 1 of docs/process/kaizen/2026-11-08-proof-ci-plan.md,
+  # agreed by V0.2.X on 2026-11-11 under the operator's ruling that a new proofs job waits
+  # for that agreement or for the release. It runs when the change classifier's `proofs`
+  # flag is set, which a light run can also set, and gates merges through `CI result`.
+  proofs:
+    needs: changes
+    if: needs.changes.outputs.proofs == 'true' && needs.changes.outputs.mode != 'certified'
+    uses: ./.github/workflows/proofs.yml
+
   vscode-extension:
     name: VS Code extension
     needs: changes
@@ -1124,7 +1136,7 @@ jobs:
   # `skipped`, which this condition would otherwise accept.
   certify:
     name: Certify the tested tree
-    needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux]
+    needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, proofs, miri, docs-links, native, native-linux]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.mode == 'full' && needs.changes.outputs.draft != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
@@ -1160,7 +1172,7 @@ jobs:
   # job. Branch protection on `main` and on `v0.2.3` requires it, measured 2026-11-04.
   ci-result:
     name: CI result
-    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux, certify]
+    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, proofs, miri, docs-links, native, native-linux, certify]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
