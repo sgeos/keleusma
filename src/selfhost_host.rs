@@ -786,7 +786,12 @@ pub const VERIFY_OP_CAP: usize = 8192;
 ///
 /// Sized to hold the largest stage source. `parse.kel` exceeds 400 KB; the wire-format v2 twenty-four-bit data operands raised the shared-segment
 /// ceiling from 64 KB to 16 MB, so this may exceed 64 KB.
-pub const LEX_SOURCE_CAP: usize = 524288;
+///
+/// Raised from 524,288 to 786,432 on 2026-11-18 under the operator's ruling of
+/// 2026-10-26 that limits may be raised. Ring increment R1 took `parse.kel` to
+/// 513,150 bytes, and the reference-poison tests mark it to about 524,000, at the
+/// old cap. The new cap leaves about 260 KB for the ring operations of R2 and R3.
+pub const LEX_SOURCE_CAP: usize = 786432;
 
 /// How many distinct identifiers `src.istart`/`src.ilen` in `lexer.kel` hold.
 pub const LEX_INTERN_CAP: usize = 1536;

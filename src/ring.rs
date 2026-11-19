@@ -5,14 +5,14 @@
 //! the data layout and no operation. This module holds the three pieces both
 //! compilers must agree on byte for byte.
 //!
-//! 1. The admissibility rules, checked by [`check_ring_declarations`] before the
+//! 1. The admissibility rules, checked by [`check_ring_declarations`](crate::ring::check_ring_declarations) before the
 //!    type checker resolves anything, so that every refusal names the
 //!    restriction it enforces.
 //! 2. The hidden names of the three data fields a ring field lowers to, given by
-//!    [`hidden_field_names`]. The reference compiler expands a ring field with
-//!    [`expand_ring_fields`], and the self-hosted driver builds the same names
+//!    [`hidden_field_names`](crate::ring::hidden_field_names). The reference compiler expands a ring field with
+//!    [`expand_ring_fields`](crate::ring::expand_ring_fields), and the self-hosted driver builds the same names
 //!    from the same function, so the spelling cannot drift between the two.
-//! 3. The capacity bound [`RING_CAPACITY_MAX`].
+//! 3. The capacity bound [`RING_CAPACITY_MAX`](crate::ring::RING_CAPACITY_MAX).
 //!
 //! # The hidden names, and why a dot
 //!
@@ -80,6 +80,15 @@ impl RingError {
 #[must_use]
 pub fn hidden_field_names(field: &str) -> [String; 3] {
     RING_HIDDEN_SUFFIXES.map(|suffix| format!("{field}.{suffix}"))
+}
+
+/// Whether `name` is one of the hidden field names a ring field expands into.
+///
+/// A field name written in source is one identifier and cannot contain a dot,
+/// and every hidden name does, so the test is exact after expansion.
+#[must_use]
+pub fn is_hidden_field_name(name: &str) -> bool {
+    name.contains('.')
 }
 
 /// Whether `elem` is an admissible first-pass ring element type, one of `Word`,

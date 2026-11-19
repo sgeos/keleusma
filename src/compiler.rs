@@ -4167,7 +4167,19 @@ fn compile_with_recorded_type_hook(
             let all_unmutated = private_slot_indices
                 .iter()
                 .all(|slot| !written.contains(slot));
-            if all_unmutated {
+            // A private ring is state by definition, and it cannot move to
+            // `const data`, which refuses a ring, so the advice below would be
+            // impossible to follow. In increment R1 no operation writes a ring
+            // yet, so a block holding one is exempt. When R3 adds the mutating
+            // operations, this exemption should give way to counting the
+            // writes those operations emit.
+            let holds_ring = program.data_decls.iter().any(|d| {
+                d.visibility == DataVisibility::Private
+                    && d.fields
+                        .iter()
+                        .any(|f| crate::ring::is_hidden_field_name(&f.name))
+            });
+            if all_unmutated && !holds_ring {
                 let private_block_name = program
                     .data_decls
                     .iter()
