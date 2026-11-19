@@ -3,13 +3,18 @@
 > **Navigation** [Decisions](./README.md) | [Absorption 150](./ABSORPTION_150_BRIEF.md) | [V0.3.X roadmap](../roadmap/V0_3_X_ROADMAP.md)
 
 Computed against native `2a52d085`, which is pull request 777 merged into
-`v0.3.0`, and upstream `6be6a2ad` on 2026-11-18, with 0 unabsorbed commits
+`v0.3.0`, and upstream `4b988b91` on 2026-11-18, with 0 unabsorbed commits
 measured after fetching. The merge was made on `docs/v3-resume-20261118`, which
 also carries this line's work of the same day.
 
 - **781** adds Kaizen's idle compaction result, its open decisions of
   2026-11-18, and context quality evidence with a change to its evidence
   script.
+- **782** is Kaizen's Rust 1.100 lint fix, merged on a green full run under
+  rustc 1.100.0. It holds V0.2.X's constant-pool loop in `src/vm.rs`, Kaizen's
+  fix to `tests/selfhost_resource_admission.rs`, Clippy run with `--keep-going`
+  in `ci.yml`, and this line's `e410222d`, which Kaizen cherry-picked with its
+  authorship kept and which this branch already held.
 
 ## Merge and effect
 
