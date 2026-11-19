@@ -13766,7 +13766,7 @@ mod tests {
                 .expect("aux view");
         let count = aux.const_count(0).expect("chunk 0") as usize;
         assert_eq!(count, module.chunks[0].constants.len());
-        for i in 0..count {
+        for (i, constant) in module.chunks[0].constants.iter().enumerate() {
             // The bundled runtime is i64/f64, eight-byte scalars; the
             // into_value comparand uses the same widths (B28 P2).
             let decoded = crate::wire_schema::decode_constant_pool(
@@ -13775,7 +13775,7 @@ mod tests {
             )
             .expect("decode");
             let owned = crate::bytecode::Value::from_const(&decoded[0], 8, 8);
-            let original = module.chunks[0].constants[i].clone().into_value();
+            let original = constant.clone().into_value();
             assert_eq!(
                 owned, original,
                 "constant at index {} mismatches across archive round trip",
