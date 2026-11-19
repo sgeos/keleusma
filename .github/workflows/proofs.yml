@@ -89,8 +89,13 @@ jobs:
           cargo kani --version
       - name: Run the Kani light tier, one harness at a time
         timeout-minutes: 45
+        # setup-ocaml sets CLICOLOR_FORCE for the whole job, which makes Kani colour its
+        # verdict line, and check.sh matches that line as plain text. Colour stays off here.
         env:
           KANI_LOG_DIR: ${{ runner.temp }}/kani-logs
+          CLICOLOR_FORCE: '0'
+          NO_COLOR: '1'
+          CARGO_TERM_COLOR: never
         run: tools/proof-kani/check.sh --tier light --jobs 1
       - name: Keep the Kani logs
         if: ${{ !cancelled() }}
