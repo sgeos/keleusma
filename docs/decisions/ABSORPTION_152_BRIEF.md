@@ -31,4 +31,13 @@ updates and documentation, so the checks are targeted at it.
 | Root `documentation_links`, `gate_ci_correspondence`, `ci_shard_coverage`, `ci_light_path_coverage` and `comment_citations` | 25 passed |
 | Native `handoff_figures` | 6 passed, 0 failed |
 
-The hosted run on the pull request covers the rest.
+The full native verification then ran at `b421d2bb` in a separate worktree,
+once the machine status returned to ok. Native fmt, Clippy in both float
+configurations, doc and shellcheck passed, and the root checks passed. Both
+native suites passed 881 and ignored 1, and each failed
+`every_registered_mutation_still_matches_the_emitter`. The `Text` ordering arm
+of `a96356d1` repeated the integer comparison arm's predicate lines that the
+mutation sweep registers, so three mutations matched twice. The next commit
+writes the `Text` arm's predicate as a chain of tests, after which
+`mutation_placement`, `text_comparison` and the three emitter censuses pass and
+Clippy is clean. The hosted run on the pull request covers the rest.
