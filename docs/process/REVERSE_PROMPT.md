@@ -168,21 +168,22 @@ proceeds without it.
 
 ## In progress
 
-The operator directed on 2026-11-18 that Kaizen fixes the Rust 1.100.0 lints and that this line
-works the roadmap in parallel, so `fix/clippy-rust-1-100` is withdrawn and Kaizen was told of it.
-Three pieces of work are local, none pushed.
+The operator directed on 2026-11-18 that Kaizen fixes the Rust 1.100.0 lints, which merged as
+pull request 782 at `4b988b91`, and that this line works the roadmap in parallel. Every local
+branch below has `4b988b91` merged in. None is pushed.
 
-- Ring buffer increment R1, the type surface and the data layout with its self-hosted twin, on
-  `feat/ring-r1` in the worktree `v02-ring-r1`, delegated to an agent under the rulings of
-  2026-10-31.
-- The memory tightness runner Kaizen asked for in sequence 379, `examples/tightness.rs` on
-  `feat/tightness-runner`. It measures the stack by painting the ephemeral region, because the
-  bottom end is reserved at construction and its arena peak equals the reservation. Its build is
-  queued behind the machine monitor and it is not yet compiled.
+- Ring buffer increment R1, `feat/ring-r1` at `fc72f2a8`. Measured green locally on 2026-11-19.
+  The 19 ring tests pass. The second verification pass ran the documentation build, 277
+  self-hosted tests including the construct-support boundary, now 156 cases with 145 SOk, 4
+  Refuses, 2 Diverges and 5 RefRejects, and the native gate in both configurations, all green.
+  The quick tier passed 2966 of 2968, and the two failures are fixed in `fc72f2a8`. The lexer
+  source capacity is raised from 524,288 to 786,432 bytes under the ruling of 2026-10-26, and the
+  native corpus pins of `parse.kel` and `lexer.kel` are re-pinned.
+- The memory tightness runner, `feat/tightness-runner` at `a29a40c4`. It ran once and measured 15
+  of 15 programs with no bound exceeded. Kaizen has the figures and the format.
+- The arena fixes, `fix/arena-relative-bottom-mark` at `3ff4e83c`, finding A1 and the
+  feature gating of the arena's test targets.
 - The process records on `docs/v02-handoff-20261118`.
-
-Heavy verification waits on the machine monitor, which reports elevated from memory pressure
-caused by applications outside these sessions and from disk below 50 GB free.
 
 ## Next, in order
 
