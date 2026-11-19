@@ -40,4 +40,7 @@ of `a96356d1` repeated the integer comparison arm's predicate lines that the
 mutation sweep registers, so three mutations matched twice. The next commit
 writes the `Text` arm's predicate as a chain of tests, after which
 `mutation_placement`, `text_comparison` and the three emitter censuses pass and
-Clippy is clean. The hosted run on the pull request covers the rest.
+Clippy is clean. The full native verification was then run again at
+`fd1ee9a0` and every step passed, both native suites at 882 passed, 0 failed
+and 1 ignored. Only this file changed afterwards. The hosted run on the pull
+request covers the rest.
