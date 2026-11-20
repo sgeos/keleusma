@@ -1683,7 +1683,7 @@ Keleusma provides static guarantees about script behavior through the three func
 
 ### Recursion Prohibition
 
-All forms of recursion are prohibited. The compiler rejects any cycle in the call graph among Keleusma functions. This includes direct recursion (function `a` calling itself) and mutual recursion (function `a` calling `b` which calls `a`). Recursive algorithms must be supplied by the host as registered native functions. At that point, termination guarantees rest on the host, not the Keleusma compiler.
+All forms of recursion are prohibited. The compiler rejects any cycle in the call graph among Keleusma functions. This includes direct recursion (function `a` calling itself) and mutual recursion (function `a` calling `b` which calls `a`). The rule holds for every function category and for calls made through a pipe, through a trait method and through the predicate of a refined newtype. The diagnostic begins `recursive call detected` and names the functions of the cycle in call order, as in `` `a` -> `b` -> `a` ``. The bytecode verifier applies the same rule to a compiled module. Recursive algorithms must be supplied by the host as registered native functions. At that point, termination guarantees rest on the host, not the Keleusma compiler.
 
 The only form of "recursion" in Keleusma is the implicit re-entry of `loop` functions, which is not a function call but a coroutine iteration with a mandatory yield on every path.
 
