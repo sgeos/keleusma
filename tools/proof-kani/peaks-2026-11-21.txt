@@ -1,0 +1,20 @@
+# Peaks of the Kani heavy tier, measured on 2026-11-21 at commit 144b98cc on branch
+# proof/kani-ci-robust, one harness at a time on a 32 GB macOS machine, under
+# KANI_TIMEOUT=30m and KANI_MEM_LIMIT_MB=12288. peak is the maximum resident set size
+# from /usr/bin/time -l, in bytes. sampled is the largest sum of the harness's process
+# group sampled every 15 s, a lower bound. Every TIMEOUT stopped at the 30-minute cap
+# with no failed check in its log, recorded then as FAILED by a script since corrected.
+# A TIMEOUT peak is the peak reached by the cap, not the harness's full peak.
+# harness verdict seconds peak_bytes sampled_bytes
+verifier_harnesses::wcet_stream_single_op TIMEOUT 1807 9061285888 8731033600
+verifier_harnesses::wcet_stream_if_region TIMEOUT 1818 7620231168 7000342528
+verifier_harnesses::wcet_stream_loop_region TIMEOUT 1811 4180885504 4129472512
+verifier_harnesses::wcmu_stream_single_op TIMEOUT 1820 3406479360 3409395712
+verifier_harnesses::wcmu_stream_if_region TIMEOUT 1811 5588746240 5391384576
+verifier_harnesses::wcmu_stream_loop_region TIMEOUT 1812 6619512832 6585286656
+verifier_harnesses::wcet_whole_chunk_walk_does_not_panic TIMEOUT 1811 7983218688 7472922624
+verifier_harnesses::wcet_straight_line_is_exact SUCCESSFUL 74 3317760000 3325231104
+verifier_harnesses::wcet_is_monotone_in_the_cost_model TIMEOUT 1808 7816052736 7600586752
+verifier_harnesses::module_call_depth_is_bounded TIMEOUT 1805 9722789888 9606889472
+verifier_harnesses::module_wcmu_does_not_panic TIMEOUT 1807 9031286784 8955150336
+verifier_harnesses::verify_does_not_panic TIMEOUT 1813 9186394112 9110962176

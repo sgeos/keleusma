@@ -59,7 +59,17 @@ seconds with the machine monitor at ok throughout. The same tier run two at a ti
 seconds, and `--only` ran one harness in one second. The peaks were recorded as unknown,
 because `/usr/bin/time -l` is refused inside the sandbox the runs were made from.
 
-**The heavy tier has no green run.** Of its twelve harnesses, `wcet_straight_line_is_exact`
+**The heavy tier was measured on 2026-11-21, and only one of its twelve harnesses finishes
+within thirty minutes.** One harness at a time, under a 30-minute and a 12 GB cap per harness,
+`wcet_straight_line_is_exact` verified in 74 seconds at a peak of 3.3 GB. The other eleven
+reached the time cap with no failed check, at peaks from 3.4 to 9.7 GB, all below the 12 GB
+cap, so none of them was stopped for memory. Their standing is unknown, not failed. The
+measurements are in `peaks-2026-11-21.txt`, the baseline the proof continuous-integration plan
+of 2026-11-08 asks for. A peak recorded at the time cap is the peak reached by then, not the
+harness's full peak. Splitting these harnesses into pieces by the selector narrowing is the next
+step, to find pieces that finish.
+
+**Before the measurement.** Of its twelve harnesses, `wcet_straight_line_is_exact`
 verified in an earlier, larger form, and `wcet_stream_single_op` ran for more than 30 minutes,
 reached about 30 gigabytes, and was stopped. The other ten were never run, because the machine
 reported elevated memory pressure and starting them would have added load.
