@@ -111,10 +111,15 @@ pub(crate) fn comparisons_reached_by_text(
         stack: Vec::new(),
         locals: vec![false; locals],
     };
-    for i in 0..usize::from(chunk.param_count) {
+    for (i, slot) in entry
+        .locals
+        .iter_mut()
+        .enumerate()
+        .take(usize::from(chunk.param_count))
+    {
         let declared = own.and_then(|s| s.params.get(i)).is_some_and(is_text);
         let tagged = chunk.param_types.get(i) == Some(&TypeTag::Text);
-        entry.locals[i] = declared || tagged;
+        *slot = declared || tagged;
     }
     let reply_text = chunk.block_type != BlockType::Func && entry.locals.first() == Some(&true);
     let mut states: Vec<Option<State>> = vec![None; n];
