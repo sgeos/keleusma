@@ -12,7 +12,9 @@
 From Stdlib Require Import List Arith Lia.
 From RegionCore Require Import Core Shape Reuse.
 From RegionCore Require Controls.
-From Termination Require Import Termination.
+From SharedSlots Require Import ArmShape Arm.
+From SharedSlots Require Controls.
+From Termination Require Import Termination TerminationArm.
 Import ListNotations.
 
 Definition finishes (P : plan) (m : module) (fuel : nat) : bool :=
@@ -54,4 +56,22 @@ Theorem loop_ok_runs_agree : forall host n,
 Proof.
   exact (accepted_runs_agree RegionCore.Controls.loop_ok [] RegionCore.Controls.loop_ok_accepted
            RegionCore.Controls.P0 P0_injective).
+Qed.
+
+(** The join checker's corollary applies to a plan that is not injective,
+    the shared-slot module [sequential] under [Pshare], so its premise is
+    satisfiable where B2's corollary cannot apply. *)
+Example sequential_accepted_by_join :
+  region_checkA SharedSlots.Controls.Pshare SharedSlots.Controls.sequential = Some [].
+Proof. vm_compute. reflexivity. Qed.
+
+Theorem sequential_runs_agree : forall host n,
+  exists sp sb,
+    cycles SharedSlots.Controls.Pshare host SharedSlots.Controls.sequential
+      (bound SharedSlots.Controls.sequential) n init = Some sp /\
+    cycles baseline host SharedSlots.Controls.sequential (bound SharedSlots.Controls.sequential) n init = Some sb /\
+    log sp = log sb.
+Proof.
+  exact (accepted_runs_agree_arm SharedSlots.Controls.Pshare SharedSlots.Controls.sequential []
+           sequential_accepted_by_join).
 Qed.

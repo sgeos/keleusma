@@ -13,7 +13,8 @@
     pins below. *)
 
 From RegionCore Require Core Shape Sim Reuse Controls.
-From Termination Require Termination Controls.
+From SharedSlots Require SharedShape SharedSim Shared ArmShape ArmSim Arm Controls.
+From Termination Require Termination TerminationArm Controls.
 From Termination Require Claims.
 
 Definition pin_shape_calls :
@@ -43,3 +44,15 @@ Definition pin_bound_pinned :
 Definition pin_calls_call_pinned :
   forall K f : Corelib.Init.Datatypes.nat, Termination.Termination.calls_i K (RegionCore.Core.Call f) = (f < K)
   := Termination.Claims.calls_call_pinned.
+
+Definition pin_accepted_terminates_arm :
+  forall (P : RegionCore.Core.plan) (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), SharedSlots.ArmShape.region_checkA P m = Corelib.Init.Datatypes.Some ft -> forall (Q : RegionCore.Core.plan) (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (n : Corelib.Init.Datatypes.nat) (s : RegionCore.Core.state), exists s' : RegionCore.Core.state, RegionCore.Core.cycles Q host m (Termination.Termination.bound m) n s = Corelib.Init.Datatypes.Some s'
+  := Termination.Claims.pin_accepted_terminates_arm.
+
+Definition pin_accepted_runs_agree_arm :
+  forall (P : RegionCore.Core.plan) (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), SharedSlots.ArmShape.region_checkA P m = Corelib.Init.Datatypes.Some ft -> forall (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (n : Corelib.Init.Datatypes.nat), exists sp sb : RegionCore.Core.state, RegionCore.Core.cycles P host m (Termination.Termination.bound m) n RegionCore.Core.init = Corelib.Init.Datatypes.Some sp /\ RegionCore.Core.cycles RegionCore.Core.baseline host m (Termination.Termination.bound m) n RegionCore.Core.init = Corelib.Init.Datatypes.Some sb /\ RegionCore.Core.log sp = RegionCore.Core.log sb
+  := Termination.Claims.pin_accepted_runs_agree_arm.
+
+Definition pin_sequential_accepted_by_join :
+  SharedSlots.ArmShape.region_checkA SharedSlots.Controls.Pshare SharedSlots.Controls.sequential = Corelib.Init.Datatypes.Some Corelib.Init.Datatypes.nil
+  := Termination.Claims.pin_sequential_accepted_by_join.

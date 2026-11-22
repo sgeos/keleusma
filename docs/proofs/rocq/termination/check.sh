@@ -34,8 +34,9 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/termination}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(Termination Controls Claims Statements)
-pins_expected=7
+modules=(Termination TerminationArm Controls Claims Statements)
+ss_deps=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls)
+pins_expected=10
 results=(
     Termination.shape_calls Termination.calls_mono Termination.calls_from_nth
     Termination.check_funcs_calls Termination.fuel_agree Termination.ftab_prefix
@@ -43,6 +44,8 @@ results=(
     Termination.accepted_good Termination.accepted_terminates Termination.accepted_runs_agree
     Controls.loop_ok_bound_is_needed Controls.self_call_rejected Controls.forward_call_rejected
     Controls.call_chain_accepted_and_finishes Controls.P0_injective Controls.loop_ok_runs_agree
+    TerminationArm.shapeA_calls TerminationArm.accepted_goodA TerminationArm.accepted_terminates_arm
+    TerminationArm.accepted_runs_agree_arm Controls.sequential_accepted_by_join Controls.sequential_runs_agree
     Claims.bound_pinned Claims.calls_call_pinned
 )
 
@@ -127,9 +130,24 @@ done
         fi
     done
 )
+# The second dependency, the shared-slot extension, is built and rechecked from its own sources.
+mkdir -p "$out/ss"
+for m in "${ss_deps[@]}"; do
+    cp "$src/../shared_slots/$m.v" "$out/ss/"
+done
+(
+    cd "$out/ss"
+    for m in "${ss_deps[@]}"; do
+        if ! rocq compile -Q ../dep RegionCore -Q . SharedSlots "$m.v" > "$m.log" 2>&1 || [ -s "$m.log" ]; then
+            cat "$m.log" >&2
+            echo "check.sh: dependency $m.v does not compile cleanly" >&2
+            exit 1
+        fi
+    done
+)
 cd "$out/own"
 for m in "${modules[@]}"; do
-    if ! rocq compile -Q ../dep RegionCore -Q . Termination "$m.v" > "$m.log" 2>&1; then
+    if ! rocq compile -Q ../dep RegionCore -Q ../ss SharedSlots -Q . Termination "$m.v" > "$m.log" 2>&1; then
         cat "$m.log" >&2
         echo "check.sh: $m.v does not compile" >&2
         exit 1
@@ -149,7 +167,7 @@ qualified=()
 for m in "${modules[@]}"; do
     qualified+=("Termination.$m")
 done
-rocqchk -silent -o -Q ../dep RegionCore -Q . Termination -norec "${qualified[@]}" > rocqchk.log 2>&1
+rocqchk -silent -o -Q ../dep RegionCore -Q ../ss SharedSlots -Q . Termination -norec "${qualified[@]}" > rocqchk.log 2>&1
 required=(
     '* Axioms: <none>'
     '* Constants/Inductives relying on type-in-type: <none>'
@@ -172,7 +190,7 @@ echo "check.sh: rocqchk re-verified ${#modules[@]} modules, no axiom, no unsafe 
         echo "Print Assumptions Termination.$r."
     done
 } > Assumptions.v
-rocq compile -Q ../dep RegionCore -Q . Termination Assumptions.v > Assumptions.log 2>&1
+rocq compile -Q ../dep RegionCore -Q ../ss SharedSlots -Q . Termination Assumptions.v > Assumptions.log 2>&1
 closed=$(grep -c '^Closed under the global context$' Assumptions.log || true)
 if [ "$closed" -ne "${#results[@]}" ]; then
     cat Assumptions.log >&2

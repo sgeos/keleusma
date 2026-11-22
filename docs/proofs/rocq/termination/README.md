@@ -9,7 +9,9 @@ would hold by that alone. This directory closes that, in the Rocq Prover, versio
 every module B2's checker accepts, a fuel `bound m` computed from the module's structure suffices
 for every run to finish, for every plan, host, starting state and number of cycles. With
 `reuse_sound`, the reuse run under any injective plan and the baseline run then both finish at
-that fuel with the same log.** Every named result is checked with no axiom.
+that fuel with the same log.** The same holds for every module and plan that the join checker
+of [`../shared_slots/`](../shared_slots/README.md) accepts together, with no injectivity premise.
+Every named result is checked with no axiom.
 
 ## Why it terminates
 
@@ -35,6 +37,9 @@ loop finishes, and `accepted_terminates` lifts it to any number of cycles.
 | `runs` | Within the fuel measure, every block, instruction and loop finishes, for any plan and host |
 | `accepted_terminates` | Every accepted module finishes `n` cycles at fuel `bound m`, from any state, for any plan and host |
 | `accepted_runs_agree` | For an accepted module and an injective plan, both runs finish at `bound m` with the same log |
+| `shapeA_calls` | The join checker's main-block rule, like B2's, accepts only calls to known functions |
+| `accepted_terminates_arm` | Every module the join checker accepts with some plan finishes at `bound m`, for any plan and host |
+| `accepted_runs_agree_arm` | For a module and plan the join checker accepts together, both runs finish at `bound m` with the same log |
 
 ## How to check it
 
@@ -44,15 +49,16 @@ docs/proofs/rocq/termination/check.sh
 ```
 
 The script follows the hardened scripts of the other directories. It builds B2's sources as its
-dependency, then this directory's four modules. Only this directory's sources are scanned for
+dependency, and the shared-slot extension's sources as a second dependency, then this
+directory's five modules. Only this directory's sources are scanned for
 forbidden constructs, and `rocqchk` re-verifies only this directory's modules, though its context
 summary lists any axiom of a dependency too. It fails unless no source holds
 an admitted or assumed proof, a warning silencer or a `Redirect`, the pin and control files
 open no section and declare no hypothesis, variable or context, every module compiles with no
-output, `rocqchk` reports no axiom and no unsafe construct, all 21 named results are closed, and
-`Statements.v` holds its 7 pins. `Claims.v` states the three headline results, two controls and
+output, `rocqchk` reports no axiom and no unsafe construct, all 27 named results are closed, and
+`Statements.v` holds its 10 pins. `Claims.v` states the five headline results, three controls and
 two definition equations, and `Statements.v` imports no module of the project and pins each of
-those seven items by the type Rocq printed with fully qualified names, because an audit of
+those ten items by the type Rocq printed with fully qualified names, because an audit of
 2026-11-18 showed that pins written with bare names under `Import` could be bypassed by
 redefining a name they use. On 2026-11-18, before that regeneration, a premise added to
 `accepted_terminates`, with its uses patched to supply it, was refused at its pin, in a copy
@@ -70,6 +76,8 @@ agreement with the V0.2.X line.
 - `call_chain`, whose main calls a function that calls another twice, is accepted and finishes at
   its bound.
 - `loop_ok_runs_agree` applies the corollary to `loop_ok` under the injective plan `P0`.
+- `sequential_runs_agree` applies the join checker's corollary to the shared-slot module
+  `sequential` under `Pshare`, which is not injective, so B2's corollary could not apply to it.
 
 ## The trusted base
 
@@ -83,9 +91,6 @@ the definition of `bound`, and the one nontrivial case of `calls_i`. They do not
 
 - **The size of the bound.** It is a sufficient fuel, not a tight one, and it is not related to
   increment A's time bound, which counts cycles of a different core.
-- **The join checker.** `accepted_runs_agree` uses B2's checker and an injective plan. The join
-  checker of [`../shared_slots/`](../shared_slots/README.md) checks functions the same way but
-  its main block with its own rules, and the same reading of its calls was not done here.
 - **Keleusma itself.** Nothing relates the region core to the shipping virtual machine. The
   shipping compiler's refusal of recursion is the V0.2.X line's. This line's differential test
   reported it missing, and that line's fix, `f2346760` on pull request 778, was not merged when

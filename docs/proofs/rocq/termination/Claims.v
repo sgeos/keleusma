@@ -9,7 +9,9 @@
 From Stdlib Require Import List.
 From RegionCore Require Import Core Shape.
 From RegionCore Require Controls.
-From Termination Require Import Termination.
+From SharedSlots Require Import ArmShape.
+From SharedSlots Require Controls.
+From Termination Require Import Termination TerminationArm.
 From Termination Require Controls.
 Import ListNotations.
 
@@ -36,6 +38,20 @@ Definition pin_loop_ok_bound_is_needed :
 Definition pin_self_call_rejected :
   region_check (mkmodule [RegionCore.Controls.blk [Call 0]] BNil) = None
   := Termination.Controls.self_call_rejected.
+
+Definition pin_accepted_terminates_arm : forall P m ft, region_checkA P m = Some ft ->
+  forall Q host n s, exists s', cycles Q host m (bound m) n s = Some s'
+  := accepted_terminates_arm.
+
+Definition pin_accepted_runs_agree_arm : forall P m ft, region_checkA P m = Some ft ->
+  forall host n,
+  exists sp sb, cycles P host m (bound m) n init = Some sp /\
+                cycles baseline host m (bound m) n init = Some sb /\ log sp = log sb
+  := accepted_runs_agree_arm.
+
+Definition pin_sequential_accepted_by_join :
+  region_checkA SharedSlots.Controls.Pshare SharedSlots.Controls.sequential = Some []
+  := Termination.Controls.sequential_accepted_by_join.
 
 (** The definition the headline's fuel rests on, pinned by a proved
     equation, and the calls predicate by its one nontrivial case. *)
