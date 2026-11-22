@@ -18,12 +18,13 @@ between the two anchors merged kaizen or proofs work and none touched `src/` or 
 
 ## State
 
-Updated 2026-11-21 before a machine restart. Every branch below is local, has `4b988b91`, pull
-request 782 merged into `v0.2.3`, merged in, and is not pushed. Each sits in its own worktree
+Updated 2026-11-22. Every branch below is local and not pushed. Each sits in its own worktree
 beside the project.
 
-- Pull request 778, `fix/v02-proofs-findings` at `63825864`, waits for the operator's merge. The
-  operator directed that nothing builds on it before it merges, so `v0.2.3` is not merged into it.
+- Pull request 778 merged into `v0.2.3` as `2143044c`. On 2026-11-22 `v0.2.3` was green at
+  `ec23afa7`, after Kaizen's pull request 788 moved the F1 and F2 Kani harnesses to expected
+  passes, and the operator directed that each branch adopt it. Every branch below has
+  `ec23afa7` merged in, and a targeted recheck of each was started that day.
 - `feat/ring-r1` at `fc72f2a8`, worktree `v02-ring-r1`. Ring increment R1, green locally on
   2026-11-19 as recorded in this line's block of REVERSE_PROMPT.md, with the native gate passing
   in both configurations.
@@ -38,9 +39,10 @@ beside the project.
 
 ## Continue here
 
-Ask the operator for consent to push the four branches and open their pull requests, with V0.3.X
-reviewing the R1 change since it moves native corpus inputs. After 778 merges, merge `v0.2.3` into
-every branch and rerun its checks. Then take ring increment R2, the reads, on top of R1. The guarded
+Read the targeted recheck's results. Ask the operator for consent to push the four branches and
+open their pull requests, with V0.3.X reviewing the R1 change since it moves native corpus inputs.
+Then take ring increment R2, the reads, on top of R1, and the stream prologue question recorded in
+this line's concerns, which no longer waits on 778. The guarded
 step scripts are kept on `/Volumes/Scratch/keleusma/`.
 
 # V0.2.X handoff, 2026-11-06, after the cryptography rulings

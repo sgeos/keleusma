@@ -196,7 +196,6 @@ branch below has `4b988b91` merged in. None is pushed.
 
 ## Decisions waiting on the operator
 
-- The merge of pull request 778.
 - Consent to push `fix/clippy-rust-1-100` and `fix/arena-relative-bottom-mark` and open their
   pull requests.
 - The module header after 778. A keeps the shallow per-chunk figure and documents it. B
@@ -229,8 +228,8 @@ branch below has `4b988b91` merged in. None is pushed.
 - Read, not measured. The verifier admits a stream chunk with instructions before its `Stream`
   marker, and the per-iteration time bound counts only from `Stream` to `Reset`. The first run of
   such a hand-written chunk could exceed the hosted runtime's instruction bound. The compiler
-  never emits such a prologue. A fix belongs in `src/verify.rs` beside pull request 778, so it
-  waits for that merge.
+  never emits such a prologue. A fix belongs in `src/verify.rs`, and pull request 778, which it
+  waited for, merged as `2143044c`.
 - The session scratchpad was emptied by the restart. The guard file and the agent brief were
   restored from the copies on the scratch volume.
 
