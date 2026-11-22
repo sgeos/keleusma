@@ -288,6 +288,22 @@ its `main` merge on 2026-11-01.
 
 ## Owed by this line
 
+Added 2026-11-21 after the restart. The operator told this session first-hand to proceed with
+the Rocq and Kani proofs on an uncontended machine. `v0.2.3` moved to `ec23afa7`, with pull
+request 778 and Kaizen's pull request 788 merged, and was merged into `proofs` locally at
+`50ef074f`. New, all local unless noted.
+- `proof/kani-ci-robust` at `144b98cc`. `check.sh` strips colour escapes before reading
+  verdicts, reads GNU `time -v` peaks, and gains `KANI_TIMEOUT` and `KANI_MEM_LIMIT_MB`, which
+  terminates a harness's own process group above the cap. A heavy-tier run under a 30-minute
+  and 12 GB cap per harness was started from that worktree, logs under
+  `/Volumes/Scratch/keleusma/kani-ci-robust/heavy-20261121`.
+- `proof/rocq-termination` at `23419b95`, termination for the join checker.
+- `proof/rocq-call-sites` at `c0d40d1d`, `docs/proofs/rocq/call_sites`, reuse soundness when
+  functions allocate, with a call rule, and containment of B2. It also adds
+  `tools/rocq-pins/genpins.py`, the pin generator.
+- An adversarial audit of the call-site and join-checker termination work was started.
+- `proof/kani-findings-flip` must be rebased onto `v0.2.3` after pull request 788 before it lands.
+
 Added 2026-11-21, before a machine restart. Kaizen reports in sequence 556 that the Rust 1.100
 CI break is fixed on `v0.2.3` by pull request 782, so pull request 779 can take `origin/v0.2.3`
 and rerun, with the operator's consent to push. Kaizen's sequence 558, from the first CI run of
