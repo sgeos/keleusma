@@ -2,8 +2,8 @@
 
 > **Navigation** [Decisions](./README.md) | [Backlog B42](./BACKLOG.md#b42-first-class-ring-buffers-managed-by-the-compiler) | [Dynamic Text capacity](./TEXT_CAPACITY_TYPE.md)
 
-**Status.** Design, proposed 2026-10-30. Not implemented. No source file changes with this
-document.
+**Status.** Design, proposed 2026-10-30. Increment R1, the type surface and the data
+layout, is built as recorded in [R1 as built](#r1-as-built). The operations are not built.
 
 ## Provenance
 
@@ -562,3 +562,108 @@ can run.
 accumulated, so the instruction count and the worst-case execution time are linear in `K` and
 constant in `N`. No opcode is needed, and the arena use is unchanged, since a ring lives in the
 data segment.
+
+## R1 as built
+
+**Status.** Built on the branch `feat/ring-r1` from `origin/v0.2.3` at `cf5c8d1f`, 2026-11-18.
+Increment R1 builds the type surface and the data layout and no operation. The rulings above
+govern it. D1 through D7 are option (a), and B1 and B2 are option (a). Only the R1 row of the
+schedule is in scope.
+
+### What is built
+
+- The parser recognises `Ring<T, N>` by name in every type position, as it recognises
+  `Multiword` and `Option`, and builds `TypeExpr::Ring`. The type checker resolves it to
+  `Type::Ring`, which unifies only with a ring of a unifying element and an equal capacity
+  and never with an array.
+- The admissibility rules live in `src/ring.rs` and run first in the type checker, before any
+  type is resolved, so each refusal names its rule. A ring is admitted only as the whole
+  declared type of a field of a `private data` or `shared data` block. The element is one of
+  `Word`, `Byte`, `bool`, `Fixed` and `Float`. The capacity is a literal or a total const
+  expression over literals from 1 to 16,777,213, so that `2 + N` stays below the 24-bit
+  indexed data operand bound of 2^24 that the compiler applies to a data array. A ring field
+  admits no initializer. The walk covers every declaration form that carries a type, by class,
+  and a ring nested inside a data field's type is refused as well.
+- Every expression that reaches a ring field is refused at its receiver in the type checker,
+  which covers a read, an assignment, an index, an indexed write, a method call and an
+  iteration. The diagnostic says that ring operations are not yet implemented.
+
+### The expansion and the hidden names
+
+A ring field `r` of block `d` is replaced, after the type checker and monomorphization and
+before the data layout is built, by three ordinary data fields in its place, `r.len: Word`,
+`r.head: Word` and `r.buf: [T; N]`. The data layout records them as `d.r.len`, `d.r.head` and
+`d.r.buf`. The expansion is `expand_ring_fields` in `src/ring.rs`, called from the compiler
+after `refuse_unimplemented_types`. Everything downstream, the slot partition, the private
+initializers, the shared byte offsets, the wire `DATA_FIELDS` records and the typed schema
+hash, is the existing path for ordinary fields.
+
+The names were chosen against the three constraints the task set, after checking what each
+consumer accepts.
+
+- **A user cannot write them.** A field name in source is one identifier, so no source can
+  declare a field named `r.len`. A source access `d.r.len` parses as a field access on the
+  ring field `r`, which the type checker refuses.
+- **The wire schema and the host data API accept them.** The wire decoder requires a field
+  name to be valid UTF-8 and nothing more, and the data layout already stores block-qualified
+  names containing a dot. No code in the crate splits a field name at a dot, which was checked
+  by searching for every split on a dot in `src/`, `keleusma-cli/src` and `native_codegen/src`.
+- **They cannot collide with or confuse a host's addressing.** A host addresses a shared field
+  by its layout name through `DataLayout::slot_of`, or by slot index. Every name a program can
+  declare has exactly one dot, between block and field, and every hidden name has two, so the
+  two sets are disjoint. `slot_of("d.r")` finds nothing, which is deliberate, since a ring is
+  not one slot. A host reads and writes the parts as `d.r.len`, `d.r.head` and `d.r.buf`,
+  which `tests/ring_buffer.rs` exercises through `Vm::set_shared` and `Vm::get_shared`.
+
+The self-hosted compiler reaches the same bytes by the same names. `parse.kel` reads the ring
+field type in a data block, checks the element and a literal capacity, emits the element's
+type record followed by a capacity record, tag 145, and commits three entries to its own
+field table, so every later field keeps the data operand the reference gives it. The driver
+then rewrites the field's name, element and capacity records into the records of the three
+hidden fields, in `expand_ring_records` in `src/selfhost/mod.rs`, and every existing consumer
+of the data records sees ordinary fields. **One limit of the oracle follows and is stated
+here.** The hidden names in both compilers come from one function,
+`crate::ring::hidden_field_names`, so the byte-identical comparison checks the slot order,
+the counts, the kinds, the initializers, the offsets and the schema tokens independently, but
+not the spelling of the suffixes, which is one definition by construction rather than two
+that agree.
+
+### Measured layout
+
+The following was measured on 2026-11-19 for the host target, 64-bit words, by `tests/ring_buffer.rs`, at its first green run. One prediction the tests were written with was wrong and is corrected below.
+
+- A ring takes `2 + N` slots and three fields, so a field declared after it is addressed by a
+  data operand two higher than its declaration position.
+- A private ring costs exactly the private bytes and the persistent capacity of the three
+  ordinary fields it stands for, checked for `Word`, `Byte`, `bool` and `Fixed` at `N` of 1, 5
+  and 8. The figure is not `16 + N * size(T)` as first predicted. A `Ring<Word, 1>` takes 96
+  private bytes, the same as `a: Word, b: Word, c: [Word; 1]`, so these three fields are not
+  stored packed to the element width. Why is not investigated here, since the ring adds no
+  cost of its own.
+- **The shared buffer has no padding**, which settles the point this document marked as
+  unverified. In `shared data io { a: Byte, r: Ring<T, 3>, b: Word }` the length is at byte 1,
+  the head at byte 9, element `k` at `17 + k * size(T)` and `b` immediately after the last
+  element, for `T` of `Word`, `Byte` and `bool`. A host that views a shared ring as the flat
+  composite `{ len: Word, head: Word, buf: [T; N] }` must therefore not assume word alignment
+  of the ring or of the field after it.
+- The typed schema hash differs among `Ring<Word, 8>`, `Ring<Word, 9>`, `Ring<Byte, 8>` and a
+  plain `[Word; 10]`, in a shared and in a private block.
+- A private ring loads empty. Its three fields carry the zero initializer, and a run that reads
+  each hidden word and element zero returns zero.
+
+### What R1 leaves to later increments, and the residual limits
+
+- No ring operation exists. R2 and R3 build them under the rulings above, and D5 makes each of
+  them validate a shared ring's length and head.
+- The self-hosted stages lower a ring field whose capacity is one literal and whose element is
+  `Word`, `Byte`, `bool`, `Fixed` or `Float`, in a private block, and `Word` or `Byte` in a
+  shared block. A capacity written as a const expression, a `Fixed<F>` element with an explicit
+  fraction count, and a shared ring of `bool`, `Fixed` or `Float` are refused by the shipping
+  self-hosted entry as outside the subset, never emitted divergently. The last follows from the
+  driver's shared layout, which lays out `Word` and `Byte` shared fields only, for every shared
+  field and not only a ring.
+- A ring in a position other than a data field is refused by the shipping self-hosted entry
+  through the reference's rejection, since `parse.kel` refuses a ring only inside a data or
+  struct block declaration.
+- The native backend is not touched. A ring reaches it as three ordinary data fields, which it
+  already handles, and no corpus source declares a ring.

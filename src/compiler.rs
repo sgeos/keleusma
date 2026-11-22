@@ -357,6 +357,7 @@ fn render_type_expr(ty: &TypeExpr) -> String {
     use crate::ast::PrimType;
     match ty {
         TypeExpr::TextN(n, _) => alloc::format!("Text<{}>", n),
+        TypeExpr::Ring(elem, n, _) => alloc::format!("Ring<{}, {}>", render_type_expr(elem), n),
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => String::from("Byte"),
             PrimType::Word => String::from("Word"),
@@ -3154,6 +3155,7 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
             | TypeExpr::NegativeLabelled(inner, _, _) => walk(inner),
             TypeExpr::Tuple(elems, _) => elems.iter().try_for_each(walk),
             TypeExpr::Named(_, args, _, _) => args.iter().try_for_each(walk),
+            TypeExpr::Ring(inner, _, _) => walk(inner),
             TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => Ok(()),
         }
     }
@@ -3252,6 +3254,7 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
                 span: *span,
             }),
             TypeExpr::Array(inner, _, _)
+            | TypeExpr::Ring(inner, _, _)
             | TypeExpr::Option(inner, _)
             | TypeExpr::Labelled(inner, _, _)
             | TypeExpr::NegativeLabelled(inner, _, _) => refuse_in_native(inner),
@@ -3544,6 +3547,16 @@ fn compile_with_recorded_type_hook(
     // monomorphization has erased every const parameter it can. See
     // `refuse_unimplemented_types` for why it is a whole-program walk.
     refuse_unimplemented_types(&owned)?;
+    // THE RING EXPANSION, increment R1 of `RING_BUFFER_DESIGN.md`. Each ring
+    // field becomes three hidden data fields here, after the type checker has
+    // admitted the program and refused every expression naming a ring field, and
+    // before the data layout is built, so the layout, the private initializers,
+    // the shared offsets and the typed schema hash all come from the existing
+    // paths for ordinary fields. `crate::ring` records the choice of names.
+    crate::ring::expand_ring_fields(&mut owned).map_err(|e| CompileError {
+        message: e.message,
+        span: e.span,
+    })?;
     // V0.2.0 Consolidation Phase 4 retired the closure-hoisting
     // pass and the four closure opcodes (`Op::PushFunc`,
     // `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and
@@ -4154,7 +4167,19 @@ fn compile_with_recorded_type_hook(
             let all_unmutated = private_slot_indices
                 .iter()
                 .all(|slot| !written.contains(slot));
-            if all_unmutated {
+            // A private ring is state by definition, and it cannot move to
+            // `const data`, which refuses a ring, so the advice below would be
+            // impossible to follow. In increment R1 no operation writes a ring
+            // yet, so a block holding one is exempt. When R3 adds the mutating
+            // operations, this exemption should give way to counting the
+            // writes those operations emit.
+            let holds_ring = program.data_decls.iter().any(|d| {
+                d.visibility == DataVisibility::Private
+                    && d.fields
+                        .iter()
+                        .any(|f| crate::ring::is_hidden_field_name(&f.name))
+            });
+            if all_unmutated && !holds_ring {
                 let private_block_name = program
                     .data_decls
                     .iter()
@@ -4722,6 +4747,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
         TypeExpr::Unit(_) => String::from("()"),
         TypeExpr::Multiword(_, _, _) => String::from("Multiword"),
         TypeExpr::TextN(_, _) => String::from("Text"),
+        TypeExpr::Ring(_, _, _) => String::from("Ring"),
         TypeExpr::Named(name, _, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => String::from("tuple"),
         TypeExpr::Array(_, _, _) => String::from("array"),
@@ -5216,6 +5242,17 @@ fn schema_type_token(t: &TypeExpr, types: &[TypeDef]) -> String {
             TypeExpr::TextN(n, _) => {
                 out.push_str(&format!(
                     "Text<{}>",
+                    n.as_lit().map_or_else(String::new, |v| v.to_string())
+                ));
+            }
+            // Unreachable for a data field, whose ring is expanded into three
+            // ordinary fields before any token is rendered. Rendered rather than
+            // refused so the function stays total.
+            TypeExpr::Ring(elem, n, _) => {
+                out.push_str("Ring<");
+                render(elem, types, depth, out);
+                out.push_str(&format!(
+                    ",{}>",
                     n.as_lit().map_or_else(String::new, |v| v.to_string())
                 ));
             }
@@ -6391,6 +6428,15 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Multiword(_, _, _) => Ok(()),
+        // A ring field is expanded into three ordinary fields before this
+        // validator runs, so a ring reaching it is an internal error rather than
+        // a source error. It is refused rather than admitted unexpanded.
+        TypeExpr::Ring(_, _, span) => Err(CompileError {
+            message: String::from(
+                "internal error: a ring data field reached the data-field validator unexpanded",
+            ),
+            span: *span,
+        }),
         // A `private` field holds a flat `Text<N>` body in the persistent
         // composite pool like any other flat composite, and only script code
         // writes it, so its length never exceeds `N`. A `shared` field is
@@ -7418,6 +7464,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
         TypeExpr::Unit(_) => Some("()".to_string()),
         TypeExpr::Multiword(_, _, _) => Some("Multiword".to_string()),
         TypeExpr::TextN(_, _) => Some("Text".to_string()),
+        TypeExpr::Ring(_, _, _) => Some("Ring".to_string()),
         TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
@@ -9412,6 +9459,10 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     fix_type(p, frac_bits);
                 }
             }
+            // A `Ring<Fixed, N>` element resolves to the target's Q-format here
+            // like any other `Fixed`, before the expansion copies it into the
+            // hidden element array.
+            TypeExpr::Ring(elem, _, _) => fix_type(elem, frac_bits),
             TypeExpr::Array(elem, _, _) => fix_type(elem, frac_bits),
             TypeExpr::Option(inner, _) => fix_type(inner, frac_bits),
             TypeExpr::Named(_, args, _, _) => {

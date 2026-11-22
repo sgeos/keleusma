@@ -228,6 +228,27 @@ let found: Option<Word> = Option::Some(42);
 let missing: Option<Word> = Option::None;
 ```
 
+### Ring Buffers
+
+**Status. Increment R1. The type and its data layout are built and no operation is.** `Ring<T, N>` is a ring buffer managed by the compiler, holding up to `N` elements of type `T` in a data segment. The design and the rulings that govern it are in [RING_BUFFER_DESIGN.md](../decisions/RING_BUFFER_DESIGN.md). The operations `push`, `pop`, `peek`, `len`, `capacity`, `clear`, logical indexing and iteration are pending, and every expression that reads or writes a ring field is refused at compile time until they land.
+
+```
+private data hist {
+  samples: Ring<Fixed, 16>,
+  count: Word,
+}
+```
+
+The following rules hold in this release, and a program that breaks one is refused at compile time with a diagnostic naming the rule.
+
+- A ring is admitted only as the whole declared type of a field of a `private data` or `shared data` block. A ring in a local binding, a parameter, a return or yield type, a struct field, an enum payload, a newtype, a tuple, an array element, an `Option`, a generic argument, a cast target, a trait or native signature, or a `const data` block is refused.
+- The element type `T` is one of `Word`, `Byte`, `bool`, `Fixed` and `Float`.
+- The capacity `N` is an integer literal or a total const expression over literals that evaluates to a positive value. A ring occupies `2 + N` data slots, and `2 + N` must be below the 24-bit indexed data operand bound of 2^24, so `N` is at most 16,777,213.
+- A ring field admits no initializer. It is empty at load.
+- `Ring<T, N>` and `Ring<U, M>` unify only when `T` and `U` unify and `N` equals `M`. A ring never unifies with an array.
+
+A ring field `r` lowers to three hidden data fields in declaration order, a length `Word` named `r.len`, a head `Word` named `r.head` and an element array `[T; N]` named `r.buf`. It therefore occupies `2 + N` consecutive data slots, and every slot is a scalar slot that loads as the zero of its type. The data layout records the three fields under the block-qualified names `d.r.len`, `d.r.head` and `d.r.buf`, which is how a host addresses the parts of a shared ring. No source program can write these names, since a field name in source is one identifier. In the shared host buffer the three fields are packed with no padding, so for a ring at byte offset `o` on a 64-bit target the length is at `o`, the head at `o + 8` and element `k` at `o + 16 + k * size(T)`.
+
 ## Const Generics
 
 A definition may be parameterized by a compile-time constant in addition to its type parameters. A const parameter is a lowercase name introduced by the `const` keyword, whose type is `Word`, the only admissible const-parameter type. Const parameters are declared on functions, structs, and enums, mixed freely with type parameters.
@@ -357,6 +378,7 @@ The following type expressions are admissible as data segment field types.
 | Fixed-arity tuple of admissible types | Yes | Compositional. |
 | Fixed-length array `[T; N]` of admissible elements | Yes | Size is element size times length. |
 | `Option<T>` where `T` is admissible | Yes | Tag plus payload, fixed size. |
+| `Ring<T, N>` with `T` one of `Word`, `Byte`, `bool`, `Fixed`, `Float` | Yes, in `private` and `shared` data only | Lowers to a length word, a head word and `[T; N]`, `2 + N` slots. Refused in `const` data and nested in any other type. See Ring Buffers above. |
 | Nominal struct of admissible fields | Yes | Compositional. |
 | Nominal enum where all variants have admissible payloads | Yes | Discriminator plus the maximum-size payload. |
 | `StaticStr` | Conditional | Surface grammar does not currently expose static strings as data field types. A `Text` field in shared data is rejected at compile time, because the shared segment is a flat host-owned byte buffer that cannot hold an arena pointer (B28 item 2); the host marshals strings outside the shared slots. |

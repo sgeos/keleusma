@@ -27,7 +27,6 @@ description = "Total Functional Stream Processor with definitive WCET and WCMU v
 license = "0BSD"
 keywords = ["scripting", "bytecode", "no-std", "wcet", "embedded"]
 categories = ["no-std", "compilers", "embedded"]
-homepage = "https://github.com/sgeos/keleusma"
 repository = "https://github.com/sgeos/keleusma"
 documentation = "https://docs.rs/keleusma"
 readme = "README.md"
@@ -276,6 +275,10 @@ required-features = ["compile", "verify"]
 
 [[example]]
 name = "measured_wcet"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "tightness"
 required-features = ["compile", "verify"]
 
 [[example]]

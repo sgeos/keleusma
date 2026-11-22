@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Arena::rewind_bottom` could move the bottom head below the persistent boundary when given a `BottomMark` taken before `resize_persistent_capacity` grew the persistent region, or before `resize_persistent`. `bottom_used` then overflowed, and the next bottom allocation overwrote persistent bytes. A `BottomMark` now records the bottom length relative to the persistent boundary. A rewind therefore never crosses the boundary, and after a preserving resize the mark names the same allocation boundary in the relocated bytes. Found with Kani by the proofs line as finding A1.
+
 ## [0.3.1] - 2026-07-08
 
 Purely additive over 0.3.0. Seven new public methods, no removals or changes, so

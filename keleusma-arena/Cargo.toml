@@ -32,3 +32,27 @@ allocator-api2 = { version = "0.4", default-features = false }
 # that are only available under specific features.
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "basic"
+required-features = ["alloc"]
+
+[[example]]
+name = "budget_check"
+required-features = ["alloc"]
+
+[[example]]
+name = "epoch_handle"
+required-features = ["alloc"]
+
+[[example]]
+name = "frame_loop"
+required-features = ["alloc"]
+
+[[example]]
+name = "mixed_allocator"
+required-features = ["alloc"]
+
+[[test]]
+name = "public_api"
+required-features = ["alloc"]
