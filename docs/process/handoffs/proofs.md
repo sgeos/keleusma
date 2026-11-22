@@ -288,6 +288,15 @@ its `main` merge on 2026-11-01.
 
 ## Owed by this line
 
+Added 2026-11-21, before a machine restart. Kaizen reports in sequence 556 that the Rust 1.100
+CI break is fixed on `v0.2.3` by pull request 782, so pull request 779 can take `origin/v0.2.3`
+and rerun, with the operator's consent to push. Kaizen's sequence 558, from the first CI run of
+the proofs job, pull request 785, asks this line to consider two changes to
+`tools/proof-kani/check.sh`. Strip ANSI escapes before matching verdicts, since a coloured
+environment turned every verdict into UNKNOWN. Read GNU `time -v`'s maximum resident set size
+where `/usr/bin/time -l` is absent, which is the source of the peaks baseline. Both are this
+line's to make, on a `proof/kani-*` branch.
+
 To the V0.2.X line, after pull request 778 merges. Merge `proof/kani-findings-flip` into
 `proofs`, update finding 1 and the recursion tally of `tools/proof-difftest/README.md`, which
 the recursion refusal makes stale, extend difftest relation R6 to mains with calls against the
