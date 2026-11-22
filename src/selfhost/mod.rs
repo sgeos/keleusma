@@ -2088,6 +2088,12 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         Value::Int(id_of("Text") + 1),
     )
     .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_RING_ID,
+        Value::Int(id_of("Ring") + 1),
+    )
+    .unwrap();
 
     vm.set_shared(
         &mut shared,
@@ -2647,6 +2653,12 @@ fn try_parse_functions_impl_with(
         &mut shared,
         crate::selfhost_host::BR_P_TEXT_ID,
         Value::Int(id_of("Text") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_RING_ID,
+        Value::Int(id_of("Ring") + 1),
     )
     .unwrap();
 
@@ -3307,6 +3319,11 @@ fn try_parse_functions_impl_with(
         },
         before_resume,
     )?;
+    // A ring field reaches here as its name, element and capacity records. It leaves as the
+    // three hidden fields the reference lays out, so every consumer of the data records
+    // below sees ordinary fields only.
+    let mut names = names;
+    let data_records = expand_ring_records(&mut names, data_records);
     Ok((
         names,
         data_records,
@@ -3314,6 +3331,77 @@ fn try_parse_functions_impl_with(
         struct_records,
         native_paths,
     ))
+}
+
+/// Expand each ring field in `parse.kel`'s data records into the three hidden fields the
+/// reference compiler lays out for it, increment R1 of `RING_BUFFER_DESIGN.md`.
+///
+/// `parse.kel` emits a ring field `r: Ring<T, N>` as its name record 4, the element's
+/// type record 6 and the capacity record
+/// [`crate::selfhost_host::PARSE_RING_CAPACITY_TAG`], and a private one then carries the
+/// element's initializer records. This rewrites the first three into the records of the
+/// fields `r.len: Word`, `r.head: Word` and `r.buf: [T; N]`, with the `Word` initializer
+/// records the two words need in a private block, so the buffer keeps the element's own
+/// initializer records that follow. The names come from [`crate::ring::hidden_field_names`],
+/// the function the reference expansion uses, so the spelling is one definition. A hidden
+/// name, and `Word` when the source never spells it, is appended to `names`, which leaves
+/// every existing intern id unchanged.
+///
+/// # Panics
+///
+/// When a capacity record does not follow a field's name and type records, which only a
+/// stage that broke its own record protocol can produce.
+fn expand_ring_records(names: &mut Vec<String>, records: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    use crate::selfhost_host::{
+        PARSE_PRIVATE_INIT_KIND_TAG, PARSE_PRIVATE_INIT_VALUE_TAG, PARSE_RING_CAPACITY_TAG,
+    };
+    if !records.iter().any(|&(c, _)| c == PARSE_RING_CAPACITY_TAG) {
+        return records;
+    }
+    fn intern(names: &mut Vec<String>, s: &str) -> i64 {
+        let at = names.iter().position(|n| n == s).unwrap_or_else(|| {
+            names.push(s.to_string());
+            names.len() - 1
+        });
+        i64::try_from(at).expect("name id")
+    }
+    let mut out: Vec<(i64, i64)> = Vec::with_capacity(records.len() + 16);
+    let mut visibility = 2;
+    for (code, val) in records {
+        if code == 9 {
+            visibility = val % 4;
+        }
+        if code != PARSE_RING_CAPACITY_TAG {
+            out.push((code, val));
+            continue;
+        }
+        let at = out.len();
+        let (field, elem) = match out.get(at.wrapping_sub(2)..) {
+            Some(&[(4, field), (6, elem)]) => (field, elem),
+            _ => panic!("a ring capacity record does not follow its field's name and type"),
+        };
+        out.truncate(at - 2);
+        let field_name = usize::try_from(field)
+            .ok()
+            .and_then(|i| names.get(i))
+            .cloned()
+            .expect("ring field name id");
+        let word = intern(names, "Word");
+        let [len, head, buf] = crate::ring::hidden_field_names(&field_name);
+        for name in [len, head] {
+            let id = intern(names, &name);
+            out.extend([(4, id), (6, word)]);
+            if visibility == 1 {
+                out.extend([
+                    (PARSE_PRIVATE_INIT_KIND_TAG, 3),
+                    (PARSE_PRIVATE_INIT_VALUE_TAG, 0),
+                ]);
+            }
+        }
+        let id = intern(names, &buf);
+        out.extend([(4, id), (6, elem), (8, val)]);
+    }
+    out
 }
 
 /// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
@@ -10650,6 +10738,7 @@ fn unsupported_text_capacity(src: &str) -> Option<(&'static str, u32)> {
             }
             TypeExpr::Option(inner, _) => type_scan(inner, true, out),
             TypeExpr::Array(inner, _, _)
+            | TypeExpr::Ring(inner, _, _)
             | TypeExpr::Labelled(inner, _, _)
             | TypeExpr::NegativeLabelled(inner, _, _) => type_scan(inner, inside_option, out),
             TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {

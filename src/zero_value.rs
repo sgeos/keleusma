@@ -121,6 +121,12 @@ fn zero_value_at(
         TypeExpr::Multiword(n, _, _) => Ok(ConstValue::Array(
             alloc::vec![zero_prim(&crate::ast::PrimType::Word); n.as_lit().unwrap_or(0) as usize],
         )),
+        // A ring has no value in increment R1. It exists only as a data field,
+        // which the compiler expands into three ordinary fields before any zero
+        // is asked for, so reaching here means a pass was skipped.
+        TypeExpr::Ring(_, _, _) => Err(ZeroValueError::UnknownType(alloc::string::String::from(
+            "Ring<T, N> has no value outside a data field",
+        ))),
         TypeExpr::Option(_, _) => Ok(ConstValue::None),
         TypeExpr::Tuple(elems, _) => {
             let mut out = Vec::with_capacity(elems.len());
@@ -229,6 +235,7 @@ fn zero_respects_refinements_at(ty: &TypeExpr, reg: &TypeRegistry, depth: usize)
         TypeExpr::Unit(_)
         | TypeExpr::Prim(_, _)
         | TypeExpr::TextN(_, _)
+        | TypeExpr::Ring(_, _, _)
         | TypeExpr::Multiword(_, _, _)
         | TypeExpr::Option(_, _) => true,
         TypeExpr::Tuple(elems, _) => elems

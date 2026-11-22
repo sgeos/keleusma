@@ -6,6 +6,15 @@ Current sprint source of truth.
 
 ---
 
+## 2026-11-18 Resume after the pause
+
+The handoff anchored on `7bc3a7f4` validated. Pull request 778, which refuses recursion, saturates
+both bounds and adds the composed time bound, is green and waits for the operator's merge. Rust
+1.100.0 turns `v0.2.3` red at a lint in a `src/vm.rs` test, fixed locally on
+`fix/clippy-rust-1-100`. The proofs line's arena finding A1 is fixed locally on
+`fix/arena-relative-bottom-mark`. Neither branch is pushed. The proofs line's tail-position
+proposal for delegated loops is put to the operator. Next is the ring buffer.
+
 ## 2026-11-06 Unification, the array design and the cryptography plan
 
 The operator directed two unifications through `main`. `v0.2.3` merged into `main` as

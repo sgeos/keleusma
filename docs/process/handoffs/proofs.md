@@ -33,6 +33,63 @@ per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 > None of these relates any model to the shipping verifier by proof. The interline export hold
 > below still stands.
 
+> **REFRESHED 2026-11-12, tenth stamp, describing the Kani guard and the findings flip.** The
+> operator ruled first-hand in this line's session on 2026-11-11, verbatim, "This line can
+> handle heavy work. It is just important to make sure it does not crash the computer." and
+> "Self-pausing at critical is ideal." `tools/proof-kani/check.sh` now runs each harness in its
+> own process group, stops it with `SIGSTOP` when `machine-status` reports critical and resumes
+> it at ok, waits before starting a harness at elevated or critical, and refuses only at stale.
+> Compile-time selector narrowing, `KANI_WALK_SEL_*` and `KANI_CLOSE_SEL_*`, lets one piece of a
+> heavy harness be measured alone, and a narrowed run exits 3 so it never reads as a pass. This
+> is on `proof/kani-self-pause` at `74ddd0fc`, merged into `proofs`. The V0.2.X line accepted
+> all four findings and fixed them on `fix/v02-proofs-findings`, pull request 778, which it held
+> for this line. On `proof/kani-findings-flip` at `ca10524a`, which merges that branch's
+> `63825864`, the F1 and F2 finding harnesses became the regressions
+> `f1_wcet_overhead_saturates` and `f2_wcmu_slot_width_validated`, and the light tier verified
+> seven of seven with the negative control failing as required. That branch carries V0.2.X
+> commits, so it merges into `proofs` only after 778 is on `v0.2.3`. The V0.2.X line relayed,
+> second-hand, an operator instruction for this line, "Address all known proofs related work
+> that does not require my input". It is recorded as relayed by V0.2.X and was not confirmed
+> first-hand. The heavy tier still has no green run, and its peaks inside the sandbox read
+> unknown because `/usr/bin/time -l` is refused there.
+
+> **REFRESHED 2026-11-18, eleventh stamp, after a pause of six days and a machine restart.**
+> The operator told this session first-hand on 2026-11-18 that Rust 1.100 broke continuous
+> integration, that Kaizen is fixing it, and to do as much outstanding proof work as the
+> workstation allows, pulling everything together later. So nothing below is pushed or merged
+> yet, and pull request 779, `proofs` into `v0.2.3`, stays red on a Clippy lint in
+> `src/vm.rs` that is not this line's. This line drafted and then reverted a local fix of that
+> lint, to avoid duplicating Kaizen. Seven branches wait, each in its own worktree.
+> `proof/kani-findings-flip` at `ca10524a` flips F1 and F2 to regressions and carries V0.2.X's
+> unmerged pull request 778, so it waits for 778, whose merge the operator reserved to
+> themself, as V0.2.X relayed. `proof/kani-arena` at `8fa36252`, pushed, adds Kani harnesses
+> for the `keleusma-arena` allocator contract and finding A1, a rewind below the persistent
+> boundary, which V0.2.X reports fixed locally at `ca73895e`, unpushed, with a relative mark
+> encoding, so its two harnesses flip when that lands. Five Rocq branches wait, none pushed.
+> `proof/rocq-b1-pins` at `f7de65f6` pins 29 of B1's statements, closing open item 5.
+> `proof/rocq-accounting-arm` at `51ae2f5b`, which contains `proof/rocq-accounting`, proves
+> memory accounting, Theorem C, for B2's region core epoch by epoch, for injective plans and for
+> plans the join checker accepts, and supersedes `proof/rocq-accounting` for landing.
+> `proof/rocq-termination` at `6afd00ca` proves that every module B2's checker accepts
+> finishes at a computed fuel, so B2's reuse theorem is not vacuous.
+> `proof/rocq-pins-qualified` at `8d8a015f` repairs the merged directories `core_bounds`,
+> `region_core`, `shared_slots` and `instance`. A fresh-context audit of 2026-11-18 showed by
+> execution that pins written with bare names under `Import` can be bypassed by redefining a
+> name such as `cycles`, so every such `Statements.v` became `Claims.v` and a regenerated
+> `Statements.v` pins each item with fully qualified names and no project import. The other
+> audit findings were repaired. The per-epoch reading of the accounting, stated at first as an
+> unproved assumption, is proved since `51ae2f5b` for final states, with the per-`Get` reading
+> following from the proof's structure. A delta check of the repairs on 2026-11-18 found the shadowing
+> repair held against every attack tried, including a replay against accounting and core_bounds,
+> and found that a commented-out pin was still counted, now fixed in all seven scripts. It also
+> noted that global settings such as `Global Arguments` in a module loaded by `Require` alone
+> still reach `Statements.v`, with no way found to weaken a pin through them. Kaizen
+> relayed three operator rulings of 2026-11-18, not confirmed first-hand here. The toolchain
+> follows the latest stable Rust. The interline checkpoint export hold is lifted. Worktrees
+> stay under `keleusma-worktrees/`. Kaizen also relayed the answer "6, yes and yes", that heavy
+> Kani runs may be measured here and may pause themselves at critical, which matches the
+> operator's first-hand ruling of 2026-11-11.
+
 ## Validity
 
 Validate by ancestry and by content, never by a hash match.
@@ -53,7 +110,7 @@ grep -c '^\*\*Lemma' $P             # 5
 grep -c '^\*\*Theorem' $P           # 7
 grep -c '^\*\*Corollary' $P         # 4
 grep -c 'blacksquare' $P            # 15, one per proof block
-ls docs/proofs/ | wc -l             # 5, the proof, three AUDIT records, and rocq/
+ls docs/proofs/ | wc -l             # 7, the proof, its obligation, a README, three AUDIT records, and rocq/. The value 5 written here until 2026-11-18 was wrong from the start
 ls docs/proofs/rocq/region_reuse/*.v | wc -l   # 5, the B1 mechanisation
 ls docs/proofs/rocq/core_bounds/*.v | wc -l    # 6, increment A
 ls docs/proofs/rocq/region_core/*.v | wc -l    # 6, increment B2
@@ -197,9 +254,9 @@ its `main` merge on 2026-11-01.
    This file recorded it as awaiting one word in `docs/process/REVERSE_PROMPT.md`. As of
    2026-11-01 that file no longer mentions it, and no other file on `v0.2.3` does. Whether it
    was answered or dropped is unverified, so ask the operator before treating it as open.
-5. **B1's statements are not pinned.** Increment A's audit showed by execution that a
-   checking script of this kind cannot detect a statement weakened by an added premise. A pins
-   its headline statements in `Statements.v`, and B1's directory needs the same.
+5. **B1's statements are pinned on `proof/rocq-b1-pins`, not yet landed.** Increment A's audit
+   showed by execution that a checking script of this kind cannot detect a statement weakened
+   by an added premise. That branch pins 28 of B1's 32 named results in `Statements.v`.
 
 ## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
 
@@ -231,7 +288,48 @@ its `main` merge on 2026-11-01.
 
 ## Owed by this line
 
-Nothing to any peer line. This line honors the Kaizen export hold above.
+Added 2026-11-21 after the restart. The operator told this session first-hand to proceed with
+the Rocq and Kani proofs on an uncontended machine. `v0.2.3` moved to `ec23afa7`, with pull
+request 778 and Kaizen's pull request 788 merged, and was merged into `proofs` locally at
+`50ef074f`. New, all local unless noted.
+- `proof/kani-ci-robust` at `144b98cc`. `check.sh` strips colour escapes before reading
+  verdicts, reads GNU `time -v` peaks, and gains `KANI_TIMEOUT` and `KANI_MEM_LIMIT_MB`, which
+  terminates a harness's own process group above the cap. A heavy-tier run under a 30-minute
+  and 12 GB cap per harness was started from that worktree, logs under
+  `/Volumes/Scratch/keleusma/kani-ci-robust/heavy-20261121`.
+- `proof/rocq-termination` at `a18d24b1`, termination for the join checker.
+- `proof/rocq-call-sites` at `ca783946`, `docs/proofs/rocq/call_sites`, reuse soundness when
+  functions allocate, with a call rule, and containment of B2. It also adds
+  `tools/rocq-pins/genpins.py`, the pin generator.
+- An adversarial audit of the call-site and join-checker termination work found no soundness
+  defect. It showed that a pin replaced by a duplicate passed the count, so every `check.sh`
+  now requires each pin to name a distinct item, on all branches: `rocq-pins-qualified` at
+  `a7842c0f`, `rocq-accounting-arm` at `7c9df6c4`, `rocq-b1-pins` at `f66b4759`. Its other
+  findings were repaired.
+- `proof/kani-findings-flip` must be rebased onto `v0.2.3` after pull request 788 before it lands.
+
+Added 2026-11-21, before a machine restart. Kaizen reports in sequence 556 that the Rust 1.100
+CI break is fixed on `v0.2.3` by pull request 782, so pull request 779 can take `origin/v0.2.3`
+and rerun, with the operator's consent to push. Kaizen's sequence 558, from the first CI run of
+the proofs job, pull request 785, asks this line to consider two changes to
+`tools/proof-kani/check.sh`. Strip ANSI escapes before matching verdicts, since a coloured
+environment turned every verdict into UNKNOWN. Read GNU `time -v`'s maximum resident set size
+where `/usr/bin/time -l` is absent, which is the source of the peaks baseline. Both are this
+line's to make, on a `proof/kani-*` branch.
+
+To the V0.2.X line, after pull request 778 merges. Merge `proof/kani-findings-flip` into
+`proofs`, update finding 1 and the recursion tally of `tools/proof-difftest/README.md`, which
+the recursion refusal makes stale, extend difftest relation R6 to mains with calls against the
+composed time figure of `3dee17c2`, and measure the heavy harnesses that now reach
+`find_call_cycle`. To the Kaizen line, review of its Phase 1 proofs job when it arrives, and a
+committed peaks baseline from split heavy harnesses. When V0.2.X pushes its fix of finding
+A1, flip the two A1 harnesses on `proof/kani-arena` to regressions. Land the waiting branches
+when the operator pulls everything together, `proof/rocq-pins-qualified` first since it repairs
+landed work, and `proof/rocq-accounting-arm` in place of `proof/rocq-accounting`. Open proof
+work: a statement of the per-epoch reading over intermediate states, the
+termination corollary for the join checker, and the remaining B2 exclusions, refined
+confinement, the escape-copy discipline and sites in called functions. The Kaizen export hold above is reported
+lifted, by relay only.
 
 ## Owed to this line
 

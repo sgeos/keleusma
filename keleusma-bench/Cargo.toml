@@ -6,7 +6,6 @@ publish = ["crates-io"]
 rust-version = "1.88"
 description = "Cost-model calibration tool for Keleusma. Measures pipelined cycles per opcode on a host CPU and emits a CostModel implementation suitable for the runtime's WCET analysis."
 license = "0BSD"
-homepage = "https://github.com/sgeos/keleusma"
 repository = "https://github.com/sgeos/keleusma"
 documentation = "https://docs.rs/keleusma-bench"
 readme = "README.md"
