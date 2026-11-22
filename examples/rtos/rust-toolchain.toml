@@ -1,10 +1,10 @@
-# Pin the toolchain to a stable Rust release with both the
-# host target (for the std demonstrator) and the M55 target
-# (for cross-compile validation toward the eventual N6 port).
-# Matches the embassy-hello-n6 scaffold's choice for
-# predictability across the two crates.
+# The latest stable Rust, with both the host target (for the std demonstrator) and the
+# M55 target (for cross-compile validation toward the eventual N6 port). The crate pinned
+# 1.92 until 2026-11-18, when the operator ruled that Keleusma uses the latest Rust
+# toolchain. This file still names the components and target the crate needs, which a
+# bare `stable` would not install.
 [toolchain]
-channel = "1.92"
+channel = "stable"
 # `clippy` was ABSENT from this list until 2026-09-27, so the crate was not
 # lintable from a clean checkout: `cargo clippy` inside this directory resolves
 # to the pinned toolchain, which did not carry it. It passed on a developer

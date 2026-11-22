@@ -289,6 +289,11 @@ LIGHT=(
     wire_harnesses::crc32_detects_bit_errors_in_four_bytes
     wire_harnesses::secded_corrects_single_bit_errors
     wire_harnesses::secded_detects_double_bit_errors
+    # Findings F1 and F2 were expected failures until the verifier fix of pull request 778
+    # saturated the time and memory bounds and refused a zero slot width. They now verify,
+    # and stay here so that a regression of either fix fails the light tier.
+    verifier_harnesses::finding_f1_wcet_overhead_overflows
+    verifier_harnesses::finding_f2_wcmu_slot_width_unvalidated
 )
 
 # Expected to verify, heavy or not yet measured. None has a recorded green run
@@ -313,8 +318,6 @@ HEAVY=(
 # not merely a failed verdict, keeps an expected failure from passing for an
 # unrelated reason such as an unwinding bound that is too small.
 FAILING=(
-    "verifier_harnesses::finding_f1_wcet_overhead_overflows|attempt to add with overflow|in keleusma::verify::wcet_stream_iteration_with_cost_model"
-    "verifier_harnesses::finding_f2_wcmu_slot_width_unvalidated|attempt to divide by zero|in keleusma::verify::wcmu_region_at|attempt to multiply with overflow|in keleusma::verify::wcmu_stream_iteration_with_value_slot_bytes"
     "verifier_harnesses::negative_control_false_wcet_bound|in verifier_harnesses::negative_control_false_wcet_bound::{closure#0}"
 )
 
