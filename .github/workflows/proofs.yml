@@ -1,0 +1,107 @@
+name: Proofs
+
+# THE MACHINE-CHECKED PROOFS AND THE KANI LIGHT TIER, PHASE 1 OF THE PROOF CI PLAN.
+#
+# The operator ruled that a new CI job for the proofs waits for the release or for
+# agreement with the V0.2.X line, which agreed on 2026-11-11 in interline sequence 468. The
+# plan is docs/process/kaizen/2026-11-08-proof-ci-plan.md. This workflow runs the five Rocq
+# checks under docs/proofs/rocq/, each of which rebuilds its proofs and rechecks every
+# compiled module with the standalone checker rocqchk, the differential test between the
+# Rocq model and the Rust verifier in tools/proof-difftest/, and the Kani light tier in
+# tools/proof-kani/.
+#
+# HOW IT IS CALLED. ci.yml calls it as its `proofs` job when the change classifier's
+# `proofs` flag is set, so it gates merges through `CI result`. The weekly schedule runs it
+# whole, so drift in an input the flag does not list is still caught. GitHub starts a
+# scheduled workflow only from `main`, so the schedule checks out the version branch named
+# in PROOFS_REF, as fuzz.yml does with FUZZ_REF. When a new version branch is cut, change
+# PROOFS_REF with FUZZ_REF and the `target-branch` entries of .github/dependabot.yml.
+#
+# VERSIONS are pinned to the ones the proofs were checked with: OCaml 5.2.1, rocq-core
+# 9.3.0, rocq-stdlib 9.2.0, ocamlfind 1.9.8 and Kani 0.68.0. Rust is the latest stable, by
+# the operator's ruling of 2026-11-18. Kani installs the nightly toolchain it needs itself.
+#
+# PARALLELISM. Kani runs one harness at a time, because no peak baseline is committed yet
+# and the plan runs an unmeasured harness alone. The logs, with any peaks the script
+# records, are kept as an artifact, from which the baseline can be committed. The machine
+# monitor of the development machine is absent on a runner, so the job's own time limit
+# bounds it, as V0.2.X asked.
+on:
+  workflow_call:
+  schedule:
+    - cron: '41 9 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PROOFS_REF: v0.2.3
+
+jobs:
+  proofs:
+    name: Rocq checks, difftest and the Kani light tier
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && env.PROOFS_REF || '' }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: 5.2.1
+      - name: Install Rocq and the extraction tools at the pinned versions
+        run: |
+          opam install -y rocq-core.9.3.0 rocq-stdlib.9.2.0 ocamlfind.1.9.8
+          opam exec -- rocq --version
+      - name: Check each Rocq proof and recheck it with rocqchk
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          ran=0
+          for script in docs/proofs/rocq/*/check.sh; do
+            echo "::group::$script"
+            opam exec -- bash "$script"
+            echo "::endgroup::"
+            ran=$((ran + 1))
+          done
+          # A glob that matched nothing would pass while checking nothing.
+          test "$ran" -ge 5
+          echo "checked $ran Rocq proof directories"
+      - name: Run the differential test between the Rocq model and the Rust verifier
+        timeout-minutes: 20
+        run: opam exec -- bash tools/proof-difftest/check.sh
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.kani
+            ~/.cargo/bin/kani
+            ~/.cargo/bin/cargo-kani
+          key: kani-0.68.0-${{ runner.os }}
+      - name: Install Kani 0.68.0
+        run: |
+          if ! command -v cargo-kani > /dev/null; then
+            cargo install --locked kani-verifier --version 0.68.0
+          fi
+          cargo kani setup
+          cargo kani --version
+      - name: Run the Kani light tier, one harness at a time
+        timeout-minutes: 45
+        # setup-ocaml sets CLICOLOR_FORCE for the whole job, which makes Kani colour its
+        # verdict line, and check.sh matches that line as plain text. Colour stays off here.
+        env:
+          KANI_LOG_DIR: ${{ runner.temp }}/kani-logs
+          CLICOLOR_FORCE: '0'
+          NO_COLOR: '1'
+          CARGO_TERM_COLOR: never
+        run: tools/proof-kani/check.sh --tier light --jobs 1
+      - name: Keep the Kani logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kani-light-logs
+          path: ${{ runner.temp }}/kani-logs
+          if-no-files-found: warn
+          retention-days: 90
