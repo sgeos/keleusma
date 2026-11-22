@@ -14,6 +14,10 @@
 #      they become explicit premises of each closed theorem.
 #   5. The number of results reported closed equals the number named, so a
 #      result that silently dropped out of the list cannot pass.
+#   6. Statements.v pins the exact type of 29 named results, and proves the
+#      definitions of Trace.sound and Trace.baseline by equations. A statement
+#      weakened by an added premise or a changed conclusion then fails to
+#      compile against its pin. The file must hold the expected number of pins.
 #
 # The trusted base is the Rocq kernel, rocqchk, the Stdlib modules imported by
 # the sources, List, Arith and Lia, and the statements as written. Whether the
@@ -28,7 +32,8 @@ set -euo pipefail
 src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/region_reuse}"
-modules=(Bound Trace Clearance Theorems Controls)
+modules=(Bound Trace Clearance Theorems Controls Statements)
+pins_expected=29
 results=(
     Bound.A1_branch_bound Bound.A1s_static_bound Bound.cond_one_arm Bound.C_plan_bound
     Bound.B2a_accounting Bound.footprint_below_bump Bound.footprint_above_bump
@@ -43,6 +48,8 @@ results=(
     Controls.reuse_without_separation_is_unsound Controls.baseline_reads_first
     Controls.plan_reads_second Controls.unsound_plan_fails_the_premises
     Controls.premises_of_B1_are_satisfiable Controls.instance_reads_each_region
+    Controls.B1_premises_hold
+    Statements.sound_pinned Statements.baseline_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -83,6 +90,25 @@ if [ "$hits" -ne 0 ]; then
     exit 1
 fi
 echo "check.sh: scanned ${#modules[@]} sources, no forbidden construct"
+
+# The pinned statements. Statements.v must compile, which step 2 checks, and must
+# hold exactly the expected number of type pins, so a deleted pin is visible.
+# Counted with comments removed, as the scan reads the sources, so a pin
+# commented out is not counted.
+pins=$(flat "$src/Statements.v" | { grep -oE '\<(Definition|Lemma) pin_' || true; } | wc -l | tr -d ' ')
+if [ "$pins" -ne "$pins_expected" ]; then
+    echo "check.sh: Statements.v holds $pins type pins, expected $pins_expected" >&2
+    exit 1
+fi
+echo "check.sh: Statements.v holds the $pins expected type pins"
+# Each pin names a distinct result, so a pin replaced by a duplicate of
+# another is refused as well as a deleted one.
+targets="$(flat "$src/Statements.v" | { grep -oE ":= *[A-Z][A-Za-z0-9_]*\.[A-Za-z0-9_']+ *\." || true; } | sed -E 's/^:= *//; s/ *\.$//' | sort)"
+if [ "$(printf '%s\n' "$targets" | grep -c .)" -ne "$pins_expected" ] || [ -n "$(printf '%s\n' "$targets" | uniq -d)" ]; then
+    echo "check.sh: the pins of Statements.v do not name $pins_expected distinct results" >&2
+    exit 1
+fi
+echo "check.sh: the $pins_expected pins name distinct results"
 
 # 2. Compile out of tree, so no build output lands beside the sources.
 # The output directory is deleted only when this script made it, shown by its marker.

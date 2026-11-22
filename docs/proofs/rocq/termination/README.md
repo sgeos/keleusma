@@ -1,0 +1,102 @@
+# Termination, an Excluded Case of Increment B2
+
+> **Navigation**: [Increment B2](../region_core/README.md) | [The prose proof](../../COMPOSITE_REGION_REUSE_PROOF.md)
+
+Increment B2's headline `reuse_sound` says the reuse run and the baseline run either both stop for
+lack of fuel or both finish with the same log. It left termination among the cases it does not
+cover, so for all it showed, both runs of an accepted module might always stop and the theorem
+would hold by that alone. This directory closes that, in the Rocq Prover, version 9.3.0. **For
+every module B2's checker accepts, a fuel `bound m` computed from the module's structure suffices
+for every run to finish, for every plan, host, starting state and number of cycles. With
+`reuse_sound`, the reuse run under any injective plan and the baseline run then both finish at
+that fuel with the same log.** The same holds for every module and plan that the join checker
+of [`../shared_slots/`](../shared_slots/README.md) accepts together, with no injectivity premise.
+Every named result is checked with no axiom.
+
+## Why it terminates
+
+B2's checker checks each function against the result shapes of earlier functions only, and a call
+must find its callee's shape. So a call inside function `i` names a function below `i`, and the
+main block calls only functions of the module. No call chain recurses. Loops are counted, with a
+constant count. `shape_calls` proves the first fact, and `check_funcs_calls` lifts it to the
+whole function list.
+
+The fuel is `fuel_b`, computed over the block structure. An instruction that neither branches,
+loops nor calls needs one unit. A conditional needs one more than its larger arm. A loop of `k`
+iterations needs `k` plus one more than its body. A call needs one more than its callee's fuel,
+taken from a table `ftab` built in function order, so each entry depends only on earlier ones.
+`runs` proves by induction on fuel that at or above this measure every block, instruction and
+loop finishes, and `accepted_terminates` lifts it to any number of cycles.
+
+## The results
+
+| Result | Statement |
+|---|---|
+| `shape_calls` | A block the shape checker accepts against a table of `n` result shapes calls only functions below `n` |
+| `check_funcs_calls` | Each accepted function calls only functions before it |
+| `runs` | Within the fuel measure, every block, instruction and loop finishes, for any plan and host |
+| `accepted_terminates` | Every accepted module finishes `n` cycles at fuel `bound m`, from any state, for any plan and host |
+| `accepted_runs_agree` | For an accepted module and an injective plan, both runs finish at `bound m` with the same log |
+| `shapeA_calls` | The join checker's main-block rule, like B2's, accepts only calls to known functions |
+| `accepted_terminates_arm` | Every module the join checker accepts with some plan finishes at `bound m`, for any plan and host |
+| `accepted_runs_agree_arm` | For a module and plan the join checker accepts together, both runs finish at `bound m` with the same log |
+
+## How to check it
+
+```sh
+eval $(opam env --switch=rocq)
+docs/proofs/rocq/termination/check.sh
+```
+
+The script follows the hardened scripts of the other directories. It builds B2's sources as its
+dependency, and the shared-slot extension's sources as a second dependency, then this
+directory's five modules. Only this directory's sources are scanned for
+forbidden constructs, and `rocqchk` re-verifies only this directory's modules, though its context
+summary lists any axiom of a dependency too. It fails unless no source holds
+an admitted or assumed proof, a warning silencer or a `Redirect`, the pin and control files
+open no section and declare no hypothesis, variable or context, every module compiles with no
+output, `rocqchk` reports no axiom and no unsafe construct, all 32 named results are closed, and
+`Statements.v` holds its 16 pins, each naming a distinct item of `Claims.v`, with every item
+pinned. `Claims.v` states the six headline results, six controls and four definition equations,
+and `Statements.v` imports no module of the project and pins each of those sixteen items by the type Rocq printed with fully qualified names, because an audit of
+2026-11-18 showed that pins written with bare names under `Import` could be bypassed by
+redefining a name they use. On 2026-11-18, before that regeneration, a premise added to
+`accepted_terminates`, with its uses patched to supply it, was refused at its pin, in a copy
+under `tmp/`.
+No log of that run is kept in the tree. Continuous integration does not yet run the script,
+under the operator's ruling that a new continuous-integration job waits for the release or for
+agreement with the V0.2.X line.
+
+## The controls
+
+- B2's accepted loop `loop_ok` finishes at `bound loop_ok` but stops at fuel 1, so the bound does
+  work and finishing is not automatic.
+- A function calling itself and a function calling a later function are both rejected by B2's
+  checker, which is what the termination rests on.
+- `call_chain`, whose main calls a function that calls another twice, is accepted and finishes at
+  its bound.
+- `loop_ok_runs_agree` applies the corollary to `loop_ok` under the injective plan `P0`.
+- `choose_runs_agree` applies the join checker's corollary to `choose`, which only the join
+  checker accepts, so the join is exercised, and `call_join_runs_agree` to a module whose main
+  calls a function, so the join checker's call case and the callee's fuel are exercised.
+- `sequential_runs_agree` applies the join checker's corollary to the shared-slot module
+  `sequential` under `Pshare`, which is not injective, so B2's corollary could not apply to it.
+
+## The trusted base
+
+The Rocq kernel, `rocqchk`, the standard-library modules `List`, `Arith`, `Bool` and `Lia`,
+B2's definitions, the shared-slot extension's definitions, among them `region_checkA`,
+`shapeA_b`, `Pshare`, `sequential` and `choose`, and the statements as written. The pins fix the
+headline statements, `shapeA_calls`, six controls, the module `call_join` and the controls'
+`finishes`, the definition of `bound`, and the one nontrivial case of `calls_i`. They do not fix `fuel_b` or
+`ftab`, which only make the bound larger or smaller. The headline holds of whatever value
+`bound m` takes, since it states that the run finishes at that fuel.
+
+## What is not covered
+
+- **The size of the bound.** It is a sufficient fuel, not a tight one, and it is not related to
+  increment A's time bound, which counts cycles of a different core.
+- **Keleusma itself.** Nothing relates the region core to the shipping virtual machine. The
+  shipping compiler's refusal of recursion is the V0.2.X line's. This line's differential test
+  reported it missing, and that line's fix, `f2346760` on pull request 778, was not merged when
+  this was written.

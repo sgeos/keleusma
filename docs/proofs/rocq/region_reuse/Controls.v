@@ -185,9 +185,21 @@ Proof.
   right; simpl; lia.
 Qed.
 
-Theorem premises_of_B1_are_satisfiable : Trace.sound unit nat unit unit C_sel I_next C_plan.
+(** The premises of Theorem B1 hold of this instance, stated in full so that
+    the pin of this control fixes that B1's premises are satisfiable.  No pin
+    fixes a proof term, so the pin does not show that the conclusion below
+    is proved through B1, but with the pin of [theorem_B1] it shows that B1
+    is not vacuous. *)
+Theorem B1_premises_hold :
+  Theorems.sole unit C_plan 0 /\
+  (forall n, exists f, Clearance.flow_ok f /\
+     Theorems.describes unit nat unit unit f (Trace.gen unit nat unit unit C_sel I_next (Trace.baseline unit) n) /\
+     Theorems.separated_scopes unit nat unit unit C_plan 0 (Clearance.send f)
+       (Trace.gen unit nat unit unit C_sel I_next (Trace.baseline unit) n) /\
+     Theorems.all_confined unit nat unit unit f C_plan 0
+       (Trace.gen unit nat unit unit C_sel I_next (Trace.baseline unit) n)).
 Proof.
-  apply (theorem_B1 unit nat unit unit C_sel I_next C_plan 0).
+  split.
   - intros s k' H. injection H; auto.
   - intros n. rewrite I_gen.
     assert (Hm : firstn n I_evs = firstn (Nat.min n 4) I_evs).
@@ -196,6 +208,12 @@ Proof.
     rewrite Hm. exists (I_flow (firstn (Nat.min n 4) I_evs)).
     split; [apply I_flow_ok; lia|]. split; [split; [intros t; reflexivity|intros t r H; exact H]|].
     split; [apply I_separated; lia|]. intros p1 s b rest _ _ t _ [].
+Qed.
+
+Theorem premises_of_B1_are_satisfiable : Trace.sound unit nat unit unit C_sel I_next C_plan.
+Proof.
+  destruct B1_premises_hold as [Hs Hp].
+  exact (theorem_B1 unit nat unit unit C_sel I_next C_plan 0 Hs Hp).
 Qed.
 
 (** The run reuses the slot and reads each region's own bytes. *)

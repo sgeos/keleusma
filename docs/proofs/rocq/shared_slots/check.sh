@@ -38,7 +38,7 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/shared_slots}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls Statements)
+modules=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls Claims Statements)
 pins_expected=8
 results=(
     SharedSim.shape_false_eq SharedSim.existsb_false_all SharedSim.cells_differ_shared
@@ -51,7 +51,7 @@ results=(
     Controls.co_live_rejected_by_join Controls.joined_live_rejected_and_diverges Controls.arms_accepted_by_join
     ArmSim.ajoin_sound_l ArmSim.ajoin_sound_r ArmSim.step_popA ArmSim.simulation_arm
     Arm.region_checkA_wf Arm.reuse_sound_arm Arm.shape_embed Arm.arm_generalises Arm.arm_contains_b2
-    Statements.pin_arm_group_covered Statements.pin_co_live_rejected Statements.pin_choose_covered
+    Claims.pin_arm_group_covered Claims.pin_co_live_rejected Claims.pin_choose_covered
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -79,7 +79,7 @@ done
 # The pins and the controls may not open a section or declare a hypothesis,
 # variable or context, which could discharge a premise added to a pinned
 # statement.
-for m in Statements Controls; do
+for m in Statements Claims Controls; do
     [ -f "$src/$m.v" ] || continue
     n=$(flat "$src/$m.v" | { grep -oE '\<(Section|Hypothes[ie]s|Hypothesis|Variables?|Context)\>' || true; } | wc -l | tr -d ' ')
     if [ "$n" -ne 0 ]; then
@@ -95,12 +95,23 @@ echo "check.sh: scanned ${#modules[@]} sources, no forbidden construct"
 
 # The pinned statements. Statements.v must compile, which step 2 checks, and must
 # hold exactly the expected number of type pins, so a deleted pin is visible.
-pins=$(grep -cE '^(Definition|Lemma) pin_' "$src/Statements.v" || true)
+# Counted with comments removed, as the scan reads the sources, so a pin
+# commented out is not counted.
+pins=$(flat "$src/Statements.v" | { grep -oE '\<(Definition|Lemma) pin_' || true; } | wc -l | tr -d ' ')
 if [ "$pins" -ne "$pins_expected" ]; then
     echo "check.sh: Statements.v holds $pins type pins, expected $pins_expected" >&2
     exit 1
 fi
 echo "check.sh: Statements.v holds the $pins expected type pins"
+# Each pin names a distinct item of Claims.v, and every item is pinned, so a
+# pin replaced by a duplicate of another is refused as well as a deleted one.
+targets="$(flat "$src/Statements.v" | { grep -oE ":= *[A-Za-z0-9_]+\.Claims\.[A-Za-z0-9_']+" || true; } | sed -E 's/.*\.Claims\.//' | sort)"
+items="$(flat "$src/Claims.v" | { grep -oE "\<(Definition|Lemma|Example|Theorem|Corollary) [A-Za-z0-9_']+" || true; } | awk '{ print $2 }' | sort)"
+if [ "$targets" != "$items" ] || [ -n "$(printf '%s\n' "$targets" | uniq -d)" ]; then
+    echo "check.sh: the pins of Statements.v do not name each item of Claims.v exactly once" >&2
+    exit 1
+fi
+echo "check.sh: every item of Claims.v is pinned exactly once"
 
 # 2. Compile out of tree, so no build output lands beside the sources.
 # The output directory is deleted only when this script made it, shown by its marker.

@@ -40,11 +40,12 @@ strengthened after this increment's audit. It fails unless all of the following 
 3. All six modules compile with no output.
 4. `rocqchk` re-verifies every module with no axiom and no unsafe construct in its summary.
 5. `Print Assumptions` reports each of the 38 named results closed.
-6. `Statements.v` holds the five expected pins. They fix the statement of `reuse_sound`, the
+6. `Statements.v` holds the seven expected pins, fully qualified, of the items of `Claims.v`. They fix the statement of `reuse_sound`, the
    statement of `loop_ok_sound`, and the claims of the divergence controls `loop_bad`,
    `sep_only` and the shared-slot module, so weakening one of those claims fails to compile.
-   The other controls are not pinned, and neither are the definitions the pinned claims
-   mention, among them `log_of`, `P0`, `P01` and the control modules themselves.
+   The two others fix the definitions of `injective` and `baseline` by equations. The other
+   controls are not pinned, and neither are the definitions the pinned claims mention, among
+   them `log_of`, `P0`, `P01` and the control modules themselves.
 
 Six planted defects were run against this copy on 2026-11-08, and the script refused each. They
 were a premise added to `reuse_sound`, an `Admitted` lemma, an unlisted theorem using the
@@ -54,6 +55,22 @@ silencer split across two lines. The delta check then found a silencer split by 
 passing, which the comment stripping now refuses. No log is kept in the tree. Continuous integration does not
 yet run the script, under the operator's ruling that a new continuous-integration job waits for
 the release or for agreement with the V0.2.X line.
+
+## The pins, regenerated on 2026-11-18
+
+An adversarial audit of 2026-11-18 showed by execution, in a sibling directory, that pins
+written with bare names under `Import` can be bypassed. A module that redefines a name the pins
+use, such as `cycles`, captures every bare use of it, so a headline can become vacuous while
+every pin still compiles. The statements first written here are therefore kept, with their
+proofs, in `Claims.v`, and `Statements.v` is regenerated so that it imports no module of the
+project. Each of its pins states, with fully qualified names, the type Rocq printed for one item
+of `Claims.v` on that date, the proved definition equations included. A redefined name then
+changes the type of an item of `Claims.v` without changing the pinned text, and compilation
+fails. The same attack was replayed against `region_core` in a copy under `tmp/`, a `cycles`
+that always returns `None` added to `Reuse.v` with `reuse_sound` proved trivially and the
+controls patched to compile, and `Statements.v` refused it at `pin_reuse_sound` while every
+other module compiled. Regenerating the pins from a tampered tree would record the tampering,
+so the pinned text itself remains part of the trusted base.
 
 ## The trusted base
 
@@ -173,13 +190,20 @@ a function are rejected, for which there is no separate control.
    copy is ever made.
 6. **Sites inside called functions.** Functions may not allocate, which excludes the case of a
    site executed twice in one scope through two calls.
+   The later directory [`../call_sites/`](../call_sites/README.md), added on 2026-11-21, lifts
+   this for injective plans, with a call rule refusing a call while a caller's live handle is of
+   a site the callee may allocate.
 7. **Memory accounting, Theorem C.** The interpreter does not count memory, so the saving of
-   reuse is shown by `Controls.loop_ok_one_slot` on one module and not proved in general.
+   reuse is shown by `Controls.loop_ok_one_slot` on one module and not proved in general here.
+   The later directory [`../accounting/`](../accounting/README.md), added on 2026-11-18, proves
+   it in general for injective plans, epoch by epoch, counting cells and not bytes.
 8. **Composite structure.** A region holds one number, with no fields, views or nesting, and
    is never written after its allocation.
 9. **Termination.** `reuse_sound` says the two runs stop or finish together. No theorem shows
    that an accepted module finishes, although its controls do at the fuel they use. Increment A
    proves termination for its own core.
+   The later directory [`../termination/`](../termination/README.md), added on 2026-11-18,
+   proves that every accepted module finishes at a computed fuel, so both runs finish and agree.
 10. **Underflow.** Popping an empty stack yields the scalar zero, in the semantics and in the
     checker alike, where a real verifier would reject the program.
 11. **Further results of Part I.** Theorem A1 and Corollary A1s, the branch bounds, are

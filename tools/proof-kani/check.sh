@@ -51,6 +51,16 @@
 # src/generators.rs describes, so that one piece of a heavy harness can be
 # measured alone. A run with any of them set exits 3 even when every selected
 # harness verified, because it verified only a piece.
+# KANI_TIMEOUT caps each harness's run through Kani's experimental
+# --harness-timeout, given with a unit such as 30m, and a run that times out is
+# recorded as TIMEOUT. KANI_MEM_LIMIT_MB caps the resident memory of each
+# harness's process group, sampled at every poll. A group above the cap is
+# resumed if paused and terminated, and the harness is recorded as OVERLIMIT.
+# Pausing alone keeps a stopped harness's memory, so on a machine whose memory
+# one harness can fill, the cap is the guard that frees it. The largest sample
+# is recorded beside the verdict as the sampled peak, a lower bound on the true
+# peak between samples. Sampling needs a view of other processes, which some
+# sandboxes refuse, and then the sample is zero and the cap is not enforced.
 # KANI_STATUS_CMD replaces `machine-status --level` as the monitor command, so
 # the pausing can be exercised without a real critical level. It must exit 0
 # for ok, 1 for elevated, 2 for critical and 3 for stale.
@@ -85,6 +95,8 @@ monitor_level() {
 # Sets `paused_total` to the seconds spent paused. Always returns 0, because the
 # verdict is read from the log and not from the exit status.
 paused_total=0
+sampled_peak_kb=0
+overlimit=0
 watched_pgid=""
 watched_paused=0
 run_watched() {
@@ -107,8 +119,26 @@ run_watched() {
     paused_total=0
     trap 'release_watched; exit 130' INT TERM
     trap 'release_watched' EXIT
-    local level paused_at=0 waited stale_noted=0
+    local level paused_at=0 waited stale_noted=0 rss_kb pids
+    local limit_kb=$(( ${KANI_MEM_LIMIT_MB:-0} * 1024 ))
+    sampled_peak_kb=0
+    overlimit=0
     while kill -0 "$watched_pgid" 2> /dev/null; do
+        # The group's resident memory, summed over its processes. Reading it
+        # needs a view of other processes, which some sandboxes refuse, and
+        # then the sample is zero and no limit is enforced.
+        pids="$(pgrep -g "$watched_pgid" 2> /dev/null | paste -sd, - || true)"
+        rss_kb=0
+        if [ -n "$pids" ]; then
+            rss_kb="$(ps -o rss= -p "$pids" 2> /dev/null | awk '{ s += $1 } END { print s + 0 }')"
+        fi
+        if [ "$rss_kb" -gt "$sampled_peak_kb" ]; then sampled_peak_kb="$rss_kb"; fi
+        if [ "$limit_kb" -gt 0 ] && [ "$rss_kb" -gt "$limit_kb" ]; then
+            echo "note: process group $watched_pgid holds ${rss_kb} KB, above KANI_MEM_LIMIT_MB, terminating it" >&2
+            overlimit=1
+            release_watched
+            break
+        fi
         if [ "$monitored" -eq 1 ]; then
             if monitor_level; then level=0; else level=$?; fi
             if [ "$level" -eq 2 ] && [ "$watched_paused" -eq 0 ]; then
@@ -239,10 +269,16 @@ if [ "${1:-}" = "--one" ]; then
     # Peak memory, where `/usr/bin/time -l` works. Inside some sandboxes it
     # fails on a refused sysctl, and the peak is then recorded as unknown,
     # never as zero.
+    # KANI_TIMEOUT caps each harness's run, through Kani's experimental
+    # --harness-timeout, given with a unit such as 30m.
+    timeout_args=()
+    if [ -n "${KANI_TIMEOUT:-}" ]; then
+        timeout_args=(-Z unstable-options --harness-timeout "$KANI_TIMEOUT")
+    fi
     peak="unknown"
     if /usr/bin/time -l true > /dev/null 2>&1; then
         run_watched "$log" "$log.time" \
-            /usr/bin/time -l cargo kani --output-format terse --exact --harness "$name"
+            /usr/bin/time -l cargo kani ${timeout_args[@]+"${timeout_args[@]}"} --output-format terse --exact --harness "$name"
         # The maximum resident set size comes first because it covers the
         # model checker, a grandchild of this process. The peak memory
         # footprint covers only the direct child, `cargo`, which measured
@@ -256,13 +292,30 @@ if [ "${1:-}" = "--one" ]; then
         fi
         # Kani's own diagnostics went to the timing file, so keep them in the log.
         cat "$log.time" >> "$log"
+    elif /usr/bin/time -v true > /dev/null 2>&1; then
+        # GNU time, as on the Linux runners, reports the same figure in
+        # kilobytes under its own label.
+        run_watched "$log" "$log.time" \
+            /usr/bin/time -v cargo kani ${timeout_args[@]+"${timeout_args[@]}"} --output-format terse --exact --harness "$name"
+        kb="$(awk -F: '/Maximum resident set size/ { gsub(/ /, "", $2); print $2 }' "$log.time")"
+        case "$kb" in
+            ''|*[!0-9]*) peak="unknown" ;;
+            *) peak=$(( kb * 1024 )) ;;
+        esac
+        cat "$log.time" >> "$log"
     else
         run_watched "$log" "$log.err" \
-            cargo kani --output-format terse --exact --harness "$name"
+            cargo kani ${timeout_args[@]+"${timeout_args[@]}"} --output-format terse --exact --harness "$name"
         cat "$log.err" >> "$log"
         rm -f "$log.err"
     fi
     end="$(date +%s)"
+    # Colour escapes are removed before any verdict is read. An environment
+    # that forces colour, as setup-ocaml does on the runners, otherwise puts an
+    # escape between "VERIFICATION:- " and the word, and every verdict reads as
+    # UNKNOWN. Perl is used because sed's in-place flag differs between GNU
+    # and BSD.
+    perl -pi -e 's/\e\[[0-9;]*[A-Za-z]//g' "$log"
     verdict="UNKNOWN"
     if grep -q '^VERIFICATION:- SUCCESSFUL' "$log"; then
         verdict="SUCCESSFUL"
@@ -274,10 +327,20 @@ if [ "${1:-}" = "--one" ]; then
     elif grep -q '^VERIFICATION:- FAILED' "$log"; then
         verdict="FAILED"
     fi
-    echo "$verdict $(( end - start )) $peak $paused_total" > "$log_dir/${name##*::}.verdict"
-    echo "$name $peak" >> "$log_dir/peaks.txt"
-    printf '%-60s %-10s %5ss  peak %s bytes  paused %ss\n' \
-        "$name" "$verdict" "$(( end - start ))" "$peak" "$paused_total"
+    # Kani reports a run stopped by --harness-timeout with the same
+    # "VERIFICATION:- FAILED" line as a property that fails, and adds "CBMC
+    # timed out". The heavy-tier run of 2026-11-21 recorded eleven timeouts as
+    # FAILED before this check, with no failed check in any of their logs.
+    if [ "$overlimit" -eq 1 ]; then
+        verdict="OVERLIMIT"
+    elif grep -q 'CBMC timed out' "$log"; then
+        verdict="TIMEOUT"
+    fi
+    sampled=$(( sampled_peak_kb * 1024 ))
+    echo "$verdict $(( end - start )) $peak $paused_total $sampled" > "$log_dir/${name##*::}.verdict"
+    echo "$name $peak $sampled" >> "$log_dir/peaks.txt"
+    printf '%-60s %-10s %5ss  peak %s bytes  sampled %s bytes  paused %ss\n' \
+        "$name" "$verdict" "$(( end - start ))" "$peak" "$sampled" "$paused_total"
     exit 0
 fi
 

@@ -288,6 +288,17 @@ its `main` merge on 2026-11-01.
 
 ## Owed by this line
 
+Added 2026-11-22. Pull request 779 merged into `v0.2.3` on the operator's word, after its head
+`23e27a91` ran green, with `v0.2.3` at `ec23afa7` merged in and the Kani light tier verified
+locally on that tree. The operator then asked first-hand for all work to be committed and
+pushed, and every proof branch below was pushed to origin that day. `proof/kani-ci-robust` at
+`7a7d4dea` now also reports Kani timeouts as TIMEOUT and holds the heavy-tier peaks baseline
+`tools/proof-kani/peaks-2026-11-21.txt`, from which only `wcet_straight_line_is_exact` finishes
+within thirty minutes, the other eleven reaching the cap with no failed check, at peaks of 3.4
+to 9.7 GB. V0.2.X reports finding A1 fixed on pull request 791, so the two A1 harnesses on
+`proof/kani-arena` flip to regressions against it. The rebase of `proof/kani-findings-flip` onto
+`v0.2.3` after pull request 788 is still owed.
+
 Added 2026-11-21 after the restart. The operator told this session first-hand to proceed with
 the Rocq and Kani proofs on an uncontended machine. `v0.2.3` moved to `ec23afa7`, with pull
 request 778 and Kaizen's pull request 788 merged, and was merged into `proofs` locally at

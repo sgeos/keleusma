@@ -40,7 +40,7 @@ all of the following hold.
 3. `rocqchk` re-verifies all fourteen modules with no axiom and no unsafe construct in its
    summary.
 4. `Print Assumptions` reports each of the 42 named results closed.
-5. `Statements.v` holds the ten expected pins.
+5. `Statements.v` holds the twelve expected pins, fully qualified, of the ten pins and two definition equations of `Claims.v`.
 
 Eight planted defects were run against copies of the tree under the ignored `tmp/` on
 2026-11-08, after a control copy with no defect passed. The script refused every one. They were
@@ -51,6 +51,22 @@ witness weakened to a tautology, which its pin refused, a section hypothesis in 
 warnings attribute, and an `Admitted` lemma in a copied dependency of B2. No log of these runs is
 kept in the tree. Continuous integration does not run the script, under the operator's ruling
 of 2026-11-07 on new continuous-integration jobs.
+
+## The pins, regenerated on 2026-11-18
+
+An adversarial audit of 2026-11-18 showed by execution, in a sibling directory, that pins
+written with bare names under `Import` can be bypassed. A module that redefines a name the pins
+use, such as `cycles`, captures every bare use of it, so a headline can become vacuous while
+every pin still compiles. The statements first written here are therefore kept, with their
+proofs, in `Claims.v`, and `Statements.v` is regenerated so that it imports no module of the
+project. Each of its pins states, with fully qualified names, the type Rocq printed for one item
+of `Claims.v` on that date, the proved definition equations included. A redefined name then
+changes the type of an item of `Claims.v` without changing the pinned text, and compilation
+fails. The same attack was replayed against `region_core` in a copy under `tmp/`, a `cycles`
+that always returns `None` added to `Reuse.v` with `reuse_sound` proved trivially and the
+controls patched to compile, and `Statements.v` refused it at `pin_reuse_sound` while every
+other module compiled. Regenerating the pins from a tampered tree would record the tampering,
+so the pinned text itself remains part of the trusted base.
 
 ## The trusted base
 
@@ -93,7 +109,8 @@ B1's observation `OBytes b` is the core's `ReadE (Some b)`, `OStale` is `ReadE N
 | `Safety.v` | `checked_slot_safe`, which derives B1's `slot_safe` for every slot from `region_check` and an injective plan |
 | `Instance.v` | `instance_sound`, `core_log_is_B1_obs` and `reuse_sound_via_B1` |
 | `Witnesses.v` | evidence that the instance is not vacuous |
-| `Statements.v` | the pins |
+| `Claims.v` | the pins as first written, with bare names |
+| `Statements.v` | the items of `Claims.v` pinned with fully qualified names |
 
 ## The proof, in order
 
