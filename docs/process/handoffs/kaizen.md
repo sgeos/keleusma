@@ -22,7 +22,9 @@ operator gave this line the handling of Dependabot findings.
 
 ## Where to work and how to validate
 
-Work only in the `.worktrees/kaizen` worktree below the primary checkout. The line uses
+Work only in this line's own worktree, `../keleusma-worktrees/kaizen` beside the primary
+checkout, where every line's tree lives by the operator's ruling of 2026-11-18. The operator
+moved it there on 2026-11-21. The line uses
 a short-lived branch per increment, cut from `origin/v0.2.3` with
 `git switch --no-track -c`, because the sandbox cannot write the shared git config that
 upstream tracking needs. The primary checkout and the sibling worktrees belong to other
@@ -39,7 +41,7 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-11-18
+## State on 2026-11-21
 
 - **Rulings.** Every operator ruling to this line is recorded verbatim with its
   dispositions in the dated open-decision lists under [`../kaizen/`](../kaizen/README.md),
@@ -49,13 +51,15 @@ run.
   green security-only PRs into `main` are pre-authorized, branch runs stay
   uncancelled, the pinned shard lists of PR 689 stay, and release signing begins at
   the first release after the operator makes a key.
-- **Merged.** This line's PRs into `v0.2.3` through PR 776, `7e0e6c10`, on 2026-11-08,
-  among them the footprint and metrics tracking, the machine-status helper and the proof
-  CI plan. Nothing has merged into `v0.2.3` since `cf5c8d1f`, PR 775, on 2026-11-08.
-- **CI is red for every pull request** since Rust 1.100.0 reached the unpinned stable
-  toolchain on 2026-11-12. Its Clippy reports `needless_range_loop` in `src/vm.rs`,
-  `src/coroutine.rs` and `src/text.rs`, in the lint job and both native gates, on pull
-  requests that change none of those files. The code is V0.2.X's, told in sequence 493.
+- **Merged.** This line's PRs into `v0.2.3` through PR 787, `4accffbe`, on 2026-11-18.
+- **CI is green under Rust 1.100.0**, by PR 782 at `4b988b91`, with V0.2.X's and V0.3.X's
+  lint fixes in it, and CI's Clippy now runs with `--keep-going`. PR 783 moved the RTOS
+  example and the footprint probe to the latest stable and re-baselined the footprint
+  ceilings, since 1.100 shrank the runtime by 1 to 4 percent. Dependabot PRs 763, 784 and
+  786 merged. The full branch run 44476186908 at `475eb487` passed.
+- **The proofs CI job is live**, PR 785, `.github/workflows/proofs.yml`. It runs the five
+  Rocq checks, the difftest and the Kani light tier, gates through `CI result`, and runs
+  weekly once it reaches `main`.
 - **Scratch volume.** This worktree's `target` links to
   `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
@@ -100,20 +104,24 @@ authority, so the startup-file positions reach them first-hand.
    unblock the waiting pull requests in order.
 3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Export the interline checkpoint at handoff. The hold is lifted, and a message that
-   matches a disclosure term is exported with its body redacted.
+4. At each handoff, export the interline checkpoint with every body that matches a kept
+   disclosure term redacted in the export, leaving the store unchanged.
 5. The proofs line resumes when the operator starts its session, with Rocq and Kani as
    ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
    was sent in the interline mailbox. Public records use the coded vocabulary of that file.
 6. `scripts/metrics.py` tracks every reasonable metric, by
-   [the metrics record](../kaizen/2026-11-07-metrics.md). Add the tightness runner to CI
-   when V0.2.X provides it, asked in sequence 379.
+   [the metrics record](../kaizen/2026-11-07-metrics.md). V0.2.X's tightness runner,
+   `examples/tightness.rs` on its unpushed `feat/tightness-runner`, sequence 562, joins the
+   CI footprint and metrics job once it reaches origin.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
-8. Write the `proofs` CI job of [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md).
-   V0.2.X agreed in sequence 468, asking for a runner time limit and for F1 and F2 to flip to
-   expected passes with its fix. Pin Kani's nightly and the stable toolchain together.
+8. Commit a Kani peak baseline once `check.sh` records peaks on Linux, sequence 558. PR 788,
+   `61481c7a`, moved F1 and F2 to the light tier's expected passes after PR 778 left
+   `v0.2.3` red, and branch run 44987301124 is green again.
+9. Propose that `the_corpus_stays_under_its_size_ceiling` in `tests/fuzz_corpus_replay.rs`
+   count only tracked corpus files. It reads the whole directory, so a local fuzz run's
+   ignored output fails the light tier on an otherwise clean tree, as it did on 2026-11-21.
 
 ## Open with the operator
 
@@ -124,6 +132,9 @@ K-series checks are deferred.
 
 ## Concerns
 
+- Interline messages reach the public checkpoint. Kaizen's own review note of 2026-11-08
+  quoted a scratchpad path that names the account, and was redacted on export. Messages
+  should name a file by its repository path, never by a local absolute path.
 - The self-host archive storage cost is unverified, item K10.
 - `minimatch` 10.2.6 stays in the extension. GitHub withdrew alert 6, but the advisory
   still covers that version and no client release accepts the fix.
@@ -140,7 +151,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
+| [Interline](../interline/checkpoint.json) | `c26c998ec29d939e8afa8e2bf32fb5b480136638074892e45431ddf640566313`, 564 messages, 214 unacknowledged at export, 0 addressed to `kaizen`. Other projects' messages are kept, by the ruling of 2026-11-18, and the bodies of 111 that matched a kept disclosure term are redacted in the export only. It restored into a fresh store and re-exported identically |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `8efbc7acda0987da71408c436dd77413f4db812eccd174aba02b3f6860aee580`, 3 samples evaluated and labelled and 3 task outcomes, exported on 2026-11-05, restored into a fresh store and re-exported byte-identical |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 

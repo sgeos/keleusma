@@ -88,8 +88,8 @@ The cause of the blow-up in `wcet_stream_single_op` is not established. A hypoth
 
 | Harness | Purpose | Required failure | Result | Time |
 |---------|---------|------------------|--------|------|
-| `finding_f1_wcet_overhead_overflows` | Reproduces finding F1 | `attempt to add with overflow` in `wcet_stream_iteration_with_cost_model` | Failed as required | 13 s |
-| `finding_f2_wcmu_slot_width_unvalidated` | Reproduces finding F2 | `attempt to divide by zero` in `wcmu_region_at` and `attempt to multiply with overflow` in `wcmu_stream_iteration_with_value_slot_bytes` | Failed as required | 11 s |
+| `finding_f1_wcet_overhead_overflows` | Reproduces finding F1 | `attempt to add with overflow` in `wcet_stream_iteration_with_cost_model` | Failed as required before pull request 778, verified since | 13 s |
+| `finding_f2_wcmu_slot_width_unvalidated` | Reproduces finding F2 | `attempt to divide by zero` in `wcmu_region_at` and `attempt to multiply with overflow` in `wcmu_stream_iteration_with_value_slot_bytes` | Failed as required before pull request 778, verified since | 11 s |
 | `negative_control_false_wcet_bound` | Negative control, a false bound | The harness's own assertion | Failed as required | 31 s |
 
 ## Negative control

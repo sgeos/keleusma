@@ -224,9 +224,11 @@ impl<P: Platform> Kernel<P> {
             // task currently `WaitingFor(id)` and promote it to
             // ready with `WakeReason::Event`. Events that no task
             // is waiting for are dropped.
+            // The events are drained in place, which borrows `pending_events` and
+            // `tasks` as separate fields, so no second vector is allocated and the
+            // buffer keeps its capacity for the next tick.
             if !self.pending_events.is_empty() {
-                let events: alloc::vec::Vec<u8> = self.pending_events.drain(..).collect();
-                for event_id in events {
+                for event_id in self.pending_events.drain(..) {
                     for t in &mut self.tasks {
                         if let TaskState::WaitingFor(waiting_for) = t.state
                             && waiting_for == event_id
