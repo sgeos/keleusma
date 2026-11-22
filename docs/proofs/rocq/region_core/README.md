@@ -199,6 +199,8 @@ a function are rejected, for which there is no separate control.
 9. **Termination.** `reuse_sound` says the two runs stop or finish together. No theorem shows
    that an accepted module finishes, although its controls do at the fuel they use. Increment A
    proves termination for its own core.
+   The later directory [`../termination/`](../termination/README.md), added on 2026-11-18,
+   proves that every accepted module finishes at a computed fuel, so both runs finish and agree.
 10. **Underflow.** Popping an empty stack yields the scalar zero, in the semantics and in the
     checker alike, where a real verifier would reject the program.
 11. **Further results of Part I.** Theorem A1 and Corollary A1s, the branch bounds, are
