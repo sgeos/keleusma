@@ -84,6 +84,16 @@ Choose it from data, not from the machine it was tuned on.
 - **On this machine the script keeps its machine-status gate**, which already holds a job
   back at elevated, and runs where no monitor exists, as on a runner.
 
+## Phase 1, written on 2026-11-18
+
+V0.2.X agreed to Phase 1 before the release on 2026-11-11, in interline sequence 468, asking
+that the job carry its own time limit on the runner and that the expected failures F1 and F2
+flip to expected passes in the pull request that fixes them. The proofs line accepted the
+plan in sequence 411. The job is `.github/workflows/proofs.yml`, called from `ci.yml` behind
+the change classifier's new `proofs` flag and scheduled weekly, with the versions the proofs
+were checked with pinned and Rust on the latest stable, by the operator's ruling of
+2026-11-18. Kani runs one harness at a time until a peak baseline is committed.
+
 ## What is asked, and of whom
 
 - **V0.2.X.** Whether it agrees to Phase 1 before the release, since the job adds CI time

@@ -45,7 +45,7 @@ class ClassifyTests(unittest.TestCase):
                 self.assertEqual(self.mode('docs/a.md', event=event), 'full')
 
     def test_an_empty_or_blank_list_fails_closed(self):
-        closed = {'mode': 'full', 'native': 'true', 'vscode': 'true'}
+        closed = {'mode': 'full', 'native': 'true', 'proofs': 'true', 'vscode': 'true'}
         self.assertEqual(ci_classify.classify('pull_request', []), closed)
         self.assertEqual(ci_classify.classify('pull_request', ['', '  ']), closed)
         self.assertEqual(ci_classify.classify('push', []), closed)
@@ -84,17 +84,31 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(ci_classify.classify('push', ['editors/vscode/package.json'])['vscode'], 'true')
         self.assertEqual(ci_classify.classify('push', ['editors/vim/syntax/keleusma.vim'])['vscode'], 'false')
 
+    def test_proofs_flag_follows_the_proofs_and_the_code_they_check(self):
+        for path in ('docs/proofs/rocq/core_bounds/Core.v', 'tools/proof-kani/src/lib.rs',
+                     'tools/proof-difftest/check.sh', 'src/verify.rs', 'src/bytecode.rs',
+                     'keleusma-wire/src/lib.rs', '.github/workflows/proofs.yml'):
+            with self.subTest(path=path):
+                self.assertEqual(ci_classify.classify('pull_request', [path])['proofs'], 'true')
+        for path in ('src/vm.rs', 'docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md', 'README.md'):
+            with self.subTest(path=path):
+                self.assertEqual(ci_classify.classify('pull_request', [path])['proofs'], 'false')
+
+    def test_a_proof_only_change_is_light_but_still_runs_the_proofs(self):
+        outputs = ci_classify.classify('pull_request', ['docs/proofs/rocq/core_bounds/Core.v'])
+        self.assertEqual((outputs['mode'], outputs['proofs']), ('light', 'true'))
+
     def test_main_prints_sorted_outputs_and_fails_closed_on_unreadable_input(self):
         out = io.StringIO()
         with mock.patch('sys.stdin', io.StringIO('docs/a.md\n')), redirect_stdout(out):
             ci_classify.main(['--event', 'pull_request'])
-        self.assertEqual(out.getvalue(), 'mode=light\nnative=false\nvscode=false\n')
+        self.assertEqual(out.getvalue(), 'mode=light\nnative=false\nproofs=false\nvscode=false\n')
         broken = mock.Mock()
         broken.read.side_effect = UnicodeError('undecodable')
         out = io.StringIO()
         with mock.patch('sys.stdin', broken), redirect_stdout(out):
             ci_classify.main(['--event', 'pull_request'])
-        self.assertEqual(out.getvalue(), 'mode=full\nnative=true\nvscode=true\n')
+        self.assertEqual(out.getvalue(), 'mode=full\nnative=true\nproofs=true\nvscode=true\n')
 
 
 if __name__ == '__main__':
