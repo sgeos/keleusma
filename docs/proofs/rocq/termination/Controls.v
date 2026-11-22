@@ -75,3 +75,38 @@ Proof.
   exact (accepted_runs_agree_arm SharedSlots.Controls.Pshare SharedSlots.Controls.sequential []
            sequential_accepted_by_join).
 Qed.
+
+(** The join checker's corollary on a module only the join checker accepts,
+    [choose], whose arms allocate different sites that share a slot, so the
+    join of [ArmShape.v] is exercised. *)
+Theorem choose_runs_agree : forall host n,
+  exists sp sb,
+    cycles SharedSlots.Controls.Pshare host SharedSlots.Controls.choose
+      (bound SharedSlots.Controls.choose) n init = Some sp /\
+    cycles baseline host SharedSlots.Controls.choose (bound SharedSlots.Controls.choose) n init = Some sb /\
+    log sp = log sb.
+Proof.
+  exact (accepted_runs_agree_arm SharedSlots.Controls.Pshare SharedSlots.Controls.choose []
+           (proj2 SharedSlots.Controls.choose_needs_join)).
+Qed.
+
+(** A module whose main calls a function, accepted by the join checker, so
+    the call case of [shapeA_calls] and the callee's fuel are exercised. *)
+Definition call_join : module :=
+  mkmodule [RegionCore.Controls.blk [Const 1; Const 2; Add]]
+           (RegionCore.Controls.blk [Call 0; Yield; Drop]).
+
+Example call_join_accepted_and_finishes :
+  region_checkA SharedSlots.Controls.Pshare call_join = Some [[TS]] /\
+  finishes SharedSlots.Controls.Pshare call_join (bound call_join) = true.
+Proof. vm_compute. split; reflexivity. Qed.
+
+Theorem call_join_runs_agree : forall host n,
+  exists sp sb,
+    cycles SharedSlots.Controls.Pshare host call_join (bound call_join) n init = Some sp /\
+    cycles baseline host call_join (bound call_join) n init = Some sb /\
+    log sp = log sb.
+Proof.
+  exact (accepted_runs_agree_arm SharedSlots.Controls.Pshare call_join [[TS]]
+           (proj1 call_join_accepted_and_finishes)).
+Qed.

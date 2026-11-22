@@ -55,10 +55,10 @@ forbidden constructs, and `rocqchk` re-verifies only this directory's modules, t
 summary lists any axiom of a dependency too. It fails unless no source holds
 an admitted or assumed proof, a warning silencer or a `Redirect`, the pin and control files
 open no section and declare no hypothesis, variable or context, every module compiles with no
-output, `rocqchk` reports no axiom and no unsafe construct, all 27 named results are closed, and
-`Statements.v` holds its 10 pins. `Claims.v` states the five headline results, three controls and
-two definition equations, and `Statements.v` imports no module of the project and pins each of
-those ten items by the type Rocq printed with fully qualified names, because an audit of
+output, `rocqchk` reports no axiom and no unsafe construct, all 32 named results are closed, and
+`Statements.v` holds its 16 pins, each naming a distinct item of `Claims.v`, with every item
+pinned. `Claims.v` states the six headline results, six controls and four definition equations,
+and `Statements.v` imports no module of the project and pins each of those sixteen items by the type Rocq printed with fully qualified names, because an audit of
 2026-11-18 showed that pins written with bare names under `Import` could be bypassed by
 redefining a name they use. On 2026-11-18, before that regeneration, a premise added to
 `accepted_terminates`, with its uses patched to supply it, was refused at its pin, in a copy
@@ -76,14 +76,19 @@ agreement with the V0.2.X line.
 - `call_chain`, whose main calls a function that calls another twice, is accepted and finishes at
   its bound.
 - `loop_ok_runs_agree` applies the corollary to `loop_ok` under the injective plan `P0`.
+- `choose_runs_agree` applies the join checker's corollary to `choose`, which only the join
+  checker accepts, so the join is exercised, and `call_join_runs_agree` to a module whose main
+  calls a function, so the join checker's call case and the callee's fuel are exercised.
 - `sequential_runs_agree` applies the join checker's corollary to the shared-slot module
   `sequential` under `Pshare`, which is not injective, so B2's corollary could not apply to it.
 
 ## The trusted base
 
-The Rocq kernel, `rocqchk`, the standard-library modules `List`, `Arith` and `Lia`, B2's
-definitions, and the statements as written. The pins fix the headline statements, two controls,
-the definition of `bound`, and the one nontrivial case of `calls_i`. They do not fix `fuel_b` or
+The Rocq kernel, `rocqchk`, the standard-library modules `List`, `Arith`, `Bool` and `Lia`,
+B2's definitions, the shared-slot extension's definitions, among them `region_checkA`,
+`shapeA_b`, `Pshare`, `sequential` and `choose`, and the statements as written. The pins fix the
+headline statements, `shapeA_calls`, six controls, the module `call_join` and the controls'
+`finishes`, the definition of `bound`, and the one nontrivial case of `calls_i`. They do not fix `fuel_b` or
 `ftab`, which only make the bound larger or smaller. The headline holds of whatever value
 `bound m` takes, since it states that the run finishes at that fuel.
 

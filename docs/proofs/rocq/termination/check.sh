@@ -20,8 +20,8 @@
 #      requires the expected number of type pins.
 #
 # The trusted base is the Rocq kernel, rocqchk, the Stdlib modules imported by
-# the sources, List, Arith and Lia, increment B2's definitions, and the
-# statements as written. Whether the region core models Keleusma is not checked
+# the sources, List, Arith, Bool and Lia, increment B2's definitions, the
+# shared-slot extension's definitions, and the statements as written. Whether the region core models Keleusma is not checked
 # here; see README.md.
 #
 # Usage: docs/proofs/rocq/termination/check.sh
@@ -36,7 +36,7 @@ out="${ROCQ_OUT:-$root/target/rocq/termination}"
 deps=(Core Shape Sim Reuse Controls)
 modules=(Termination TerminationArm Controls Claims Statements)
 ss_deps=(SharedShape SharedSim Shared ArmShape ArmSim Arm Controls)
-pins_expected=10
+pins_expected=16
 results=(
     Termination.shape_calls Termination.calls_mono Termination.calls_from_nth
     Termination.check_funcs_calls Termination.fuel_agree Termination.ftab_prefix
@@ -46,6 +46,8 @@ results=(
     Controls.call_chain_accepted_and_finishes Controls.P0_injective Controls.loop_ok_runs_agree
     TerminationArm.shapeA_calls TerminationArm.accepted_goodA TerminationArm.accepted_terminates_arm
     TerminationArm.accepted_runs_agree_arm Controls.sequential_accepted_by_join Controls.sequential_runs_agree
+    Controls.choose_runs_agree Controls.call_join_accepted_and_finishes Controls.call_join_runs_agree
+    Claims.call_join_pinned Claims.finishes_pinned
     Claims.bound_pinned Claims.calls_call_pinned
 )
 
@@ -98,6 +100,15 @@ if [ "$pins" -ne "$pins_expected" ]; then
     exit 1
 fi
 echo "check.sh: Statements.v holds the $pins expected type pins"
+# Each pin names a distinct item of Claims.v, and every item is pinned, so a
+# pin replaced by a duplicate of another is refused as well as a deleted one.
+targets="$(flat "$src/Statements.v" | { grep -oE ":= *[A-Za-z0-9_]+\.Claims\.[A-Za-z0-9_']+" || true; } | sed -E 's/.*\.Claims\.//' | sort)"
+items="$(flat "$src/Claims.v" | { grep -oE "\<(Definition|Lemma|Example|Theorem|Corollary) [A-Za-z0-9_']+" || true; } | awk '{ print $2 }' | sort)"
+if [ "$targets" != "$items" ] || [ -n "$(printf '%s\n' "$targets" | uniq -d)" ]; then
+    echo "check.sh: the pins of Statements.v do not name each item of Claims.v exactly once" >&2
+    exit 1
+fi
+echo "check.sh: every item of Claims.v is pinned exactly once"
 
 # 2. Compile out of tree, so no build output lands beside the sources.
 # The output directory is deleted only when this script made it, shown by its marker.

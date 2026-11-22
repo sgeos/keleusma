@@ -56,3 +56,27 @@ Definition pin_accepted_runs_agree_arm :
 Definition pin_sequential_accepted_by_join :
   SharedSlots.ArmShape.region_checkA SharedSlots.Controls.Pshare SharedSlots.Controls.sequential = Corelib.Init.Datatypes.Some Corelib.Init.Datatypes.nil
   := Termination.Claims.pin_sequential_accepted_by_join.
+
+Definition pin_shapeA_calls :
+  forall (P : RegionCore.Core.plan) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)) (b : RegionCore.Core.block) (reg : Corelib.Init.Datatypes.bool) (S S' : Corelib.Init.Datatypes.list SharedSlots.ArmShape.atag), SharedSlots.ArmShape.shapeA_b P ft reg S b = Corelib.Init.Datatypes.Some S' -> Termination.Termination.calls_b (Corelib.Init.Datatypes.length ft) b
+  := Termination.Claims.pin_shapeA_calls.
+
+Definition pin_sequential_runs_agree :
+  forall (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (n : Corelib.Init.Datatypes.nat), exists sp sb : RegionCore.Core.state, RegionCore.Core.cycles SharedSlots.Controls.Pshare host SharedSlots.Controls.sequential (Termination.Termination.bound SharedSlots.Controls.sequential) n RegionCore.Core.init = Corelib.Init.Datatypes.Some sp /\ RegionCore.Core.cycles RegionCore.Core.baseline host SharedSlots.Controls.sequential (Termination.Termination.bound SharedSlots.Controls.sequential) n RegionCore.Core.init = Corelib.Init.Datatypes.Some sb /\ RegionCore.Core.log sp = RegionCore.Core.log sb
+  := Termination.Claims.pin_sequential_runs_agree.
+
+Definition pin_choose_runs_agree :
+  forall (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (n : Corelib.Init.Datatypes.nat), exists sp sb : RegionCore.Core.state, RegionCore.Core.cycles SharedSlots.Controls.Pshare host SharedSlots.Controls.choose (Termination.Termination.bound SharedSlots.Controls.choose) n RegionCore.Core.init = Corelib.Init.Datatypes.Some sp /\ RegionCore.Core.cycles RegionCore.Core.baseline host SharedSlots.Controls.choose (Termination.Termination.bound SharedSlots.Controls.choose) n RegionCore.Core.init = Corelib.Init.Datatypes.Some sb /\ RegionCore.Core.log sp = RegionCore.Core.log sb
+  := Termination.Claims.pin_choose_runs_agree.
+
+Definition pin_call_join_accepted_and_finishes :
+  SharedSlots.ArmShape.region_checkA SharedSlots.Controls.Pshare Termination.Controls.call_join = Corelib.Init.Datatypes.Some ((RegionCore.Shape.TS :: Corelib.Init.Datatypes.nil) :: Corelib.Init.Datatypes.nil)%list /\ Termination.Controls.finishes SharedSlots.Controls.Pshare Termination.Controls.call_join (Termination.Termination.bound Termination.Controls.call_join) = Corelib.Init.Datatypes.true
+  := Termination.Claims.pin_call_join_accepted_and_finishes.
+
+Definition pin_call_join_pinned :
+  Termination.Controls.call_join = {| RegionCore.Core.mfuncs := RegionCore.Controls.blk (RegionCore.Core.Const 1 :: RegionCore.Core.Const 2 :: RegionCore.Core.Add :: Corelib.Init.Datatypes.nil) :: Corelib.Init.Datatypes.nil; RegionCore.Core.mmain := RegionCore.Controls.blk (RegionCore.Core.Call 0 :: RegionCore.Core.Yield :: RegionCore.Core.Drop :: Corelib.Init.Datatypes.nil) |}
+  := Termination.Claims.call_join_pinned.
+
+Definition pin_finishes_pinned :
+  forall (P : RegionCore.Core.plan) (m : RegionCore.Core.module) (fuel : Corelib.Init.Datatypes.nat), Termination.Controls.finishes P m fuel = match RegionCore.Core.cycles P RegionCore.Controls.host_len m fuel 2 RegionCore.Core.init with | Corelib.Init.Datatypes.Some _ => Corelib.Init.Datatypes.true | Corelib.Init.Datatypes.None => Corelib.Init.Datatypes.false end
+  := Termination.Claims.finishes_pinned.
