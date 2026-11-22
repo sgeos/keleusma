@@ -1816,6 +1816,31 @@ fn flow_admissible(source: &Type, target: &Type) -> bool {
     }
 }
 
+/// Whether `value` may be written into a data field of type `declared`.
+///
+/// A field declared with negative labels, `T@!L`, is a boundary position, and
+/// the specification relaxes the positive upper-bound rule there so that any
+/// label the field does not list is admitted. Its write is then checked
+/// structurally here and against the listed labels by
+/// `check_negative_labels_against_data_write`. Every other field applies the
+/// full rule, the value's labels a subset of the field's at every position.
+fn data_write_compatible(
+    ctx: &mut Ctx,
+    value: &Type,
+    declared: &Type,
+    negatives: &BTreeSet<String>,
+) -> bool {
+    if negatives.is_empty() {
+        types_compatible(ctx, value, declared)
+    } else {
+        types_compatible(
+            ctx,
+            &strip_labels(value.clone()),
+            &strip_labels(declared.clone()),
+        )
+    }
+}
+
 /// The labels of every condition governing the current position, the
 /// implicit-flow context a data-field write is charged with.
 fn governing_labels(ctx: &Ctx) -> BTreeSet<String> {
@@ -3481,7 +3506,13 @@ fn check_data_index_write(
     // As for a plain data-field write, the value carries the governing
     // conditions' labels and flows into the element.
     let value_ty = apply_labels(type_of_expr(ctx, value)?, &governing_labels(ctx));
-    if !types_compatible(ctx, &value_ty, &current) {
+    let field_negatives = ctx
+        .data_negative_labels
+        .get(data_name)
+        .and_then(|m| m.get(field))
+        .cloned()
+        .unwrap_or_default();
+    if !data_write_compatible(ctx, &value_ty, &current, &field_negatives) {
         return Err(TypeError::new(
             format!(
                 "indexed assignment to `{}.{}` expects {}, got {}",
@@ -5176,7 +5207,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             // condition, since writing it discloses which branch ran. The
             // value is the source of the flow and the field its target.
             let value_ty = apply_labels(type_of_expr(ctx, value)?, &governing_labels(ctx));
-            if !types_compatible(ctx, &value_ty, &declared) {
+            if !data_write_compatible(ctx, &value_ty, &declared, &negatives) {
                 return Err(TypeError::new(
                     format!(
                         "assignment to `{}.{}` expects {}, got {}",

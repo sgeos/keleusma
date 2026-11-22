@@ -108,9 +108,9 @@ fn an_implicit_flow_into_an_indexed_field_is_refused() {
         "{data}loop main(_r: Word) -> Word {{ if box.secret < 3 {{ box.out[0] = 1; }} else {{}}; let _ = yield 0; 0 }}\n"
     );
     let program = parse(&tokenize(&src).expect("lex")).expect("parse");
-    let err = compile(&program)
-        .err()
-        .expect("an implicit flow into an array element compiled");
+    let Err(err) = compile(&program) else {
+        panic!("an implicit flow into an array element compiled");
+    };
     assert!(err.message.contains("Content"), "{}", err.message);
 }
 
@@ -135,4 +135,28 @@ fn a_let_may_raise_a_plain_value_to_a_labelled_annotation() {
         "let t: Word@Content = edge.source_rank; let _ = t;",
         "",
     );
+}
+
+fn compile_data(data: &str, body: &str) -> Result<(), String> {
+    let src = format!("{data}loop main(_r: Word) -> Word {{ {body} let _ = yield 0; 0 }}\n");
+    let program = parse(&tokenize(&src).expect("lex")).expect("parse");
+    compile(&program).map(|_| ()).map_err(|e| e.message)
+}
+
+#[test]
+fn a_negative_labelled_field_admits_a_label_it_does_not_list() {
+    // The specification relaxes the positive rule at a `!`-labelled boundary.
+    let data = "shared data b { other: Word@Other, open: Word@!Secret, }\n";
+    if let Err(m) = compile_data(data, "b.open = b.other;") {
+        panic!("an unlisted label was refused at a negative boundary: {m}");
+    }
+}
+
+#[test]
+fn a_negative_labelled_field_refuses_its_label_through_a_condition() {
+    let data = "shared data b { secret: Word@Secret, open: Word@!Secret, }\n";
+    match compile_data(data, "if b.secret < 3 { b.open = 1; } else {};") {
+        Ok(()) => panic!("an implicit flow of a forbidden label compiled"),
+        Err(m) => assert!(m.contains("Secret"), "{m}"),
+    }
 }
