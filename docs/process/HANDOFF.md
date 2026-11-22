@@ -18,32 +18,26 @@ between the two anchors merged kaizen or proofs work and none touched `src/` or 
 
 ## State
 
-Updated 2026-11-22. Every branch below is local and not pushed. Each sits in its own worktree
-beside the project.
+Updated 2026-11-22 after the merges. Every pull request this line opened on 2026-11-22 merged
+into `v0.2.3`.
 
-- Pull request 778 merged into `v0.2.3` as `2143044c`. On 2026-11-22 `v0.2.3` was green at
-  `ec23afa7`, after Kaizen's pull request 788 moved the F1 and F2 Kani harnesses to expected
-  passes, and the operator directed that each branch adopt it. Every branch below has
-  `ec23afa7` merged in, and a targeted recheck of each was started that day.
-- `feat/ring-r1` at `fc72f2a8`, worktree `v02-ring-r1`. Ring increment R1, green locally on
-  2026-11-19 as recorded in this line's block of REVERSE_PROMPT.md, with the native gate passing
-  in both configurations.
-- `feat/tightness-runner` at `a29a40c4`, worktree `v02-tightness`. Kaizen's memory tightness
-  runner, run once with 15 of 15 programs within their bounds.
-- `fix/arena-relative-bottom-mark` at `3ff4e83c`, worktree `v02-arena-mark`. Finding A1 and the
-  arena's test-target feature gating.
-- `docs/v02-handoff-20261118`, worktree `v02-handoff-20261118`, this record.
-- The worktree `v0.2.x` is detached at the head of `v0.2.3`, since each branch above is checked
-  out in its own worktree. No background task is running.
+| Pull request | Merge | What it carries |
+|---|---|---|
+| 791 | `3b8da3c0` | The arena's relative bottom mark, finding A1, and its test-target feature gating |
+| 792 | `4db6fdda` | The memory tightness runner, which Kaizen's pull request 797 runs in CI |
+| 793 | `9a4108ef` | This line's process records of 2026-11-18 to 2026-11-22 |
+| 794 | `840cb138` | Ring increment R1, with both native gate jobs green |
+
+- In flight, `fix/ifc-shared-field-labels` in worktree `v02-ifc`, the information-flow fix for a
+  report from a downstream host crate, carried by the pull request that also carries this record.
+- The worktree `v0.2.x` is detached at the head of `v0.2.3`. No background task is running.
 - The questions waiting on the operator are listed in this line's block of REVERSE_PROMPT.md.
 
 ## Continue here
 
-Read the targeted recheck's results. Ask the operator for consent to push the four branches and
-open their pull requests, with V0.3.X reviewing the R1 change since it moves native corpus inputs.
-Then take ring increment R2, the reads, on top of R1, and the stream prologue question recorded in
-this line's concerns, which no longer waits on 778. The guarded
-step scripts are kept on `/Volumes/Scratch/keleusma/`.
+Merge the information-flow pull request on its green run. Then take ring increment R2, the reads,
+and the stream prologue question recorded in this line's concerns. The guarded step scripts are
+kept on the scratch volume.
 
 # V0.2.X handoff, 2026-11-06, after the cryptography rulings
 
