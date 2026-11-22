@@ -23,8 +23,8 @@ operator gave this line the handling of Dependabot findings.
 ## Where to work and how to validate
 
 Work only in this line's own worktree, `../keleusma-worktrees/kaizen` beside the primary
-checkout, where every line's tree lives by the operator's ruling of 2026-11-18. Until the
-operator moves it there between sessions, it is `.worktrees/kaizen`. The line uses
+checkout, where every line's tree lives by the operator's ruling of 2026-11-18. The operator
+moved it there on 2026-11-21. The line uses
 a short-lived branch per increment, cut from `origin/v0.2.3` with
 `git switch --no-track -c`, because the sandbox cannot write the shared git config that
 upstream tracking needs. The primary checkout and the sibling worktrees belong to other
@@ -116,10 +116,12 @@ authority, so the startup-file positions reach them first-hand.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
-8. Merge `fix/kaizen-kani-flip-20261121` when green. PR 778 merged on 2026-11-21 without
-   flipping F1 and F2, so the branch run at `2143044c` failed its `proofs` job with both
-   harnesses verifying, and this line moved them to the light tier's expected passes. Then
-   commit a Kani peak baseline once `check.sh` records peaks on Linux, sequence 558.
+8. Commit a Kani peak baseline once `check.sh` records peaks on Linux, sequence 558. PR 788,
+   `61481c7a`, moved F1 and F2 to the light tier's expected passes after PR 778 left
+   `v0.2.3` red, and branch run 44987301124 is green again.
+9. Propose that `the_corpus_stays_under_its_size_ceiling` in `tests/fuzz_corpus_replay.rs`
+   count only tracked corpus files. It reads the whole directory, so a local fuzz run's
+   ignored output fails the light tier on an otherwise clean tree, as it did on 2026-11-21.
 
 ## Open with the operator
 
@@ -149,7 +151,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `df5c0dfb2e7f883701f8c05a890cdc3d4d2725a47d12ce846dc201c5ddeca04a`, 558 messages, 213 unacknowledged at export, none addressed to `kaizen`. Other projects' messages are kept, by the ruling of 2026-11-18, and the bodies of 111 that matched a kept disclosure term are redacted in the export only. It restored into a fresh store and re-exported identically |
+| [Interline](../interline/checkpoint.json) | `c26c998ec29d939e8afa8e2bf32fb5b480136638074892e45431ddf640566313`, 564 messages, 214 unacknowledged at export, 0 addressed to `kaizen`. Other projects' messages are kept, by the ruling of 2026-11-18, and the bodies of 111 that matched a kept disclosure term are redacted in the export only. It restored into a fresh store and re-exported identically |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `8efbc7acda0987da71408c436dd77413f4db812eccd174aba02b3f6860aee580`, 3 samples evaluated and labelled and 3 task outcomes, exported on 2026-11-05, restored into a fresh store and re-exported byte-identical |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
