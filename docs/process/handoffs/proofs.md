@@ -297,11 +297,15 @@ request 778 and Kaizen's pull request 788 merged, and was merged into `proofs` l
   terminates a harness's own process group above the cap. A heavy-tier run under a 30-minute
   and 12 GB cap per harness was started from that worktree, logs under
   `/Volumes/Scratch/keleusma/kani-ci-robust/heavy-20261121`.
-- `proof/rocq-termination` at `23419b95`, termination for the join checker.
-- `proof/rocq-call-sites` at `c0d40d1d`, `docs/proofs/rocq/call_sites`, reuse soundness when
+- `proof/rocq-termination` at `a18d24b1`, termination for the join checker.
+- `proof/rocq-call-sites` at `ca783946`, `docs/proofs/rocq/call_sites`, reuse soundness when
   functions allocate, with a call rule, and containment of B2. It also adds
   `tools/rocq-pins/genpins.py`, the pin generator.
-- An adversarial audit of the call-site and join-checker termination work was started.
+- An adversarial audit of the call-site and join-checker termination work found no soundness
+  defect. It showed that a pin replaced by a duplicate passed the count, so every `check.sh`
+  now requires each pin to name a distinct item, on all branches: `rocq-pins-qualified` at
+  `a7842c0f`, `rocq-accounting-arm` at `7c9df6c4`, `rocq-b1-pins` at `f66b4759`. Its other
+  findings were repaired.
 - `proof/kani-findings-flip` must be rebased onto `v0.2.3` after pull request 788 before it lands.
 
 Added 2026-11-21, before a machine restart. Kaizen reports in sequence 556 that the Rust 1.100
