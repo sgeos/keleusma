@@ -6,6 +6,16 @@ Current sprint source of truth.
 
 ---
 
+## 2026-11-22 Ring R1, the tightness runner and the information-flow fix
+
+Pull request 778 merged as `2143044c`, and Kaizen's 788 made `v0.2.3` green again. This line's
+791, 792, 793 and 794 merged, carrying the arena fix for finding A1, the memory tightness runner,
+the process records and ring increment R1. R1 raised the self-hosted lexer's source capacity to
+786,432 bytes under the ruling of 2026-10-26 and re-pinned two native corpus files, reviewed by
+V0.3.X. A downstream host crate reported that information-flow labels on data fields were not
+enforced. The report reproduced at `ec23afa7`, and the fix enforces them at data-field writes and
+annotated `let` bindings, including the labels of governing conditions. Next is ring R2.
+
 ## 2026-11-18 Resume after the pause
 
 The handoff anchored on `7bc3a7f4` validated. Pull request 778, which refuses recursion, saturates

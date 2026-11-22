@@ -1,6 +1,6 @@
 # Reverse prompt
 
-## V0.2.X state, 2026-11-18, after the pause
+## V0.2.X state, 2026-11-22, after R1 and the information-flow fix
 
 This block is the `v0.2.3` line's own channel. On the operator's ruling of 2026-11-04, item 8
 below, each line tracks only its own material in the shared process files until they are
@@ -168,27 +168,25 @@ proceeds without it.
 
 ## In progress
 
-The operator directed on 2026-11-18 that Kaizen fixes the Rust 1.100.0 lints, which merged as
-pull request 782 at `4b988b91`, and that this line works the roadmap in parallel. Every local
-branch below has `4b988b91` merged in. None is pushed.
+Pull requests 791, 792, 793 and 794 merged into `v0.2.3` on 2026-11-22, as recorded in
+`HANDOFF.md`. The information-flow fix is in flight on `fix/ifc-shared-field-labels`.
 
-- Ring buffer increment R1, `feat/ring-r1` at `fc72f2a8`. Measured green locally on 2026-11-19.
-  The 19 ring tests pass. The second verification pass ran the documentation build, 277
-  self-hosted tests including the construct-support boundary, now 156 cases with 145 SOk, 4
-  Refuses, 2 Diverges and 5 RefRejects, and the native gate in both configurations, all green.
-  The quick tier passed 2966 of 2968, and the two failures are fixed in `fc72f2a8`. The lexer
-  source capacity is raised from 524,288 to 786,432 bytes under the ruling of 2026-10-26, and the
-  native corpus pins of `parse.kel` and `lexer.kel` are re-pinned.
-- The memory tightness runner, `feat/tightness-runner` at `a29a40c4`. It ran once and measured 15
-  of 15 programs with no bound exceeded. Kaizen has the figures and the format.
-- The arena fixes, `fix/arena-relative-bottom-mark` at `3ff4e83c`, finding A1 and the
-  feature gating of the arena's test targets.
-- The process records on `docs/v02-handoff-20261118`.
+- A downstream host crate reported, through Kaizen, that labelled shared fields could flow into
+  unlabelled ones. At `ec23afa7` four such flows compiled, against `GRAMMAR.md`. The data-field
+  assignment and the annotated `let` passed the flow check its types in reverse order, and no
+  check charged a write with the labels of the conditions governing it. Both are fixed, the
+  relaxed rule at negative-labelled fields is kept, and a plain value may now bind to a labelled
+  annotation, which the reversed check refused.
+- Measured before the merge of `v0.2.3` at `9ef59fc6`: 3003 of 3003 quick-tier tests, 1041
+  self-hosted tests, the documentation build, and clippy in both feature sets.
+- Not covered: a write inside a called function is checked there, without the caller's governing
+  labels.
 
 ## Next, in order
 
-1. Push the clippy fix and the arena fix and open their pull requests, with consent.
-2. The ring buffer, with the batch push and a required `overflow` arm.
+1. Ring increment R2, the reads, then R3, the mutations with the batch push and its
+   required `overflow` arm.
+2. The stream prologue question in the concerns below.
 3. The cryptography work, ordered by the answers to C1 to C7.
 4. The nested-loop work, ordered by the answers to Q1 to Q7.
 5. After the next public release, block bodies in match arms, named states, and the rewrite of
@@ -196,15 +194,13 @@ branch below has `4b988b91` merged in. None is pushed.
 
 ## Decisions waiting on the operator
 
-- Consent to push `fix/clippy-rust-1-100` and `fix/arena-relative-bottom-mark` and open their
-  pull requests.
 - The module header after 778. A keeps the shallow per-chunk figure and documents it. B
   switches the header to the composed bound. C keeps both under distinct names. D has `Vm::new`
   refuse a module whose composed bound cannot be computed. The recommendation is A with D.
 - The proofs line's tail-position proposal of sequence 495. A delegation to a loop would be
-  refused unless it is in tail position of the caller's body. The premise is confirmed at
-  `src/typecheck.rs:5717`, where a delegated call takes the callee's yield type and code after
-  it compiles. The change is breaking for such sources, needs the same refusal in the
+  refused unless it is in tail position of the caller's body. The premise is confirmed in
+  the `Expr::Call` arm of `src/typecheck.rs`, where a delegated call takes the callee's yield
+  type and code after it compiles. The change is breaking for such sources, needs the same refusal in the
   self-hosted compiler, and changes GRAMMAR.md section 6.3. A separate verifier hardening, a
   refusal of `Op::Return` in a stream chunk, would make the premise of
   `tests/stream_never_returns.rs` structural for bytecode and needs no surface change.
@@ -217,11 +213,8 @@ branch below has `4b988b91` merged in. None is pushed.
 - Git history before `abcf810b` still holds the wording that Appendix B flags. Removing it would
   mean rewriting published history, which this line has not done and does not propose without an
   explicit instruction.
-- Until the clippy fix merges, every fresh CI run of a pull request into `v0.2.3` fails the
-  clippy job for a reason unrelated to its change, including 779, 780 and any rerun of 778.
-- The arena's library tests do not compile with `--no-default-features`, because the test
-  module imports `allocator_api2::vec` without the `alloc` gate. CI only checks that
-  configuration, so it is not caught. It predates A1 and is not changed.
+- Five documentation examples of the arena call `Arena::with_capacity` and fail under
+  `cargo test --no-default-features`, which CI checks but does not test.
 - The proofs line's heavy Kani harnesses, three of which reach `find_call_cycle` and
   `topological_call_order` after 778, have never had a green run. That line will measure them
   after 778 merges.

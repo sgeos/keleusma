@@ -385,7 +385,9 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // under the operator's ruling of 2026-10-26, because the marked `parse.kel`
 // reached the old cap. Nothing was added or removed. The two values were
 // computed by FNV-1a over the files, reproducing the previous pins from the
-// base first. Whether the derived figures moved is for the native gate run.
+// base first. V0.3.X recomputed both independently. Both native gate jobs, default
+// features and narrow-float-32, passed on pull request 794 at 21cc5deb, so the
+// derived figures did not move.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
