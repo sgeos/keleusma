@@ -54,9 +54,9 @@ const CITED_TESTS: &[&str] = &[
 /// to the line; if the code moved, they must be sent to a failing test rather
 /// than to whatever now occupies it.
 const CITED_LINES: &[(usize, &str)] = &[
-    (1278, "then_branch.heap_total.max(else_branch.heap_total)"),
-    (1367, "body_heap_one.saturating_mul(iter_count)"),
-    (1375, "body_heap.max(break_heap)"),
+    (1324, "then_branch.heap_total.max(else_branch.heap_total)"),
+    (1413, "body_heap_one.saturating_mul(iter_count)"),
+    (1421, "body_heap.max(break_heap)"),
 ];
 
 #[test]

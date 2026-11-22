@@ -112,7 +112,7 @@ cargo build --target thumbv8m.main-none-eabihf --lib \
 | `build.rs` | Emits embedded link arguments (`--nmagic`, `-Tlink.x`, `-Tdefmt.x`) only when `CARGO_CFG_TARGET_OS == "none"`. |
 | `memory.x` | AXISRAM2 map for the embedded build. 768 KB FLASH at 0x34100000, 256 KB RAM at 0x341C0000. |
 | `.cargo/config.toml` | Target-scoped `runner = "probe-rs run --chip STM32N657"` for `thumbv8m.main-none-eabihf`. |
-| `rust-toolchain.toml` | Toolchain pin (Rust 1.92) with the `thumbv8m.main-none-eabihf` target. |
+| `rust-toolchain.toml` | The latest stable Rust, with the `thumbv8m.main-none-eabihf` target and the components the crate needs. |
 | `scripts/prelude.kel` | Shared script-side prelude. Declares `Status`, `StatusErrorCode`, and the `use` lines for the host natives. |
 | `scripts/led.kel` | LED blinker task. Pattern-matches the `Status` returned by `host::gpio_set`. |
 | `scripts/sensor.kel` | Sensor poller task. |

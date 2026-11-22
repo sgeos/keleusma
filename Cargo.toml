@@ -254,7 +254,7 @@ hkdf = { version = "0.13", default-features = false, optional = true }
 # SHA-256 for the recipient-key fingerprint and for HKDF. Pure-Rust
 # implementation suitable for no_std + alloc.
 sha2 = { version = "0.11", default-features = false, optional = true }
-sdl3 = { version = "0.20", features = ["build-from-source-static"], optional = true }
+sdl3 = { version = "0.22", features = ["build-from-source-static"], optional = true }
 
 [dev-dependencies]
 # Installs the version-controlled git hooks under `.cargo-husky/hooks/`
