@@ -191,7 +191,9 @@ a function are rejected, for which there is no separate control.
 6. **Sites inside called functions.** Functions may not allocate, which excludes the case of a
    site executed twice in one scope through two calls.
 7. **Memory accounting, Theorem C.** The interpreter does not count memory, so the saving of
-   reuse is shown by `Controls.loop_ok_one_slot` on one module and not proved in general.
+   reuse is shown by `Controls.loop_ok_one_slot` on one module and not proved in general here.
+   The later directory [`../accounting/`](../accounting/README.md), added on 2026-11-18, proves
+   it in general for injective plans, epoch by epoch, counting cells and not bytes.
 8. **Composite structure.** A region holds one number, with no fields, views or nesting, and
    is never written after its allocation.
 9. **Termination.** `reuse_sound` says the two runs stop or finish together. No theorem shows
