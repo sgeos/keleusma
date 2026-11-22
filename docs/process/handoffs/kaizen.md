@@ -41,7 +41,7 @@ git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-11-18
+## State on 2026-11-21
 
 - **Rulings.** Every operator ruling to this line is recorded verbatim with its
   dispositions in the dated open-decision lists under [`../kaizen/`](../kaizen/README.md),
@@ -51,13 +51,15 @@ run.
   green security-only PRs into `main` are pre-authorized, branch runs stay
   uncancelled, the pinned shard lists of PR 689 stay, and release signing begins at
   the first release after the operator makes a key.
-- **Merged.** This line's PRs into `v0.2.3` through PR 776, `7e0e6c10`, on 2026-11-08,
-  among them the footprint and metrics tracking, the machine-status helper and the proof
-  CI plan. Nothing has merged into `v0.2.3` since `cf5c8d1f`, PR 775, on 2026-11-08.
-- **CI is red for every pull request** since Rust 1.100.0 reached the unpinned stable
-  toolchain on 2026-11-12. Its Clippy reports `needless_range_loop` in `src/vm.rs`,
-  `src/coroutine.rs` and `src/text.rs`, in the lint job and both native gates, on pull
-  requests that change none of those files. The code is V0.2.X's, told in sequence 493.
+- **Merged.** This line's PRs into `v0.2.3` through PR 787, `4accffbe`, on 2026-11-18.
+- **CI is green under Rust 1.100.0**, by PR 782 at `4b988b91`, with V0.2.X's and V0.3.X's
+  lint fixes in it, and CI's Clippy now runs with `--keep-going`. PR 783 moved the RTOS
+  example and the footprint probe to the latest stable and re-baselined the footprint
+  ceilings, since 1.100 shrank the runtime by 1 to 4 percent. Dependabot PRs 763, 784 and
+  786 merged. The full branch run 44476186908 at `475eb487` passed.
+- **The proofs CI job is live**, PR 785, `.github/workflows/proofs.yml`. It runs the five
+  Rocq checks, the difftest and the Kani light tier, gates through `CI result`, and runs
+  weekly once it reaches `main`.
 - **Scratch volume.** This worktree's `target` links to
   `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
@@ -108,14 +110,16 @@ authority, so the startup-file positions reach them first-hand.
    ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
    was sent in the interline mailbox. Public records use the coded vocabulary of that file.
 6. `scripts/metrics.py` tracks every reasonable metric, by
-   [the metrics record](../kaizen/2026-11-07-metrics.md). Add the tightness runner to CI
-   when V0.2.X provides it, asked in sequence 379.
+   [the metrics record](../kaizen/2026-11-07-metrics.md). V0.2.X's tightness runner,
+   `examples/tightness.rs` on its unpushed `feat/tightness-runner`, sequence 562, joins the
+   CI footprint and metrics job once it reaches origin.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.
-8. Land the `proofs` CI job, `.github/workflows/proofs.yml`, Phase 1 of
-   [the proof CI plan](../kaizen/2026-11-08-proof-ci-plan.md), and commit a Kani peak
-   baseline from its first artifact. F1 and F2 flip to expected passes with V0.2.X's fix.
+8. Merge `fix/kaizen-kani-flip-20261121` when green. PR 778 merged on 2026-11-21 without
+   flipping F1 and F2, so the branch run at `2143044c` failed its `proofs` job with both
+   harnesses verifying, and this line moved them to the light tier's expected passes. Then
+   commit a Kani peak baseline once `check.sh` records peaks on Linux, sequence 558.
 
 ## Open with the operator
 
