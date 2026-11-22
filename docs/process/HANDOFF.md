@@ -18,21 +18,30 @@ between the two anchors merged kaizen or proofs work and none touched `src/` or 
 
 ## State
 
-- Pull request 778 is green on its head `63825864` and waits for the operator's merge. The
-  operator directed on 2026-11-18 that nothing builds on it before it merges. The proofs line
-  verified its flipped F1 and F2 harnesses against that head in sequence 492.
-- Rust 1.100.0 of 2026-11-09 fails the workspace clippy step on `src/vm.rs` at the archive
-  round-trip test, so every fresh CI run of `v0.2.3` and of the pull requests into it is red. The
-  fix is `20667050` on `fix/clippy-rust-1-100`, committed locally and not pushed.
-- Finding A1 of the proofs line, a bottom mark rewinding below the persistent boundary, is fixed
-  by `ca73895e` on `fix/arena-relative-bottom-mark`, committed locally and not pushed.
+Updated 2026-11-21 before a machine restart. Every branch below is local, has `4b988b91`, pull
+request 782 merged into `v0.2.3`, merged in, and is not pushed. Each sits in its own worktree
+beside the project.
+
+- Pull request 778, `fix/v02-proofs-findings` at `63825864`, waits for the operator's merge. The
+  operator directed that nothing builds on it before it merges, so `v0.2.3` is not merged into it.
+- `feat/ring-r1` at `fc72f2a8`, worktree `v02-ring-r1`. Ring increment R1, green locally on
+  2026-11-19 as recorded in this line's block of REVERSE_PROMPT.md, with the native gate passing
+  in both configurations.
+- `feat/tightness-runner` at `a29a40c4`, worktree `v02-tightness`. Kaizen's memory tightness
+  runner, run once with 15 of 15 programs within their bounds.
+- `fix/arena-relative-bottom-mark` at `3ff4e83c`, worktree `v02-arena-mark`. Finding A1 and the
+  arena's test-target feature gating.
+- `docs/v02-handoff-20261118`, worktree `v02-handoff-20261118`, this record.
+- The worktree `v0.2.x` is detached at the head of `v0.2.3`, since each branch above is checked
+  out in its own worktree. No background task is running.
 - The questions waiting on the operator are listed in this line's block of REVERSE_PROMPT.md.
 
 ## Continue here
 
-With the operator's consent, push the two fix branches and open their pull requests, the clippy
-fix first because it restores the version branch. Then take the ring buffer under
-`RING_BUFFER_DESIGN.md`.
+Ask the operator for consent to push the four branches and open their pull requests, with V0.3.X
+reviewing the R1 change since it moves native corpus inputs. After 778 merges, merge `v0.2.3` into
+every branch and rerun its checks. Then take ring increment R2, the reads, on top of R1. The guarded
+step scripts are kept on `/Volumes/Scratch/keleusma/`.
 
 # V0.2.X handoff, 2026-11-06, after the cryptography rulings
 
