@@ -279,6 +279,10 @@ name = "measured_wcet"
 required-features = ["compile", "verify"]
 
 [[example]]
+name = "tightness"
+required-features = ["compile", "verify"]
+
+[[example]]
 name = "opaque_rust_string"
 required-features = ["compile", "verify"]
 
