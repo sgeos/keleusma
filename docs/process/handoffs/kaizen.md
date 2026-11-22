@@ -120,8 +120,10 @@ authority, so the startup-file positions reach them first-hand.
    `61481c7a`, moved F1 and F2 to the light tier's expected passes after PR 778 left
    `v0.2.3` red, and branch run 44987301124 is green again.
 9. Propose that `the_corpus_stays_under_its_size_ceiling` in `tests/fuzz_corpus_replay.rs`
-   count only tracked corpus files. It reads the whole directory, so a local fuzz run's
-   ignored output fails the light tier on an otherwise clean tree, as it did on 2026-11-21.
+   count only tracked files, since a local fuzz run's ignored output fails it.
+10. Recheck Dependabot alert 7, `minimatch` in the VS Code lockfile, once
+    `vscode-languageclient` accepts `minimatch` 11. Left open by the operator on 2026-11-22.
+    An override breaks the client, which calls `makeRe`, removed in 11.
 
 ## Open with the operator
 
