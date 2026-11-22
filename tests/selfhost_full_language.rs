@@ -3048,6 +3048,13 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         "fn main() -> Text<8> { \"abc\" as Text<8> }",
         Identical,
     ),
+    // A ring is admitted only as a data field type, increment R1. The other positions and
+    // the refusals are in `ring_fields_have_their_pinned_self_hosted_outcomes`.
+    (
+        "TypeExpr::Ring",
+        "private data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }",
+        Identical,
+    ),
     (
         "TypeExpr::Labelled",
         "fn main(a: Word@Secret) -> Word@Secret { a }",
@@ -3545,6 +3552,183 @@ fn capacity_bounded_text_has_its_pinned_outcomes() {
         "a byte comparison was skipped"
     );
     assert_eq!(identical, 40, "the identical population moved");
+}
+
+/// The ring buffer type `Ring<T, N>`, increment R1, 2026-11-18.
+///
+/// R1 builds the type and its data layout and no operation. A ring field lowers to three
+/// hidden data fields, a length word, a head word and `[T; N]`. The parser stage reads the
+/// field type and emits its capacity, and the driver expands the field into the three
+/// fields with the names the reference expansion uses, so the data layout, the private
+/// initializers, the shared offsets and the typed schema hash are compared byte for byte
+/// with the reference by the shipping entry. The cases cover a private and a shared
+/// block, `N` of 1, a power of two and a non-power of two, every element type the stages
+/// lay out, and fields before and after a ring, whose data operands move by two.
+///
+/// The refusals pin that each program the reference rejects is refused, and the
+/// unsupported rows pin the ring forms the stages do not lower, so that each is refused
+/// rather than emitted divergently.
+#[test]
+fn ring_fields_have_their_pinned_self_hosted_outcomes() {
+    let mut cases: Vec<(&str, Class)> = vec![
+        (
+            "private data d { r: Ring<Word, 1> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Word, 5> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Word, 1> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Word, 8> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Word, 5> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "shared data d { r: Ring<Byte, 8> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Byte, 3> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<bool, 2> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { r: Ring<Fixed, 4> }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "private data d { a: Word, r: Ring<Word, 4>, b: Word }\nfn main() -> Word { d.b = 3; d.a + d.b }",
+            Identical,
+        ),
+        (
+            "shared data io { a: Byte, r: Ring<Byte, 3>, x: Word }\nfn main() -> Word { io.x }",
+            Identical,
+        ),
+        (
+            "shared data io { r: Ring<Word, 2>, x: Word }\nprivate data d { s: Ring<Byte, 7>, t: Ring<Word, 16>, y: Word }\nfn main() -> Word { d.y = io.x; d.y }",
+            Identical,
+        ),
+        // Programs the reference rejects.
+        (
+            "private data d { r: Ring<Word, 4> }\nfn main() -> Word { d.r }",
+            PipelineRejects,
+        ),
+        (
+            "private data d { r: Ring<Word, 4> }\nfn main() -> Word { d.r[0] = 1; 0 }",
+            PipelineRejects,
+        ),
+        (
+            "private data d { r: Ring<Word, 0> }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "private data d { r: Ring<Word, 16777214> }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "private data d { r: Ring<Text, 4> }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "const data c { r: Ring<Word, 4> = 0 }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "struct S { r: Ring<Word, 4> }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "private data d { r: [Ring<Word, 4>; 2] }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "private data d { r: Ring<Word, 4> = 0 }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "fn main() -> Word { let r: Ring<Word, 4> = 0; 0 }",
+            RefRejects,
+        ),
+        (
+            "fn f(r: Ring<Word, 4>) -> Word { 0 }\nfn main() -> Word { 0 }",
+            RefRejects,
+        ),
+        // Ring forms the reference admits and the stages do not lower.
+        (
+            "private data d { r: Ring<Word, 2 + 2> }\nfn main() -> Word { 0 }",
+            Unsupported,
+        ),
+        (
+            "private data d { r: Ring<Fixed<16>, 4> }\nfn main() -> Word { 0 }",
+            Unsupported,
+        ),
+        (
+            "shared data d { r: Ring<bool, 4> }\nfn main() -> Word { 0 }",
+            Unsupported,
+        ),
+    ];
+    #[cfg(feature = "floats")]
+    cases.push((
+        "private data d { r: Ring<Float, 4> }\nfn main() -> Word { 0 }",
+        Identical,
+    ));
+    let mut identical = 0usize;
+    let mut mismatches = Vec::new();
+    for (src, expected) in &cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+            continue;
+        }
+        if *expected != Identical {
+            continue;
+        }
+        let target = keleusma::target::Target::host();
+        let ours = self_hosted_compile(src, &target).expect("classified Identical");
+        let reference = compile_src(src);
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{src}"
+        );
+        // The layout really carries the ring's three fields, so the comparison above
+        // compared a ring and not an empty layout.
+        let layout = reference
+            .data_layout
+            .as_ref()
+            .expect("a ring program has data");
+        assert!(
+            layout.fields.iter().any(|f| f.name.ends_with(".buf")),
+            "{src}"
+        );
+        identical += 1;
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    // Non-vacuity. The byte comparison ran for every case expected to be identical.
+    let expected_identical = cases.iter().filter(|(_, c)| *c == Identical).count();
+    assert_eq!(
+        identical, expected_identical,
+        "a byte comparison was skipped"
+    );
+    #[cfg(feature = "floats")]
+    assert_eq!(identical, 14, "the identical population moved");
 }
 
 /// A match over an `Option<T>` parameter, Order 6. The parser resolves `Option::Some` and
