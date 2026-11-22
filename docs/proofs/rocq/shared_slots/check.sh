@@ -103,6 +103,15 @@ if [ "$pins" -ne "$pins_expected" ]; then
     exit 1
 fi
 echo "check.sh: Statements.v holds the $pins expected type pins"
+# Each pin names a distinct item of Claims.v, and every item is pinned, so a
+# pin replaced by a duplicate of another is refused as well as a deleted one.
+targets="$(flat "$src/Statements.v" | { grep -oE ":= *[A-Za-z0-9_]+\.Claims\.[A-Za-z0-9_']+" || true; } | sed -E 's/.*\.Claims\.//' | sort)"
+items="$(flat "$src/Claims.v" | { grep -oE "\<(Definition|Lemma|Example|Theorem|Corollary) [A-Za-z0-9_']+" || true; } | awk '{ print $2 }' | sort)"
+if [ "$targets" != "$items" ] || [ -n "$(printf '%s\n' "$targets" | uniq -d)" ]; then
+    echo "check.sh: the pins of Statements.v do not name each item of Claims.v exactly once" >&2
+    exit 1
+fi
+echo "check.sh: every item of Claims.v is pinned exactly once"
 
 # 2. Compile out of tree, so no build output lands beside the sources.
 # The output directory is deleted only when this script made it, shown by its marker.
