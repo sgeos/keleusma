@@ -66,3 +66,23 @@ Definition pin_log_of_pinned :
 Definition pin_calls_contains_b2 :
   forall (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), RegionCore.Shape.region_check m = Corelib.Init.Datatypes.Some ft -> CallSites.ShapeC.region_checkC m = Corelib.Init.Datatypes.Some (CallSites.Contains.lift ft)
   := CallSites.Claims.pin_calls_contains_b2.
+
+Definition pin_twice_sound :
+  forall (host : Corelib.Init.Datatypes.list RegionCore.Core.ev -> Corelib.Init.Datatypes.nat) (fuel n : Corelib.Init.Datatypes.nat), match RegionCore.Core.cycles CallSites.Controls.P1 host CallSites.Controls.twice fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some sp => match RegionCore.Core.cycles RegionCore.Core.baseline host CallSites.Controls.twice fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some sb => RegionCore.Core.log sp = RegionCore.Core.log sb | Corelib.Init.Datatypes.None => Corelib.Init.Logic.False end | Corelib.Init.Datatypes.None => match RegionCore.Core.cycles RegionCore.Core.baseline host CallSites.Controls.twice fuel n RegionCore.Core.init with | Corelib.Init.Datatypes.Some _ => Corelib.Init.Logic.False | Corelib.Init.Datatypes.None => Corelib.Init.Logic.True end end
+  := CallSites.Claims.pin_twice_sound.
+
+Definition pin_alloc_fn_pinned :
+  CallSites.Controls.alloc_fn = CallSites.Controls.blk (RegionCore.Core.Const 7 :: RegionCore.Core.New 1 :: RegionCore.Core.Get :: Corelib.Init.Datatypes.nil)
+  := CallSites.Claims.alloc_fn_pinned.
+
+Definition pin_twice_pinned :
+  CallSites.Controls.twice = {| RegionCore.Core.mfuncs := CallSites.Controls.alloc_fn :: Corelib.Init.Datatypes.nil; RegionCore.Core.mmain := CallSites.Controls.blk (RegionCore.Core.LoopN 2 (CallSites.Controls.blk (RegionCore.Core.Call 0 :: RegionCore.Core.Yield :: RegionCore.Core.Store 1 :: Corelib.Init.Datatypes.nil)) :: Corelib.Init.Datatypes.nil) |}
+  := CallSites.Claims.twice_pinned.
+
+Definition pin_live_across_call_pinned :
+  CallSites.Controls.live_across_call = {| RegionCore.Core.mfuncs := CallSites.Controls.alloc_fn :: Corelib.Init.Datatypes.nil; RegionCore.Core.mmain := CallSites.Controls.blk (RegionCore.Core.Const 5 :: RegionCore.Core.New 1 :: RegionCore.Core.Call 0 :: RegionCore.Core.Drop :: RegionCore.Core.Get :: RegionCore.Core.Yield :: RegionCore.Core.Drop :: Corelib.Init.Datatypes.nil) |}
+  := CallSites.Claims.live_across_call_pinned.
+
+Definition pin_blk_pinned :
+  forall l : Corelib.Init.Datatypes.list RegionCore.Core.instr, CallSites.Controls.blk l = RegionCore.Controls.blk l
+  := CallSites.Claims.blk_pinned.

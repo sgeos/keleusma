@@ -49,6 +49,30 @@ Definition pin_live_across_call_diverges :
 Definition pin_calls_contains_b2 : forall m ft, region_check m = Some ft -> region_checkC m = Some (lift ft)
   := calls_contains_b2.
 
+Definition pin_twice_sound : forall host fuel n,
+  match cycles Controls.P1 host Controls.twice fuel n init, cycles baseline host Controls.twice fuel n init with
+  | Some sp, Some sb => log sp = log sb
+  | None, None => True
+  | _, _ => False
+  end
+  := Controls.twice_sound.
+
+(** The control modules, pinned by proved equations, so that what the
+    controls say is about these modules. *)
+Example alloc_fn_pinned : Controls.alloc_fn = Controls.blk [Const 7; New 1; Get].
+Proof. reflexivity. Qed.
+
+Example twice_pinned :
+  Controls.twice = mkmodule [Controls.alloc_fn] (Controls.blk [LoopN 2 (Controls.blk [Call 0; Yield; Store 1])]).
+Proof. reflexivity. Qed.
+
+Example live_across_call_pinned :
+  Controls.live_across_call = mkmodule [Controls.alloc_fn] (Controls.blk [Const 5; New 1; Call 0; Drop; Get; Yield; Drop]).
+Proof. reflexivity. Qed.
+
+Example blk_pinned : forall l, Controls.blk l = RegionCore.Controls.blk l.
+Proof. reflexivity. Qed.
+
 (** The definitions the conclusions and controls rest on, pinned by proved
     equations. *)
 Example live_in_pinned : forall A s, live_in A (TR s) = existsb (Nat.eqb s) A.

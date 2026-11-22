@@ -33,7 +33,7 @@ root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/call_sites}"
 deps=(Core Shape Sim Reuse Controls)
 modules=(ShapeC Frame SimC CallSites Contains Controls Claims Statements)
-pins_expected=13
+pins_expected=18
 results=(
     ShapeC.shapeC_extend ShapeC.check_funcsC_inv
     Frame.framed_same Frame.framed_mono Frame.framed_trans Frame.pop_keepsF Frame.frame
@@ -47,6 +47,7 @@ results=(
     Controls.twice_sound Controls.live_across_call_rejected Controls.live_across_call_diverges
     Claims.live_in_pinned Claims.call_rule_pinned Claims.framed_pinned
     Claims.P1_pinned Claims.log_of_pinned
+    Claims.alloc_fn_pinned Claims.twice_pinned Claims.live_across_call_pinned Claims.blk_pinned
 )
 
 command -v rocq >/dev/null || { echo "check.sh: rocq is not on PATH" >&2; exit 1; }
@@ -97,6 +98,15 @@ if [ "$pins" -ne "$pins_expected" ]; then
     exit 1
 fi
 echo "check.sh: Statements.v holds the $pins expected type pins"
+# Each pin names a distinct item of Claims.v, and every item is pinned, so a
+# pin replaced by a duplicate of another is refused as well as a deleted one.
+targets="$(flat "$src/Statements.v" | { grep -oE ":= *[A-Za-z0-9_]+\.Claims\.[A-Za-z0-9_']+" || true; } | sed -E 's/.*\.Claims\.//' | sort)"
+items="$(flat "$src/Claims.v" | { grep -oE "\<(Definition|Lemma|Example|Theorem|Corollary) [A-Za-z0-9_']+" || true; } | awk '{ print $2 }' | sort)"
+if [ "$targets" != "$items" ] || [ -n "$(printf '%s\n' "$targets" | uniq -d)" ]; then
+    echo "check.sh: the pins of Statements.v do not name each item of Claims.v exactly once" >&2
+    exit 1
+fi
+echo "check.sh: every item of Claims.v is pinned exactly once"
 
 # 2. Compile out of tree, so no build output lands beside the sources.
 # The output directory is deleted only when this script made it, shown by its marker.
