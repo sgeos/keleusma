@@ -256,6 +256,17 @@ if [ "${1:-}" = "--one" ]; then
         fi
         # Kani's own diagnostics went to the timing file, so keep them in the log.
         cat "$log.time" >> "$log"
+    elif /usr/bin/time -v true > /dev/null 2>&1; then
+        # GNU time, as on the Linux runners, reports the same figure in
+        # kilobytes under its own label.
+        run_watched "$log" "$log.time" \
+            /usr/bin/time -v cargo kani --output-format terse --exact --harness "$name"
+        kb="$(awk -F: '/Maximum resident set size/ { gsub(/ /, "", $2); print $2 }' "$log.time")"
+        case "$kb" in
+            ''|*[!0-9]*) peak="unknown" ;;
+            *) peak=$(( kb * 1024 )) ;;
+        esac
+        cat "$log.time" >> "$log"
     else
         run_watched "$log" "$log.err" \
             cargo kani --output-format terse --exact --harness "$name"
@@ -263,6 +274,12 @@ if [ "${1:-}" = "--one" ]; then
         rm -f "$log.err"
     fi
     end="$(date +%s)"
+    # Colour escapes are removed before any verdict is read. An environment
+    # that forces colour, as setup-ocaml does on the runners, otherwise puts an
+    # escape between "VERIFICATION:- " and the word, and every verdict reads as
+    # UNKNOWN. Perl is used because sed's in-place flag differs between GNU
+    # and BSD.
+    perl -pi -e 's/\e\[[0-9;]*[A-Za-z]//g' "$log"
     verdict="UNKNOWN"
     if grep -q '^VERIFICATION:- SUCCESSFUL' "$log"; then
         verdict="SUCCESSFUL"
