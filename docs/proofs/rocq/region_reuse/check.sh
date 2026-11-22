@@ -101,6 +101,14 @@ if [ "$pins" -ne "$pins_expected" ]; then
     exit 1
 fi
 echo "check.sh: Statements.v holds the $pins expected type pins"
+# Each pin names a distinct result, so a pin replaced by a duplicate of
+# another is refused as well as a deleted one.
+targets="$(flat "$src/Statements.v" | { grep -oE ":= *[A-Z][A-Za-z0-9_]*\.[A-Za-z0-9_']+ *\." || true; } | sed -E 's/^:= *//; s/ *\.$//' | sort)"
+if [ "$(printf '%s\n' "$targets" | grep -c .)" -ne "$pins_expected" ] || [ -n "$(printf '%s\n' "$targets" | uniq -d)" ]; then
+    echo "check.sh: the pins of Statements.v do not name $pins_expected distinct results" >&2
+    exit 1
+fi
+echo "check.sh: the $pins_expected pins name distinct results"
 
 # 2. Compile out of tree, so no build output lands beside the sources.
 # The output directory is deleted only when this script made it, shown by its marker.
