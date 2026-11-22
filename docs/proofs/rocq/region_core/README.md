@@ -173,6 +173,9 @@ a function are rejected, for which there is no separate control.
    copy is ever made.
 6. **Sites inside called functions.** Functions may not allocate, which excludes the case of a
    site executed twice in one scope through two calls.
+   The later directory [`../call_sites/`](../call_sites/README.md), added on 2026-11-21, lifts
+   this for injective plans, with a call rule refusing a call while a caller's live handle is of
+   a site the callee may allocate.
 7. **Memory accounting, Theorem C.** The interpreter does not count memory, so the saving of
    reuse is shown by `Controls.loop_ok_one_slot` on one module and not proved in general.
 8. **Composite structure.** A region holds one number, with no fields, views or nesting, and
