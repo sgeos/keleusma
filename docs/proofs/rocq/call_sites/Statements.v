@@ -12,7 +12,7 @@
     proofs, including the proved equations that fix definitions. *)
 
 From RegionCore Require Core Shape Sim Reuse Controls.
-From CallSites Require ShapeC Frame SimC CallSites Controls.
+From CallSites Require ShapeC Frame SimC CallSites Contains Controls.
 From CallSites Require Claims.
 
 Definition pin_reuse_sound_calls :
@@ -62,3 +62,7 @@ Definition pin_P1_pinned :
 Definition pin_log_of_pinned :
   forall (P : RegionCore.Core.plan) (m : RegionCore.Core.module), CallSites.Controls.log_of P m = match RegionCore.Core.cycles P RegionCore.Controls.host_len m 100 2 RegionCore.Core.init with | Corelib.Init.Datatypes.Some s => RegionCore.Core.log s | Corelib.Init.Datatypes.None => Corelib.Init.Datatypes.nil end
   := CallSites.Claims.log_of_pinned.
+
+Definition pin_calls_contains_b2 :
+  forall (m : RegionCore.Core.module) (ft : Corelib.Init.Datatypes.list (Corelib.Init.Datatypes.list RegionCore.Shape.tag)), RegionCore.Shape.region_check m = Corelib.Init.Datatypes.Some ft -> CallSites.ShapeC.region_checkC m = Corelib.Init.Datatypes.Some (CallSites.Contains.lift ft)
+  := CallSites.Claims.pin_calls_contains_b2.

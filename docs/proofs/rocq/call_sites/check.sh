@@ -32,8 +32,8 @@ src="$(cd "$(dirname "$0")" && pwd)"
 root="$(git -C "$src" rev-parse --show-toplevel)"
 out="${ROCQ_OUT:-$root/target/rocq/call_sites}"
 deps=(Core Shape Sim Reuse Controls)
-modules=(ShapeC Frame SimC CallSites Controls Claims Statements)
-pins_expected=12
+modules=(ShapeC Frame SimC CallSites Contains Controls Claims Statements)
+pins_expected=13
 results=(
     ShapeC.shapeC_extend ShapeC.check_funcsC_inv
     Frame.framed_same Frame.framed_mono Frame.framed_trans Frame.pop_keepsF Frame.frame
@@ -41,6 +41,8 @@ results=(
     SimC.cells_differ SimC.pop_keeps SimC.step_pop SimC.rel_push_vn SimC.matches_push_vn SimC.rel_note
     SimC.simulationC
     CallSites.region_checkC_wf CallSites.reuse_sound_calls
+    Contains.nth_lift Contains.existsb_live_nil Contains.shapeC_lift Contains.no_alloc
+    Contains.check_funcs_lift Contains.calls_contains_b2
     Controls.P1_injective Controls.twice_rejected_by_B2 Controls.twice_accepted Controls.twice_agrees
     Controls.twice_sound Controls.live_across_call_rejected Controls.live_across_call_diverges
     Claims.live_in_pinned Claims.call_rule_pinned Claims.framed_pinned

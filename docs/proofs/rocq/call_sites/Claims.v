@@ -6,7 +6,7 @@
 
 From Stdlib Require Import List.
 From RegionCore Require Import Core Shape.
-From CallSites Require Import ShapeC Frame CallSites.
+From CallSites Require Import ShapeC Frame CallSites Contains.
 From CallSites Require Controls.
 Import ListNotations.
 
@@ -45,6 +45,9 @@ Definition pin_live_across_call_rejected : region_checkC Controls.live_across_ca
 Definition pin_live_across_call_diverges :
   Controls.log_of Controls.P1 Controls.live_across_call <> Controls.log_of baseline Controls.live_across_call
   := Controls.live_across_call_diverges.
+
+Definition pin_calls_contains_b2 : forall m ft, region_check m = Some ft -> region_checkC m = Some (lift ft)
+  := calls_contains_b2.
 
 (** The definitions the conclusions and controls rest on, pinned by proved
     equations. *)
