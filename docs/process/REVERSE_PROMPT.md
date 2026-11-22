@@ -155,7 +155,7 @@ proceeds without it.
   `Vm::wcet_per_iteration_composed` as an addition only. It is green on `63825864`. The proofs
   line verified its two flipped Kani harnesses against that head in sequence 492. The operator
   directed on 2026-11-18 that the merge is the operator's and that nothing builds on it before.
-- Rust 1.100.0 of 2026-11-09 adds a `needless_range_loop` finding in the archive round-trip test
+- Rust 1.100.0 of 2026-11-09 adds a needless range loop finding in the archive round-trip test
   of `src/vm.rs`. The proofs line measured it failing the clippy job of pull request 779, run
   43318377229. The fix, `20667050` on `fix/clippy-rust-1-100`, is committed locally and not
   pushed. A guarded local clippy sweep under 1.100.0 across the workspace and the three feature
