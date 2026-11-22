@@ -1496,6 +1496,11 @@ struct Ctx {
     /// Script-side reads return the inner type with no labels; the
     /// negative wrapper does not propagate through the value lattice.
     data_negative_labels: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    /// The labels of the conditions governing the code being checked, one
+    /// entry per enclosing `if` condition, `match` scrutinee or arm guard. A
+    /// data-field write under them is an implicit flow of those labels, so
+    /// each write charges their union to the value written.
+    pc_labels: Vec<BTreeSet<String>>,
     /// Stack of local variable scopes. Inner scopes shadow outer.
     locals: Vec<BTreeMap<String, Type>>,
     /// Return type of the function currently being checked.
@@ -1606,6 +1611,7 @@ impl Ctx {
             expected_type_stack: Vec::new(),
             data: BTreeMap::new(),
             data_negative_labels: BTreeMap::new(),
+            pc_labels: Vec::new(),
             locals: Vec::new(),
             current_return: None,
             current_return_negative_labels: BTreeSet::new(),
@@ -1808,6 +1814,12 @@ fn flow_admissible(source: &Type, target: &Type) -> bool {
         (Type::Option(s_inner), Type::Option(t_inner)) => flow_admissible(&s_inner, &t_inner),
         _ => true,
     }
+}
+
+/// The labels of every condition governing the current position, the
+/// implicit-flow context a data-field write is charged with.
+fn governing_labels(ctx: &Ctx) -> BTreeSet<String> {
+    ctx.pc_labels.iter().flatten().cloned().collect()
 }
 
 /// Top-level type check entry point.
@@ -3022,6 +3034,7 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     ctx.current_resume = resume_type_for(ctx, func.category);
     ctx.unknown_resumes.clear();
     ctx.open_projections.clear();
+    ctx.pc_labels.clear();
     // Snapshot the substitution at function entry so the per-function
     // resolution does not pollute later functions with this function's
     // local type variables. The vargen counter continues monotonically
@@ -3465,8 +3478,10 @@ fn check_data_index_write(
             span,
         ));
     }
-    let value_ty = type_of_expr(ctx, value)?;
-    if !types_compatible(ctx, &current, &value_ty) {
+    // As for a plain data-field write, the value carries the governing
+    // conditions' labels and flows into the element.
+    let value_ty = apply_labels(type_of_expr(ctx, value)?, &governing_labels(ctx));
+    if !types_compatible(ctx, &value_ty, &current) {
         return Err(TypeError::new(
             format!(
                 "indexed assignment to `{}.{}` expects {}, got {}",
@@ -4927,7 +4942,10 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             let value_ty = value_result?;
             let bound_ty = match declared_pre {
                 Some(declared) => {
-                    if !types_compatible(ctx, &declared, &value_ty) {
+                    // The value is the source of the flow and the annotation
+                    // its target, so a labelled value cannot bind to a less
+                    // labelled annotation.
+                    if !types_compatible(ctx, &value_ty, &declared) {
                         return Err(TypeError::new(
                             format!(
                                 "let binding declared as {} but value has type {}",
@@ -5154,8 +5172,11 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 .and_then(|m| m.get(field))
                 .cloned()
                 .unwrap_or_default();
-            let value_ty = type_of_expr(ctx, value)?;
-            if !types_compatible(ctx, &declared, &value_ty) {
+            // The value is charged with the labels of every governing
+            // condition, since writing it discloses which branch ran. The
+            // value is the source of the flow and the field its target.
+            let value_ty = apply_labels(type_of_expr(ctx, value)?, &governing_labels(ctx));
+            if !types_compatible(ctx, &value_ty, &declared) {
                 return Err(TypeError::new(
                     format!(
                         "assignment to `{}.{}` expects {}, got {}",
@@ -6046,10 +6067,15 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     *span,
                 ));
             }
-            let then_ty = type_of_block(ctx, then_block)?;
-            let result_ty = match else_block {
-                Some(b) => {
-                    let else_ty = type_of_block(ctx, b)?;
+            // Both branches run under the condition's labels.
+            ctx.pc_labels.push(cond_labels.clone());
+            let then_r = type_of_block(ctx, then_block);
+            let else_r = else_block.as_mut().map(|b| type_of_block(ctx, b));
+            ctx.pc_labels.pop();
+            let then_ty = then_r?;
+            let result_ty = match else_r {
+                Some(else_r) => {
+                    let else_ty = else_r?;
                     // Branches must unify structurally; their
                     // labels are unioned to form the result's
                     // labels. The structural check ignores
@@ -6094,6 +6120,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // Type the body of each arm. The arm bodies must agree.
             let mut common: Option<Type> = None;
             let mut arm_labels: BTreeSet<String> = BTreeSet::new();
+            // Every arm runs under the scrutinee's labels, and an arm body
+            // also under its guard's. An early error leaves the stack deeper,
+            // which is harmless since the error ends the check and each
+            // function clears the stack on entry.
+            let pc_depth = ctx.pc_labels.len();
+            ctx.pc_labels.push(scrutinee_labels.clone());
             for arm in arms.iter_mut() {
                 check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
                 note_open_destructuring(ctx, &arm.pattern, &scrutinee_ty);
@@ -6102,6 +6134,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 // Guard expression must evaluate to Bool. The guard
                 // is checked in the scope of the pattern's bindings
                 // so it can refer to bound names.
+                let mut guard_labels = BTreeSet::new();
                 if let Some(guard) = arm.guard.as_mut() {
                     let guard_ty = type_of_expr(ctx, guard)?;
                     if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
@@ -6114,8 +6147,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                             arm.span,
                         ));
                     }
+                    guard_labels = labels_of(&guard_ty);
                 }
-                let arm_ty = type_of_expr(ctx, &mut arm.expr)?;
+                ctx.pc_labels.push(guard_labels);
+                let arm_r = type_of_expr(ctx, &mut arm.expr);
+                ctx.pc_labels.pop();
+                let arm_ty = arm_r?;
                 ctx.pop_scope();
                 arm_labels = arm_labels.union(&labels_of(&arm_ty)).cloned().collect();
                 let arm_ty_bare = strip_labels(arm_ty);
@@ -6137,6 +6174,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     }
                 }
             }
+            ctx.pc_labels.truncate(pc_depth);
             check_exhaustiveness(ctx, arms, &scrutinee_ty, *span)?;
             let bare = common.unwrap_or(Type::Unit);
             // The result carries the union of all arm labels
