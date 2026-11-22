@@ -41,10 +41,11 @@ this increment's audit. It fails unless all of the following hold.
 4. `Print Assumptions` reports each of the 32 named results closed, which catches a named
    result that is not closed. It does not catch a name removed from the list, which step 3
    covers for axioms regardless.
-5. `Statements.v` pins the exact type of each of the four headline theorems, and proves the
-   definitions of `good`, `wcet` and `wcmu` by equations, so a statement weakened by an added
-   premise or a changed conclusion fails to compile. A change to another definition a statement
-   mentions does not, as the trusted base below records. The script requires exactly four type pins.
+5. `Statements.v` pins, with fully qualified names, the exact type of each of the four headline
+   theorems and of the equations in `Claims.v` that prove the definitions of `good`, `wcet` and
+   `wcmu`, so a statement weakened by an added premise or a changed conclusion fails to compile.
+   A change to another definition a statement mentions does not, as the trusted base below
+   records. The script requires exactly seven type pins.
 
 Five planted defects were run against the script on 2026-11-08, and it refused every one. They
 were an `Admitted` lemma, an unlisted theorem using the classical axiom, an unguarded fixpoint
@@ -52,6 +53,22 @@ under a guard unset split by a comment, a premise added to `stream_bounded` as t
 attack, which its pin refused, and a `Set Warnings` command. No log is kept in the tree.
 Continuous integration does not yet run the script, under the operator's ruling that a new
 continuous-integration job waits for the release or for agreement with the V0.2.X line.
+
+## The pins, regenerated on 2026-11-18
+
+An adversarial audit of 2026-11-18 showed by execution, in a sibling directory, that pins
+written with bare names under `Import` can be bypassed. A module that redefines a name the pins
+use, such as `cycles`, captures every bare use of it, so a headline can become vacuous while
+every pin still compiles. The statements first written here are therefore kept, with their
+proofs, in `Claims.v`, and `Statements.v` is regenerated so that it imports no module of the
+project. Each of its pins states, with fully qualified names, the type Rocq printed for one item
+of `Claims.v` on that date, the proved definition equations included. A redefined name then
+changes the type of an item of `Claims.v` without changing the pinned text, and compilation
+fails. The same attack was replayed against `region_core` in a copy under `tmp/`, a `cycles`
+that always returns `None` added to `Reuse.v` with `reuse_sound` proved trivially and the
+controls patched to compile, and `Statements.v` refused it at `pin_reuse_sound` while every
+other module compiled. Regenerating the pins from a tampered tree would record the tampering,
+so the pinned text itself remains part of the trusted base.
 
 ## The trusted base
 
@@ -62,7 +79,9 @@ statements and the definitions of `good`, `wcet` and `wcmu`, but not the definit
 statements mention, among them `run_b`, `cycle`, `cycles`, `reset`, `stream_segs`, `summary` and
 `le_summ`. The delta check showed by execution that a change to `stream_segs` passes the pins.
 Those definitions are therefore checked only by reading them and by the concrete values in
-`Controls.v`.
+`Controls.v`, and the controls themselves are not pinned, so a change to such a definition
+made together with weakened controls would pass every pin. An audit of 2026-11-18 noted this
+by reading and did not execute it.
 
 ## The core
 
@@ -118,7 +137,8 @@ fuel enough, which is the totality of every accepted function and of every cycle
 | `Soundness.runs_within_bounds` | the induction behind them, every completed run within its block's bound |
 | `Soundness.fuel_suffices` | the induction behind totality |
 | `Algebra.summary_join` | summarising a joined run is sequencing the summaries |
-| `Statements.v` | the four headline statements pinned by type, and the definitions of `good`, `wcet` and `wcmu` pinned by proved equations |
+| `Claims.v` | the four headline statements as first written, and the definitions of `good`, `wcet` and `wcmu` fixed by proved equations |
+| `Statements.v` | the items of `Claims.v` pinned by type with fully qualified names |
 
 ## The controls
 

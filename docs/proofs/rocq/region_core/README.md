@@ -40,11 +40,12 @@ strengthened after this increment's audit. It fails unless all of the following 
 3. All six modules compile with no output.
 4. `rocqchk` re-verifies every module with no axiom and no unsafe construct in its summary.
 5. `Print Assumptions` reports each of the 38 named results closed.
-6. `Statements.v` holds the five expected pins. They fix the statement of `reuse_sound`, the
+6. `Statements.v` holds the seven expected pins, fully qualified, of the items of `Claims.v`. They fix the statement of `reuse_sound`, the
    statement of `loop_ok_sound`, and the claims of the divergence controls `loop_bad`,
    `sep_only` and the shared-slot module, so weakening one of those claims fails to compile.
-   The other controls are not pinned, and neither are the definitions the pinned claims
-   mention, among them `log_of`, `P0`, `P01` and the control modules themselves.
+   The two others fix the definitions of `injective` and `baseline` by equations. The other
+   controls are not pinned, and neither are the definitions the pinned claims mention, among
+   them `log_of`, `P0`, `P01` and the control modules themselves.
 
 Six planted defects were run against this copy on 2026-11-08, and the script refused each. They
 were a premise added to `reuse_sound`, an `Admitted` lemma, an unlisted theorem using the
@@ -54,6 +55,22 @@ silencer split across two lines. The delta check then found a silencer split by 
 passing, which the comment stripping now refuses. No log is kept in the tree. Continuous integration does not
 yet run the script, under the operator's ruling that a new continuous-integration job waits for
 the release or for agreement with the V0.2.X line.
+
+## The pins, regenerated on 2026-11-18
+
+An adversarial audit of 2026-11-18 showed by execution, in a sibling directory, that pins
+written with bare names under `Import` can be bypassed. A module that redefines a name the pins
+use, such as `cycles`, captures every bare use of it, so a headline can become vacuous while
+every pin still compiles. The statements first written here are therefore kept, with their
+proofs, in `Claims.v`, and `Statements.v` is regenerated so that it imports no module of the
+project. Each of its pins states, with fully qualified names, the type Rocq printed for one item
+of `Claims.v` on that date, the proved definition equations included. A redefined name then
+changes the type of an item of `Claims.v` without changing the pinned text, and compilation
+fails. The same attack was replayed against `region_core` in a copy under `tmp/`, a `cycles`
+that always returns `None` added to `Reuse.v` with `reuse_sound` proved trivially and the
+controls patched to compile, and `Statements.v` refused it at `pin_reuse_sound` while every
+other module compiled. Regenerating the pins from a tampered tree would record the tampering,
+so the pinned text itself remains part of the trusted base.
 
 ## The trusted base
 
