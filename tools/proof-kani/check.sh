@@ -327,9 +327,13 @@ if [ "${1:-}" = "--one" ]; then
     elif grep -q '^VERIFICATION:- FAILED' "$log"; then
         verdict="FAILED"
     fi
+    # Kani reports a run stopped by --harness-timeout with the same
+    # "VERIFICATION:- FAILED" line as a property that fails, and adds "CBMC
+    # timed out". The heavy-tier run of 2026-11-21 recorded eleven timeouts as
+    # FAILED before this check, with no failed check in any of their logs.
     if [ "$overlimit" -eq 1 ]; then
         verdict="OVERLIMIT"
-    elif [ "$verdict" = "UNKNOWN" ] && grep -qi 'timed out\|timeout' "$log"; then
+    elif grep -q 'CBMC timed out' "$log"; then
         verdict="TIMEOUT"
     fi
     sampled=$(( sampled_peak_kb * 1024 ))
