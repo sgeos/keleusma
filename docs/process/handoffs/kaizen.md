@@ -110,9 +110,9 @@ authority, so the startup-file positions reach them first-hand.
    ruled in [the proof-language record](../kaizen/2026-11-07-proof-language.md). Its brief
    was sent in the interline mailbox. Public records use the coded vocabulary of that file.
 6. `scripts/metrics.py` tracks every reasonable metric, by
-   [the metrics record](../kaizen/2026-11-07-metrics.md). V0.2.X's tightness runner,
-   `examples/tightness.rs` on its unpushed `feat/tightness-runner`, sequence 562, joins the
-   CI footprint and metrics job once it reaches origin.
+   [the metrics record](../kaizen/2026-11-07-metrics.md). Memory tightness from V0.2.X's
+   `examples/tightness.rs`, PR 792, is required in the CI footprint job since 2026-11-22.
+   Time tightness waits for a count of the cost a run actually spends.
 7. Review the proofs line's `tools/proof-kani/check.sh` commit on `proof/kani-verifier`,
    which adopts machine-status gating. `scripts/machine-guard.sh` applies the shared
    machine's playbook to Keleusma's own heavy scripts.

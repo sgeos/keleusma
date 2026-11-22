@@ -5,7 +5,6 @@ edition = "2024"
 publish = ["crates-io"]
 description = "Procedural macros for the Keleusma scripting language. Implementation detail of the keleusma crate; depend on `keleusma` rather than this crate directly."
 license = "0BSD"
-homepage = "https://github.com/sgeos/keleusma"
 repository = "https://github.com/sgeos/keleusma"
 documentation = "https://docs.rs/keleusma-macros"
 readme = "README.md"

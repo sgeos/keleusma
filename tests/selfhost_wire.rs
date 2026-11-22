@@ -12658,8 +12658,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // `text_method`, `text_layout_cap`, `text_method_begin`, `text_open`, `text_comma` and
     // `text_close`, for 1199, and took the blob to 37,772. The `Byte` literal suffix added
     // no name and took the blob to 37,802.
-    assert_eq!(worst_names, 1199, "the worst-case name count moved");
-    assert_eq!(worst_blob, 37802, "the worst-case blob size moved");
+    // 1199 -> 1206 on 2026-11-22: ring increment R1 added seven names to
+    // `parse.kel`, its ring phase, capacity, predicates and diagnostic. The cap is
+    // 2048, so the margin stays wide. The blob moved 37802 -> 38106 with those
+    // names, against a cap of 49152.
+    assert_eq!(worst_names, 1206, "the worst-case name count moved");
+    assert_eq!(worst_blob, 38106, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

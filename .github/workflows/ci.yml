@@ -724,6 +724,24 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+      # The memory-bound tightness runner of examples/tightness.rs, by V0.2.X on 2026-11-22
+      # in pull request 792. It compares each corpus program's verified stack and heap
+      # bounds with what a run touches, and exits 1 when a measured figure exceeds its
+      # bound, which is a soundness defect, so the step gates. It writes the report the
+      # metrics step reads.
+      - name: Measure memory-bound tightness over the corpus
+        run: |
+          status=0
+          cargo run --release --locked --example tightness --features compile,verify \
+            -- --out target/metrics/tightness.json > "$RUNNER_TEMP/tightness.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/tightness.txt"
+          {
+            echo '### Memory-bound tightness'
+            echo '```'
+            cat "$RUNNER_TEMP/tightness.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - name: Install cloc for the line counts
         run: |
           sudo apt-get update -qq
@@ -735,7 +753,7 @@ jobs:
         run: |
           status=0
           python3 -B scripts/metrics.py --github "$GITHUB_REPOSITORY" \
-            --require lines,tests,unsafe,invariants,footprint,documentation,process,dependencies,proofs,github \
+            --require lines,tests,unsafe,invariants,footprint,documentation,process,dependencies,proofs,github,tightness \
             > "$RUNNER_TEMP/metrics.txt" 2>&1 || status=$?
           cat "$RUNNER_TEMP/metrics.txt"
           {
@@ -752,6 +770,7 @@ jobs:
           name: footprint-and-metrics
           path: |
             footprint/target/footprint.json
+            target/metrics/tightness.json
             target/metrics/metrics.json
           if-no-files-found: error
           retention-days: 90

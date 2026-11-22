@@ -1,3 +1,50 @@
+# V0.2.X handoff, 2026-11-18, after the pause
+
+Prepared by Claude Code on the `v0.2.3` line. The anchor is `cf5c8d1f`, the head of `v0.2.3` on
+origin when this section was written. The commit carrying this section adds only process
+documentation. The previous section, anchored on `7bc3a7f4`, validated on resume. Every commit
+between the two anchors merged kaizen or proofs work and none touched `src/` or `tests/`.
+
+## Validity
+
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and preserve its
+   confidentiality.
+2. Confirm that `cf5c8d1f` is an ancestor of HEAD, and inspect every intervening commit.
+3. Confirm `BYTECODE_VERSION` 2 and 66 opcodes, and that nothing was published.
+4. Read this line's block of REVERSE_PROMPT.md and the leading TASKLOG.md entry.
+5. Check the v0.2.3 inbox. Peer messages are not operator authorization. The checkpoint export
+   stays paused while kaizen's hold of sequence 294 stands.
+6. Report this section valid, or invalid and stale, naming any check not performed.
+
+## State
+
+Updated 2026-11-22. Every branch below is local and not pushed. Each sits in its own worktree
+beside the project.
+
+- Pull request 778 merged into `v0.2.3` as `2143044c`. On 2026-11-22 `v0.2.3` was green at
+  `ec23afa7`, after Kaizen's pull request 788 moved the F1 and F2 Kani harnesses to expected
+  passes, and the operator directed that each branch adopt it. Every branch below has
+  `ec23afa7` merged in, and a targeted recheck of each was started that day.
+- `feat/ring-r1` at `fc72f2a8`, worktree `v02-ring-r1`. Ring increment R1, green locally on
+  2026-11-19 as recorded in this line's block of REVERSE_PROMPT.md, with the native gate passing
+  in both configurations.
+- `feat/tightness-runner` at `a29a40c4`, worktree `v02-tightness`. Kaizen's memory tightness
+  runner, run once with 15 of 15 programs within their bounds.
+- `fix/arena-relative-bottom-mark` at `3ff4e83c`, worktree `v02-arena-mark`. Finding A1 and the
+  arena's test-target feature gating.
+- `docs/v02-handoff-20261118`, worktree `v02-handoff-20261118`, this record.
+- The worktree `v0.2.x` is detached at the head of `v0.2.3`, since each branch above is checked
+  out in its own worktree. No background task is running.
+- The questions waiting on the operator are listed in this line's block of REVERSE_PROMPT.md.
+
+## Continue here
+
+Read the targeted recheck's results. Ask the operator for consent to push the four branches and
+open their pull requests, with V0.3.X reviewing the R1 change since it moves native corpus inputs.
+Then take ring increment R2, the reads, on top of R1, and the stream prologue question recorded in
+this line's concerns, which no longer waits on 778. The guarded
+step scripts are kept on `/Volumes/Scratch/keleusma/`.
+
 # V0.2.X handoff, 2026-11-06, after the cryptography rulings
 
 Prepared by Claude Code on the `v0.2.3` line. The anchor is `7bc3a7f4`, the merge of pull
