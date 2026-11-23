@@ -1297,6 +1297,21 @@ pub enum TypeExpr {
     /// applied to storage instead of iteration -- a runtime length under a
     /// static cap.
     TextN(ConstExpr, Span),
+    /// Ring buffer managed by the compiler: `Ring<T, N>`, holding up to `N`
+    /// elements of the scalar type `T` in a data segment.
+    ///
+    /// Increment R1 of `docs/decisions/RING_BUFFER_DESIGN.md` builds the type
+    /// surface and the data layout only. The type is admitted solely as the
+    /// declared type of a field of a `private data` or `shared data` block, with
+    /// `T` one of `Word`, `Byte`, `bool`, `Fixed` and `Float` and `N` a positive
+    /// constant. Every other position is refused by the type checker, and so is
+    /// every expression that reads or writes a ring field, since no operation is
+    /// built yet.
+    ///
+    /// A ring field lowers to three hidden data fields, a length `Word`, a head
+    /// `Word` and an element array `[T; N]`, so it occupies `2 + N` consecutive
+    /// data slots. See [`crate::ring`] for the hidden names.
+    Ring(Box<TypeExpr>, ConstExpr, Span),
     /// Option type: `Option<T>`.
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
@@ -1385,6 +1400,7 @@ impl TypeExpr {
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Multiword(_, _, span)
             | TypeExpr::TextN(_, span)
+            | TypeExpr::Ring(_, _, span)
             | TypeExpr::Option(_, span)
             | TypeExpr::Unit(span)
             | TypeExpr::Labelled(_, _, span) => *span,

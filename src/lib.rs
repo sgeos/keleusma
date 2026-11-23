@@ -216,6 +216,10 @@ pub mod monomorphize;
 /// Token-to-AST recursive-descent parser.
 #[cfg(feature = "compile")]
 pub mod parser;
+/// The compiler-managed ring buffer type `Ring<T, N>`: its admissibility
+/// rules, its capacity bound and the hidden data fields it lowers to.
+#[cfg(feature = "compile")]
+pub mod ring;
 /// Target descriptor (word/address/float widths, endianness) used by
 /// [`compiler::compile_with_target`] for cross-architecture
 /// portability.

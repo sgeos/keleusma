@@ -111,10 +111,15 @@ pub(crate) fn comparisons_reached_by_text(
         stack: Vec::new(),
         locals: vec![false; locals],
     };
-    for i in 0..usize::from(chunk.param_count) {
+    for (i, slot) in entry
+        .locals
+        .iter_mut()
+        .enumerate()
+        .take(usize::from(chunk.param_count))
+    {
         let declared = own.and_then(|s| s.params.get(i)).is_some_and(is_text);
         let tagged = chunk.param_types.get(i) == Some(&TypeTag::Text);
-        entry.locals[i] = declared || tagged;
+        *slot = declared || tagged;
     }
     let reply_text = chunk.block_type != BlockType::Func && entry.locals.first() == Some(&true);
     let mut states: Vec<Option<State>> = vec![None; n];
@@ -210,4 +215,154 @@ pub(crate) fn comparisons_reached_by_text(
         }
     }
     found
+}
+
+/// The `fn` chunks every `Return` of which yields a string literal record this
+/// backend lays out itself.
+///
+/// The emitter compares two `Text` operands by contents only when both are such
+/// records, and a call's result was never one, so `pick(a) == "yes"` was refused
+/// even when `pick` returns only literals. A chunk qualifies when, on every path,
+/// the value it returns comes from a string constant, from a local holding one,
+/// or from a call to a chunk that qualifies. Marks meet by intersection, so a
+/// value counts only when every path agrees. A parameter never counts, since a
+/// caller or host may pass any `Text`.
+///
+/// Termination. Within a chunk the marks only fall, and they are finite. Across
+/// chunks the set only grows, by at most one chunk per round, so at most as many
+/// rounds as there are chunks run. Each walk is also bounded by a step budget, and
+/// a chunk whose walk exceeds it does not qualify.
+pub(crate) fn literal_text_returns(
+    chunks: &[Chunk],
+    signatures: &[ChunkSignature],
+) -> BTreeSet<usize> {
+    let mut found = BTreeSet::new();
+    for _ in 0..=chunks.len() {
+        let mut grew = false;
+        for (index, chunk) in chunks.iter().enumerate() {
+            if found.contains(&index)
+                || chunk.block_type != BlockType::Func
+                || !signatures.get(index).is_some_and(|s| is_text(&s.ret))
+            {
+                continue;
+            }
+            if returns_only_literals(chunk, &found) {
+                found.insert(index);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    found
+}
+
+/// Whether every `Return` of `chunk` yields a literal record, given the chunks
+/// already known to return only literal records.
+fn returns_only_literals(chunk: &Chunk, literal_callees: &BTreeSet<usize>) -> bool {
+    let n = chunk.ops.len();
+    if n == 0 {
+        return false;
+    }
+    let locals = usize::from(chunk.local_count).max(usize::from(chunk.param_count));
+    let mut states: Vec<Option<State>> = vec![None; n];
+    states[0] = Some(State {
+        stack: Vec::new(),
+        locals: vec![false; locals],
+    });
+    let mut work: VecDeque<usize> = VecDeque::from([0]);
+    let mut returned = false;
+    let mut budget = n.saturating_mul(locals + 64).saturating_mul(8).max(1024);
+    while let Some(ip) = work.pop_front() {
+        budget = budget.saturating_sub(1);
+        if budget == 0 {
+            return false;
+        }
+        let Some(state) = states[ip].clone() else {
+            continue;
+        };
+        let op = &chunk.ops[ip];
+        if matches!(op, Op::Return) {
+            if !state.stack.last().copied().unwrap_or(false) {
+                return false;
+            }
+            returned = true;
+        }
+        let mut next = state.clone();
+        if let Op::SetLocal(l) = op {
+            let top = next.stack.last().copied().unwrap_or(false);
+            if let Some(slot) = next.locals.get_mut(*l as usize) {
+                *slot = top;
+            }
+        }
+        let first = match op {
+            Op::Const(c) => matches!(
+                chunk.constants.get(*c as usize),
+                Some(ConstValue::StaticStr(_))
+            ),
+            Op::GetLocal(l) => state.locals.get(*l as usize).copied().unwrap_or(false),
+            Op::Call(t, _) => literal_callees.contains(&(*t as usize)),
+            _ => false,
+        };
+        if !matches!(op, Op::Trap(_)) {
+            let (required, delta) = keleusma::verify::op_depth_effect(op, chunk);
+            for _ in 0..required.max(0) {
+                next.stack.pop();
+            }
+            for k in 0..(required + delta).max(0) {
+                next.stack.push(k == 0 && first);
+            }
+        }
+        if matches!(op, Op::Dup) {
+            let top = state.stack.last().copied().unwrap_or(false);
+            let d = next.stack.len();
+            for slot in &mut next.stack[d.saturating_sub(2)..] {
+                *slot = top;
+            }
+        }
+        let successors: Vec<usize> = match op {
+            Op::Return | Op::Trap(_) => Vec::new(),
+            Op::Else(t) | Op::EndLoop(t) | Op::Break(t) => vec![*t as usize],
+            Op::If(t) | Op::BreakIf(t) => vec![ip + 1, *t as usize],
+            _ => vec![ip + 1],
+        };
+        for s in successors {
+            if s >= n {
+                continue;
+            }
+            let changed = match &mut states[s] {
+                Some(old) => old.meet(&next),
+                slot @ None => {
+                    *slot = Some(next.clone());
+                    true
+                }
+            };
+            if changed {
+                work.push_back(s);
+            }
+        }
+    }
+    returned
+}
+
+impl State {
+    /// Intersect `other` into `self`, reporting whether anything changed. A slot
+    /// stays marked only when it is marked on both paths.
+    fn meet(&mut self, other: &State) -> bool {
+        let mut changed = false;
+        for (mine, theirs) in self.stack.iter_mut().zip(&other.stack) {
+            if *mine && !*theirs {
+                *mine = false;
+                changed = true;
+            }
+        }
+        for (mine, theirs) in self.locals.iter_mut().zip(&other.locals) {
+            if *mine && !*theirs {
+                *mine = false;
+                changed = true;
+            }
+        }
+        changed
+    }
 }

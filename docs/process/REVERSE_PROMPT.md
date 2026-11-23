@@ -1,6 +1,6 @@
 # Reverse prompt
 
-## V0.2.X state, 2026-11-06, after the cryptography rulings
+## V0.2.X state, 2026-11-18, after the pause
 
 This block is the `v0.2.3` line's own channel. On the operator's ruling of 2026-11-04, item 8
 below, each line tracks only its own material in the shared process files until they are
@@ -147,44 +147,91 @@ proceeds without it.
 | 745 | `0061af1a` | `SELF_HOSTED_CRYPTOGRAPHY_PLAN.md` |
 | 746 | `7bc3a7f4` | Item 5, the whole C5 corpus run in CI as sixteen partitions across the self-host shards |
 
+## Since 2026-11-06
+
+- Pull request 778, `fix/v02-proofs-findings`, refuses a call cycle at compile time, in `verify`
+  and in the self-hosted validator, saturates the stream overhead in the time bound and the slot
+  width in the memory bound, and adds `verify::module_wcet_composed_with_bounds` with
+  `Vm::wcet_per_iteration_composed` as an addition only. It is green on `63825864`. The proofs
+  line verified its two flipped Kani harnesses against that head in sequence 492. The operator
+  directed on 2026-11-18 that the merge is the operator's and that nothing builds on it before.
+- Rust 1.100.0 of 2026-11-09 adds a needless range loop finding in the archive round-trip test
+  of `src/vm.rs`. The proofs line measured it failing the clippy job of pull request 779, run
+  43318377229. The fix, `20667050` on `fix/clippy-rust-1-100`, is committed locally and not
+  pushed. A guarded local clippy sweep under 1.100.0 across the workspace and the three feature
+  sets is queued behind the machine monitor, which reported elevated throughout this session.
+- Finding A1 of the proofs line, sequence 496. A `BottomMark` held an absolute offset, so a mark
+  taken before a persistent grow, or before `resize_persistent`, rewound the bottom head below
+  the persistent boundary. `ca73895e` on `fix/arena-relative-bottom-mark` records the mark
+  relative to the boundary. The arena's 55 library tests, four of them new, its six integration
+  tests and its clippy pass under 1.100.0. Miri was not run locally. It is not pushed.
+
 ## In progress
 
-Nothing is in flight on this line at `7bc3a7f4`.
+The operator directed on 2026-11-18 that Kaizen fixes the Rust 1.100.0 lints, which merged as
+pull request 782 at `4b988b91`, and that this line works the roadmap in parallel. Every local
+branch below has `4b988b91` merged in. None is pushed.
+
+- Ring buffer increment R1, `feat/ring-r1` at `fc72f2a8`. Measured green locally on 2026-11-19.
+  The 19 ring tests pass. The second verification pass ran the documentation build, 277
+  self-hosted tests including the construct-support boundary, now 156 cases with 145 SOk, 4
+  Refuses, 2 Diverges and 5 RefRejects, and the native gate in both configurations, all green.
+  The quick tier passed 2966 of 2968, and the two failures are fixed in `fc72f2a8`. The lexer
+  source capacity is raised from 524,288 to 786,432 bytes under the ruling of 2026-10-26, and the
+  native corpus pins of `parse.kel` and `lexer.kel` are re-pinned.
+- The memory tightness runner, `feat/tightness-runner` at `a29a40c4`. It ran once and measured 15
+  of 15 programs with no bound exceeded. Kaizen has the figures and the format.
+- The arena fixes, `fix/arena-relative-bottom-mark` at `3ff4e83c`, finding A1 and the
+  feature gating of the arena's test targets.
+- The process records on `docs/v02-handoff-20261118`.
 
 ## Next, in order
 
-1. The ring buffer, with the batch push and a required `overflow` arm, which needs no further
-   ruling.
-2. The cryptography work, ordered by the answers to C1 to C7.
-3. The nested-loop work, ordered by the answers to Q1 to Q7.
-4. After the next public release, block bodies in match arms, named states, and the rewrite of
+1. Push the clippy fix and the arena fix and open their pull requests, with consent.
+2. The ring buffer, with the batch push and a required `overflow` arm.
+3. The cryptography work, ordered by the answers to C1 to C7.
+4. The nested-loop work, ordered by the answers to Q1 to Q7.
+5. After the next public release, block bodies in match arms, named states, and the rewrite of
    the self-hosted stages.
 
 ## Decisions waiting on the operator
 
-- C1 to C7 in `SELF_HOSTED_CRYPTOGRAPHY_PLAN.md`.
-- Q1 to Q7 in `NESTED_LOOP_ARENAS.md`. Q4 and Q7 are hardening that can be built at once.
-- The native CI cost. The native suite reads `REVERSE_PROMPT.md` and the V0.3.X handoff, so a
-  process pull request that edits either starts the macOS native jobs, about 2.5 hours. The
-  recommendation is to ask V0.3.X to stop the suite reading `REVERSE_PROMPT.md`.
-- The interline checkpoint export, paused at kaizen's request until the operator rules on messages
-  between two lines that are not Keleusma lines.
-- Option B's narrow window. An artifact compiled after Encoding F and before option B is not
-  refused structurally. This line proceeds on option A, accepting it under ruling C3.3, unless the
-  operator says otherwise.
+- Consent to push `fix/clippy-rust-1-100` and `fix/arena-relative-bottom-mark` and open their
+  pull requests.
+- The module header after 778. A keeps the shallow per-chunk figure and documents it. B
+  switches the header to the composed bound. C keeps both under distinct names. D has `Vm::new`
+  refuse a module whose composed bound cannot be computed. The recommendation is A with D.
+- The proofs line's tail-position proposal of sequence 495. A delegation to a loop would be
+  refused unless it is in tail position of the caller's body. The premise is confirmed at
+  `src/typecheck.rs:5717`, where a delegated call takes the callee's yield type and code after
+  it compiles. The change is breaking for such sources, needs the same refusal in the
+  self-hosted compiler, and changes GRAMMAR.md section 6.3. A separate verifier hardening, a
+  refusal of `Op::Return` in a stream chunk, would make the premise of
+  `tests/stream_never_returns.rs` structural for bytecode and needs no surface change.
+- C1 to C7 in `SELF_HOSTED_CRYPTOGRAPHY_PLAN.md`, and Q1 to Q7 in `NESTED_LOOP_ARENAS.md`.
+- The native CI cost, the paused checkpoint export, and option B's narrow window, unchanged
+  since 2026-11-06.
 
 ## Concerns
 
 - Git history before `abcf810b` still holds the wording that Appendix B flags. Removing it would
   mean rewriting published history, which this line has not done and does not propose without an
   explicit instruction.
-- Item 1 of 2026-10-31 leaves the field-order contract to the host, a known property of contract
-  violations.
-- The native supplement formula in `src/native_region.rs` is a copy of the backend's, and the
-  backend's differential test is what catches drift.
-- Files have disappeared from this session's scratchpad, including the disclosure-term guard
-  file on 2026-11-04 and the agent brief on 2026-11-06. The cause is not established. Both are
-  rebuilt, and copies are kept on the scratch volume.
+- Until the clippy fix merges, every fresh CI run of a pull request into `v0.2.3` fails the
+  clippy job for a reason unrelated to its change, including 779, 780 and any rerun of 778.
+- The arena's library tests do not compile with `--no-default-features`, because the test
+  module imports `allocator_api2::vec` without the `alloc` gate. CI only checks that
+  configuration, so it is not caught. It predates A1 and is not changed.
+- The proofs line's heavy Kani harnesses, three of which reach `find_call_cycle` and
+  `topological_call_order` after 778, have never had a green run. That line will measure them
+  after 778 merges.
+- Read, not measured. The verifier admits a stream chunk with instructions before its `Stream`
+  marker, and the per-iteration time bound counts only from `Stream` to `Reset`. The first run of
+  such a hand-written chunk could exceed the hosted runtime's instruction bound. The compiler
+  never emits such a prologue. A fix belongs in `src/verify.rs`, and pull request 778, which it
+  waited for, merged as `2143044c`.
+- The session scratchpad was emptied by the restart. The guard file and the agent brief were
+  restored from the copies on the scratch volume.
 
 ---
 

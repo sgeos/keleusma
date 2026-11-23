@@ -221,6 +221,14 @@ let pair: (Word, Float) = (42, 3.14);
 let channels: [Float; 8] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 ````
 
+**Ring buffers**: `Ring<T, N>`, a ring buffer of up to `N` scalar elements managed by the compiler. Increment R1 admits the type only as the type of a `private data` or `shared data` field, and its operations are pending, so a program may declare a ring and may not yet read or write it. See [TYPE_SYSTEM.md](TYPE_SYSTEM.md) and [RING_BUFFER_DESIGN.md](../decisions/RING_BUFFER_DESIGN.md).
+
+````
+private data hist {
+  samples: Ring<Fixed, 16>,
+}
+````
+
 **Optionals**: Nullable values using Option.
 
 ````
@@ -1223,7 +1231,7 @@ scalar_literal     = [ '-' ] integer_lit
 
 (* Types *)
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type
-                | multiword_type
+                | multiword_type | ring_type
 prim_type       = 'Word' | 'Float' | 'bool' | 'Text' | '(' ')'
 (* A named type's argument list carries type arguments followed by const
    arguments. A const argument is a const expression; a type argument may
@@ -1241,6 +1249,15 @@ option_type     = 'Option' '<' type_expr '>'
    parse time; a symbolic argument is range-checked after substitution at
    monomorphization. *)
 multiword_type  = 'Multiword' '<' const_expr [ ',' const_expr ] '>'
+(* Ring buffer managed by the compiler, increment R1. The first argument is
+   the element type and the second the capacity, a const expression over
+   literals that evaluates to a value from 1 to 16777213. `Ring` is recognised
+   by name in every type position. The type checker admits a ring only as the
+   whole type of a `private` or `shared` data field, with a `Word`, `Byte`,
+   `bool`, `Fixed` or `Float` element and no initializer. The operations are
+   pending, and every expression naming a ring field is refused. See
+   docs/decisions/RING_BUFFER_DESIGN.md. *)
+ring_type       = 'Ring' '<' type_expr ',' const_expr '>'
 
 (* Functions *)
 (* The `ephemeral` and `signed` modifiers are permitted only on
@@ -1683,7 +1700,7 @@ Keleusma provides static guarantees about script behavior through the three func
 
 ### Recursion Prohibition
 
-All forms of recursion are prohibited. The compiler rejects any cycle in the call graph among Keleusma functions. This includes direct recursion (function `a` calling itself) and mutual recursion (function `a` calling `b` which calls `a`). Recursive algorithms must be supplied by the host as registered native functions. At that point, termination guarantees rest on the host, not the Keleusma compiler.
+All forms of recursion are prohibited. The compiler rejects any cycle in the call graph among Keleusma functions. This includes direct recursion (function `a` calling itself) and mutual recursion (function `a` calling `b` which calls `a`). The rule holds for every function category and for calls made through a pipe, through a trait method and through the predicate of a refined newtype. The diagnostic begins `recursive call detected` and names the functions of the cycle in call order, as in `` `a` -> `b` -> `a` ``. The bytecode verifier applies the same rule to a compiled module. Recursive algorithms must be supplied by the host as registered native functions. At that point, termination guarantees rest on the host, not the Keleusma compiler.
 
 The only form of "recursion" in Keleusma is the implicit re-entry of `loop` functions, which is not a function call but a coroutine iteration with a mandatory yield on every path.
 

@@ -6,7 +6,6 @@ publish = ["crates-io"]
 rust-version = "1.88"
 description = "Standalone command-line frontend for Keleusma. Provides a script runner, a bytecode compiler, and an interactive REPL so users can work with Keleusma scripts without writing any Rust host code."
 license = "0BSD"
-homepage = "https://github.com/sgeos/keleusma"
 repository = "https://github.com/sgeos/keleusma"
 documentation = "https://docs.rs/keleusma-cli"
 readme = "README.md"

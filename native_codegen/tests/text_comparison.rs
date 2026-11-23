@@ -14,9 +14,13 @@
 //!
 //! # What this does not establish
 //!
-//! A `Text` returned by a call, passed as a parameter, returned by a native or
-//! read from a field is still refused in a comparison. Ordering comparisons of
-//! `Text` are refused. Both are recorded in the Order 6 completion record.
+//! A `Text` returned by a call to a function that returns only literals compares
+//! by content since 2026-11-18. A `Text` passed as a parameter, returned by a
+//! function that may return one, returned by a native or read from a field is
+//! still refused in a comparison, equality and ordering alike. Since the same
+//! day an ordering comparison of two literal records lowers, by the virtual
+//! machine's `str` order. The limits are recorded in the Order 6 completion
+//! record.
 mod common;
 
 use keleusma_native::{LowerOptions, module_refusals};
@@ -49,16 +53,98 @@ fn literal_text_comparisons_agree_with_the_vm_by_content() {
     }
 }
 
-/// MUST-NOT-FIRE for the test above, and the case that was wrong before. A
-/// `Text` from a call is not a literal record, so comparing it is refused, not
-/// lowered as the address comparison that gave the wrong branch.
+/// A function every `Return` of which yields a string literal returns a record
+/// this backend laid out, so its result compares by content. These were refused
+/// until 2026-11-18, when `text::literal_text_returns` began to recognise such a
+/// function, through locals and through calls to another such function.
+const AGREE_THROUGH_CALLS: &[&str] = &[
+    "fn pick(a: Word) -> Text { if a > 0 { \"yes\" } else { \"no\" } } \
+     fn main(a: Word, b: Word) -> Word { if pick(a) == \"yes\" { 1 } else { 2 } }",
+    "fn pick(a: Word) -> Text { let s = if a > 0 { \"yes\" } else { \"no\" }; s } \
+     fn main(a: Word, b: Word) -> Word { if pick(a) != pick(b) { 3 } else { 4 } }",
+    "fn inner(a: Word) -> Text { if a > 0 { \"p\" } else { \"q\" } } \
+     fn outer(a: Word) -> Text { inner(a + 1) } \
+     fn main(a: Word, b: Word) -> Word { let t = outer(b); if t == \"p\" { 5 } else { 6 } }",
+    "fn pick(a: Word) -> Text { if a > 0 { \"yes\" } else { \"no\" } } \
+     fn main(a: Word, b: Word) -> Word { match pick(a) { \"yes\" => 10, \"no\" => 20, _ => 30 } }",
+];
+
+#[test]
+fn text_from_literal_returning_functions_compares_by_content() {
+    for src in AGREE_THROUGH_CALLS {
+        let m = common::build(src);
+        assert!(
+            module_refusals(&m, LowerOptions::default()).is_empty(),
+            "a comparison of literal-returning calls is refused: {src}"
+        );
+        for (a, b) in [(1, 0), (-1, 0), (0, 7), (2, -3)] {
+            for optimise in [false, true] {
+                let (vm, native) = common::vm_and_native_two_arg_at(src, a, b, optimise);
+                assert_eq!(native, vm, "{src} on ({a}, {b}), optimised {optimise}");
+            }
+        }
+    }
+}
+
+/// Ordering comparisons of literal records follow the virtual machine's `str`
+/// order, byte-wise over UTF-8 and then by length. They were refused until
+/// 2026-11-18. The pairs cover a proper prefix, a differing first byte, a
+/// differing later byte, equality, the empty string, a byte above 127 against
+/// an ASCII one, and a literal returned by a function.
+#[test]
+fn literal_text_orderings_agree_with_the_vm() {
+    let pairs = [
+        ("ab", "abc"),
+        ("b", "abc"),
+        ("abd", "abc"),
+        ("same", "same"),
+        ("", "a"),
+        ("é", "z"),
+    ];
+    let mut compared = 0;
+    for (x, y) in pairs {
+        for op in ["<", ">", "<=", ">="] {
+            for (l, r) in [(x, y), (y, x)] {
+                let src = format!(
+                    "fn main(a: Word, b: Word) -> Word {{ if \"{l}\" {op} \"{r}\" {{ 1 }} else {{ 0 }} }}"
+                );
+                let m = common::build(&src);
+                assert!(
+                    module_refusals(&m, LowerOptions::default()).is_empty(),
+                    "a literal ordering is refused: {src}"
+                );
+                for optimise in [false, true] {
+                    let (vm, native) = common::vm_and_native_two_arg_at(&src, 0, 0, optimise);
+                    assert_eq!(native, vm, "{src}, optimised {optimise}");
+                    compared += 1;
+                }
+            }
+        }
+    }
+    let src = "fn pick(a: Word) -> Text { if a > 0 { \"pear\" } else { \"apple\" } } \
+               fn main(a: Word, b: Word) -> Word { if pick(a) < \"banana\" { 1 } else { 0 } }";
+    for (a, b) in [(1, 0), (-1, 0)] {
+        for optimise in [false, true] {
+            let (vm, native) = common::vm_and_native_two_arg_at(src, a, b, optimise);
+            assert_eq!(native, vm, "{src} on ({a}, {b}), optimised {optimise}");
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 6 * 4 * 2 * 2 + 4);
+}
+
+/// MUST-NOT-FIRE for the tests above. A `Text` parameter, or a function that
+/// may return one, is not a record this backend laid out, so comparing it is
+/// refused, not lowered as the address comparison that gave the wrong branch.
 #[test]
 fn a_text_whose_layout_this_backend_does_not_own_is_refused_in_a_comparison() {
     for src in [
-        "fn pick(a: Word) -> Text { if a > 0 { \"yes\" } else { \"no\" } } \
-         fn main(a: Word, b: Word) -> Word { if pick(a) == \"yes\" { 1 } else { 2 } }",
         "fn same(s: Text, t: Text) -> Word { if s == t { 1 } else { 0 } } \
          fn main(a: Word, b: Word) -> Word { same(\"p\", \"p\") }",
+        "fn echo(s: Text) -> Text { s } \
+         fn main(a: Word, b: Word) -> Word { if echo(\"p\") == \"p\" { 1 } else { 2 } }",
+        "fn either(a: Word, s: Text) -> Text { if a > 0 { \"yes\" } else { s } } \
+         fn main(a: Word, b: Word) -> Word { if either(a, \"no\") == \"yes\" { 1 } else { 2 } }",
     ] {
         let m = common::build(src);
         let refusals = module_refusals(&m, LowerOptions::default());

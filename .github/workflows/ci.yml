@@ -88,6 +88,8 @@ jobs:
       vscode: ${{ steps.classify.outputs.vscode }}
       # `true` when a changed path is a native gate input, on any event and in any mode.
       native: ${{ steps.classify.outputs.native }}
+      # `true` when a changed path is an input of the proofs, on any event and in any mode.
+      proofs: ${{ steps.classify.outputs.proofs }}
       # `true` only for a draft pull request. It defers the self-host tier and nothing else.
       draft: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'true' || 'false' }}
     steps:
@@ -206,7 +208,10 @@ jobs:
         run: cargo check --locked --workspace --all-targets
       - name: Clippy
         if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # --keep-going reports every crate that fails rather than stopping at the first, so
+        # that one run lists all findings. A new Clippy release raised one lint in several
+        # crates on 2026-11-12, and stopping at the first cost a CI run per crate.
+        run: cargo clippy --keep-going --workspace --all-targets -- -D warnings
       - name: Scan the dependency graph against the advisory database
         if: ${{ !cancelled() }}
         run: cargo audit
@@ -719,6 +724,24 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+      # The memory-bound tightness runner of examples/tightness.rs, by V0.2.X on 2026-11-22
+      # in pull request 792. It compares each corpus program's verified stack and heap
+      # bounds with what a run touches, and exits 1 when a measured figure exceeds its
+      # bound, which is a soundness defect, so the step gates. It writes the report the
+      # metrics step reads.
+      - name: Measure memory-bound tightness over the corpus
+        run: |
+          status=0
+          cargo run --release --locked --example tightness --features compile,verify \
+            -- --out target/metrics/tightness.json > "$RUNNER_TEMP/tightness.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/tightness.txt"
+          {
+            echo '### Memory-bound tightness'
+            echo '```'
+            cat "$RUNNER_TEMP/tightness.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - name: Install cloc for the line counts
         run: |
           sudo apt-get update -qq
@@ -730,7 +753,7 @@ jobs:
         run: |
           status=0
           python3 -B scripts/metrics.py --github "$GITHUB_REPOSITORY" \
-            --require lines,tests,unsafe,invariants,footprint,documentation,process,dependencies,proofs,github \
+            --require lines,tests,unsafe,invariants,footprint,documentation,process,dependencies,proofs,github,tightness \
             > "$RUNNER_TEMP/metrics.txt" 2>&1 || status=$?
           cat "$RUNNER_TEMP/metrics.txt"
           {
@@ -747,6 +770,7 @@ jobs:
           name: footprint-and-metrics
           path: |
             footprint/target/footprint.json
+            target/metrics/tightness.json
             target/metrics/metrics.json
           if-no-files-found: error
           retention-days: 90
@@ -882,6 +906,16 @@ jobs:
 
   # The extension reads only its own directory, so it runs when that directory changes,
   # or when the change list cannot be read.
+  # THE MACHINE-CHECKED PROOFS AND THE KANI LIGHT TIER, from .github/workflows/proofs.yml,
+  # which also runs weekly on its own. Phase 1 of docs/process/kaizen/2026-11-08-proof-ci-plan.md,
+  # agreed by V0.2.X on 2026-11-11 under the operator's ruling that a new proofs job waits
+  # for that agreement or for the release. It runs when the change classifier's `proofs`
+  # flag is set, which a light run can also set, and gates merges through `CI result`.
+  proofs:
+    needs: changes
+    if: needs.changes.outputs.proofs == 'true' && needs.changes.outputs.mode != 'certified'
+    uses: ./.github/workflows/proofs.yml
+
   vscode-extension:
     name: VS Code extension
     needs: changes
@@ -1015,7 +1049,7 @@ jobs:
       # Tests that need llc and llvm-readobj FAIL rather than skip when absent.
       KEL_REQUIRE_LLVM_TOOLS: '1'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # Native provenance tests inspect historical commits.
           fetch-depth: 0
@@ -1090,7 +1124,7 @@ jobs:
       CARGO_TERM_COLOR: always
       KEL_REQUIRE_LLVM_TOOLS: '1'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -1121,7 +1155,7 @@ jobs:
   # `skipped`, which this condition would otherwise accept.
   certify:
     name: Certify the tested tree
-    needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux]
+    needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, proofs, miri, docs-links, native, native-linux]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.mode == 'full' && needs.changes.outputs.draft != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
@@ -1157,7 +1191,7 @@ jobs:
   # job. Branch protection on `main` and on `v0.2.3` requires it, measured 2026-11-04.
   ci-result:
     name: CI result
-    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, miri, docs-links, native, native-linux, certify]
+    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, footprint, detached, selfhost-compiler, vscode-extension, proofs, miri, docs-links, native, native-linux, certify]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:

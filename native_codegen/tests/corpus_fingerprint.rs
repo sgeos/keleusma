@@ -390,6 +390,14 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // that reported the movement. Re-pinned again when `v0.2.3` at `f372463d`, the
 // self-hosted `Text<N>` above, was merged, since `codegen.kel` and `parse.kel`
 // then carry both changes.
+//
+// **RE-PINNED 2026-11-18, ring increment R1.** V0.2.X's `feat/ring-r1` changed
+// `parse.kel` to read `Ring<T, N>` data fields and refuse their misuse, and
+// raised the lexer source capacity in `lexer.kel` from 524,288 to 786,432 bytes
+// under the operator's ruling of 2026-10-26, because the marked `parse.kel`
+// reached the old cap. Nothing was added or removed. The two values were
+// computed by FNV-1a over the files, reproducing the previous pins from the
+// base first. Whether the derived figures moved is for the native gate run.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -599,11 +607,11 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     // Absorption 116 omits the unreachable default of checked arithmetic.
     ("src/selfhost/kel/codegen.kel", 0xbde280a323e0017a),
-    ("src/selfhost/kel/lexer.kel", 0x39fe77b5403b897f),
+    ("src/selfhost/kel/lexer.kel", 0xc2821b282bc04d74),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
     // Absorption 116 lowers a cast to the operand's own type as identity.
-    ("src/selfhost/kel/parse.kel", 0x3c40719b201b15ca),
+    ("src/selfhost/kel/parse.kel", 0x64e2a8a4c63f0b69),
     ("src/selfhost/kel/reconstruct.kel", 0x85fe89091c7949a2),
     // Absorption 119 adds the template header scan as the fifteenth stage.
     ("src/selfhost/kel/template_scan.kel", 0x2389d34aaba8c2c7),
