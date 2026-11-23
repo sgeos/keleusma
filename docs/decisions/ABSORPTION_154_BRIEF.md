@@ -37,3 +37,21 @@ checkpoint was scanned with this line's disclosure-term scan, and none of its
 The full native suites last ran at `70ec4613`, before this absorption. 794's
 own hosted run passed both native gate jobs before it merged, and the hosted run
 on this branch's pull request covers the combination.
+
+## Absorption 155 and the checkpoint repair
+
+Pull request 798 failed `Shell scripts and Python tooling`, in two
+`test_interline` installation tests, with "duplicate message or unregistered
+checkpoint route". Absorption 153's textual merge of
+`docs/process/interline/checkpoint.json` had kept two copies of message
+`v030-20261101-main-into-v030`, because this line's side and Kaizen's export
+held it at different positions. The next merge, absorption 155, brings in
+upstream 800, Kaizen's alert record, through `4a222da3`, and takes `v0.2.3`'s
+checkpoint verbatim, which holds the message once. The scan finds no term in
+its 564 messages, and all 215 script tests pass, the interline tests among
+them.
+
+**A checkpoint is not merged as text.** On a conflict or an absorption, take
+one exported side whole and confirm with `read_checkpoint` or the script
+tests, since a clean textual merge of two exports can still duplicate a
+message.
